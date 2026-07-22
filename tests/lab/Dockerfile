@@ -6,6 +6,7 @@ RUN dnf -y update && dnf -y install \
     sudo \
     python3 \
     python3-pip \
+    python3-PyMySQL \
     chrony \
     firewalld \
     selinux-policy \
@@ -17,7 +18,16 @@ RUN dnf -y update && dnf -y install \
     numactl \
     less \
     vim \
+    lsof \
+    socat \
+    rsync \
+    procps-ng \
     && dnf clean all
+
+# node_exporter + mysqld_exporter (ARM64 binaries)
+RUN curl -Ls https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-arm64.tar.gz | tar xz --strip-components=1 -C /usr/local/bin/ node_exporter-1.8.2.linux-arm64/node_exporter && \
+    curl -Ls https://github.com/prometheus/mysqld_exporter/releases/download/v0.16.0/mysqld_exporter-0.16.0.linux-arm64.tar.gz | tar xz --strip-components=1 -C /usr/local/bin/ mysqld_exporter-0.16.0.linux-arm64/mysqld_exporter && \
+    chmod +x /usr/local/bin/node_exporter /usr/local/bin/mysqld_exporter
 
 # Ansible user z sudo bez hasla
 RUN useradd -m -s /bin/bash ansible && \

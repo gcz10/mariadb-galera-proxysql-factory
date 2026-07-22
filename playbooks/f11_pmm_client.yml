@@ -1,0 +1,75 @@
+---
+# F11: PMM Client monitoring — rejestracja węzłów w PMM Server.
+# pmm2-client nie wspiera aarch64 — alternatywa: PMM Server scrapuje
+# node_exporter (9100) i mysqld_exporter (9104) przez built-in VictoriaMetrics.
+# Satisfies: ISC-46 (metryki trafiają do systemu monitoringowego).
+
+- name: "F11 - Rejestruj węzły w PMM przez scrape config"
+  hosts: all
+  become: true
+
+  tasks:
+    - name: "Sprawdz czy node_exporter dziala (port 9100)"
+      ansible.builtin.shell: "curl -s -o /dev/null -w '%{http_code}' http://localhost:9100/metrics 2>/dev/null || echo '000'"
+      changed_when: false
+      register: node_exp_check
+
+    - name: "Wypisz status node_exporter"
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: node_exporter {{ 'OK' if node_exp_check.stdout == '200' else 'FAILED' }}"
+
+    # MariaDB monitoring — tylko na węzłach Galera z działającym MariaDB
+    - name: "Instaluj mysqld_exporter na węzłach Galera"
+      block:
+        - name: "Pobierz mysqld_exporter (aarch64)"
+          ansible.builtin.unarchive:
+            src: "https://github.com/prometheus/mysqld_exporter/releases/download/v0.16.0/mysqld_exporter-0.16.0.linux-arm64.tar.gz"
+            dest: /usr/local/bin/
+            remote_src: true
+            extra_opts: ["--strip-components=1"]
+            include: "mysqld_exporter-0.16.0.linux-arm64/mysqld_exporter"
+          ignore_errors: true
+
+        - name: "Utworz .my.cnf dla mysqld_exporter"
+          ansible.builtin.copy:
+            dest: /var/lib/mysql/.my.cnf
+            content: |
+              [client]
+              user=pmm_monitor
+              password=pmm_monitor_password
+              socket=/var/lib/mysql/mysql.sock
+            owner: mysql
+            group: mysql
+            mode: "0600"
+
+        - name: "Utworz uzytkownika pmm_monitor w MariaDB (gnode1)"
+          community.mysql.mysql_user:
+            name: pmm_monitor
+            password: pmm_monitor_password
+            priv: "*.*:PROCESS,REPLICATION CLIENT,SELECT,SHOW DATABASES,RELOAD"
+            host: localhost
+            state: present
+            login_unix_socket: /var/lib/mysql/mysql.sock
+          when: galera_node_idx | default(1) == 1
+
+        - name: "Uruchom mysqld_exporter"
+          ansible.builtin.shell: |
+            pkill mysqld_exporter 2>/dev/null || true
+            nohup /usr/local/bin/mysqld_exporter \
+              --config.my-cnf=/var/lib/mysql/.my.cnf \
+              --web.listen-address=:9104 \
+              > /var/tmp/mysqld_exporter.log 2>&1 &
+            sleep 3
+          changed_when: false
+
+        - name: "Sprawdz mysqld_exporter"
+          ansible.builtin.shell: "curl -s -o /dev/null -w '%{http_code}' http://localhost:9104/metrics 2>/dev/null || echo '000'"
+          changed_when: false
+          register: mysql_exp_check
+
+        - name: "Wypisz status mysqld_exporter"
+          ansible.builtin.debug:
+            msg: "{{ inventory_hostname }}: mysqld_exporter {{ 'OK' if mysql_exp_check.stdout == '200' else 'FAILED' }}"
+      when: "'galera' in group_names"
+
+  handlers: []

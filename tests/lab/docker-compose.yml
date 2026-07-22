@@ -102,6 +102,25 @@ services:
     restart: unless-stopped
     mem_limit: 4g
 
+  vmagent:
+    image: victoriametrics/vmagent:latest
+    container_name: vmagent
+    hostname: vmagent
+    networks:
+      galera-net:
+        ipv4_address: 172.28.0.200
+    volumes:
+      - ./vmagent.yml:/etc/vmagent/scrape.yml:ro
+    command:
+      - "--promscrape.config=/etc/vmagent/scrape.yml"
+      - "--remoteWrite.url=https://172.28.0.100:8443/prometheus/api/v1/write"
+      - "--remoteWrite.basicAuth.username=admin"
+      - "--remoteWrite.basicAuth.password=admin"
+      - "--remoteWrite.tlsInsecureSkipVerify=true"
+    restart: unless-stopped
+    depends_on:
+      - pmm-server
+
 networks:
   galera-net:
     driver: bridge
