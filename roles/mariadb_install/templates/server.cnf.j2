@@ -2,9 +2,6 @@
 # Nie wpisuj danych klastra w rolach — wszystko z cluster.yml + inventory.
 # Satisfies: ISC-7,8,9,10,14,17 (Galera cluster health)
 
-[mariadbd]
-plugin-wsrep-provider = ON
-
 [mysqld]
 # === Podstawowe ===
 datadir = /var/lib/mysql
@@ -28,9 +25,6 @@ wsrep_node_address = {{ galera_node_address }}
 wsrep_sst_method = mariabackup
 wsrep_sst_auth = "{{ sst_user }}:{{ sst_password }}"
 
-# === SST safety ===
-wsrep_sst_donor_rejects_queries = 1
-
 # === Bind ===
 bind-address = 0.0.0.0
 
@@ -43,12 +37,11 @@ max_connections = 50
 log_error = /var/log/mariadb/mariadb.log
 slow_query_log = OFF
 
-# === gcache (do weryfikacji po F0 pomiarze — ISC-68) ===
+# === gcache ===
 wsrep_provider_options = "gcache.size={{ gcache_size }}"
 
 [client]
 socket = /var/lib/mysql/mysql.sock
 
 [sst]
-# SST przez mariadb-backup
 streamfmt = mbstream

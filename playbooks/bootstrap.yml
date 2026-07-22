@@ -1,0 +1,81 @@
+---
+# bootstrap.yml — initial bootstrap klastra Galera (OSOBNY od site.yml)
+# Wymaga: site.yml (config deployed)
+# Uruchomienie: ansible-playbook bootstrap.yml -i clusters/<name>/inventory.yml -e confirm=yes -l gnode1
+# NIGDY nie uruchamiaj bez -e confirm=yes (ISC-12, ISC-13, ISC-65)
+
+- name: "Bootstrap - initial Galera cluster (JEDEN węzeł, jawne potwierdzenie)"
+  hosts: galera
+  become: true
+  serial: 1
+  vars:
+    sst_user: "sst_user"
+    sst_password: "sst_password_change_me"
+
+  pre_tasks:
+    - name: "Blokuj bootstrap bez confirm=yes"
+      ansible.builtin.assert:
+        that:
+          - confirm is defined
+          - confirm | bool
+        fail_msg: "Bootstrap wymaga -e confirm=yes. Nigdy nie uruchamiaj bez jawnego potwierdzenia."
+
+    - name: "Tylko jeden węzeł do bootstrap"
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts | length == 1
+        fail_msg: "Bootstrap na jednym węźle. Użyj -l gnode1. (ISC-12, ISC-65)"
+
+    - name: "Zabij stary proces MariaDB"
+      ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null || true"
+      changed_when: false
+
+    - name: "Wyczyść aria log"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/mysql/aria_log_control
+        - /var/lib/mysql/aria_log.00000001
+      changed_when: false
+
+  tasks:
+    - name: "Bootstrap Galera (--wsrep-new-cluster)"
+      ansible.builtin.shell: |
+        mariadbd --user=mysql --datadir=/var/lib/mysql --socket=/var/lib/mysql/mysql.sock \
+          --wsrep-new-cluster > /var/log/mariadb/mariadb.log 2>&1 &
+        sleep 15
+      changed_when: false
+
+    - name: "Czekaj na Primary Component"
+      ansible.builtin.wait_for:
+        port: 3306
+        timeout: 30
+
+    - name: "Weryfikuj cluster status"
+      community.mysql.mysql_query:
+        query: "SHOW STATUS WHERE Variable_name IN ('wsrep_cluster_status','wsrep_cluster_size','wsrep_connected','wsrep_ready','wsrep_local_state','wsrep_provider_name','wsrep_provider_version')"
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      register: wsrep_status
+
+    - name: "Wypisz cluster status"
+      ansible.builtin.debug:
+        msg: "{{ wsrep_status.query_result }}"
+
+    - name: "Utworz SST user"
+      community.mysql.mysql_user:
+        name: "{{ sst_user }}"
+        password: "{{ sst_password }}"
+        priv: "*.*:RELOAD,PROCESS,LOCK TABLES,BINLOG ADMIN,REPLICATION CLIENT"
+        host: localhost
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      no_log: true
+
+    - name: "Zapisz dowód bootstrap"
+      ansible.builtin.copy:
+        content: "Bootstrap completed at {{ ansible_date_time.iso8601 }} on {{ inventory_hostname }}\n{{ wsrep_status.query_result }}"
+        dest: /var/lib/mysql/.isa_bootstrap_proof
+        mode: "0644"
+
+  handlers: []

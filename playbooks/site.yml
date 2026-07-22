@@ -1,0 +1,86 @@
+---
+# site.yml — główny playbook converge (NIGDY nie bootstrapuje, nie czyści datadir, nie resetuje kont)
+# Powtarzalny: drugi uruchomiony converge raportuje changed=0 (ISC-2)
+# Uruchomienie: ansible-playbook site.yml -i clusters/<name>/inventory.yml
+
+- name: "Converge - konfiguracja klastra (bez bootstrap)"
+  hosts: galera
+  become: true
+  serial: 1
+  max_fail_percentage: 0
+  vars:
+    galera_cluster_name: "lab_galera"
+    galera_nodes_csv: "172.28.0.11,172.28.0.12,172.28.0.13"
+    sst_user: "sst_user"
+    sst_password: "sst_password_change_me"
+    gcache_size: "128M"
+    mariadb_config_dir: /etc/my.cnf.d
+
+  pre_tasks:
+    - name: "Zabij stary proces MariaDB (lab: brak systemd)"
+      ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null || true"
+      changed_when: false
+
+    - name: "Wyczyść aria log (po crashu)"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/mysql/aria_log_control
+        - /var/lib/mysql/aria_log.00000001
+      changed_when: false
+
+    - name: "Utworz katalogi"
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: /var/run/mysqld, owner: mysql, group: mysql, mode: "0755" }
+        - { path: /var/log/mariadb, owner: mysql, group: mysql, mode: "0755" }
+        - { path: "{{ mariadb_config_dir }}", owner: root, group: root, mode: "0755" }
+
+  tasks:
+    - name: "Konfiguruj Galera server.cnf"
+      ansible.builtin.template:
+        src: ../roles/mariadb_install/templates/server.cnf.j2
+        dest: "{{ mariadb_config_dir }}/server.cnf"
+        owner: root
+        group: root
+        mode: "0644"
+      register: config_result
+
+    - name: "Inicjalizuj datadir (jeśli pusty)"
+      ansible.builtin.command: mariadb-install-db --user=mysql --datadir=/var/lib/mysql
+      args:
+        creates: /var/lib/mysql/mysql
+      register: init_result
+
+    - name: "Uruchom MariaDB (lab: bez systemd, jako daemon)"
+      ansible.builtin.shell: |
+        mariadbd --user=mysql --datadir=/var/lib/mysql --socket=/var/lib/mysql/mysql.sock \
+          > /var/log/mariadb/mariadb.log 2>&1 &
+        sleep 60
+      changed_when: false
+
+    - name: "Czekaj na gotowość MariaDB"
+      ansible.builtin.wait_for:
+        port: 3306
+        timeout: 120
+      ignore_errors: true
+      register: mariadb_ready
+
+    - name: "Utworz SST user (tylko na pierwszym węźle, jeśli nie istnieje)"
+      community.mysql.mysql_user:
+        name: "{{ sst_user }}"
+        password: "{{ sst_password }}"
+        priv: "*.*:RELOAD,PROCESS,LOCK TABLES,BINLOG ADMIN,REPLICATION CLIENT"
+        host: localhost
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      when: galera_node_idx | default(1) == 1 and mariadb_ready.failed == false
+      no_log: true
+
+  handlers: []

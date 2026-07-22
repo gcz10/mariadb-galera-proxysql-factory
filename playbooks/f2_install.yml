@@ -36,6 +36,9 @@
           - MariaDB-client
           - MariaDB-backup
           - galera-4
+          - socat
+          - rsync
+          - lsof
         state: present
       when: "'galera' in group_names"
 

@@ -1,0 +1,24 @@
+---
+# F3-fix: Instaluj brakujące narzędzia SST na węzłach Galera
+# socat — wymagane dla SST przez mariabackup
+
+- name: "F3-fix - instaluj narzedzia SST"
+  hosts: galera
+  become: true
+
+  tasks:
+    - name: "Instaluj socat"
+      ansible.builtin.dnf:
+        name: socat
+        state: present
+
+    - name: "Sprawdz mbstream (z MariaDB-backup)"
+      ansible.builtin.shell: which mbstream 2>/dev/null || find /usr -name "mbstream" -type f 2>/dev/null | head -1
+      changed_when: false
+      register: mbstream_path
+
+    - name: "Wypisz mbstream path"
+      ansible.builtin.debug:
+        msg: "mbstream: {{ mbstream_path.stdout | default('not found') }}"
+
+  handlers: []
