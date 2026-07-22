@@ -18,7 +18,7 @@
 
   pre_tasks:
     - name: "Zabij stary proces MariaDB (lab: brak systemd)"
-      ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null || true"
+      ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :4567 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :4568 2>/dev/null | xargs kill -9 2>/dev/null; true"
       changed_when: false
 
     - name: "Wyczyść aria log (po crashu)"
@@ -41,6 +41,14 @@
         - { path: /var/run/mysqld, owner: mysql, group: mysql, mode: "0755" }
         - { path: /var/log/mariadb, owner: mysql, group: mysql, mode: "0755" }
         - { path: "{{ mariadb_config_dir }}", owner: root, group: root, mode: "0755" }
+
+    - name: "Utworz plik logu MariaDB z poprawnymi uprawnieniami"
+      ansible.builtin.file:
+        path: /var/log/mariadb/mariadb.log
+        state: touch
+        owner: mysql
+        group: mysql
+        mode: "0640"
 
   tasks:
     - name: "Konfiguruj Galera server.cnf"

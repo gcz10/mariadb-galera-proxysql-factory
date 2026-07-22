@@ -22,7 +22,7 @@ wsrep_cluster_name = {{ galera_cluster_name }}
 wsrep_cluster_address = gcomm://{{ galera_nodes_csv }}
 wsrep_node_name = {{ inventory_hostname }}
 wsrep_node_address = {{ galera_node_address }}
-wsrep_sst_method = mariabackup
+wsrep_sst_method = mysqldump
 wsrep_sst_auth = "{{ sst_user }}:{{ sst_password }}"
 
 # === Bind ===
