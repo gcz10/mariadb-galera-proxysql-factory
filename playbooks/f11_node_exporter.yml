@@ -1,0 +1,74 @@
+---
+# F11-partial: Instalacja node_exporter na wszystkich węzłach lab cluster.
+# Prometheus + Grafana już działają jako kontenery (tests/lab/docker-compose.yml).
+# node_exporter: port 9100, metryki systemowe.
+# myqld_exporter: port 9104, instalowany po F3 (gdy MariaDB działa).
+# Satisfies (partial): ISC-46 (metryki trafiają do systemu monitoringowego).
+
+- name: "Monitoring - instaluj node_exporter"
+  hosts: all
+  become: true
+  serial: 1
+
+  tasks:
+    - name: "Instaluj node_exporter przez dnf"
+      ansible.builtin.dnf:
+        name: node_exporter
+        state: present
+      ignore_errors: true
+      register: node_exporter_dnf
+
+    - name: "Fallback - pobierz node_exporter binary (jeśli dnf niedostepny)"
+      ansible.builtin.unarchive:
+        src: "https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-arm64.tar.gz"
+        dest: /usr/local/bin/
+        remote_src: true
+        extra_opts: ["--strip-components=1"]
+        include: "node_exporter-1.8.2.linux-arm64/node_exporter"
+      when: node_exporter_dnf.failed | default(false)
+      register: node_exporter_binary
+
+    - name: "Utworz systemd service dla node_exporter (jeśli brak)"
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/node_exporter.service
+        content: |
+          [Unit]
+          Description=Node Exporter
+          After=network.target
+          [Service]
+          ExecStart=/usr/local/bin/node_exporter --web.listen-address=:9100
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+        mode: "0644"
+      when: node_exporter_dnf.failed | default(false)
+
+    - name: "Wlacz i uruchom node_exporter (systemd)"
+      ansible.builtin.systemd:
+        name: node_exporter
+        state: started
+        enabled: true
+        daemon_reload: true
+      ignore_errors: true
+
+    - name: "Fallback - uruchom node_exporter bezposrednio (brak systemd w kontenerze)"
+      ansible.builtin.shell: |
+        pkill node_exporter 2>/dev/null || true
+        nohup /usr/local/bin/node_exporter --web.listen-address=:9100 > /var/tmp/node_exporter.log 2>&1 &
+      changed_when: true
+      when: node_exporter_dnf.failed | default(false)
+
+    - name: "Sprawdz czy node_exporter odpowiada"
+      ansible.builtin.wait_for:
+        port: 9100
+        timeout: 5
+      ignore_errors: true
+      register: node_exporter_check
+
+    - name: "Wypisz status node_exporter"
+      ansible.builtin.debug:
+        msg: >-
+          node_exporter on {{ inventory_hostname }}:
+          {{ 'OK (port 9100)' if node_exporter_check.failed == false else 'FAILED (port 9100 not listening)' }}
+
+  handlers: []
