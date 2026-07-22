@@ -33,13 +33,13 @@
       "type": "object",
       "properties": {
         "cluster_name": { "type": "string" },
-        "nodes_expected": { "type": "integer", "minimum": 3, "maximum": 3 }
+        "nodes_expected": { "type": "integer", "minimum": 1 }
       }
     },
     "proxysql": {
       "type": "object",
       "properties": {
-        "nodes_expected": { "type": "integer", "minimum": 2, "maximum": 2 },
+        "nodes_expected": { "type": "integer", "minimum": 2 },
         "max_writers": { "type": "integer", "const": 1 },
         "read_write_split_enabled": { "type": "boolean", "const": false },
         "endpoint": {

@@ -7,7 +7,7 @@ phase: think
 progress: 0/68
 mode: iterate
 started: "2026-07-22T15:27:04Z"
-updated: "2026-07-22T15:33:39Z"
+updated: "2026-07-22T15:43:12Z"
 principal_stated_goal: "Zbuduj powtarzalną, idempotentną i operacyjnie bezpieczną fabrykę produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących maszynach Rocky Linux 9, tak aby nowy niezależny klaster powstawał przez dodanie inventory i konfiguracji klastra, a każdy stan wysokiej dostępności, bezpieczeństwa, backupu i odtwarzania był potwierdzony wykonywalnym testem oraz dowodem."
 principal_stated_goal_source: prompt
 principal_stated_goal_signal: 4
@@ -288,12 +288,21 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - 2026-07-22 — F1 research: Rocky Linux 9.8 (latest minor, 2026-05-27), major EOL 2032-05-31 — dowód: rockylinux.org, endoflife.date (2026-07-22).
 - 2026-07-22 — F1 research: ansible-core 2.21.2 + ansible.mysql 5.1.0 — ponieważ community.mysql deprecated -> ansible.mysql — dowód: ansible.com, github.com/ansible-collections/ansible.mysql (2026-07-22).
 - 2026-07-22 — F1 research: odrzucone MariaDB 12.3 (krótszy EOL), 11.8 (krótszy EOL), 10.11 (starsza), 10.5/10.6 (EOL/przestarzałe) — dowód: mariadb.org (2026-07-22).
+- 2026-07-22 — ADR-001: Keepalived VIP endpoint — ponieważ principal wybór; VRRP <3s spełnia RTO <2min — docs/adr/ADR-001-keepalived-vip-endpoint.md.
+- 2026-07-22 — ADR-002: TLS disabled w v1 + risk acceptance — ponieważ principal wybór; ISC-44 otwarte, ISC-45 aktywne — docs/adr/ADR-002-tls-disabled-risk-acceptance.md.
+- 2026-07-22 — ADR-003: backup SMB teraz -> S3 retencja 30d — ponieważ principal wybór; ISC-32/37 zależne — docs/adr/ADR-003-backup-smb-to-s3.md.
+- 2026-07-22 — ADR-004: MariaDB 11.4.12 LTS — ponieważ najdłuższe wsparcie + Galera 4 + RPM RHEL9 — docs/adr/ADR-004-mariadb-11.4-lts-selection.md.
+- 2026-07-22 — przyjęte założenie: gcache.size = write_rate_bytes/s × ist_window_min × 60; minimum 128MB — ponieważ formula z oknem IST; implementacja tests/validation/calc-gcache.py — dowód: Galera docs + ISC-68.
 
 ## Verification
 
 - ISC-3: F1 research — versions/discovered-versions.json + versions/candidate.lock.yml wypełnione z oficjalnych źródeł (mariadb.org, proxysql.com, rockylinux.org, ansible.com); commit 2026-07-22. Host-dependent RPM release potwierdzenie w F0.
-- ISC-63: F1 research — requirements.yml używa ansible.mysql 5.1.0; brak state: latest w candidate.lock.yml; commit 2026-07-22. Probe pełny po F2.
-- ISC-66: F0 playbook przygotowany (playbooks/f0_discovery.yml), ansible syntax-check PASS; nie uruchomiony (BLK-1/BLK-2).
+- ISC-43: probe-no-secrets-leak.sh PASS lokalnie 2026-07-22 — brak sekretów w repo, logach, argv. Probe gotowy do uruchomienia na CI.
+- ISC-58: validate-cluster-schema.py PASS lokalnie 2026-07-22 — cluster.yml zgodny z schema + semantic checks (production locked, max_writers=1, R/W split off). Probe gotowy do CI.
+- ISC-62: 7 runbook stubs utworzone (bootstrap, total-outage, node-replacement, backup, restore, upgrade, decommission) w docs/runbooks/; do uzupełnienia w F4/F9/F10/F12/F13/F14.
+- ISC-63: probe-no-state-latest.sh PASS lokalnie 2026-07-22 — brak 'state: latest' w rolach i playbookach. Probe gotowy do CI.
+- ISC-66: F0 playbook przygotowany i rozszerzony (playbooks/f0_discovery.yml), ansible syntax-check PASS; nie uruchomiony (BLK-1/BLK-2).
+- ISC-68: calc-gcache.py gotowy — formula zaimplementowana, testowana lokalnie (0=fog, 1MB/s=1800M, 10MB/s=18000M); wyliczenie właściwe po F0 pomiarze write rate.
 
 
 ## Blockers
@@ -305,4 +314,4 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 
 ## Następny pojedynczy feature
 
-F0: Discovery — uruchomić po uzyskaniu dostępu do testowych hostów (BLK-1, BLK-2). BLK-3 i BLK-4 rozstrzygnięte. F1 (research wersji) wykonany — versions/discovered-versions.json, versions/candidate.lock.yml, versions/compatibility-report.md wypełnione. F0 jest read-only względem usług; instaluje fio wyłącznie na jawnych testowych hostach z allow_bench: true. Po F0: promocja candidate.lock.yml -> versions.lock.yml.
+F0: Discovery — uruchomić po uzyskaniu dostępu do testowych hostów (BLK-1, BLK-2). BLK-3 i BLK-4 rozstrzygnięte. F1 (research wersji) wykonany. Przygotowane bez hostów: 4 ADR-y (docs/adr/), 7 runbook stubs (docs/runbooks/), 9 skryptów sond (tests/validation/), walidator schema (PASS lokalnie), gcache formula (testowana lokalnie), F0 playbook rozszerzony (syntax-check PASS). Po F0: promocja candidate.lock.yml -> versions.lock.yml. Po F0: F2 (preflight, repo, pakiety, time sync, SELinux, firewalld).
