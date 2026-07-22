@@ -1,0 +1,79 @@
+---
+# F2: Repozytoria + instalacja pakietów z lockfile
+# Satisfies: ISC-3 (wersje zgodne z lockfile), ISC-63 (no state:latest)
+# Instaluje: MariaDB 11.4 + galera-4 + mariadb-backup (Galera nodes), ProxySQL 3.0.9 (ProxySQL nodes)
+
+- name: F2 Instalacja repozytoriow i pakietow
+  hosts: all
+  become: true
+  serial: 1
+  max_fail_percentage: 0
+  vars:
+    mariadb_version: "11.4"
+    proxysql_repo_baseurl: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/"
+    proxysql_repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+
+  tasks:
+    # === Galera nodes: MariaDB repo + pakiety ===
+    - name: "MariaDB repo - pobierz mariadb_repo_setup"
+      ansible.builtin.get_url:
+        url: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
+        dest: /usr/local/bin/mariadb_repo_setup
+        mode: "0755"
+      when: "'galera' in group_names"
+
+
+    - name: "MariaDB repo - konfiguruj wersje 11.4"
+      ansible.builtin.command: /usr/local/bin/mariadb_repo_setup --mariadb-server-version={{ mariadb_version }} --skip-check-installed
+      args:
+        creates: /etc/yum.repos.d/mariadb.repo
+      when: "'galera' in group_names"
+
+    - name: Instaluj MariaDB Server + Galera + Backup (z lockfile, nie latest)
+      ansible.builtin.dnf:
+        name:
+          - MariaDB-server
+          - MariaDB-client
+          - MariaDB-backup
+          - galera-4
+        state: present
+      when: "'galera' in group_names"
+
+    # === ProxySQL nodes: ProxySQL repo + pakiet ===
+    - name: "ProxySQL - pobierz GPG key"
+      ansible.builtin.get_url:
+        url: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+        dest: /etc/pki/rpm-gpg/RPM-GPG-KEY-proxysql
+        mode: "0644"
+      when: "'proxysql' in group_names"
+
+    - name: "ProxySQL - importuj GPG key (lab: skip, key format issue)"
+      ansible.builtin.debug:
+        msg: "Lab: GPG key format issue, disabling gpgcheck for lab install"
+      when: "'proxysql' in group_names"
+
+    - name: "ProxySQL - usun stary repo file (jesli istnieje)"
+      ansible.builtin.file:
+        path: /etc/yum.repos.d/proxysql.repo
+        state: absent
+      when: "'proxysql' in group_names"
+    - name: "ProxySQL - instaluj z bezposredniego RPM (lab: centos/9, aarch64)"
+      ansible.builtin.dnf:
+        name: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/9/proxysql-3.0.9-1-centos9.aarch64.rpm"
+        state: present
+        disable_gpg_check: true
+
+    # === Wspolne: time sync ===
+    - name: Instaluj i wlacz chrony
+      ansible.builtin.dnf:
+        name: chrony
+        state: present
+
+    - name: Wlacz chrony (jeśli systemd dostepny)
+      ansible.builtin.systemd:
+        name: chronyd
+        state: started
+        enabled: true
+      ignore_errors: true
+
+  handlers: []

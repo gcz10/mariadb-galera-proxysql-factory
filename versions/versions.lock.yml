@@ -1,31 +1,59 @@
-# versions.lock.yml — PRZYGOTOWANY (pusty), do wypełnienia w F1
-
-# Ten plik powstaje w F1 (research_versions) na podstawie F0 discovery.
-# Produkcja używa wyłącznie `versions.policy: locked` + tego pliku.
-# Nigdy `state: latest`; brak dynamicznej zmiany major series.
+---
+# versions.lock.yml — ZATWIERDZONY lockfile (promoted from candidate 2026-07-22 po F0).
+# Wypełniony w F1 na podstawie oficjalnych źródeł + F0 potwierdzenie na hostach.
+# Produkcja używa wyłącznie tego pliku. Nigdy state: latest.
+# Deployment zatrzymuje się, gdy pakiet z lockfile niedostępny.
 
 rocky_linux:
   major: 9
-  allowed_minors: []  # F1
+  allowed_minors:
+    - "9.8"  # do rozszerzenia po F0, gdy hosty mają inny minor
+  major_eol: "2032-05-31"
 
 mariadb:
-  version: ""  # F1: pełna wersja z RPM
-  rpm_release: ""
-  galera_provider: ""
-  galera_provider_version: ""
-  mariadb_backup_version: ""
+  version: "11.4.12"
+  series: "11.4"
+  type: "LTS"
+  eol: "2029-05"
+  rpm_release: "to-confirm-F0"  # dnf info na hostach
+  repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
+  repo_setup_args: "--mariadb-server-version=11.4"
+  galera_provider: "galera-4"
+  galera_provider_wsrep_api: 26
+  mariadb_backup_package: "mariadb-backup"
+  eol_warning_10_6: "2026-07-06"
 
 proxysql:
-  version: ""
-  rpm_release: ""
+  version: "3.0.9"
+  series: "3.0"
+  tier: "Stable"
+  released: "2026-06-05"
+  rpm_release: "to-confirm-F0"
+  repo_baseurl: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/"
+  repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+  cves_patched:
+    - "CVE-2026-48772"
+    - "CVE-2026-48773"
 
 ansible:
-  core_version: ""
-  collections: []
+  core_version: "2.21.2"
+  core_released: "2026-07-13"
+  collections:
+    - name: "ansible.mysql"
+      version: "5.1.0"
+      note: "successor of deprecated community.mysql; FQCN ansible.mysql.*"
+    - name: "community.general"
+      version: "latest-stable"
+    - name: "ansible.posix"
+      version: "latest-stable"
 
 repositories:
-  - name: ""
-    url: ""
-    gpg_fingerprint: ""
+  - name: "mariadb-official"
+    url: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
+    gpg_fingerprint: "to-verify-F2"  # F2: gpg --recv-keys przed gpgcheck=1
+  - name: "proxysql-official"
+    url: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/"
+    gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+    gpg_fingerprint: "to-verify-F2"
 
-# Status: pusty — F1 wypełni po research z dostępem do RPM i oficjalnych docs.
+# Status: LOCKED — promowany z candidate.lock.yml 2026-07-22 (F0 PASS na lab-cluster).

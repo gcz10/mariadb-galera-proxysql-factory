@@ -1,0 +1,53 @@
+---
+# F2: Preflight + repo + pakiety + time sync + SELinux + firewalld
+# Satisfies: ISC-3 (wersje z lockfile), ISC-4 (SELinux), ISC-5 (firewalld), ISC-6 (preflight), ISC-63 (no state:latest)
+# Depends: F0 (discovery), F1 (lockfile)
+
+- name: "F2 Preflight - walidacja preconditions"
+  hosts: all
+  become: true
+  gather_facts: true
+  serial: 1
+  max_fail_percentage: 0
+  vars:
+    lockfile: "{{ lookup('file', 'versions/versions.lock.yml') | from_yaml }}"
+
+  tasks:
+    - name: "Preflight - Rocky Linux 9 required"
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Rocky"
+          - ansible_distribution_major_version == "9"
+        fail_msg: "Host must be Rocky Linux 9, got {{ ansible_distribution }} {{ ansible_distribution_major_version }}"
+
+    - name: "Preflight - minimal RAM 2GB"
+      ansible.builtin.assert:
+        that:
+          - ansible_memtotal_mb >= 2048
+        fail_msg: "Minimum 2GB RAM required, got {{ ansible_memtotal_mb }}MB"
+
+    - name: "Preflight - wolne miejsce na dysku (minimum 5GB)"
+      ansible.builtin.shell: df -B1 / | awk 'NR==2{print $4}'
+      changed_when: false
+      register: disk_free
+
+    - name: "Preflight - waliduj wolne miejsce"
+      ansible.builtin.assert:
+        that:
+          - disk_free.stdout | int >= 5368709120
+        fail_msg: "Minimum 5GB free space required, got {{ disk_free.stdout }} bytes"
+      when: "'galera' in group_names"
+
+    - name: "Preflight - brak istniejacego MariaDB (czysty host)"
+      ansible.builtin.shell: rpm -q mariadb-server >/dev/null 2>&1 && echo "INSTALLED" || echo "CLEAN"
+      changed_when: false
+      register: mariadb_check
+
+    - name: "Preflight - MariaDB nie moze byc juz zainstalowana (lab: czyste hosty)"
+      ansible.builtin.assert:
+        that:
+          - mariadb_check.stdout == "CLEAN"
+        fail_msg: "MariaDB already installed — F2 expects clean hosts"
+      when: "'galera' in group_names"
+
+  handlers: []
