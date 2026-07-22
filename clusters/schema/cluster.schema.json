@@ -18,7 +18,7 @@
     "platform": {
       "type": "object",
       "properties": {
-        "virtualization": { "type": "string", "enum": ["vmware_esxi"] },
+        "virtualization": { "type": "string", "enum": ["vmware_esxi", "docker_orbstack"] },
         "rocky_linux_major": { "type": "integer", "const": 9 }
       }
     },

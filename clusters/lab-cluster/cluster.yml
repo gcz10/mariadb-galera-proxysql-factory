@@ -1,0 +1,84 @@
+---
+# Lab cluster — konfiguracja dla 5-kontenerowego klastra Docker (OrbStack).
+# Profil: laboratory. Nie jest to produkcja.
+
+cluster:
+  name: "lab-cluster"
+  environment: "laboratory"
+  profile: "laboratory"
+  automation_release: "0.1.0"
+
+platform:
+  virtualization: "docker_orbstack"
+  rocky_linux_major: 9
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/candidate.lock.yml"
+
+galera:
+  cluster_name: "lab_galera"
+  nodes_expected: 3
+
+proxysql:
+  nodes_expected: 2
+  max_writers: 1
+  read_write_split_enabled: false
+  endpoint:
+    type: "keepalived_vip"
+    address: "172.28.0.30"
+    port: 6033
+
+tls:
+  mode: "disabled"
+  certificate_source: ""
+  ca_reference: ""
+  certificate_reference: ""
+  private_key_reference: ""
+
+network:
+  application_cidrs: ["172.28.0.0/24"]
+  database_cluster_cidrs: ["172.28.0.0/24"]
+  administration_cidrs: ["172.28.0.0/24"]
+  monitoring_cidrs: ["172.28.0.0/24"]
+
+secrets:
+  backend: "ansible_vault"
+
+storage:
+  data_directory: "/var/lib/mysql"
+  backup_staging_directory: "/var/tmp/mariadb-backup"
+  filesystem: "xfs"
+  expected_database_size_gb: "unknown"
+  expected_growth_gb_per_month: "unknown"
+  available_iops: "unknown"
+
+workload:
+  peak_qps: "unknown"
+  peak_connections: "unknown"
+  read_write_ratio: "unknown"
+  largest_transaction_mb: "unknown"
+  largest_table_gb: "unknown"
+  expected_write_latency_ms: "unknown"
+
+availability:
+  rpo: "0"
+  rto_node_failure: "2m"
+  rto_full_cluster_failure: "30m"
+  maintenance_window: "anytime"
+  allowed_service_interruption: "2m"
+
+backup:
+  enabled: true
+  destination: "smb"
+  full_backup_schedule: "0 2 * * *"
+  incremental_backup_schedule: "disabled"
+  retention_days: 14
+  encryption_enabled: true
+  immutable_or_offsite_copy: true
+  restore_test_schedule: "0 4 * * 0"
+
+monitoring:
+  system: "unknown"
+  alert_target: "unknown"
+  log_destination: "unknown"

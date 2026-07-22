@@ -251,12 +251,10 @@
           when: allow_bench | bool
       when: "'discovery_bench' in group_names"
 
-    - name: Zapisz fakty hosta do pliku
+    - name: Zapisz fakty hosta do pliku raportu
       ansible.builtin.copy:
-        content: "{{ lookup('template', 'discovery-report.json.j2') }}"
+        content: "{{ lookup('template', '../roles/discovery/templates/discovery-report.json.j2') }}"
         dest: /var/tmp/f0-discovery-{{ inventory_hostname }}.json
         mode: "0644"
-      delegate_to: localhost
-      changed_when: true
 
   handlers: []
