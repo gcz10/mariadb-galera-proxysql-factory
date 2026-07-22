@@ -1,0 +1,31 @@
+# versions.lock.yml — PRZYGOTOWANY (pusty), do wypełnienia w F1
+
+# Ten plik powstaje w F1 (research_versions) na podstawie F0 discovery.
+# Produkcja używa wyłącznie `versions.policy: locked` + tego pliku.
+# Nigdy `state: latest`; brak dynamicznej zmiany major series.
+
+rocky_linux:
+  major: 9
+  allowed_minors: []  # F1
+
+mariadb:
+  version: ""  # F1: pełna wersja z RPM
+  rpm_release: ""
+  galera_provider: ""
+  galera_provider_version: ""
+  mariadb_backup_version: ""
+
+proxysql:
+  version: ""
+  rpm_release: ""
+
+ansible:
+  core_version: ""
+  collections: []
+
+repositories:
+  - name: ""
+    url: ""
+    gpg_fingerprint: ""
+
+# Status: pusty — F1 wypełni po research z dostępem do RPM i oficjalnych docs.

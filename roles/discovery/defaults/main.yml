@@ -1,0 +1,9 @@
+galera_wsrep_provider: "galera-4"
+galera_cluster_address_method: "gcomm://"  # F3 uzupełni listę z inventory
+galera_sst_method: "mariabackup"
+galera_max_writers: 1
+galera_read_write_split: false
+galera_serial: 1
+galera_max_fail_percentage: 0
+galera_ist_window_minutes: 30
+galera_gcache_size: "unknown"  # F0 wyliczy z write rate

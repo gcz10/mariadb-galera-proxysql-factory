@@ -1,0 +1,171 @@
+---
+# F0: Discovery — read-only zbieranie faktów z istniejących hostów Rocky Linux 9.
+# Nie modyfikuje usług produkcyjnych. Narzędzia benchmarkowe (fio) instaluje
+# wyłącznie na hostach jawnie oznaczonych w inventory grupą [discovery_bench]
+# i tylko po zmiennej allow_bench: true.
+#
+# Satisfies: ISC-66 (raport discovery), ISC-67 (read-only), ISC-68 (gcache calc)
+# Status: PRZYGOTOWANY — nie uruchomiony (BLK-1, BLK-2: brak testowych hostów)
+
+- name: F0 Discovery — zbierz fakty
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    allow_bench: false
+    bench_path: /var/tmp/f0-fio
+    bench_size: 1G
+    ist_window_minutes: 30
+
+  tasks:
+    - name: Zbierz Ansible facts (OS, kernel, CPU, RAM, mounts)
+      ansible.builtin.setup:
+        gather_subset:
+          - all
+
+    - name: Wersja Rocky Linux
+      ansible.builtin.command: cat /etc/rocky-release
+      changed_when: false
+      register: rocky_release
+
+    - name: Dostępne repozytoria (dnf)
+      ansible.builtin.command: dnf repolist --all
+      changed_when: false
+      register: dnf_repolist
+
+    - name: SELinux status
+      ansible.builtin.command: getenforce
+      changed_when: false
+      register: selinux_status
+
+    - name: Firewalld status
+      ansible.builtin.command: firewall-cmd --state
+      changed_when: false
+      ignore_errors: true
+      register: firewalld_state
+
+    - name: Firewalld — otwarte usługi/porty
+      ansible.builtin.command: firewall-cmd --list-all
+      changed_when: false
+      ignore_errors: true
+      register: firewalld_list
+
+    - name: Chrony/NTP status
+      ansible.builtin.command: chronyc tracking
+      changed_when: false
+      ignore_errors: true
+      register: chronyc_tracking
+
+    - name: DNS — resolvery
+      ansible.builtin.command: cat /etc/resolv.conf
+      changed_when: false
+      register: resolv_conf
+
+    - name: Trasy sieciowe
+      ansible.builtin.command: ip -json route
+      changed_when: false
+      register: ip_route
+
+    - name: Interfejsy sieciowe
+      ansible.builtin.command: ip -json addr
+      changed_when: false
+      register: ip_addr
+
+    - name: Osiągalność portów Galery/ProxySQL (localhost probe)
+      ansible.builtin.shell: |
+        for p in 3306 4567 4568 6033 6032; do
+          (ss -tlnp | grep -q ":$p " && echo "$p LISTEN") || echo "$p CLOSED"
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: port_probe
+
+    - name: Dyski i filesystem
+      ansible.builtin.command: lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL -J
+      changed_when: false
+      register: lsblk_out
+
+    - name: Mount options i wolne miejsce
+      ansible.builtin.command: findmnt -J
+      changed_when: false
+      register: findmnt_out
+
+    - name: Istniejące pakiety MariaDB/ProxySQL
+      ansible.builtin.shell: rpm -qa | grep -Ei 'mariadb|galera|proxysql|wsrep' || true
+      changed_when: false
+      register: existing_db_pkgs
+
+    - name: Istniejące usługi MariaDB/ProxySQL
+      ansible.builtin.shell: systemctl list-units --type=service --all | grep -Ei 'mariadb|mysql|proxysql' || true
+      changed_when: false
+      register: existing_db_services
+
+    - name: Istniejący monitoring (procesy)
+      ansible.builtin.shell: |
+        ps -eo comm | grep -Ei 'prometheus|node_exporter|zabbix|datadog|grafana' || true
+      changed_when: false
+      register: monitoring_procs
+
+    - name: Istniejący log shipping
+      ansible.builtin.shell: systemctl list-units --type=service --all | grep -Ei 'loki|filebeat|fluentd|rsyslog' || true
+      changed_when: false
+      register: log_shipping
+
+    - name: Audyt PK w information_schema (jeśli istnieje MariaDB)
+      community.mysql.mysql_query:
+        query: |
+          SELECT t.TABLE_SCHEMA, t.TABLE_NAME
+          FROM information_schema.TABLES t
+          LEFT JOIN information_schema.STATISTICS s
+            ON t.TABLE_SCHEMA=s.TABLE_SCHEMA AND t.TABLE_NAME=s.TABLE_NAME AND s.NON_UNIQUE=0
+          WHERE t.TABLE_TYPE='BASE TABLE'
+            AND t.TABLE_SCHEMA NOT IN ('mysql','sys','performance_schema','information_schema')
+            AND s.TABLE_NAME IS NULL
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      become: true
+      become_user: mysql
+      ignore_errors: true
+      register: missing_pk
+
+    - name: Write rate (jeśli istnieje MariaDB) — wsrep received/committed
+      community.mysql.mysql_query:
+        query: SHOW GLOBAL STATUS LIKE 'wsrep_received'
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      become: true
+      become_user: mysql
+      ignore_errors: true
+      register: wsrep_received
+
+    - name: NUMA topology
+      ansible.builtin.command: numactl --hardware
+      changed_when: false
+      ignore_errors: true
+      register: numa_hw
+
+    - name: fio benchmark — TYLKO na hostach [discovery_bench] z allow_bench
+      block:
+        - name: Instaluj fio na bench hostach
+          ansible.builtin.dnf:
+            name: fio
+            state: present
+          when: allow_bench | bool
+
+        - name: Uruchom fio (randwrite fsync latency)
+          ansible.builtin.command: >
+            fio --name=f0-bench --directory={{ bench_path }} --size={{ bench_size }}
+            --rw=randwrite --fsync=1 --time_based --runtime=30 --numjobs=1
+            --output-format=json --output={{ bench_path }}/f0-fio.json
+          changed_when: false
+          when: allow_bench | bool
+      when: "'discovery_bench' in group_names"
+
+    - name: Zapisz fakty hosta do pliku
+      ansible.builtin.copy:
+        content: "{{ lookup('template', 'discovery-report.json.j2') }}"
+        dest: /var/tmp/f0-discovery-{{ inventory_hostname }}.json
+        mode: "0644"
+      delegate_to: localhost
+      changed_when: true
+
+  handlers: []

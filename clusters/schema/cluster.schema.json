@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "cluster.yml schema",
+  "description": "Schema konfiguracji klastra. PRZYGOTOWANY — do uzupełnienia w F1. Nie wpisuj danych klastra w rolach.",
+  "type": "object",
+  "required": ["cluster", "platform", "versions", "galera", "proxysql", "tls", "network", "secrets", "storage", "availability", "backup", "monitoring"],
+  "properties": {
+    "cluster": {
+      "type": "object",
+      "required": ["name", "environment", "profile", "automation_release"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "environment": { "type": "string", "enum": ["production", "staging", "laboratory"] },
+        "profile": { "type": "string", "enum": ["production", "staging", "laboratory"] },
+        "automation_release": { "type": "string" }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "properties": {
+        "virtualization": { "type": "string", "enum": ["vmware_esxi"] },
+        "rocky_linux_major": { "type": "integer", "const": 9 }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "properties": {
+        "policy": { "type": "string", "enum": ["locked", "candidate", "research-only"] },
+        "lock_file": { "type": "string" }
+      }
+    },
+    "galera": {
+      "type": "object",
+      "properties": {
+        "cluster_name": { "type": "string" },
+        "nodes_expected": { "type": "integer", "minimum": 3, "maximum": 3 }
+      }
+    },
+    "proxysql": {
+      "type": "object",
+      "properties": {
+        "nodes_expected": { "type": "integer", "minimum": 2, "maximum": 2 },
+        "max_writers": { "type": "integer", "const": 1 },
+        "read_write_split_enabled": { "type": "boolean", "const": false },
+        "endpoint": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["external_load_balancer", "keepalived_vip", "dns"] },
+            "address": { "type": "string" },
+            "port": { "type": "integer", "default": 6033 }
+          }
+        }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["disabled", "full"] },
+        "certificate_source": { "type": "string" },
+        "ca_reference": { "type": "string" },
+        "certificate_reference": { "type": "string" },
+        "private_key_reference": { "type": "string" }
+      }
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "application_cidrs": { "type": "array", "items": { "type": "string" } },
+        "database_cluster_cidrs": { "type": "array", "items": { "type": "string" } },
+        "administration_cidrs": { "type": "array", "items": { "type": "string" } },
+        "monitoring_cidrs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "properties": {
+        "backend": { "type": "string", "enum": ["ansible_vault", "hashicorp_vault", "external"] }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "data_directory": { "type": "string", "default": "/var/lib/mysql" },
+        "backup_staging_directory": { "type": "string" },
+        "filesystem": { "type": "string", "enum": ["xfs", "ext4"] },
+        "expected_database_size_gb": { "type": ["string", "number"] },
+        "expected_growth_gb_per_month": { "type": ["string", "number"] },
+        "available_iops": { "type": ["string", "number"] }
+      }
+    },
+    "availability": {
+      "type": "object",
+      "properties": {
+        "rpo": { "type": "string" },
+        "rto_node_failure": { "type": "string" },
+        "rto_full_cluster_failure": { "type": "string" },
+        "maintenance_window": { "type": "string" },
+        "allowed_service_interruption": { "type": "string" }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "destination": { "type": "string" },
+        "full_backup_schedule": { "type": "string" },
+        "incremental_backup_schedule": { "type": "string" },
+        "retention_days": { "type": ["integer", "string"] },
+        "encryption_enabled": { "type": "boolean" },
+        "immutable_or_offsite_copy": { "type": "boolean" },
+        "restore_test_schedule": { "type": "string" }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "properties": {
+        "system": { "type": "string" },
+        "alert_target": { "type": "string" },
+        "log_destination": { "type": "string" }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "properties": {
+        "peak_qps": { "type": ["string", "number"] },
+        "peak_connections": { "type": ["string", "number"] },
+        "read_write_ratio": { "type": ["string", "number"] },
+        "largest_transaction_mb": { "type": ["string", "number"] },
+        "largest_table_gb": { "type": ["string", "number"] },
+        "expected_write_latency_ms": { "type": ["string", "number"] }
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+allow_bench: false
+bench_path: /var/tmp/f0-fio
+bench_size: 1G
+ist_window_minutes: 30
+discovery_report_dir: /var/tmp

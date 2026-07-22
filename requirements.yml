@@ -1,0 +1,4 @@
+# requirements.yml — kolekcje Ansible; do uzupełnienia w F1 po research.
+# Puste do czasu, gdy F0/F1 potwierdzą wersje i kompatybilność.
+collections: []
+roles: []

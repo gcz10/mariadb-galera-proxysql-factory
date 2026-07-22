@@ -1,0 +1,16 @@
+# Sekrety — nigdy do repo
+clusters/*/secrets.yml
+*.vault
+*.pem
+*.key
+*.crt
+
+# Artefakty F0 i backupy
+/var/tmp/f0-*
+discovery-report-*.json
+
+# Python/Ansible
+__pycache__/
+*.retry
+*.pyc
+.venv/

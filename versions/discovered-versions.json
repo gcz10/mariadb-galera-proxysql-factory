@@ -1,0 +1,18 @@
+{
+  "_comment": "PRZYGOTOWANY — do wypełnienia w F0/F1 po uzyskaniu dostępu do hostów i internetu. Nie zgaduj wersji z pamięci (MASTER_PROMPT §4). Lockfile produkcyjny powstanie w F1.",
+  "galera": {
+    "wsrep_provider": "galera-4",
+    "wsrep_provider_version": "unknown",
+    "mariadb_version": "unknown",
+    "mariadb_rpm_release": "unknown",
+    "mariadb_backup_version": "unknown"
+  },
+  "proxysql": {
+    "version": "unknown",
+    "rpm_release": "unknown"
+  },
+  "ansible": {
+    "core_version": "unknown",
+    "collections": []
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "host": "{{ inventory_hostname }}",
+  "collected_at": "{{ ansible_date_time.iso8601 }}",
+  "ansible_managed": "F0 Discovery — read-only",
+  "os": {
+    "rocky_release": "{{ rocky_release.stdout | default('') }}",
+    "distribution": "{{ ansible_distribution | default('') }}",
+    "distribution_version": "{{ ansible_distribution_version | default('') }}",
+    "kernel": "{{ ansible_kernel | default('') }}"
+  },
+  "hardware": {
+    "cpu_cores": "{{ ansible_processor_vcpus | default('') }}",
+    "cpu_model": "{{ ansible_processor[0] | default('') }}",
+    "ram_mb": "{{ ansible_memtotal_mb | default('') }}",
+    "numa": {{ numa_hw.stdout | to_nice_json | default('null') }}
+  },
+  "storage": {
+    "block_devices": {{ lsblk_out.stdout | from_json | default({}) }},
+    "mounts": {{ findmnt_out.stdout | from_json | default({}) }}
+  },
+  "network": {
+    "interfaces": {{ ip_addr.stdout | from_json | default([]) }},
+    "routes": {{ ip_route.stdout | from_json | default([]) }},
+    "resolv_conf": {{ resolv_conf.stdout_lines | default([]) }},
+    "port_probe": {{ port_probe.stdout_lines | default([]) }}
+  },
+  "time_sync": {
+    "chronyc_tracking": "{{ chronyc_tracking.stdout | default('') }}"
+  },
+  "security": {
+    "selinux": "{{ selinux_status.stdout | default('') }}",
+    "firewalld_state": "{{ firewalld_state.stdout | default('') }}",
+    "firewalld_list": "{{ firewalld_list.stdout | default('') }}"
+  },
+  "packages": {
+    "existing_db_packages": {{ existing_db_pkgs.stdout_lines | default([]) }},
+    "dnf_repolist": {{ dnf_repolist.stdout_lines | default([]) }}
+  },
+  "existing_services": {
+    "db_services": {{ existing_db_services.stdout_lines | default([]) }}
+  },
+  "monitoring": {
+    "processes": {{ monitoring_procs.stdout_lines | default([]) }},
+    "log_shipping": {{ log_shipping.stdout_lines | default([]) }}
+  },
+  "database": {
+    "missing_primary_keys": {{ missing_pk.query_result | default([]) }},
+    "wsrep_received": {{ wsrep_received.query_result | default([]) }}
+  },
+  "gcache": {
+    "ist_window_minutes": {{ ist_window_minutes }},
+    "note": "gcache.size = measured_write_rate_bytes_per_sec * ist_window_minutes * 60; filled after write-rate measurement"
+  }
+}
