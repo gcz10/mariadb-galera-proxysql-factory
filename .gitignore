@@ -14,3 +14,5 @@ __pycache__/
 *.retry
 *.pyc
 .venv/
+ssh_key
+ssh_key.pub
