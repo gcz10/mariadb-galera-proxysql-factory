@@ -3,11 +3,11 @@ task: "Zbuduj fabrykę klastrów Galera i ProxySQL"
 slug: "20260722-172704_galera-proxysql-cluster-factory"
 effort: comprehensive
 effort_source: explicit
-phase: observe
+phase: think
 progress: 0/68
 mode: iterate
 started: "2026-07-22T15:27:04Z"
-updated: "2026-07-22T15:27:04Z"
+updated: "2026-07-22T15:33:39Z"
 principal_stated_goal: "Zbuduj powtarzalną, idempotentną i operacyjnie bezpieczną fabrykę produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących maszynach Rocky Linux 9, tak aby nowy niezależny klaster powstawał przez dodanie inventory i konfiguracji klastra, a każdy stan wysokiej dostępności, bezpieczeństwa, backupu i odtwarzania był potwierdzony wykonywalnym testem oraz dowodem."
 principal_stated_goal_source: prompt
 principal_stated_goal_signal: 4
@@ -162,8 +162,9 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 
 ## Not yet specified
 
-- fog: Jaka jest dokładna retencja backupów i kto ma dostęp do zasobu SMB/S3? — musi rozstrzygnąć F0 discovery backendu + decyzja principal; wpłynie na ISC-37 i harmonogram restore drill.
-- fog: Czy istnieje korporacyjny PKI/Vault do późniejszego `tls.mode=full`? — musi rozstrzygnąć F0 discovery secret backend; wpłynie na ISC-44 i plan TLS feature.
+- ~~fog: retencja backupów~~ ROZSTRZYGNIĘTY 2026-07-22 — SMB teraz, S3 retencja 30d (Decisions); ISC-37 zależy od F10 implementacji.
+- ~~fog: PKI/Vault~~ CZĘŚCIOWO ROZSTRZYGNIĘTY 2026-07-22 — secret backend = Ansible Vault (Decisions); PKI dla tls.mode=full pozostaje fog do F0 discovery istniejącego PKI.
+- fog: Czy istnieje korporacyjny PKI do późniejszego `tls.mode=full` (certyfikaty, CA)? — musi rozstrzygnąć F0 discovery; wpłynie na ISC-44 i plan TLS feature.
 - fog: Czy PITR (point-in-time recovery) jest w zakresie v1? — wymaga osobnej decyzji principal i kryteriów; obecnie out of scope domyślnie.
 - fog: Jaki jest docelowy write-latency budget (ms) dla writera? — musi rozstrzygnąć pomiar F0; wpłynie na tuning InnoDB/fsync i probe ISC-39.
 - fog: Czy istnieje reprezentatywny workload do pomiaru write rate, czy F0 mierzy na pustym klastrze? — wpłynie na wiarygodność ISC-68 (gcache).
@@ -279,20 +280,29 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - 2026-07-22 — Interview odpowiedź: backup na zamontowany zasób SMB teraz, opcja S3 później — ponieważ principal wybór; retencja i dostęp TBD (fog) — źródło: Interview 2026-07-22.
 - 2026-07-22 — Interview odpowiedź: endpoint = Keepalived VIP na węzłach ProxySQL — ponieważ principal wybór; wymaga osobnych CIDR i rekomendacji anti-affinity — źródło: Interview 2026-07-22.
 - 2026-07-22 — Interview odpowiedź: TLS `disabled` teraz, `full` zaplanowane w późniejszym feature — ponieważ principal wybór; ZAŁOŻENIE DO POTWIERDZENIA risk acceptance; ISC-44 i TLS ISC pozostają otwarte — źródło: Interview 2026-07-22.
-- 2026-07-22 — ZAŁOŻENIE DO POTWIERDZENIA: retencja backupu i dostęp do SMB/S3 — do rozstrzygnięcia po F0 discovery backendu; ISC-37 zależne otwarte.
-- 2026-07-22 — ZAŁOŻENIE DO POTWIERDZENIA: secret backend (ansible_vault/hashicorp_vault/external) — do rozstrzygnięcia po F0 discovery; ISC-43 zależne otwarte.
+- 2026-07-22 — refined: BLK-3 rozstrzygnięty — secret backend = Ansible Vault — ponieważ principal wybór; szyfrowane pliki w repo (clusters/<name>/secrets.yml), klucz poza repo; ISC-43 zależy, F6 implementacja — źródło: Interview 2026-07-22.
+- 2026-07-22 — refined: BLK-3 rozstrzygnięty — backup: SMB teraz, migracja S3 z retencją 30d — ponieważ principal wybór; ISC-32/37 zależne, F10 implementacja; S3 wymaga osobnych ISC dla fazy S3 — źródło: Interview 2026-07-22.
+- 2026-07-22 — F1 research: MariaDB 11.4.12 LTS wybrana — ponieważ najdłuższe wsparcie (EOL 2029-05), Galera 4, RPM dla RHEL9 — dowód: mariadb.org, endoflife.date (2026-07-22).
+- 2026-07-22 — F1 research: ProxySQL 3.0.9 wybrany — ponieważ Stable Tier, łata CVE-2026-48772/48773 — dowód: proxysql.com (2026-07-22).
+- 2026-07-22 — F1 research: Galera 4 (galera-4, wsrep API 26) — ponieważ jedyny wspierany provider dla MariaDB 11.x; wbudowany w pakiety MariaDB — dowód: mariadb.org (2026-07-22).
+- 2026-07-22 — F1 research: Rocky Linux 9.8 (latest minor, 2026-05-27), major EOL 2032-05-31 — dowód: rockylinux.org, endoflife.date (2026-07-22).
+- 2026-07-22 — F1 research: ansible-core 2.21.2 + ansible.mysql 5.1.0 — ponieważ community.mysql deprecated -> ansible.mysql — dowód: ansible.com, github.com/ansible-collections/ansible.mysql (2026-07-22).
+- 2026-07-22 — F1 research: odrzucone MariaDB 12.3 (krótszy EOL), 11.8 (krótszy EOL), 10.11 (starsza), 10.5/10.6 (EOL/przestarzałe) — dowód: mariadb.org (2026-07-22).
 
 ## Verification
 
-(brak — pierwsza sesja, F0 nie uruchomiony, brak dowodów)
+- ISC-3: F1 research — versions/discovered-versions.json + versions/candidate.lock.yml wypełnione z oficjalnych źródeł (mariadb.org, proxysql.com, rockylinux.org, ansible.com); commit 2026-07-22. Host-dependent RPM release potwierdzenie w F0.
+- ISC-63: F1 research — requirements.yml używa ansible.mysql 5.1.0; brak state: latest w candidate.lock.yml; commit 2026-07-22. Probe pełny po F2.
+- ISC-66: F0 playbook przygotowany (playbooks/f0_discovery.yml), ansible syntax-check PASS; nie uruchomiony (BLK-1/BLK-2).
+
 
 ## Blockers
 
 - BLK-1: Brak dostępu do testowych hostów Rocky Linux 9 (≥3 Galera + ≥2 ProxySQL) — F0 discovery nie może zostać uruchomiony i zmierzony; ISC-66/67/68 pozostają otwarte do czasu dostępu.
 - BLK-2: Brak dostępu do inventory testowego (SSH + privilege escalation) — potrzebne do uruchomienia F0 i późniejszych sond.
-- BLK-3: Brak ustalonego secret backendu i backup backendu — zależne ISC otwarte (ZAŁOŻENIE DO POTWIERDZENIA w Decisions).
-- BLK-4: Brak dostępu do internetu do oficjalnych źródeł MariaDB/Galera/ProxySQL/Rocky — F1 (research wersji) będzie wymagał dostępu do docs/release notes; jeśli brak, zostawić ISC otwarte z fog/blocker.
+- ~~BLK-3~~ ROZSTRZYGNIĘTY 2026-07-22 — secret backend = Ansible Vault; backup = SMB teraz, S3 retencja 30d później (Decisions).
+- ~~BLK-4~~ ROZSTRZYGNIĘTY 2026-07-22 — internet dostępny; F1 research wykonany z oficjalnych źródeł.
 
 ## Następny pojedynczy feature
 
-F0: Discovery — uruchomić po uzyskaniu dostępu do testowych hostów (BLK-1, BLK-2). Przed uruchomieniem: zatwierdzić secret/backup backend (BLK-3). F0 jest read-only względem usług produkcyjnych; instaluje narzędzia benchmarkowe (fio) wyłącznie na jawnych testowych hostach.
+F0: Discovery — uruchomić po uzyskaniu dostępu do testowych hostów (BLK-1, BLK-2). BLK-3 i BLK-4 rozstrzygnięte. F1 (research wersji) wykonany — versions/discovered-versions.json, versions/candidate.lock.yml, versions/compatibility-report.md wypełnione. F0 jest read-only względem usług; instaluje fio wyłącznie na jawnych testowych hostach z allow_bench: true. Po F0: promocja candidate.lock.yml -> versions.lock.yml.

@@ -1,5 +1,5 @@
 ---
-# F0: Discovery — read-only zbieranie faktów z istniejących hostów Rocky Linux 9.
+# F1 finding: community.mysql deprecated -> ansible.mysql (2026-07-22, ansible.mysql 5.1.0).
 # Nie modyfikuje usług produkcyjnych. Narzędzia benchmarkowe (fio) instaluje
 # wyłącznie na hostach jawnie oznaczonych w inventory grupą [discovery_bench]
 # i tylko po zmiennej allow_bench: true.
@@ -113,7 +113,7 @@
       register: log_shipping
 
     - name: Audyt PK w information_schema (jeśli istnieje MariaDB)
-      community.mysql.mysql_query:
+      ansible.mysql.mysql_query:
         query: |
           SELECT t.TABLE_SCHEMA, t.TABLE_NAME
           FROM information_schema.TABLES t
@@ -129,7 +129,7 @@
       register: missing_pk
 
     - name: Write rate (jeśli istnieje MariaDB) — wsrep received/committed
-      community.mysql.mysql_query:
+      ansible.mysql.mysql_query:
         query: SHOW GLOBAL STATUS LIKE 'wsrep_received'
         login_unix_socket: /var/lib/mysql/mysql.sock
       become: true

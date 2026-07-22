@@ -1,18 +1,81 @@
 {
-  "_comment": "PRZYGOTOWANY — do wypełnienia w F0/F1 po uzyskaniu dostępu do hostów i internetu. Nie zgaduj wersji z pamięci (MASTER_PROMPT §4). Lockfile produkcyjny powstanie w F1.",
+  "_comment": "F1 research — wersje z oficjalnych źródeł (web_search 2026-07-22). Host-dependent fakty (rpm -qa, dnf info) pozostają na F0. Nie zgaduj z pamięci.",
+  "_research_date": "2026-07-22",
+  "_sources": [
+    "https://mariadb.org/download/",
+    "https://endoflife.date/mariadb",
+    "https://proxysql.com/",
+    "https://rockylinux.org/",
+    "https://endoflife.date/rocky-linux",
+    "https://docs.ansible.com/",
+    "https://github.com/ansible-collections/ansible.mysql"
+  ],
+  "rocky_linux": {
+    "major": 9,
+    "latest_minor": "9.8",
+    "latest_minor_released": "2026-05-27",
+    "major_eol": "2032-05-31",
+    "policy": "tylko najnowszy minor jest wspierany; poprzednie superseded",
+    "rpm_source": "Rocky Linux AppStream"
+  },
   "galera": {
     "wsrep_provider": "galera-4",
-    "wsrep_provider_version": "unknown",
-    "mariadb_version": "unknown",
-    "mariadb_rpm_release": "unknown",
-    "mariadb_backup_version": "unknown"
+    "wsrep_api_version": 26,
+    "integration": "wbudowany w pakiety MariaDB Server; instalacja galera-4 obok mariadb-server",
+    "compatibility": "MariaDB 11.x uzywa wylacznie Galera 4",
+    "rolling_upgrades": "kompatybilne w obrebie 11.x; utrzymuj najnowszy patch",
+    "rpm_source": "official MariaDB repo"
+  },
+  "mariadb": {
+    "candidate_version": "11.4.12",
+    "candidate_series": "11.4",
+    "candidate_type": "LTS",
+    "candidate_ga": "2024-05",
+    "candidate_eol": "2029-05",
+    "candidate_released": "2026-05",
+    "rpm_source": "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup (--mariadb-server-version=11.4)",
+    "mariadb_backup": "pakiet mariadb-backup z tego samego repo",
+    "galera_provider_package": "galera-4",
+    "alternative_series": {
+      "11.8": { "type": "LTS", "eol": "2028-06", "latest": "11.8.8" },
+      "12.3": { "type": "LTS", "eol": "2029-06", "latest": "12.3.2" },
+      "10.11": { "type": "LTS", "eol": "2028-02", "latest": "10.11.18" }
+    },
+    "eol_warning": "10.6 EOL 2026-07-06; 10.5 (Rocky9 default AppStream) starsze, dla Galery niepolecane",
+    "selection_rationale": "11.4 LTS wybrany: najdluzsze wsparcie (May 2029), dojrzaly, kompatybilny z Galera 4, RPM dla RHEL9. 12.3 nowszy ale krotszy support window; 11.8 krotszy EOL. do potwierdzenia w F0 (co jest na hostach)."
   },
   "proxysql": {
-    "version": "unknown",
-    "rpm_release": "unknown"
+    "candidate_version": "3.0.9",
+    "candidate_released": "2026-06-05",
+    "rpm_source": "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/",
+    "gpg_key": "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg",
+    "security": "3.0.9 poprawia CVE-2026-48772 (PROXY Protocol v1 spoofing) i CVE-2026-48773 (pre-auth heap overflow); wersje <3.0.9 wymagaja natychmiastowego upgrade",
+    "tier": "Stable Tier (3.0.x)"
   },
   "ansible": {
-    "core_version": "unknown",
-    "collections": []
-  }
+    "core_version": "2.21.2",
+    "core_released": "2026-07-13",
+    "collections": {
+      "ansible.mysql": {
+        "version": "5.1.0",
+        "note": "community.mysql deprecated -> ansible.mysql; FQCN ansible.mysql.* ; nowe moduly: mysql_binlog_info, mysql_clone, mysql_perf_schema, mysql_resource_group, mysql_slow_log",
+        "status": "active",
+        "mariadb_support": "do mid-2027; potem ansible.mariadb (introduced 2026-07)"
+      },
+      "community.general": {
+        "version": "latest-stable",
+        "status": "active"
+      },
+      "ansible.posix": {
+        "version": "latest-stable",
+        "status": "active"
+      }
+    }
+  },
+  "_blocked_on_f0": [
+    "rpm -qa na hostach (co faktycznie zainstalowane)",
+    "dnf info mariadb-server proxysql (dokladny RPM release)",
+    "kernel version",
+    "ansible-galaxy collection list (co zainstalowane)"
+  ]
 }

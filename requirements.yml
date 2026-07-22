@@ -1,4 +1,15 @@
-# requirements.yml — kolekcje Ansible; do uzupełnienia w F1 po research.
-# Puste do czasu, gdy F0/F1 potwierdzą wersje i kompatybilność.
-collections: []
+---
+# requirements.yml — kolekcje Ansible.
+# F1 research: community.mysql deprecated -> ansible.mysql (2026-07-22).
+# ansible.mysql wspiera MariaDB do mid-2027; potem ansible.mariadb.
+
+collections:
+  - name: "ansible.mysql"
+    version: "5.1.0"
+    source: "https://galaxy.ansible.com"
+  - name: "community.general"
+    source: "https://galaxy.ansible.com"
+  - name: "ansible.posix"
+    source: "https://galaxy.ansible.com"
+
 roles: []
