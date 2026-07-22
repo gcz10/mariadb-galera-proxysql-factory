@@ -86,34 +86,21 @@ services:
       - SYS_ADMIN
       - NET_ADMIN
 
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    hostname: prometheus
+  pmm-server:
+    image: percona/pmm-server:latest
+    platform: linux/amd64
+    container_name: pmm-server
+    hostname: pmm-server
     networks:
       galera-net:
         ipv4_address: 172.28.0.100
     ports:
-      - "9090:9090"
+      - "8080:8080"
+      - "8443:8443"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
+      - pmm-data:/srv
     restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    hostname: grafana
-    networks:
-      galera-net:
-        ipv4_address: 172.28.0.101
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    restart: unless-stopped
+    mem_limit: 4g
 
 networks:
   galera-net:
@@ -126,5 +113,4 @@ volumes:
   gnode1-data:
   gnode2-data:
   gnode3-data:
-  prometheus-data:
-  grafana-data:
+  pmm-data:

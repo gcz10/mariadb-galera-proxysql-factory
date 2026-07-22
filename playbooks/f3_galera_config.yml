@@ -1,0 +1,65 @@
+---
+# F3: MariaDB/Galera configuration
+# Konfiguruje server.cnf z wsrep na węzłach Galera.
+# Satisfies: ISC-7,8,9,10,14,17
+# Depends: F2 (pakiety zainstalowane)
+
+- name: "F3 - MariaDB/Galera configuration"
+  hosts: galera
+  become: true
+  serial: 1
+  max_fail_percentage: 0
+  vars:
+    galera_cluster_name: "lab_galera"
+    galera_nodes_csv: "172.28.0.11,172.28.0.12,172.28.0.13"
+    sst_user: "sst_user"
+    sst_password: "sst_password_change_me"
+    gcache_size: "128M"
+    mariadb_config_dir: /etc/my.cnf.d
+
+  tasks:
+    - name: "Utworz katalog konfiguracyjny MariaDB"
+      ansible.builtin.file:
+        path: "{{ mariadb_config_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: "Utworz katalog /var/run/mysqld"
+      ansible.builtin.file:
+        path: /var/run/mysqld
+        state: directory
+        owner: mysql
+        group: mysql
+        mode: "0755"
+
+    - name: "Utworz katalog /var/log/mariadb"
+      ansible.builtin.file:
+        path: /var/log/mariadb
+        state: directory
+        owner: mysql
+        group: mysql
+        mode: "0755"
+
+    - name: "Konfiguruj Galera server.cnf z template"
+      ansible.builtin.template:
+        src: ../roles/mariadb_install/templates/server.cnf.j2
+        dest: "{{ mariadb_config_dir }}/server.cnf"
+        owner: root
+        group: root
+        mode: "0644"
+      register: config_result
+
+    - name: "Inicjalizuj datadir (mariadb-install-db)"
+      ansible.builtin.command: >
+        mariadb-install-db --user=mysql --datadir=/var/lib/mysql
+      args:
+        creates: /var/lib/mysql/mysql
+      register: init_result
+
+    - name: "Wypisz status inicjalizacji"
+      ansible.builtin.debug:
+        msg: >-
+          datadir initialized: {{ 'yes' if init_result.changed else 'already existed' }};
+          config changed: {{ config_result.changed }}
+
+  handlers: []

@@ -1,0 +1,51 @@
+# Galera/MariaDB configuration — generowany z repo (F3)
+# Nie wpisuj danych klastra w rolach — wszystko z cluster.yml + inventory.
+# Satisfies: ISC-7,8,9,10,14,17 (Galera cluster health)
+
+[mysqld]
+# === Podstawowe ===
+datadir = /var/lib/mysql
+socket = /var/lib/mysql/mysql.sock
+pid-file = /var/run/mysqld/mysqld.pid
+user = mysql
+
+# === Galera ===
+binlog_format = ROW
+default_storage_engine = InnoDB
+innodb_autoinc_lock_mode = 2
+innodb_flush_log_at_trx_commit = 0
+
+# === wsrep ===
+wsrep_on = ON
+wsrep_provider = /usr/lib/galera/libgalera_smm.so
+wsrep_cluster_name = {{ galera_cluster_name }}
+wsrep_cluster_address = gcomm://{{ galera_nodes_csv }}
+wsrep_node_name = {{ inventory_hostname }}
+wsrep_node_address = {{ galera_node_address }}
+wsrep_sst_method = mariabackup
+wsrep_sst_auth = "{{ sst_user }}:{{ sst_password }}"
+
+# === SST safety ===
+wsrep_sst_donor_rejects_queries = 1
+
+# === Bind ===
+bind-address = 0.0.0.0
+
+# === Tuning (lab: minimalne wartości) ===
+innodb_buffer_pool_size = 256M
+innodb_log_file_size = 128M
+max_connections = 50
+
+# === Logi ===
+log_error = /var/log/mariadb/mariadb.log
+slow_query_log = OFF
+
+# === gcache (do weryfikacji po F0 pomiarze — ISC-68) ===
+wsrep_provider_options = "gcache.size={{ gcache_size }}"
+
+[client]
+socket = /var/lib/mysql/mysql.sock
+
+[sst]
+# SST przez mariadb-backup
+streamfmt = mbstream
