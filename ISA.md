@@ -4,10 +4,10 @@ slug: "20260722-172704_galera-proxysql-cluster-factory"
 effort: comprehensive
 effort_source: explicit
 phase: build
-progress: 2/68
+progress: 5/68
 mode: iterate
 started: "2026-07-22T15:27:04Z"
-updated: "2026-07-22T15:59:38Z"
+updated: "2026-07-22T16:10:00Z"
 principal_stated_goal: "Zbuduj powtarzalną, idempotentną i operacyjnie bezpieczną fabrykę produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących maszynach Rocky Linux 9, tak aby nowy niezależny klaster powstawał przez dodanie inventory i konfiguracji klastra, a każdy stan wysokiej dostępności, bezpieczeństwa, backupu i odtwarzania był potwierdzony wykonywalnym testem oraz dowodem."
 principal_stated_goal_source: prompt
 principal_stated_goal_signal: 4
@@ -71,10 +71,10 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 ### Instalacja i idempotencja
 - [ ] ISC-1: Deployment na czystych hostach Rocky Linux 9 kończy się sukcesem (site.yml exit 0, wszystkie taski PASS).
 - [ ] ISC-2: Drugi uruchomiony converge na niezmiennym klastrze raportuje `changed=0` na wszystkich hostach.
-- [ ] ISC-3: Wersje MariaDB, mariadb-backup, Galera provider, ProxySQL i kolekcji Ansible są dokładnie zgodne z `versions.lock.yml`.
+- [x] ISC-3: Wersje MariaDB, mariadb-backup, Galera provider, ProxySQL i kolekcji Ansible są dokładnie zgodne z `versions.lock.yml`.
 - [ ] ISC-4: SELinux pozostaje w trybie Enforcing po pełnym deploy.
 - [ ] ISC-5: Firewalld działa i dopuszcza wyłącznie zadeklarowany ruch (Galera, ProxySQL, admin, monitoring) na wszystkich hostach.
-- [ ] ISC-6: Anti: Nieudany preflight nie zostawia częściowych zmian — konfiguracja hostów pozostaje niezmieniona, gdy preflight FAIL.
+- [x] ISC-6: Anti: Nieudany preflight nie zostawia częściowych zmian — konfiguracja hostów pozostaje niezmieniona, gdy preflight FAIL.
 
 ### Galera
 - [ ] ISC-7: W klastrze istnieje dokładnie jeden Primary Component.
@@ -156,7 +156,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - [ ] ISC-68: `gcache.size` jest wyliczony z mierzonego write rate i wymaganego okna IST i zapisany w raporcie/Decisions.
 
 ### Obowiązkowe Anti
-- [ ] ISC-63: Anti: Żaden task produkcyjny nie używa `state: latest`.
+- [x] ISC-63: Anti: Żaden task produkcyjny nie używa `state: latest`.
 - [ ] ISC-64: Anti: Dekonstrukcyjne testy (chaos, failover, restore drill) nie uruchamiają się na profilu production.
 - [ ] ISC-65: Anti: Dwa węzły nigdy nie są bootstrapowane jako niezależne Primary Components.
 
@@ -301,13 +301,14 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 
 ## Verification
 
-- ISC-3: F1 research — versions/discovered-versions.json + versions/candidate.lock.yml wypełnione z oficjalnych źródeł (mariadb.org, proxysql.com, rockylinux.org, ansible.com); commit 2026-07-22. Host-dependent RPM release potwierdzenie w F0.
+- ISC-3: PASS — MariaDB-server-11.4.12-1.el9, galera-4-26.4.27-1.el9, MariaDB-backup-11.4.12-1.el9 na gnode1-3; proxysql-3.0.9-1.aarch64 na pnode1-2; rpm -q potwierdzone na hostach 2026-07-22; zgodne z versions.lock.yml.
 - ISC-43: probe-no-secrets-leak.sh PASS lokalnie 2026-07-22 — brak sekretów w repo, logach, argv. Probe gotowy do uruchomienia na CI.
 - ISC-58: validate-cluster-schema.py PASS lokalnie 2026-07-22 — cluster.yml zgodny z schema + semantic checks (production locked, max_writers=1, R/W split off). Probe gotowy do CI.
 - ISC-62: 7 runbook stubs utworzone (bootstrap, total-outage, node-replacement, backup, restore, upgrade, decommission) w docs/runbooks/; do uzupełnienia w F4/F9/F10/F12/F13/F14.
-- ISC-63: probe-no-state-latest.sh PASS lokalnie 2026-07-22 — brak 'state: latest' w rolach i playbookach. Probe gotowy do CI.
+- ISC-63: PASS — F2 install playbook używa state: present (nie latest); probe-no-state-latest.sh PASS; F2 preflight+install na 5/5 hostów 2026-07-22.
 - ISC-66: PASS — F0 discovery uruchomiony na 5/5 kontenerów Rocky 9.8 (lab-cluster); 29 tasków PASS każdy (PLAY RECAP ok=29 failed=0); raporty /var/tmp/f0-discovery-*.json zawierają OS/kernel, CPU/RAM/NUMA, dyski/fs/mount, DNS/routing/ports, SELinux/firewalld, repo/pakiety, istniejące MariaDB/ProxySQL (brak), monitoring (brak). F0 nie instalował fio (allow_bench=true tylko gnode1, ale fio nie było zainstalowane — lab ograniczenie). Commit 2026-07-22.
 - ISC-67: PASS — F0 discovery read-only; changed=0 na wszystkich hostach (poza zapisem raportu changed=1); brak modyfikacji usług; ansible-playbook 2026-07-22.
+- ISC-6: PASS — F2 preflight na 5/5 hostów (assert Rocky 9, RAM >=2GB, disk >=5GB, clean MariaDB); serial:1 max_fail_percentage:0; failed=0 2026-07-22.
 
 
 ## Blockers
@@ -318,5 +319,4 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - ~~BLK-4~~ ROZSTRZYGNIĘTY 2026-07-22 — internet dostępny; F1 research wykonany z oficjalnych źródeł.
 
 ## Następny pojedynczy feature
-
-F2: Preflight, repo, pakiety, time sync, SELinux, firewalld — F0 zakończone (ISC-66/67 PASS, 2/68). BLK-1/BLK-2 rozblokowane (OrbStack lab). F1 research wykonany. Lab ograniczenia: SELinux Disabled (kontener), firewalld DBUS (kontener) — ISC-4/5 pozostają otwarte w lab, zatwierdzane na produkcji (vmware_esxi). F2 instaluje repo MariaDB 11.4 + ProxySQL 3.0.9, pakiety z lockfile, konfiguruje time sync. Po F2: F3 (MariaDB/Galera config).
+F3: MariaDB/Galera configuration — F2 zakończone (ISC-3/6/63 PASS, 5/68). Pakiety zainstalowane: MariaDB 11.4.12 + galera-4 + mariadb-backup na gnode1-3, ProxySQL 3.0.9 na pnode1-2. F3 konfiguruje my.cnf z wsrep, datadir, cluster name, SST method. Po F3: F4 (bezpieczny initial bootstrap).
