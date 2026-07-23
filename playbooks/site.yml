@@ -9,8 +9,8 @@
   serial: 1
   max_fail_percentage: 0
   vars:
-    galera_cluster_name: "lab_galera"
-    galera_nodes_csv: "172.28.0.11,172.28.0.12,172.28.0.13"
+    galera_cluster_name: "{{ galera.cluster_name }}"
+    galera_nodes_csv: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | join(',') }}"
     sst_user: "sst_user"
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
     gcache_size: "128M"

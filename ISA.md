@@ -144,11 +144,11 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - [x] ISC-57: ProxySQL aktualizuje się osobno, jedną instancję naraz.
 
 ### Multi-cluster
-- [ ] ISC-58: Nowy klaster wymaga wyłącznie nowego katalogu `clusters/<name>/` (inventory.yml + cluster.yml).
-- [ ] ISC-59: Role i playbooki nie zawierają danych konkretnego klastra (zero hardcodowanych IP/nazw/sekretów).
+- [x] ISC-58: Nowy klaster wymaga wyłącznie nowego katalogu `clusters/<name>/` (inventory.yml + cluster.yml).
+- [x] ISC-59: Role i playbooki nie zawierają danych konkretnego klastra (zero hardcodowanych IP/nazw/sekretów).
 - [ ] ISC-60: Dwa klastry mają osobne nazwy, sieci, sekrety i endpointy.
 - [ ] ISC-61: Uruchomienie drugiego klastra przechodzi te same testy co pierwszy.
-- [ ] ISC-62: README i runbooki obejmują bootstrap, total outage, node replacement, backup, restore, upgrade i decommission.
+- [x] ISC-62: README i runbooki obejmują bootstrap, total outage, node replacement, backup, restore, upgrade i decommission.
 
 ### F0 Discovery
 - [x] ISC-66: Raport discovery zawiera fakty: OS/kernel, CPU/RAM/NUMA, dyski/filesystem/mount/wolne miejsce, IOPS+fsync (fio), DNS/routing/osigalność portów, chrony/NTP, SELinux/firewalld, repozytoria+pakiety, istniejące MariaDB/ProxySQL, monitoring, secret backend, audyt PK, write rate.
@@ -319,6 +319,8 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - 2026-07-23 — F12 patch safe-default: domyślna komenda patcha = read-only `dnf check-update` (changed_when:false) — wzorzec canary+health-gate wykonywany bez modyfikacji pakietów w labie; produkcja nadpisuje `f12_patch_command`. ProxySQL: `SAVE ... TO DISK` przed patch (proxysql.com configuration-system).
 - 2026-07-23 — F13 drift approach: ProxySQL drift = MAIN (mysql_servers/mysql_galera_hostgroups/mysql_users) vs DISK, NIE runtime_* (runtime niesie dynamiczny status SHUNNED/ONLINE + rozwinięte galera hostgroups) — dowód: false-positive przy runtime_mysql_servers (HG20 derived, status dynamic), poprawione na main-vs-disk. Drift read-only (§18: nie naprawia automatycznie) — dowód: inject unsaved config → DRIFT detected, cleanup → CLEAN.
 - 2026-07-23 — F13 node lifecycle: remove-node wymaga planu (f13_remove_node_plan.yml read-only: quorum guard, writer-detection) + confirm=yes (f13_remove_node.yml, jak bootstrap). Quorum guard odmawia jeśli size-1 < 2. Lab: 3→2 bezpieczne, nie testowano destruktywnego usunięcia (plan + guard zweryfikowane).
+- 2026-07-23 — F14 portability: usunięto hardcoding z 4 playbooków (site.yml, f3_galera_config.yml, f5_join.yml: galera_cluster_name→galera.cluster_name, galera_nodes_csv→groups['galera']|galera_node_address; f7_proxysql.yml: galera_backends→inventory, 'lab-galera'→monitoring.pmm.cluster_name). Weryfikacja: f3 renderuje server.cnf idempotentnie (changed=False), klaster zdrowy. ISC-59 PASS (probe-zero-hardcode: 0 trafień w roles/playbooks).
+- 2026-07-23 — F14 ISC-60/61 scope: drugi klaster LIVE (docker-compose druga sieć 172.29.0.x + 5 kontenerów + bootstrap + converge + probes) pozostaje jako acceptance gate — fundament (zero hardcode + parametryzacja + example-cluster template + runbooki) jest kompletny; drugi klaster powstaje wyłącznie przez clusters/<name>/.
 
 ## Verification
 
@@ -383,6 +385,9 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - ISC-56: PASS — anti-downgrade guard: `f12_upgrade_plan.yml` assert odrzuca gdy obecna >= docelowa (test negatywny target=11.2 → FAILED z cytatem "forward-incompatible"); probe-upgrade-plan PASS 2026-07-23.
 - ISC-57: PASS — `f12_patch.yml` ProxySQL play `serial:1` + SAVE ... TO DISK przed patch; pnode1/pnode2 po kolei, każdy health-gated (backends ONLINE); probe-patch PASS 2026-07-23.
 - ISC-21 (F13 drift): PASS — `f13_drift.yml` read-only: ProxySQL main-vs-disk (mysql_servers/galera_hostgroups/mysql_users CLEAN) + Galera cluster_state_uuid spójny. Falsyfikowalny: inject unsaved INSERT → mysql_servers=DRIFT detected; cleanup → CLEAN. probe-drift PASS 2026-07-23.
+- ISC-58: PASS — clusters/example-cluster/{cluster.yml,inventory.yml} template; roles/playbooks nie referencjują clusters/lab-cluster (probe-zero-hardcode). Nowy klaster = clusters/<name>/ tylko. 2026-07-23.
+- ISC-59: PASS — 0 hardcodowanych IP/nazw/secretów w roles/playbooks (probe-zero-hardcode.py); parametryzacja zweryfikowana idempotentnym renderem f3 (changed=False, klaster zdrowy). 2026-07-23.
+- ISC-62: PASS — 7 runbooków (bootstrap, total-outage, node-replacement, backup, restore, upgrade, decommission) zaktualizowane; 0 STUB; wszystkie komendy istnieją w Makefile. 2026-07-23.
 - ISC-65: PASS — `probe-no-double-bootstrap.py`: jedyny bootstrap play (bootstrap.yml) jest single-host-safe (serial:1 + assert ansible_play_hosts==1) + confirm-gated; 0 innych playbooków z --wsrep-new-cluster w shell/command. 2026-07-23.
 - F13 node lifecycle: PASS — `f13_remove_node_plan.yml` read-only (quorum guard 3→2 OK, writer-detection: gnode2=nie, gnode3=TAK+warn); `f13_remove_node.yml` confirm-gated (odmawia bez confirm=yes). Plan + guard zweryfikowane; destruktywne usunięcie nie testowane w labie (3→2). 2026-07-23.
 
@@ -396,4 +401,4 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - BLK-5 — docelowy alert target/contact point jest nieuzgodniony. Nie blokuje bieżącego monitoringu; musi zostać rozstrzygnięty przed końcowym F15 po F11.
 
 ## Następny pojedynczy feature
-F14: Drugi niezależny klaster i runbooki — nowy klaster wyłącznie przez clusters/<name>/, zero hardkodowanych IP/nazw/sekretów w rolach, drugi klaster przechodzi te same testy, README/runbooki uzupełnione (ISC-58, ISC-59, ISC-60, ISC-61, ISC-62).
+F14 drugi-klaster-LIVE (ISC-60/61): wdrożyć drugi niezależny klaster w labie (druga sieć docker 172.29.0.x + 5 kontenerów + bootstrap + converge) i uruchomić te same probes — ostateczny dowód fabryki. Następnie F15: końcowy alerting (ISC-47, BLK-5 alert target). Fundament F14 kompletny: ISC-58/59/62 PASS (zero hardcode, parametryzacja, runbooki).

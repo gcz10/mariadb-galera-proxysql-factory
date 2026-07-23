@@ -74,6 +74,8 @@ verify-no-mass-restart:  ## F9 — statyczny guard: brak masowego restartu Galer
 
 verify-no-double-bootstrap:  ## F13 — statyczny guard: brak dwóch niezależnych Primary (ISC-65)
 	python3 tests/validation/probe-no-double-bootstrap.py
+verify-zero-hardcode:  ## F14 — statyczny guard: brak hardkodowanych danych klastra (ISC-58/59)
+	python3 tests/validation/probe-zero-hardcode.py
 
 cluster-backup:  ## F10 — backup → off-cluster S3 (szyfr, checksum, metadata); alert przy porażce
 	@: "$${MINIO_ROOT_USER:?Ustaw MINIO_ROOT_USER poza repozytorium}"

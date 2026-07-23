@@ -1,23 +1,19 @@
 # Runbook: Restore i Restore Drill
 
-**Status:** STUB — do uzupełnienia w F10
+**Status:** Aktualny (F10 complete)
 **Powiązane ISC:** ISC-36, ISC-37, ISC-38
 
 ## Przeznaczenie
 
 Odtwarzanie bazy z backupu na izolowany host + okresowy restore drill.
 
-## Procedura — Restore na izolowany host
+## Procedura — Restore drill na izolowany host (rnode1)
 
 ```bash
-# 1. Przygotuj czysty izolowany host (nie produkcyjny)
-# 2. Odszyfruj backup
-gpg -d <backup_file>.gpg | mariabackup --copy-back --target-dir=-
-
-# 3. Uruchom MariaDB na izolowanym hoście
-# 4. Test integralności
-mariadb --socket=/var/lib/mysql/mysql.sock -e "CHECK TABLE <db>.*"
-mariadb --socket=/var/lib/mysql/mysql.sock -e "SELECT COUNT(*) FROM <critical_table>"
+# Restore drill odtwarza najnowszy backup na czysty izolowany host (rnode1),
+# weryfikuje checksum (ISC-34), integralność CHECK TABLE (ISC-36) i liczbę wierszy.
+# ISC-37: drill według restore_test_schedule (0 4 * * 0).
+make cluster-restore-drill CLUSTER=<name>
 ```
 
 ## Wymagania (ISC)
@@ -29,9 +25,12 @@ mariadb --socket=/var/lib/mysql/mysql.sock -e "SELECT COUNT(*) FROM <critical_ta
 ## Restore Drill (automatyczny)
 
 ```bash
-make cluster-restore-test CLUSTER=<name>
-# Uruchamia restore na izolowanym hoście, weryfikuje integralność, raportuje PASS/FAIL
-# Nieudany drill → alert do monitoring system (ISC-38)
+# Uruchamia restore na izolowanym hoście (rnode1), weryfikuje integralność, raportuje PASS/FAIL
+# Nieudany drill → alert do monitorowanego kanału (ISC-38)
+make cluster-restore-drill CLUSTER=<name>
+
+# Zweryfikuj stan restore drill (ISC-36/37)
+make lab-restore-verify CLUSTER=<name>
 ```
 
 ## Anti

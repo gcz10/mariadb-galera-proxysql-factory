@@ -1,6 +1,6 @@
 # Runbook: Total Outage — utrata quorum i pełna awaria klastra
 
-**Status:** STUB — do uzupełnienia w F4/F9
+**Status:** Aktualny (F4/F9/F13 complete)
 **Powiązane ISC:** ISC-17, ISC-30, ISC-55
 
 ## Przeznaczenie
@@ -39,7 +39,7 @@ mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SHOW STATUS LIKE 'wsrep_clu
 
 ```bash
 # Sprawdź cluster size, UUID, synced
-tests/validation/probe-galera-status.sh /var/lib/mysql/mysql.sock 3
+make lab-galera-verify CLUSTER=<name>
 ```
 
 ## Wymagany dostęp

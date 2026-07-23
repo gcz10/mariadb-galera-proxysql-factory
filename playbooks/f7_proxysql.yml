@@ -57,10 +57,7 @@
     galera_backup_hg: 20
     galera_reader_hg: 30
     galera_offline_hg: 40
-    galera_backends:
-      - "172.28.0.11"
-      - "172.28.0.12"
-      - "172.28.0.13"
+    galera_backends: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | list }}"
 
   pre_tasks:
     - name: "Wymagaj haseł"
@@ -170,7 +167,7 @@
          (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup,
           active, max_writers, writer_is_also_reader, max_transactions_behind, comment)
          VALUES ({{ galera_writer_hg }}, {{ galera_backup_hg }}, {{ galera_reader_hg }}, {{ galera_offline_hg }},
-          1, 1, 0, 100, 'lab-galera');
+          1, 1, 0, 100, '{{ monitoring.pmm.cluster_name }}');
          LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;"
       when: current_galera_hg.stdout | trim != ([galera_writer_hg, galera_backup_hg, galera_reader_hg, galera_offline_hg, 1, 0] | join(','))
       changed_when: true

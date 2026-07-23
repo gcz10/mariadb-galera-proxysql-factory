@@ -1,6 +1,6 @@
 # Runbook: Backup
 
-**Status:** STUB — do uzupełnienia w F10
+**Status:** Aktualny (F10 complete)
 **Powiązane ISC:** ISC-32, ISC-33, ISC-34, ISC-35, ISC-39
 
 ## Przeznaczenie
@@ -26,17 +26,11 @@ make cluster-backup CLUSTER=<name>
 ## Weryfikacja
 
 ```bash
-# Sprawdź że backup opuścił klaster
-findmnt -t cifs | grep <backup_mount>
+# Weryfikuj backup w off-cluster S3 (ISC-32/33/34/35)
+make lab-backup-verify CLUSTER=<name>
 
-# Sprawdź szyfrowanie
-file <backup_file>  # powinno wskazywać encrypted data
-
-# Sprawdź checksum
-sha256sum -c <backup_file>.sha256
-
-# Sprawdź metadata
-cat <backup_file>.meta.json | jq .
+# Backup pod obciążeniem nie degraduje writera (ISC-39, lab-only)
+make lab-backup-impact CLUSTER=<name>
 ```
 
 ## Harmonogram

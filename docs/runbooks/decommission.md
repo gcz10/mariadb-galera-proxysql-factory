@@ -1,6 +1,6 @@
 # Runbook: Node Decommission
 
-**Status:** STUB — do uzupełnienia w F13
+**Status:** Aktualny (F13 complete)
 **Powiązane ISC:** ISC-29, drift detection
 
 ## Przeznaczenie
@@ -10,15 +10,14 @@ Bezpieczne usunięcie węzła z klastra Galera lub ProxySQL.
 ## Procedura — Galera node
 
 ```bash
-# 1. Plan (read-only)
-make cluster-decommission-plan CLUSTER=<name> NODE=<node>
+# 1. Plan usunięcia (read-only: quorum guard 3→2, writer-detection)
+make cluster-remove-node-plan CLUSTER=<name> NODE=<node>
 
-# 2. Sprawdź quorum po usunięciu (3→2 wymaga garbd lub zostaw 3)
-# 3. Drain węzła (wsrep_desync + wait for Synced=false)
-# 4. Usuń z ProxySQL hostgroups
-# 5. Zatrzymaj MariaDB
-# 6. Usuń z inventory
-make cluster-decommission CLUSTER=<name> NODE=<node>
+# 2. Usuń węzeł (confirm-gated; drain z ProxySQL hostgroups, usuń z PMM, stop mariadbd)
+make cluster-remove-node CLUSTER=<name> NODE=<node> CONFIRM=yes
+
+# 3. Po usunięciu sprawdź dryf konfiguracji ProxySQL/Galera
+make cluster-drift CLUSTER=<name>
 ```
 
 ## Procedura — ProxySQL node
@@ -33,10 +32,9 @@ make cluster-decommission CLUSTER=<name> NODE=<node>
 ## Weryfikacja
 
 ```bash
-# Cluster size po decommission
-mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SHOW STATUS LIKE 'wsrep_cluster_size'"
-# Sprawdź że pozostałe węzły są nadal Primary + Synced
-tests/validation/probe-galera-status.sh /var/lib/mysql/mysql.sock <new_expected_size>
+# Cluster size po decommission + zdrowie pozostałych węzłów
+make lab-galera-verify CLUSTER=<name>
+make cluster-drift CLUSTER=<name>
 ```
 
 ## Anti

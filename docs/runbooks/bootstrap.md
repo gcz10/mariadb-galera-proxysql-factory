@@ -1,6 +1,6 @@
 # Runbook: Initial Bootstrap
 
-**Status:** STUB — do uzupełnienia w F4 (Bezpieczny initial bootstrap i idempotentny converge)
+**Status:** Aktualny (F4/F13 complete)
 **Powiązane ISC:** ISC-12, ISC-13, ISC-65
 
 ## Przeznaczenie

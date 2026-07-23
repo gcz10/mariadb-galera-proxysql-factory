@@ -1,6 +1,6 @@
 # Runbook: Node Replacement
 
-**Status:** STUB — do uzupełnienia w F5/F13
+**Status:** Aktualny (F5/F13 complete)
 **Powiązane ISC:** ISC-29, ISC-15
 
 ## Przeznaczenie
@@ -10,22 +10,27 @@ Wymiana uszkodzonego węzła Galera lub ProxySQL na nowy host.
 ## Procedura — Galera node
 
 ```bash
-# 1. Usuń węzeł z klastra (jeśli jeszcze działa)
-make cluster-remove-node CLUSTER=<name> NODE=<old_node>
+# 1. Plan usunięcia starego węzła (read-only: quorum guard, writer-detection)
+make cluster-remove-node-plan CLUSTER=<name> NODE=<old_node>
 
-# 2. Przygotuj nowy host (Rocky 9, F2 preflight)
+# 2. Usuń stary węzeł (confirm-gated, quorum-guarded)
+make cluster-remove-node CLUSTER=<name> NODE=<old_node> CONFIRM=yes
 
-# 3. Dodaj nowy węzeł do inventory.yml
+# 3. Przygotuj nowy host (Rocky 9, F2 preflight), dodaj do inventory.yml
 
-# 4. Dołącz nowy węzeł (SST lub IST w zależności od okna gcache)
-make cluster-add-node CLUSTER=<name>
+# 4. Dołącz nowy węzeł (SST mariabackup lub IST w zależności od okna gcache)
+make cluster-join CLUSTER=<name>
+
+# 5. Skonfiguruj ProxySQL hostgroups + monitoring dla nowego węzła
+make cluster-proxysql CLUSTER=<name>
+make cluster-monitoring CLUSTER=<name>
 ```
 
 ## Weryfikacja
 
 ```bash
 # Nowy węzeł osiąga Synced bez ręcznych kroków (ISC-29)
-tests/validation/probe-galera-status.sh /var/lib/mysql/mysql.sock 3
+make lab-galera-verify CLUSTER=<name>
 
 # Jeśli węzeł powraca w oknie gcache → IST (ISC-15)
 # Jeśli poza oknem → SST przez mariadb-backup (ISC-14)
