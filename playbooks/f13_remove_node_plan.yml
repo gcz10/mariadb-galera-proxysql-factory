@@ -1,0 +1,88 @@
+---
+# F13 — Remove-node plan: read-only analiza wpływu usunięcia węzła Galera.
+# MASTER_PROMPT §714: "remove node i decommission mają osobne playbooki i wymagają
+# planu oraz jawnego potwierdzenia."
+#
+# Ten playbook jest READ-ONLY — generuje plan, nie usuwa węzła.
+# Użycie: -e node=gnode2
+
+# === Play 1: odczytaj cluster size (direct, read-only) ===
+- name: "F13 — odczytaj cluster size"
+  hosts: galera[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: "Cluster size"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name='wsrep_cluster_size'" | awk '{print $2}'
+      register: f13_current_size
+      changed_when: false
+
+# === Play 2: odczytaj writera (direct, read-only) ===
+- name: "F13 — odczytaj writera (ProxySQL runtime)"
+  hosts: proxysql[0]
+  become: true
+  gather_facts: false
+  vars:
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    writer_hg: "{{ proxysql.writer_hostgroup | default(10) }}"
+  tasks:
+    - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
+      ansible.builtin.assert:
+        that: [proxysql_admin_password | length > 0]
+        fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
+    - name: "Writer ONLINE (writer HG)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id={{ writer_hg }} AND status='ONLINE'"
+      register: f13_writer_ip
+      changed_when: false
+      no_log: true
+
+# === Play 3: analiza + plan (localhost) ===
+- name: "F13 — remove-node plan (analiza + raport)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_become: false
+  tasks:
+    - name: "Wymagaj node= (galera host)"
+      ansible.builtin.assert:
+        that:
+          - node is defined
+          - node | length > 0
+          - node in groups['galera']
+        fail_msg: "Podaj -e node=<gnodeX> (galera host)."
+
+    - name: "Ustal czy node jest writerem + size po usunięciu"
+      ansible.builtin.set_fact:
+        f13_current_size: "{{ hostvars[groups['galera'][0]].f13_current_size.stdout | trim }}"
+        f13_node_is_writer: "{{ hostvars[node].galera_node_address | default('') == hostvars[groups['proxysql'][0]].f13_writer_ip.stdout | trim }}"
+        f13_size_after: "{{ (hostvars[groups['galera'][0]].f13_current_size.stdout | trim | int) - 1 }}"
+
+    - name: "Analiza wpływu: quorum"
+      ansible.builtin.assert:
+        that:
+          - (f13_current_size | int) >= 3
+          - (f13_size_after | int) >= 2
+        fail_msg: >-
+          ODRZUCONE: usunięcie {{ node }} zmniejszyłoby klaster do {{ f13_size_after }},
+          poniżej bezpiecznego quorum (minimum 2 dla Primary). Najpierw dodaj węzeł.
+        success_msg: "Quorum OK: {{ f13_current_size }} → {{ f13_size_after }} po usunięciu."
+
+    - name: "Ostrzeżenie: usuwany węzeł jest aktywnym writerem"
+      ansible.builtin.debug:
+        msg: >-
+          UWAGA: {{ node }} jest aktywnym writerem. Usunięcie wywoła failover
+          (ProxySQL promuje backup-writera). Rozważ remove non-writera najpierw.
+      when: f13_node_is_writer | bool
+
+    - name: "F13 remove-node plan — raport"
+      ansible.builtin.debug:
+        msg: >-
+          PLAN remove {{ node }}: cluster {{ f13_current_size }} → {{ f13_size_after }},
+          writer={{ f13_node_is_writer | bool | ternary('TAK (failover)', 'nie') }},
+          quorum=OK. Kroki (wymaga confirm=yes w f13_remove_node.yml):
+          (1) drain z ProxySQL hostgroups, (2) usuń z PMM Inventory, (3) stop mariadbd.

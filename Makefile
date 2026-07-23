@@ -72,6 +72,9 @@ lab-split-brain-test:  ## F9 — test split-brain / partycji sieci (ISC-30, lab-
 verify-no-mass-restart:  ## F9 — statyczny guard: brak masowego restartu Galery (ISC-31)
 	python3 tests/validation/probe-no-mass-restart.py
 
+verify-no-double-bootstrap:  ## F13 — statyczny guard: brak dwóch niezależnych Primary (ISC-65)
+	python3 tests/validation/probe-no-double-bootstrap.py
+
 cluster-backup:  ## F10 — backup → off-cluster S3 (szyfr, checksum, metadata); alert przy porażce
 	@: "$${MINIO_ROOT_USER:?Ustaw MINIO_ROOT_USER poza repozytorium}"
 	@: "$${MINIO_ROOT_PASSWORD:?Ustaw MINIO_ROOT_PASSWORD poza repozytorium}"
@@ -136,3 +139,22 @@ cluster-patch:  ## F12 — rolling patch z canary + brama zdrowia (ISC-52/55/57)
 
 lab-patch-verify:  ## F12 — zweryfikuj wzorzec canary patch (ISC-52/55/57)
 	tests/lab/probe-patch.py
+
+cluster-drift:  ## F13 — read-only raport dryfu konfiguracji (ISC-21)
+	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	ansible-playbook playbooks/f13_drift.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+
+lab-drift-verify:  ## F13 — zweryfikuj drift detection (ISC-21)
+	tests/lab/probe-drift.py
+
+cluster-remove-node-plan:  ## F13 — read-only plan usunięcia węzła Galera (wymaga node=gnodeX)
+	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	@test -n "$(NODE)" || (echo "Ustaw NODE=gnodeX (np. make cluster-remove-node-plan NODE=gnode2)"; exit 1)
+	ansible-playbook playbooks/f13_remove_node_plan.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e node=$(NODE) $(ANSIBLE_OPTS)
+
+cluster-remove-node:  ## F13 — usuń węzeł Galera (confirm-gated, wymaga NODE=gnodeX CONFIRM=yes)
+	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (destrukcyjne)"; exit 1)
+	@test -n "$(NODE)" || (echo "Ustaw NODE=gnodeX"; exit 1)
+	ansible-playbook playbooks/f13_remove_node.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e node=$(NODE) -e confirm=yes $(ANSIBLE_OPTS)

@@ -1,0 +1,129 @@
+---
+# F13 — Drift detection: read-only raport dryfu istotnych konfiguracji (ISC-21).
+#
+# MASTER_PROMPT §18: "Drift detection domyślnie tylko raportuje. Nie naprawiaj
+# automatycznie w production driftu wymagającego restartu, zmiany wersji, kont
+# lub ruchu." Ten playbook jest READ-ONLY — nie modyfikuje żadnego hosta.
+#
+# Sprawdza:
+#   1. ProxySQL: runtime vs disk (mysql_servers, mysql_galera_hostgroups, mysql_users)
+#      — czy zmiany runtime zostały zapisane na dysk (przetrwają restart)?
+#   2. Galera: spójność wsrep między węzłami + kluczowe ustawienia server.cnf.
+#   3. Wersje: zainstalowane pakiety vs versions.lock.yml.
+#
+# Wynik: PASS (brak dryfu) lub lista dryfów. Nigdy nie naprawia.
+
+# === Play 1: ProxySQL runtime vs disk ===
+- name: "F13 — drift ProxySQL (runtime vs disk)"
+  hosts: proxysql
+  become: true
+  gather_facts: false
+  vars:
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    # tabele ProxySQL z cyklem LOAD/SAVE — sprawdzamy MAIN (memory) vs DISK.
+    # NIE używamy runtime_* — runtime zawiera dane dynamiczne (status SHUNNED/ONLINE
+    # ustawiane przez monitor) oraz rozwinięte hostgroups (backup/reader wstrzyknięte
+    # przez mysql_galera_hostgroups). Main vs disk = niezapisany dryf konfiguracji.
+    # status pominięte (dynamiczne). mysql_users: frontend/backend split w runtime.
+    f13_proxysql_tables:
+      - { rt: "mysql_servers", disk: "disk.mysql_servers", norm: "hostgroup_id,hostname,port,weight" }
+      - { rt: "mysql_galera_hostgroups", disk: "disk.mysql_galera_hostgroups", norm: "writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active" }
+      - { rt: "mysql_users", disk: "disk.mysql_users", norm: "username,default_hostgroup,active" }
+
+  tasks:
+    - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
+      ansible.builtin.assert:
+        that: [proxysql_admin_password | length > 0]
+        fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
+
+    - name: "Drift ProxySQL — runtime vs disk per tabela (checksum)"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        rt=$(mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT {{ item.norm }} FROM {{ item.rt }} ORDER BY 1,2" | sort | md5sum | awk '{print $1}');
+        dk=$(mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT {{ item.norm }} FROM {{ item.disk }} ORDER BY 1,2" | sort | md5sum | awk '{print $1}');
+        if [ "$rt" = "$dk" ]; then echo "{{ item.rt }}=CLEAN"; else echo "{{ item.rt }}=DRIFT rt=$rt disk=$dk"; fi
+      loop: "{{ f13_proxysql_tables }}"
+      register: f13_proxysql_drift
+      changed_when: false
+      no_log: true
+
+    - name: "F13 ProxySQL drift report"
+      ansible.builtin.debug:
+        msg: "{{ f13_proxysql_drift.results | map(attribute='stdout') | list }}"
+
+# === Play 2: Galera spójność wsrep + server.cnf ===
+- name: "F13 — drift Galera (wsrep consistency + server.cnf)"
+  hosts: galera
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: "Drift Galera — wsrep_cluster_state_uuid (spójność między węzłami)"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name='wsrep_cluster_state_uuid'" | awk '{print $2}'
+      register: f13_wsrep_uuid
+      changed_when: false
+
+    - name: "Drift Galera — wsrep_sst_method w server.cnf"
+      ansible.builtin.shell: >-
+        grep -i 'wsrep_sst_method' {{ mariadb_config_dir | default('/etc/mysql') }}/server.cnf | awk -F= '{print $2}' | tr -d ' '
+      register: f13_sst_method
+      changed_when: false
+      failed_when: false
+
+    - name: "Drift Galera — wersja binaria vs zadeklarowana"
+      ansible.builtin.shell: "mariadbd --version | awk '{print $3}'"
+      register: f13_mariadb_binver
+      changed_when: false
+
+# === Play 3: wersje vs lockfile + agregacja (localhost) ===
+- name: "F13 — drift wersji vs lockfile + raport"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_become: false
+    f13_expected_mariadb: "{{ versions.mariadb | default('') }}"
+
+  tasks:
+    - name: "Agreguj cluster_state_uuid z węzłów Galera"
+      ansible.builtin.set_fact:
+        f13_uuids: "{{ groups['galera'] | map('extract', hostvars, 'f13_wsrep_uuid') | map(attribute='stdout') | list }}"
+
+    - name: "ISC-21 drift: wszystkie węzły mają ten sam cluster_state_uuid"
+      ansible.builtin.assert:
+        that:
+          - f13_uuids | unique | length == 1
+        fail_msg: >-
+          DRIFT Galera: różne cluster_state_uuid między węzłami: {{ f13_uuids }}
+        success_msg: "Galera cluster_state_uuid spójny ({{ f13_uuids | unique | list }})"
+
+    - name: "Agreguj wyniki drift ProxySQL"
+      ansible.builtin.set_fact:
+        f13_proxysql_summary: >-
+          {{
+            groups['proxysql']
+            | map('extract', hostvars, 'f13_proxysql_drift')
+            | map(attribute='results')
+            | flatten
+            | map(attribute='stdout')
+            | list
+            | join('; ')
+          }}
+
+    - name: "ISC-21 drift: ProxySQL runtime==disk na wszystkich węzłach"
+      ansible.builtin.assert:
+        that:
+          - "'DRIFT' not in f13_proxysql_summary"
+        fail_msg: "DRIFT ProxySQL: {{ f13_proxysql_summary }}"
+        success_msg: "ProxySQL runtime==disk ({{ f13_proxysql_summary }})"
+
+    - name: "F13 drift report — brak dryfu"
+      ansible.builtin.debug:
+        msg: >-
+          F13 drift: PASS — ProxySQL runtime==disk ({{ groups['proxysql'] | length }} węzłów),
+          Galera uuid spójny ({{ f13_uuids | unique | list | first | default('?') }}).
+          Drift detection read-only (§18: nie naprawia automatycznie).

@@ -1,0 +1,84 @@
+---
+# F13 — Remove-node (decommission węzła Galera): WYKONANIE z jawne potwierdzenie.
+# MASTER_PROMPT §714: remove node wymaga planu + jawnego potwierdzenia.
+# Użycie: ansible-playbook f13_remove_node.yml -e node=gnode2 -e confirm=yes
+# NIGDY bez -e confirm=yes. Najpierw uruchom f13_remove_node_plan.yml.
+
+- name: "F13 — remove node Galera (confirm-gated, quorum-guarded)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_become: false
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    writer_hg: "{{ proxysql.writer_hostgroup | default(10) }}"
+    pmm_api_url: "{{ monitoring.pmm.server_url }}"
+    pmm_cluster_name: "{{ monitoring.pmm.cluster_name }}"
+
+  tasks:
+    - name: "Wymagaj confirm=yes + node= (galera host)"
+      ansible.builtin.assert:
+        that:
+          - confirm is defined and confirm | bool
+          - node is defined and node | length > 0
+          - node in groups['galera']
+        fail_msg: >-
+          Remove-node wymaga -e confirm=yes -e node=<gnodeX>. Najpierw uruchom
+          f13_remove_node_plan.yml. Nigdy bez jawnego potwierdzenia.
+
+    - name: "Strażnik quorum: odmów jeśli usunięcie zejdzie poniżej 2 węzłów"
+      ansible.builtin.shell: >-
+        ansible {{ groups['galera'][0] }} -i {{ inventory_file }} -m shell -a
+        "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        \"SHOW STATUS WHERE Variable_name='wsrep_cluster_size'\"" | awk '{print $2}'
+      register: f13_rm_size
+      changed_when: false
+
+    - name: "Quorum guard"
+      ansible.builtin.assert:
+        that:
+          - (f13_rm_size.stdout | trim | int) - 1 >= 2
+        fail_msg: >-
+          ODRZUCONE: usunięcie {{ node }} zejdzie poniżej quorum ({{ f13_rm_size.stdout | trim }} →
+          {{ (f13_rm_size.stdout | trim | int) - 1 }}). Minimum 2 dla Primary.
+
+    - name: "Krok 1: usuń węzeł z ProxySQL hostgroups (drain + delete)"
+      ansible.builtin.shell: >-
+        ansible {{ groups['proxysql'][0] }} -i {{ inventory_file }} -m shell -a
+        "mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        \"DELETE FROM mysql_servers WHERE hostname='{{ hostvars[node].galera_node_address }}';
+         LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;\""
+      changed_when: true
+      no_log: true
+
+    - name: "Krok 2: usuń usługi węzła z PMM Inventory"
+      ansible.builtin.shell: >-
+        for sid in $(curl -sk -u "admin:{{ pmm_admin_password }}" {{ pmm_api_url }}/v1/inventory/services |
+        python3 -c "import json,sys; [print(s['service_id']) for s in json.load(sys.stdin).get('external',[]) if '{{ pmm_cluster_name }}-{{ node }}' in s.get('service_name','')]");
+        do curl -sk -u "admin:{{ pmm_admin_password }}" -X DELETE {{ pmm_api_url }}/v1/management/services/$sid; done
+      changed_when: true
+      no_log: true
+
+    - name: "Krok 3: stop mariadbd na usuwanym węźle"
+      ansible.builtin.shell: >-
+        ansible {{ node }} -i {{ inventory_file }} -m shell -a
+        "pkill -x mariadbd; sleep 2; true"
+      changed_when: true
+
+    - name: "Czekaj na stabilizację klastra (quorum utrzymane)"
+      ansible.builtin.shell: >-
+        ansible {{ groups['galera'][0] }} -i {{ inventory_file }} -m shell -a
+        "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        \"SHOW STATUS WHERE Variable_name='wsrep_cluster_size'\"" | awk '{print $2}'
+      register: f13_rm_after
+      until: (f13_rm_after.stdout | trim | int) == (f13_rm_size.stdout | trim | int) - 1
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: "Raport remove-node"
+      ansible.builtin.debug:
+        msg: >-
+          Usunięto {{ node }}: cluster size {{ f13_rm_size.stdout | trim }} → {{ f13_rm_after.stdout | trim }},
+          ProxySQL hostgroups zaktualizowane, PMM usługi usunięte, mariadbd zatrzymany.

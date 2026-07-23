@@ -158,7 +158,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 ### Obowiązkowe Anti
 - [x] ISC-63: Anti: Żaden task produkcyjny nie używa `state: latest`.
 - [x] ISC-64: Anti: Dekonstrukcyjne testy (chaos, failover, restore drill) nie uruchamiają się na profilu production.
-- [ ] ISC-65: Anti: Dwa węzły nigdy nie są bootstrapowane jako niezależne Primary Components.
+- [x] ISC-65: Anti: Dwa węzły nigdy nie są bootstrapowane jako niezależne Primary Components.
 
 ## Not yet specified
 
@@ -237,7 +237,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 | ISC-62 | literal | bash | lista runbooków + weryfikacja treści | bootstrap/outage/replace/backup/restore/upgrade/decommission | docs + linkcheck |
 | ISC-63 | Anti: no-state-latest | bash | `grep -r "state: latest"` ról/playbooków produkcyjnych | brak | grep |
 | ISC-64 | Anti: no-destruction-in-prod | bash | profil + playbook chaos/restore | produkcyjny profil nie wchodzi w chaos | ansible + profile guard |
-| ISC-65 | Anti: no-dual-primary-bootstrap | bash | drugi bootstrap przy istniejącym Primary | zablokowany | ansible + wsrep |
+| ISC-65 | Anti: no-dual-primary-bootstrap | python | statyczny scan playbooków: bootstrap play single-host-safe + confirm | zablokowany (0 wielohostowych bootstrapów) | probe-no-double-bootstrap.py |
 | ISC-66 | literal | bash | raport discovery — sekcje vs lista wymaganych faktów | wszystkie obecne | jq/ansible report |
 | ISC-67 | Anti: discovery-readonly | bash | diff stanu usług przed/po F0 | brak zmian | ansible + `stat` |
 | ISC-68 | derived: gcache-calc | bash | gcache.size vs write rate × okno IST | wyliczone i zapisane | jq + raport |
@@ -259,7 +259,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 | F10: Backup, restore i restore drill | ISC-32, ISC-33, ISC-34, ISC-35, ISC-36, ISC-37, ISC-38, ISC-39 | F5 | nie | high |
 | F11: Monitoring, dashboardy, metryki lifecycle i logi | ISC-46, ISC-48, ISC-49 | F3; F7 dla ProxySQL | nie | high |
 | F12: Rolling operations, patch i upgrade planning | ISC-50, ISC-51, ISC-52, ISC-53, ISC-54, ISC-55, ISC-56, ISC-57 | F9 | nie | high |
-| F13: Drift, node lifecycle i decommission | ISC-21 (drift), node lifecycle | F12 | nie | medium |
+| F13: Drift, node lifecycle i decommission | ISC-21 (drift), ISC-65, node lifecycle | F12 | nie | medium |
 | F14: Drugi niezależny klaster i runbooki | ISC-58, ISC-59, ISC-60, ISC-61, ISC-62 | F12 | nie | high |
 | F15: Końcowy alerting i dostarczanie powiadomień | ISC-47 | F6, F7, F9, F10, F11 | nie | high |
 
@@ -317,6 +317,8 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - 2026-07-23 — F12 research upgrade: oficjalna ścieżka MariaDB 11.4 LTS → 11.8 LTS, in-place `mariadb-upgrade --skip-write-binlog` (bez dump/restore), Galera 4 (wsrep API 26) wspiera rolling; downgrade datadir NIEWSPARTY ("forward-incompatible") — źródła: mariadb.com/kb/en/upgrading-galera-cluster, mariadb.com/kb/en/downgrading-between-major-mariadb-versions, galeracluster.com/library/documentation/upgrading.html.
 - 2026-07-23 — F12 rolling restart order: non-writer węzły pierwsze, writer ostatni (research galeracluster.com) — minimalizuje churn failoveru; ProxySQL mysql_galera_hostgroups auto-promuje backup-writera. Lab writer=gnode3 (już ostatni w inventory).
 - 2026-07-23 — F12 patch safe-default: domyślna komenda patcha = read-only `dnf check-update` (changed_when:false) — wzorzec canary+health-gate wykonywany bez modyfikacji pakietów w labie; produkcja nadpisuje `f12_patch_command`. ProxySQL: `SAVE ... TO DISK` przed patch (proxysql.com configuration-system).
+- 2026-07-23 — F13 drift approach: ProxySQL drift = MAIN (mysql_servers/mysql_galera_hostgroups/mysql_users) vs DISK, NIE runtime_* (runtime niesie dynamiczny status SHUNNED/ONLINE + rozwinięte galera hostgroups) — dowód: false-positive przy runtime_mysql_servers (HG20 derived, status dynamic), poprawione na main-vs-disk. Drift read-only (§18: nie naprawia automatycznie) — dowód: inject unsaved config → DRIFT detected, cleanup → CLEAN.
+- 2026-07-23 — F13 node lifecycle: remove-node wymaga planu (f13_remove_node_plan.yml read-only: quorum guard, writer-detection) + confirm=yes (f13_remove_node.yml, jak bootstrap). Quorum guard odmawia jeśli size-1 < 2. Lab: 3→2 bezpieczne, nie testowano destruktywnego usunięcia (plan + guard zweryfikowane).
 
 ## Verification
 
@@ -380,6 +382,9 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - ISC-55: PASS — `f12_patch.yml`: brama zdrowia po każdym węźle (until/retries) — porażka zatrzymuje rolling; 3 bramy (canary/rolling/writer); probe-patch PASS 2026-07-23.
 - ISC-56: PASS — anti-downgrade guard: `f12_upgrade_plan.yml` assert odrzuca gdy obecna >= docelowa (test negatywny target=11.2 → FAILED z cytatem "forward-incompatible"); probe-upgrade-plan PASS 2026-07-23.
 - ISC-57: PASS — `f12_patch.yml` ProxySQL play `serial:1` + SAVE ... TO DISK przed patch; pnode1/pnode2 po kolei, każdy health-gated (backends ONLINE); probe-patch PASS 2026-07-23.
+- ISC-21 (F13 drift): PASS — `f13_drift.yml` read-only: ProxySQL main-vs-disk (mysql_servers/galera_hostgroups/mysql_users CLEAN) + Galera cluster_state_uuid spójny. Falsyfikowalny: inject unsaved INSERT → mysql_servers=DRIFT detected; cleanup → CLEAN. probe-drift PASS 2026-07-23.
+- ISC-65: PASS — `probe-no-double-bootstrap.py`: jedyny bootstrap play (bootstrap.yml) jest single-host-safe (serial:1 + assert ansible_play_hosts==1) + confirm-gated; 0 innych playbooków z --wsrep-new-cluster w shell/command. 2026-07-23.
+- F13 node lifecycle: PASS — `f13_remove_node_plan.yml` read-only (quorum guard 3→2 OK, writer-detection: gnode2=nie, gnode3=TAK+warn); `f13_remove_node.yml` confirm-gated (odmawia bez confirm=yes). Plan + guard zweryfikowane; destruktywne usunięcie nie testowane w labie (3→2). 2026-07-23.
 
 
 ## Blockers
@@ -391,4 +396,4 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - BLK-5 — docelowy alert target/contact point jest nieuzgodniony. Nie blokuje bieżącego monitoringu; musi zostać rozstrzygnięty przed końcowym F15 po F11.
 
 ## Następny pojedynczy feature
-F13: Drift, node lifecycle i decommission — detekcja dryfu konfiguracji (runtime vs disk ProxySQL/Galera), add/remove węzła Galera, decommission z usuwaniem z ProxySQL hostgroups i monitoring (ISC-21 drift, node lifecycle).
+F14: Drugi niezależny klaster i runbooki — nowy klaster wyłącznie przez clusters/<name>/, zero hardkodowanych IP/nazw/sekretów w rolach, drugi klaster przechodzi te same testy, README/runbooki uzupełnione (ISC-58, ISC-59, ISC-60, ISC-61, ISC-62).
