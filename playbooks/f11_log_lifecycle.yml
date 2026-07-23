@@ -1,0 +1,57 @@
+---
+# F11: ograniczony cykl życia logów usług monitorowanych i exporterów.
+# Satisfies: ISC-48.
+
+- name: "F11 - skonfiguruj rotację logów monitoringu i baz"
+  hosts: all
+  become: true
+  serial: 1
+
+  tasks:
+    - name: "Zainstaluj systemowy logrotate"
+      ansible.builtin.dnf:
+        name: logrotate
+        state: present
+
+    - name: "Skonfiguruj ograniczoną rotację logów usług"
+      ansible.builtin.copy:
+        dest: /etc/logrotate.d/isa-database-monitoring
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          /var/log/mariadb/*.log /var/lib/proxysql/*.log /var/tmp/node_exporter.log {
+              daily
+              rotate 14
+              maxsize 100M
+              missingok
+              notifempty
+              compress
+              delaycompress
+              dateext
+              copytruncate
+              su root root
+          }
+      register: monitoring_logrotate_config
+
+    - name: "Sprawdź składnię polityki logrotate"
+      ansible.builtin.command:
+        argv:
+          - logrotate
+          - --debug
+          - /etc/logrotate.d/isa-database-monitoring
+      register: monitoring_logrotate_debug
+      changed_when: false
+
+    - name: "Sprawdź dostępność systemd dla timera rotacji"
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: monitoring_logrotate_systemd
+
+    - name: "Włącz systemowy timer rotacji logów"
+      ansible.builtin.systemd:
+        name: logrotate.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: monitoring_logrotate_systemd.stat.exists

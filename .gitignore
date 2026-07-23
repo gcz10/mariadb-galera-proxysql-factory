@@ -4,6 +4,7 @@ clusters/*/secrets.yml
 *.pem
 *.key
 *.crt
+tests/lab/.env
 
 # Artefakty F0 i backupy
 /var/tmp/f0-*

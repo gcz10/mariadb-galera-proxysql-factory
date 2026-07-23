@@ -1,7 +1,7 @@
 # Compatibility Report — F1 Version Research
 
 **Research date:** 2026-07-22
-**Sources:** mariadb.org, endoflife.date, proxysql.com, rockylinux.org, docs.ansible.com, github.com/ansible-collections/ansible.mysql
+**Sources:** mariadb.org, endoflife.date, proxysql.com, rockylinux.org, docs.ansible.com, github.com/ansible-collections/ansible.mysql, Percona PMM release notes, Prometheus node_exporter releases
 **Status:** Read-only research (BLK-4 rozstrzygnięty: internet dostępny). Host-dependent fakty pozostają na F0.
 
 ## 1. Rocky Linux 9
@@ -60,7 +60,20 @@
 
 **Decyzja:** `requirements.yml` → `ansible.mysql` (nie `community.mysql`). F0 playbook poprawiony.
 
-## 5. Kompatybilność matryca
+## 5. PMM i node_exporter
+
+| Komponent | Wersja | Dostarczenie | Status / ryzyko | Źródło |
+|---|---|---|---|---|
+| PMM Server | **3.8.1** (2026-06-16) | obraz Docker przypięty tagiem i digestem; trwały `/srv` | security release; EOL point release nieopublikowany | Percona release notes 3.8.1 |
+| node_exporter | **1.12.1** (2026-07-14) | oficjalny tarball Linux amd64/arm64, SHA-256 per architektura | latest stable w dniu badania; brak RPM Rocky 9 | Prometheus GitHub release v1.12.1 |
+
+**PMM security:** 3.8.1 łata krytyczne/wysokie podatności zależności Grafana, gRPC i nginx. Vendor pozostawia udokumentowane ryzyka zależności third-party, ocenione jako typowo nieosiągalne; lab ogranicza PMM do loopback, wyłącza automatyczne aktualizacje obrazu i stosuje limit pamięci/nofile.
+
+**Kompatybilność zmierzona:** PMM 3.8.1 native Inventory + PMM-managed `mysqld_exporter`/QAN działa z MariaDB 11.4.12. `node_exporter` 1.12.1 dostarcza metryki pięciu hostów przez external services. ProxySQL metrics są poza tym feature i zależą od F7.
+
+**Decyzja:** oba komponenty trafiają do `versions.lock.yml`; zabronione są pływające tagi `:3`/`:latest` i niezweryfikowane binaria.
+
+## 6. Kompatybilność matryca
 
 | Komponent | Wersja | Rocky 9 | Galera 4 | Kompatybilność |
 |---|---|---|---|---|
@@ -69,15 +82,17 @@
 | Galera 4 (galera-4) | wsrep API 26 | z MariaDB repo | — | MariaDB 11.x wylacznie |
 | ansible-core 2.21.2 | latest | — | — | ansible.mysql 5.1.0 |
 | ansible.mysql 5.1.0 | active | — | — | MariaDB wspierana do mid-2027 |
+| PMM Server 3.8.1 | security release | kontener, nie RPM | natywne metryki MariaDB/Galera | digest + trwały volume zweryfikowane po restarcie |
+| node_exporter 1.12.1 | latest stable 2026-07-14 | oficjalny tarball per arch | external service w PMM | amd64/arm64 SHA-256 przypięte |
 
-## 6. Blockery pozostające na F0
+## 7. Blockery pozostające na F0
 
 - F0 musi potwierdzić `rpm -qa` na hostach (co faktycznie zainstalowane)
 - F0 musi potwierdzić dokładny RPM release (`dnf info`)
 - F0 musi potwierdzić kernel i minor Rocky na hostach
 - GPG fingerprinty repozytoriów do weryfikacji w F2 (przed `gpgcheck=1`)
 
-## 7. Odrzucone warianty
+## 8. Odrzucone warianty
 
 - MariaDB 12.3: nowszy ale krotszy EOL, mniejsza dojrzałość LTS
 - MariaDB 10.11/11.8: krotszy EOL niż 11.4
@@ -85,3 +100,6 @@
 - ProxySQL <3.0.9: krytyczne CVE
 - community.mysql: deprecated
 - EPEL dla ProxySQL: przestarzałe, brak security fixes
+- pływający obraz PMM `:3`/`:latest`: niepowtarzalny deployment
+- node_exporter bez checksumy lub `:latest`: brak dowodu integralności i kontroli wersji
+- osobny vmagent/Prometheus i własne dashboardy dla danych już obsługiwanych natywnie przez PMM: drugi system prawdy

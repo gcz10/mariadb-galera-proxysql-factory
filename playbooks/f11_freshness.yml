@@ -1,0 +1,108 @@
+---
+# F11 — kolektor świeżości: publikuj realne unixtimes backup/restore/TLS.
+# Satisfies: ISC-49 (backup/restore/cert freshness do PMM textfile collector).
+#
+# Źródła dowodów (zapisywane przez F10):
+#   /var/lib/mariadb-backup-state/last_backup.json  → galera[1]  (ostatni udany backup)
+#   /var/lib/mariadb-backup-state/last_restore.json → restore[0] (ostatni udany restore drill)
+#
+# Cel: node_exporter textfile collector na galera[0] → isa_monitoring_state.prom.
+# Format dopasowany do baseline'u z f11_node_exporter.yml (ten sam plik, ten sam HELP/TYPE).
+# Plik jest własnością tego playbooka — f11_node_exporter tworzy baseline tylko gdy
+# nie istnieje (force: false), więc reconverge nie resetuje realnych wartości do 0.
+# Ansible copy jest atomowe (zapis do tempfile + rename), więc brak dodatkowego handlera.
+
+- name: "F11 — zbierz stany backup/restore i opublikuj świeżość na galera[0]"
+  hosts: galera[0]
+  become: true
+  gather_facts: false
+  vars:
+    state_dir: "/var/lib/mariadb-backup-state"
+    textfile_dir: "/var/lib/node_exporter/textfile_collector"
+    state_file: "{{ textfile_dir }}/isa_monitoring_state.prom"
+    cluster_label: "{{ monitoring.pmm.cluster_name }}"
+    backup_host: "{{ groups['galera'][1] }}"
+    restore_host: "{{ groups['restore'][0] }}"
+
+  tasks:
+    # === Zbierz realne unixtimes z węzłów źródłowych ===
+    - name: "Odczytaj unixtime ostatniego udanego backupu (galera[1])"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        f={{ state_dir }}/last_backup.json;
+        if [ -f "$f" ]; then
+          python3 -c "import json,sys; d=json.load(open('$f')); print(d.get('last_backup',''))";
+        else echo ""; fi
+      register: backup_iso
+      delegate_to: "{{ backup_host }}"
+      changed_when: false
+
+    - name: "Odczytaj unixtime ostatniego udanego restore drill (restore[0])"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        f={{ state_dir }}/last_restore.json;
+        if [ -f "$f" ]; then
+          python3 -c "import json,sys; d=json.load(open('$f')); print(d.get('last_restore',''))";
+        else echo ""; fi
+      register: restore_iso
+      delegate_to: "{{ restore_host }}"
+      changed_when: false
+
+    - name: "Oblicz unixtime backupu (0 jeśli brak dowodu)"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        v="{{ backup_iso.stdout | trim }}";
+        if [ -n "$v" ]; then date -d "$v" +%s; else echo 0; fi
+      register: backup_epoch
+      changed_when: false
+
+    - name: "Oblicz unixtime restore (0 jeśli brak dowodu)"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        v="{{ restore_iso.stdout | trim }}";
+        if [ -n "$v" ]; then date -d "$v" +%s; else echo 0; fi
+      register: restore_epoch
+      changed_when: false
+
+    # === Wygaśnięcie certyfikatu TLS (0 gdy tls.mode != full) ===
+    - name: "Odczytaj unixtime wygaśnięcia certyfikatu TLS (0 gdy disabled)"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        {% if tls.mode == 'full' and tls.certificate_reference is defined and tls.certificate_reference | length > 0 %}
+        if [ -f "{{ tls.certificate_reference }}" ]; then
+          openssl x509 -in "{{ tls.certificate_reference }}" -noout -enddate 2>/dev/null \
+            | cut -d= -f2 | xargs -I{} date -d {} +%s || echo 0;
+        else echo 0; fi
+        {% else %}
+        echo 0
+        {% endif %}
+      register: tls_expiry_epoch
+      changed_when: false
+
+    - name: "Zapewnij katalog textfile collector"
+      ansible.builtin.file:
+        path: "{{ textfile_dir }}"
+        state: directory
+        owner: root
+        group: node_exporter
+        mode: "0750"
+
+    # === Opublikuj realne unixtimes (Ansible copy = atomic write) ===
+    - name: "Zapisz realne unixtimes do isa_monitoring_state.prom"
+      ansible.builtin.copy:
+        dest: "{{ state_file }}"
+        content: |
+          # Aktualizowany atomowo przez f11_freshness.yml (ISC-49).
+          # Wartość 0 oznacza brak potwierdzonego sukcesu.
+          # HELP isa_backup_last_success_unixtime Unix time of the last verified off-cluster backup.
+          # TYPE isa_backup_last_success_unixtime gauge
+          isa_backup_last_success_unixtime{cluster="{{ cluster_label }}"} {{ backup_epoch.stdout | int }}
+          # HELP isa_restore_test_last_success_unixtime Unix time of the last successful restore drill.
+          # TYPE isa_restore_test_last_success_unixtime gauge
+          isa_restore_test_last_success_unixtime{cluster="{{ cluster_label }}"} {{ restore_epoch.stdout | int }}
+          # HELP isa_tls_cert_expiry_unixtime Unix time when the monitored certificate expires.
+          # TYPE isa_tls_cert_expiry_unixtime gauge
+          isa_tls_cert_expiry_unixtime{cluster="{{ cluster_label }}"} {{ tls_expiry_epoch.stdout | int }}
+        owner: root
+        group: node_exporter
+        mode: "0640"

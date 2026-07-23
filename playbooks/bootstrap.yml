@@ -10,7 +10,7 @@
   serial: 1
   vars:
     sst_user: "sst_user"
-    sst_password: "sst_password_change_me"
+    sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
 
   pre_tasks:
     - name: "Blokuj bootstrap bez confirm=yes"

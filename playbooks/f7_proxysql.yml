@@ -1,0 +1,287 @@
+---
+# F7: ProxySQL i mysql_galera_hostgroups.
+# Konfiguruje ProxySQL na pnode1/pnode2 z natywnym Galera routingiem.
+# Satisfies: ISC-18, ISC-19, ISC-20, ISC-21, ISC-23.
+# Lab: brak systemd — ProxySQL uruchamiany jako daemon.
+
+- name: "F7 — utwórz konta ProxySQL na klastrze Galera"
+  hosts: galera[0]
+  become: true
+  vars:
+    proxysql_monitor_user: "proxysql_monitor"
+    proxysql_monitor_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_PASSWORD') }}"
+    app_user: "app_user"
+    app_password: "{{ lookup('ansible.builtin.env', 'APP_DB_PASSWORD') }}"
+
+  pre_tasks:
+    - name: "Wymagaj haseł ProxySQL i app"
+      ansible.builtin.assert:
+        that:
+          - proxysql_monitor_password | length > 0
+          - app_password | length > 0
+        fail_msg: "Ustaw PROXYSQL_MONITOR_PASSWORD i APP_DB_PASSWORD poza repozytorium."
+
+  tasks:
+    - name: "Utwórz proxysql_monitor (PROCESS, REPLICATION CLIENT)"
+      community.mysql.mysql_user:
+        name: "{{ proxysql_monitor_user }}"
+        password: "{{ proxysql_monitor_password }}"
+        host: "%"
+        priv: "*.*:PROCESS,REPLICATION CLIENT"
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      no_log: true
+
+    - name: "Utwórz app_user (test application access)"
+      community.mysql.mysql_user:
+        name: "{{ app_user }}"
+        password: "{{ app_password }}"
+        host: "%"
+        priv: "isa_test.*:ALL"
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      no_log: true
+
+- name: "F7 — skonfiguruj ProxySQL"
+  hosts: proxysql
+  become: true
+  serial: 1
+  max_fail_percentage: 0
+  vars:
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    proxysql_monitor_user: "proxysql_monitor"
+    proxysql_monitor_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_PASSWORD') }}"
+    app_user: "app_user"
+    app_password: "{{ lookup('ansible.builtin.env', 'APP_DB_PASSWORD') }}"
+    galera_writer_hg: 10
+    galera_backup_hg: 20
+    galera_reader_hg: 30
+    galera_offline_hg: 40
+    galera_backends:
+      - "172.28.0.11"
+      - "172.28.0.12"
+      - "172.28.0.13"
+
+  pre_tasks:
+    - name: "Wymagaj haseł"
+      ansible.builtin.assert:
+        that:
+          - proxysql_admin_password | length > 0
+          - proxysql_monitor_password | length > 0
+          - app_password | length > 0
+        fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD, PROXYSQL_MONITOR_PASSWORD i APP_DB_PASSWORD."
+
+  tasks:
+    - name: "Sprawdź dostępność systemd"
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: proxysql_systemd
+
+    - name: "Włącz i uruchom ProxySQL przez systemd"
+      ansible.builtin.systemd:
+        name: proxysql
+        state: started
+        enabled: true
+      when: proxysql_systemd.stat.exists
+
+    - name: "Sprawdź proces ProxySQL bez systemd"
+      ansible.builtin.command: pgrep -x proxysql
+      register: proxysql_process
+      changed_when: false
+      failed_when: false
+      when: not proxysql_systemd.stat.exists
+
+    - name: "Uruchom ProxySQL bez systemd (lab)"
+      ansible.builtin.shell: "proxysql --idle-threads -c /etc/proxysql.cnf"
+      when:
+        - not proxysql_systemd.stat.exists
+        - proxysql_process.rc != 0
+      changed_when: true
+
+    - name: "Czekaj na admin port ProxySQL (6032)"
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6032
+        timeout: 20
+
+    - name: "Sprawdź czy hasło ProxySQL jest już ustawione"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e "SELECT 1"
+      register: proxysql_pw_check
+      changed_when: false
+      failed_when: false
+
+    - name: "Ustaw hasło administratora ProxySQL (jeśli jeszcze domyślne)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -padmin -N -B -e
+        "UPDATE global_variables SET variable_value='admin:{{ proxysql_admin_password }}'
+         WHERE variable_name='admin-admin_credentials';
+         LOAD ADMIN VARIABLES TO RUNTIME; SAVE ADMIN VARIABLES TO DISK;"
+      no_log: true
+      when: proxysql_pw_check.rc != 0
+      changed_when: true
+
+    - name: "Ustaw monitor Galera"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "UPDATE global_variables SET variable_value='{{ proxysql_monitor_user }}'
+         WHERE variable_name='mysql-monitor_username';
+         UPDATE global_variables SET variable_value='{{ proxysql_monitor_password }}'
+         WHERE variable_name='mysql-monitor_password';
+         LOAD MYSQL VARIABLES TO RUNTIME; SAVE MYSQL VARIABLES TO DISK;"
+      no_log: true
+      changed_when: false
+
+    - name: "Sprawdź aktualne backendy Galera"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT GROUP_CONCAT(DISTINCT hostname ORDER BY hostname) FROM mysql_servers
+         WHERE hostgroup_id IN ({{ galera_writer_hg }},{{ galera_backup_hg }},{{ galera_reader_hg }},{{ galera_offline_hg }})"
+      register: current_backends
+      changed_when: false
+      no_log: true
+
+    - name: "Skonfiguruj backendy Galera (jeśli różne od repo)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "DELETE FROM mysql_servers WHERE hostgroup_id IN ({{ galera_writer_hg }},{{ galera_backup_hg }},{{ galera_reader_hg }},{{ galera_offline_hg }});
+         {% for backend in galera_backends %}
+         INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES ({{ galera_writer_hg }}, '{{ backend }}', 3306);
+         {% endfor %}
+         LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;"
+      when: current_backends.stdout | trim != (galera_backends | sort | join(','))
+      changed_when: true
+      no_log: true
+
+    - name: "Sprawdź aktualną konfigurację galera_hostgroups"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT CONCAT_WS(',', writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, max_writers, writer_is_also_reader)
+         FROM mysql_galera_hostgroups WHERE writer_hostgroup={{ galera_writer_hg }}"
+      register: current_galera_hg
+      changed_when: false
+      no_log: true
+
+    - name: "Skonfiguruj mysql_galera_hostgroups (jeśli różne od repo)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "DELETE FROM mysql_galera_hostgroups WHERE writer_hostgroup={{ galera_writer_hg }};
+         INSERT INTO mysql_galera_hostgroups
+         (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup,
+          active, max_writers, writer_is_also_reader, max_transactions_behind, comment)
+         VALUES ({{ galera_writer_hg }}, {{ galera_backup_hg }}, {{ galera_reader_hg }}, {{ galera_offline_hg }},
+          1, 1, 0, 100, 'lab-galera');
+         LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;"
+      when: current_galera_hg.stdout | trim != ([galera_writer_hg, galera_backup_hg, galera_reader_hg, galera_offline_hg, 1, 0] | join(','))
+      changed_when: true
+      no_log: true
+
+    - name: "Sprawdź aktualnego app_user w ProxySQL"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT CONCAT_WS(',', username, default_hostgroup, active) FROM mysql_users WHERE username='{{ app_user }}'"
+      register: current_app_user
+      changed_when: false
+      no_log: true
+
+    - name: "Zarejestruj app_user w ProxySQL (jeśli brak/różny)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "DELETE FROM mysql_users WHERE username='{{ app_user }}';
+         INSERT INTO mysql_users (username, password, default_hostgroup, active)
+         VALUES ('{{ app_user }}', '{{ app_password }}', {{ galera_writer_hg }}, 1);
+         LOAD MYSQL USERS TO RUNTIME; SAVE MYSQL USERS TO DISK;"
+      when: current_app_user.stdout | trim != ([app_user, galera_writer_hg, 1] | join(','))
+      changed_when: true
+      no_log: true
+
+    - name: "ISC-23: wyłącz read/write split (rule 1 jeśli istnieje)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "DELETE FROM mysql_query_rules;
+         LOAD MYSQL QUERY RULES TO RUNTIME; SAVE MYSQL QUERY RULES TO DISK;"
+      no_log: true
+      changed_when: false
+
+    - name: "ISC-20: czekaj na konwergencję Galera monitora (jeden aktywny writer)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id={{ galera_writer_hg }} AND status='ONLINE'"
+      register: writer_count
+      until: writer_count.stdout | trim == '1'
+      retries: 15
+      delay: 3
+      changed_when: false
+      no_log: true
+
+    - name: "ISC-22: sprawdź stan firewalld"
+      ansible.builtin.command:
+        argv: [firewall-cmd, --state]
+      register: proxysql_firewalld
+      changed_when: false
+      failed_when: false
+
+    - name: "ISC-22: wymagaj firewalld poza laboratorium"
+      ansible.builtin.assert:
+        that:
+          - cluster.environment == 'laboratory' or proxysql_firewalld.rc == 0
+        fail_msg: "Port admin ProxySQL (6032) nie zostanie odizolowany bez firewalld poza profilem laboratory."
+
+    - name: "ISC-22: strefa firewalld dla portu admin ProxySQL"
+      ansible.posix.firewalld:
+        zone: proxysql-admin
+        permanent: true
+        state: present
+      register: proxysql_admin_zone
+      when: proxysql_firewalld.rc == 0
+
+    - name: "ISC-22: przeładuj firewalld po utworzeniu strefy admin"
+      ansible.builtin.command:
+        argv: [firewall-cmd, --reload]
+      when:
+        - proxysql_firewalld.rc == 0
+        - proxysql_admin_zone.changed
+
+    - name: "ISC-22: admin (6032) tylko z administration_cidrs"
+      ansible.posix.firewalld:
+        zone: proxysql-admin
+        source: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ network.administration_cidrs }}"
+      when: proxysql_firewalld.rc == 0
+
+    - name: "ISC-22: otwórz port admin 6032 wyłącznie w strefie admin"
+      ansible.posix.firewalld:
+        zone: proxysql-admin
+        port: 6032/tcp
+        permanent: true
+        immediate: true
+        state: enabled
+      when: proxysql_firewalld.rc == 0
+
+    - name: "ISC-22: otwórz port klienta 6033 dla application_cidrs (strefa public)"
+      ansible.posix.firewalld:
+        zone: public
+        source: "{{ item }}"
+        port: 6033/tcp
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ network.application_cidrs }}"
+      when: proxysql_firewalld.rc == 0
+
+    - name: "Raport ProxySQL (runtime hostgroups)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT hostgroup_id, hostname, status FROM runtime_mysql_servers ORDER BY hostgroup_id, hostname"
+      register: server_status
+      changed_when: false
+      no_log: true
+
+    - name: "Wydrukuj status serwerów ProxySQL"
+      ansible.builtin.debug:
+        msg: "{{ server_status.stdout_lines }}"
+
+  handlers: []

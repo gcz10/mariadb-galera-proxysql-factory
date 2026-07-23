@@ -1,0 +1,125 @@
+---
+# F8: Redundantny endpoint ProxySQL — Keepalived VIP.
+# Satisfies: ISC-24 (VIP działa gdy oba ProxySQL zdrowe),
+# ISC-25 (awaria aktywnego ProxySQL < RTO węzła — klient wznawia przez VIP),
+# ISC-26 (VIP nie kieruje ruchu do niesprawnej instancji).
+# VRRP unicast — stabilne w sieciach bez multicast (Docker/OrbStack).
+# Lab: brak systemd — keepalived uruchamiany jako daemon.
+
+- name: "F8 — Keepalived VIP dla endpointu ProxySQL"
+  hosts: proxysql
+  become: true
+  vars:
+    keepalived_interface: "{{ proxysql_endpoint_interface | default('eth0') }}"
+    keepalived_vip_prefix: "{{ proxysql_endpoint_prefix | default(24) }}"
+    keepalived_virtual_router_id: "{{ proxysql.endpoint.virtual_router_id | default(51) }}"
+    keepalived_auth_pass: "{{ lookup('ansible.builtin.env', 'KEEPALIVED_AUTH_PASS') }}"
+
+  pre_tasks:
+    - name: "Wymagaj endpointu typu keepalived_vip"
+      ansible.builtin.assert:
+        that:
+          - proxysql.endpoint.type == 'keepalived_vip'
+          - proxysql.endpoint.address | length > 0
+        fail_msg: "F8 wymaga proxysql.endpoint.type=keepalived_vip z ustawionym address."
+
+    - name: "Wymagaj hasła VRRP"
+      ansible.builtin.assert:
+        that:
+          - keepalived_auth_pass | length > 0
+        fail_msg: "Ustaw KEEPALIVED_AUTH_PASS poza repozytorium."
+
+    - name: "Wymagaj uruchomionego ProxySQL"
+      ansible.builtin.command: pgrep -x proxysql
+      changed_when: false
+
+  tasks:
+    - name: "Instaluj keepalived"
+      ansible.builtin.dnf:
+        name: keepalived
+        state: present
+
+    - name: "Wdróż skrypt health-check ProxySQL"
+      ansible.builtin.copy:
+        src: ../roles/proxysql_endpoint/files/check_proxysql.sh
+        dest: /usr/local/bin/check_proxysql.sh
+        owner: root
+        group: root
+        mode: "0755"
+      register: kl_script
+
+    - name: "Wdróż konfigurację keepalived"
+      ansible.builtin.template:
+        src: ../roles/proxysql_endpoint/templates/keepalived.conf.j2
+        dest: /etc/keepalived/keepalived.conf
+        owner: root
+        group: root
+        mode: "0644"
+      register: kl_config
+
+    - name: "Sprawdź dostępność systemd"
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: kl_systemd
+
+    # --- Ścieżka systemd (produkcja) ---
+    - name: "Włącz i uruchom keepalived przez systemd"
+      ansible.builtin.systemd:
+        name: keepalived
+        state: "{{ 'restarted' if (kl_config.changed or kl_script.changed) else 'started' }}"
+        enabled: true
+        daemon_reload: true
+      when: kl_systemd.stat.exists
+
+    # --- Ścieżka bez systemd (laboratorium) ---
+    - name: "Sprawdź proces keepalived bez systemd"
+      ansible.builtin.command: pgrep -x keepalived
+      register: kl_process
+      changed_when: false
+      failed_when: false
+      when: not kl_systemd.stat.exists
+
+    - name: "Zatrzymaj keepalived po zmianie konfiguracji (lab)"
+      ansible.builtin.command: pkill -TERM -x keepalived
+      when:
+        - not kl_systemd.stat.exists
+        - kl_process.rc == 0
+        - kl_config.changed or kl_script.changed
+      changed_when: true
+      failed_when: false
+
+    - name: "Poczekaj na zwolnienie VIP po restarcie (lab)"
+      ansible.builtin.pause:
+        seconds: 2
+      when:
+        - not kl_systemd.stat.exists
+        - kl_process.rc == 0
+        - kl_config.changed or kl_script.changed
+
+    - name: "Uruchom keepalived bez systemd (lab)"
+      ansible.builtin.shell: >-
+        keepalived -D -f /etc/keepalived/keepalived.conf
+      when:
+        - not kl_systemd.stat.exists
+        - (kl_process.rc != 0) or (kl_config.changed or kl_script.changed)
+      changed_when: true
+
+    - name: "ISC-24: czekaj na VIP na węźle MASTER"
+      ansible.builtin.shell: >-
+        ip -o -4 addr show dev {{ keepalived_interface }} | grep -q "{{ proxysql.endpoint.address }}/"
+      register: vip_master_check
+      until: vip_master_check.rc == 0
+      retries: 15
+      delay: 2
+      changed_when: false
+      when: proxysql_node_idx | int == 1
+
+    - name: "ISC-26: BACKUP nie trzyma VIP gdy MASTER zdrowy"
+      ansible.builtin.shell: >-
+        ip -o -4 addr show dev {{ keepalived_interface }} | grep -q "{{ proxysql.endpoint.address }}/"
+      register: vip_backup_check
+      changed_when: false
+      failed_when: vip_backup_check.rc == 0
+      when: proxysql_node_idx | int != 1
+
+  handlers: []

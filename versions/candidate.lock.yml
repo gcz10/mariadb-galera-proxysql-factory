@@ -35,6 +35,25 @@ proxysql:
     - "CVE-2026-48772"
     - "CVE-2026-48773"
 
+pmm:
+  version: "3.8.1"
+  released: "2026-06-16"
+  image: "percona/pmm-server:3.8.1"
+  image_digest: "sha256:ef47471fb3b54e10897a92bab0b7b45e82d9825c3b0abf5a0693242191f99468"
+  deployment: "docker-volume"
+  rpm_for_rocky_9: false
+  support_eol: "not-published-per-point-release"
+  source: "https://github.com/percona/pmm/blob/main/documentation/docs/release-notes/3.8.1.md"
+
+node_exporter:
+  version: "1.12.1"
+  released: "2026-07-14"
+  rpm_for_rocky_9: false
+  source: "https://github.com/prometheus/node_exporter/releases/tag/v1.12.1"
+  linux_sha256:
+    amd64: "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
+    arm64: "ad35b605f9954b9f1ffddf5ba054bdc5a98d790b9eae5291e1eeb83f1ecbd0e7"
+
 ansible:
   core_version: "2.21.2"
   core_released: "2026-07-13"

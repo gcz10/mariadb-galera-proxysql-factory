@@ -80,6 +80,11 @@ backup:
   restore_test_schedule: "0 4 * * 0"
 
 monitoring:
-  system: "unknown"  # F0 discovery
-  alert_target: "unknown"
+  pmm:
+    server_url: "https://pmm.example.invalid"
+    agent_id: "pmm-server"
+    cluster_name: "example-cluster"
+    validate_certs: true
+    credentials_revision: 1
+  system: "pmm"
   log_destination: "unknown"

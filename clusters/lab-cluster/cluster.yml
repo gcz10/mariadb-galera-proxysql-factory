@@ -70,15 +70,29 @@ availability:
 
 backup:
   enabled: true
-  destination: "smb"
+  # Produkcja: destination=smb (cifs mount). Lab OrbStack nie ma modułu jądra
+  # cifs (uname -r 7.0.11-orbstack), więc lab używa S3 (MinIO) — sankcjonowana
+  # opcja off-cluster. Ścieżka SMB jest zaimplementowana w f10_backup.yml,
+  # ale nietestowalna w tym labie (ograniczenie jądra, jak brak SELinux).
+  destination: "s3"
   full_backup_schedule: "0 2 * * *"
   incremental_backup_schedule: "disabled"
   retention_days: 14
   encryption_enabled: true
   immutable_or_offsite_copy: true
   restore_test_schedule: "0 4 * * 0"
+  s3:
+    endpoint: "172.28.0.60:9000"
+    bucket: "galera-backups"
+    region: "us-east-1"
+    secure: false
 
 monitoring:
-  system: "unknown"
-  alert_target: "unknown"
+  pmm:
+    server_url: "https://127.0.0.1:8443"
+    agent_id: "pmm-server"
+    cluster_name: "lab-galera"
+    validate_certs: false
+    credentials_revision: 2
+  system: "pmm"
   log_destination: "unknown"

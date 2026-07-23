@@ -8,7 +8,9 @@
     "https://rockylinux.org/",
     "https://endoflife.date/rocky-linux",
     "https://docs.ansible.com/",
-    "https://github.com/ansible-collections/ansible.mysql"
+    "https://github.com/ansible-collections/ansible.mysql",
+    "https://github.com/percona/pmm/blob/main/documentation/docs/release-notes/3.8.1.md",
+    "https://github.com/prometheus/node_exporter/releases/tag/v1.12.1"
   ],
   "rocky_linux": {
     "major": 9,
@@ -51,6 +53,24 @@
     "gpg_key": "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg",
     "security": "3.0.9 poprawia CVE-2026-48772 (PROXY Protocol v1 spoofing) i CVE-2026-48773 (pre-auth heap overflow); wersje <3.0.9 wymagaja natychmiastowego upgrade",
     "tier": "Stable Tier (3.0.x)"
+  },
+  "pmm": {
+    "candidate_version": "3.8.1",
+    "released": "2026-06-16",
+    "deployment": "pinned Docker image with persistent /srv volume",
+    "rocky_linux_9_rpm": false,
+    "compatibility": "native generic/external/MySQL Inventory verified with MariaDB 11.4.12; ProxySQL metrics deferred to F7",
+    "security": "security-focused release fixing critical/high Grafana, nginx and gRPC dependency vulnerabilities",
+    "known_risks": "vendor documents low-risk, typically unreachable vulnerabilities in remaining third-party dependencies",
+    "support_eol": "vendor does not publish an EOL per PMM point release"
+  },
+  "node_exporter": {
+    "candidate_version": "1.12.1",
+    "released": "2026-07-14",
+    "rocky_linux_9_rpm": false,
+    "delivery": "official Linux tarball, pinned by architecture and SHA-256",
+    "linux_amd64_sha256": "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63",
+    "linux_arm64_sha256": "ad35b605f9954b9f1ffddf5ba054bdc5a98d790b9eae5291e1eeb83f1ecbd0e7"
   },
   "ansible": {
     "core_version": "2.21.2",

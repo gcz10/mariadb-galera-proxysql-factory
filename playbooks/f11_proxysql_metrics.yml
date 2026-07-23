@@ -1,0 +1,249 @@
+---
+# F11 — ProxySQL metrics: włącz restapi + zarejestruj w PMM Inventory.
+# Satisfies: ISC-46 (ProxySQL metrics do PMM).
+#
+# Galera + MariaDB są już pokryte (mysqld_exporter + QAN w f11_pmm_client.yml).
+# ProxySQL (wbudowany w F7) wystawia metryki Prometheus przez restapi (:6070/metrics).
+# Ten playbook:
+#   1. włącza admin-restapi_enabled=true na każdym węźle ProxySQL (LOAD + SAVE = trwałe),
+#   2. rejestruje usługę external (group=proxysql) + external_exporter agent (port 6070)
+#      w PMM Inventory, reużywając generic nodes utworzonych przez f11_pmm_client.yml.
+#
+# Zależność: uruchamiać PO f11_pmm_client.yml (generic nodes muszą istnieć).
+
+# === Play 1: włącz restapi na węzłach ProxySQL ===
+- name: "F11 — włącz restapi ProxySQL (metryki Prometheus :6070)"
+  hosts: proxysql
+  become: true
+  gather_facts: false
+  vars:
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    restapi_port: 6070
+
+  pre_tasks:
+    - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
+      ansible.builtin.assert:
+        that:
+          - proxysql_admin_password | length > 0
+        fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
+
+  tasks:
+    - name: "Sprawdź aktualny stan admin-restapi_enabled (runtime)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT variable_value FROM global_variables WHERE variable_name='admin-restapi_enabled'"
+      register: restapi_current
+      changed_when: false
+      no_log: true
+
+    - name: "Włącz admin-restapi_enabled=true (trwale)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "UPDATE global_variables SET variable_value='true' WHERE variable_name='admin-restapi_enabled';
+         LOAD ADMIN VARIABLES TO RUNTIME; SAVE ADMIN VARIABLES TO DISK;"
+      when: restapi_current.stdout | trim != 'true'
+      changed_when: true
+      no_log: true
+
+    - name: "Zapewnij trwałość dla już-włączonego restapi (SAVE TO DISK)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SAVE ADMIN VARIABLES TO DISK;"
+      when: restapi_current.stdout | trim == 'true'
+      changed_when: false
+      no_log: true
+
+    - name: "Czekaj na port restapi ({{ restapi_port }})"
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ restapi_port }}"
+        timeout: 15
+
+    - name: "Potwierdź metryki Prometheus na :{{ restapi_port }}/metrics"
+      ansible.builtin.shell: >-
+        curl -s http://127.0.0.1:{{ restapi_port }}/metrics | grep -c '^proxysql_'
+      register: proxysql_metric_count
+      changed_when: false
+
+    - name: "Wymagaj niepustych metryk ProxySQL"
+      ansible.builtin.assert:
+        that:
+          - proxysql_metric_count.stdout | int > 0
+        fail_msg: "Brak metryk ProxySQL na :{{ restapi_port }}/metrics."
+
+# === Play 2: zarejestruj ProxySQL metrics w PMM Inventory ===
+- name: "F11 — zarejestruj metryki ProxySQL w PMM Inventory"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - "../{{ versions.lock_file }}"
+
+  vars:
+    ansible_become: false
+    pmm_api_url: "{{ lookup('ansible.builtin.env', 'PMM_SERVER_URL') | default(monitoring.get('pmm', {}).get('server_url', 'https://127.0.0.1:8443'), true) }}"
+    pmm_admin_user: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_USER') | default('admin', true) }}"
+    pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    pmm_validate_certs_effective: "{{ monitoring.get('pmm', {}).get('validate_certs', true) | bool }}"
+    pmm_cluster_name_effective: "{{ monitoring.get('pmm', {}).get('cluster_name', cluster.name) }}"
+    pmm_environment_effective: "{{ cluster.environment }}"
+    pmm_proxysql_hosts: "{{ groups.get('proxysql', []) }}"
+    pmm_proxysql_node_names: "{{ pmm_proxysql_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
+    pmm_proxysql_service_names: "{{ pmm_proxysql_node_names | map('regex_replace', '$', '-proxysql') | list }}"
+    proxysql_metrics_port: 6070
+
+  pre_tasks:
+    - name: "Wymagaj danych dostępowych PMM"
+      ansible.builtin.assert:
+        that:
+          - pmm_admin_password | length > 0
+          - pmm_api_url is match('^https://')
+          - pmm_proxysql_node_names | length > 0
+        fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium oraz użyj PMM URL z https://."
+
+  tasks:
+    # === Pobierz node IDs dla węzłów ProxySQL ===
+    - name: "Pobierz PMM node inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_nodes
+      no_log: true
+
+    - name: "Zbuduj mapę proxysql node name → node ID"
+      ansible.builtin.set_fact:
+        pmm_proxysql_node_ids: "{{ pmm_proxysql_node_ids | default({}) | combine({item.node_name: item.node_id}) }}"
+      loop: "{{ pmm_nodes.json.generic | default([]) }}"
+      when: item.node_name in pmm_proxysql_node_names
+
+    - name: "Wymagaj istnienia generic nodes dla ProxySQL"
+      ansible.builtin.assert:
+        that:
+          - (pmm_proxysql_node_ids | default({}) | length) == (pmm_proxysql_node_names | length)
+        fail_msg: "Brak generic nodes ProxySQL w PMM — uruchom najpierw f11_pmm_client.yml."
+
+    # === Cleanup starych usług ProxySQL o złym przypisaniu ===
+    - name: "Pobierz PMM service inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/services"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_services_initial
+      no_log: true
+
+    - name: "Usuń nieaktualne ProxySQL services (zła grupa / node)"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/management/services/{{ item.service_id }}"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      loop: "{{ pmm_services_initial.json.external | default([]) }}"
+      when:
+        - item.service_name in pmm_proxysql_service_names
+        - item.group != 'proxysql' or item.cluster != pmm_cluster_name_effective or item.environment != pmm_environment_effective
+      no_log: true
+
+    # === Utwórz usługi external ProxySQL ===
+    - name: "Odśwież PMM service inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/services"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_services
+      no_log: true
+
+    - name: "Utwórz natywne usługi ProxySQL (external, group=proxysql)"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/services"
+        method: POST
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        body_format: json
+        body:
+          external:
+            service_name: "{{ pmm_cluster_name_effective }}-{{ item }}-proxysql"
+            node_id: "{{ pmm_proxysql_node_ids[pmm_cluster_name_effective ~ '-' ~ item] }}"
+            environment: "{{ pmm_environment_effective }}"
+            cluster: "{{ pmm_cluster_name_effective }}"
+            group: "proxysql"
+        status_code: 200
+      loop: "{{ pmm_proxysql_hosts }}"
+      when: (pmm_cluster_name_effective ~ '-' ~ item ~ '-proxysql') not in (pmm_services.json.external | default([]) | map(attribute='service_name') | list)
+      no_log: true
+
+    - name: "Pobierz docelowy PMM service inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/services"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_services_final
+      no_log: true
+
+    - name: "Zbuduj mapę proxysql service name → service ID"
+      ansible.builtin.set_fact:
+        pmm_proxysql_service_ids: "{{ pmm_proxysql_service_ids | default({}) | combine({item.service_name: item.service_id}) }}"
+      loop: "{{ pmm_services_final.json.external | default([]) }}"
+      when: item.service_name in pmm_proxysql_service_names
+
+    # === Rejestracja external exporter agent (port 6070) ===
+    - name: "Pobierz PMM agent inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_agents
+      no_log: true
+
+    - name: "Utwórz external exporter agents dla ProxySQL (port {{ proxysql_metrics_port }})"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents"
+        method: POST
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        body_format: json
+        body:
+          external_exporter:
+            runs_on_node_id: "{{ pmm_proxysql_node_ids[pmm_cluster_name_effective ~ '-' ~ item] }}"
+            service_id: "{{ pmm_proxysql_service_ids[pmm_cluster_name_effective ~ '-' ~ item ~ '-proxysql'] }}"
+            scheme: "http"
+            metrics_path: "/metrics"
+            listen_port: "{{ proxysql_metrics_port }}"
+        status_code: 200
+      loop: "{{ pmm_proxysql_hosts }}"
+      when: pmm_proxysql_service_ids[pmm_cluster_name_effective ~ '-' ~ item ~ '-proxysql'] not in (pmm_agents.json.external_exporter | default([]) | selectattr('listen_port', 'equalto', proxysql_metrics_port) | map(attribute='service_id') | list)
+      no_log: true
+
+    - name: "Raport ProxySQL metrics w PMM"
+      ansible.builtin.debug:
+        msg: >-
+          Zarejestrowano {{ pmm_proxysql_service_ids | length }} usług ProxySQL (external exporter,
+          port {{ proxysql_metrics_port }}) w PMM Inventory.

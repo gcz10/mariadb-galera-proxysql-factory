@@ -1,75 +1,669 @@
 ---
-# F11: PMM Client monitoring — rejestracja węzłów w PMM Server.
-# pmm2-client nie wspiera aarch64 — alternatywa: PMM Server scrapuje
-# node_exporter (9100) i mysqld_exporter (9104) przez built-in VictoriaMetrics.
-# Satisfies: ISC-46 (metryki trafiają do systemu monitoringowego).
+# F11: natywna rejestracja hostów i usług w PMM Inventory.
+# PMM Server uruchamia mysqld_exporter/QAN dla zdalnych MariaDB.
+# Na hostach ARM node_exporter jest rejestrowany jako external exporter,
+# dzięki czemu PMM nadaje natywne etykiety node_name/service_name.
 
-- name: "F11 - Rejestruj węzły w PMM przez scrape config"
-  hosts: all
+- name: "F11 - Sprawdź PMM API przed zmianami na hostach"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - "../{{ versions.lock_file }}"
+
+
+  vars:
+    ansible_become: false
+    pmm_api_url: "{{ lookup('ansible.builtin.env', 'PMM_SERVER_URL') | default(monitoring.get('pmm', {}).get('server_url', 'https://127.0.0.1:8443'), true) }}"
+    pmm_admin_user: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_USER') | default('admin', true) }}"
+    pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    pmm_validate_certs_effective: "{{ monitoring.get('pmm', {}).get('validate_certs', true) | bool }}"
+
+  tasks:
+    - name: "Wymagaj bezpiecznego URL i danych administratora PMM"
+      ansible.builtin.assert:
+        that:
+          - pmm_admin_password | length > 0
+          - pmm_api_url is match('^https://')
+          - cluster.environment != 'production' or pmm_validate_certs_effective
+        fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium oraz użyj PMM URL z https://."
+
+    - name: "Potwierdź uwierzytelnienie i dostępność PMM API"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      no_log: true
+    - name: "Pobierz wersję runtime PMM"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/version"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+        return_content: true
+      register: pmm_runtime_version
+      changed_when: false
+      no_log: true
+
+    - name: "Wymagaj wersji PMM przypiętej w lockfile"
+      ansible.builtin.assert:
+        that:
+          - pmm_runtime_version.json.version == pmm.version
+        fail_msg: "PMM runtime version {{ pmm_runtime_version.json.version | default('unknown') }} nie odpowiada lockfile {{ pmm.version }}."
+
+
+- name: "F11 - Przygotuj konto monitorujące MariaDB"
+  hosts: galera
+  gather_facts: false
+  become: true
+
+  vars:
+    pmm_monitor_user: "pmm_monitor"
+    pmm_monitor_password: "{{ lookup('ansible.builtin.env', 'PMM_MONITOR_PASSWORD') }}"
+
+  pre_tasks:
+    - name: "Wymagaj hasła konta monitorującego"
+      ansible.builtin.assert:
+        that:
+          - pmm_monitor_password | length > 0
+        fail_msg: "Ustaw PMM_MONITOR_PASSWORD poza repozytorium."
+      run_once: true
+
+  tasks:
+    - name: "Utwórz replikowane konto PMM na pierwszym węźle Galera"
+      community.mysql.mysql_user:
+        name: "{{ pmm_monitor_user }}"
+        password: "{{ pmm_monitor_password }}"
+        host: "%"
+        priv: "*.*:PROCESS,REPLICATION CLIENT,SELECT,SHOW DATABASES,RELOAD"
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        column_case_sensitive: true
+      when: galera_node_idx | int == 1
+      no_log: true
+
+- name: "F11 - Zarejestruj natywne obiekty PMM"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+
+  vars:
+    ansible_become: false
+    pmm_api_url: "{{ lookup('ansible.builtin.env', 'PMM_SERVER_URL') | default(monitoring.get('pmm', {}).get('server_url', 'https://127.0.0.1:8443'), true) }}"
+    pmm_admin_user: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_USER') | default('admin', true) }}"
+    pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    pmm_monitor_user: "pmm_monitor"
+    pmm_monitor_password: "{{ lookup('ansible.builtin.env', 'PMM_MONITOR_PASSWORD') }}"
+    pmm_agent_id_effective: "{{ monitoring.get('pmm', {}).get('agent_id', 'pmm-server') }}"
+    pmm_validate_certs_effective: "{{ monitoring.get('pmm', {}).get('validate_certs', true) | bool }}"
+    pmm_credentials_revision_effective: "{{ monitoring.get('pmm', {}).get('credentials_revision', 1) | string }}"
+    pmm_environment_effective: "{{ cluster.environment }}"
+    pmm_cluster_name_effective: "{{ monitoring.get('pmm', {}).get('cluster_name', cluster.name) }}"
+    pmm_node_hosts: "{{ (groups.get('galera', []) + groups.get('proxysql', [])) | unique | list }}"
+    pmm_node_names: "{{ pmm_node_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
+    pmm_mysql_hosts: "{{ groups.get('galera', []) }}"
+    pmm_mysql_names: "{{ pmm_mysql_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
+    pmm_external_service_names: "{{ pmm_node_names | map('regex_replace', '$', '-node-exporter') | list }}"
+    pmm_mysql_service_names: "{{ pmm_mysql_names | map('regex_replace', '$', '-mysql') | list }}"
+
+  pre_tasks:
+    - name: "Wymagaj danych dostępowych poza repozytorium"
+      ansible.builtin.assert:
+        that:
+          - pmm_admin_password | length > 0
+          - pmm_api_url is match('^https://')
+          - cluster.environment != 'production' or pmm_validate_certs_effective
+          - pmm_monitor_password | length > 0
+          - pmm_node_names | length > 0
+        fail_msg: "Ustaw PMM_ADMIN_PASSWORD i PMM_MONITOR_PASSWORD poza repozytorium oraz użyj PMM URL z https://."
+
+  tasks:
+    - name: "Pobierz początkowy PMM node inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_nodes_initial
+      no_log: true
+
+    - name: "Usuń stare serverless remote nodes"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes/{{ item.node_id }}?force=true"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      loop: "{{ pmm_nodes_initial.json.remote | default([]) }}"
+      when: item.node_name in pmm_node_names or (item.node_name in pmm_node_hosts and (item.custom_labels.get('cluster', '') == pmm_cluster_name_effective or item.address == hostvars[item.node_name].get('galera_node_address', hostvars[item.node_name].get('proxysql_node_address', hostvars[item.node_name].ansible_host))))
+      no_log: true
+    - name: "Usuń nieaktualne generic nodes bieżącego klastra"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes/{{ item.node_id }}?force=true"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      loop: "{{ pmm_nodes_initial.json.generic | default([]) }}"
+      when:
+        - item.custom_labels.get('cluster', '') == pmm_cluster_name_effective
+        - item.node_name not in pmm_node_names
+        - not (item.is_pmm_server_node | default(false) | bool)
+      no_log: true
+    - name: "Usuń generic nodes z dryfem adresu lub etykiet"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes/{{ item.node_id }}?force=true"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      vars:
+        pmm_inventory_host: "{{ item.node_name | regex_replace('^' ~ pmm_cluster_name_effective ~ '-', '') }}"
+        pmm_expected_address: "{{ hostvars[pmm_inventory_host].get('galera_node_address', hostvars[pmm_inventory_host].get('proxysql_node_address', hostvars[pmm_inventory_host].ansible_host)) }}"
+      loop: "{{ pmm_nodes_initial.json.generic | default([]) }}"
+      when:
+        - item.node_name in pmm_node_names
+        - item.address != pmm_expected_address or item.custom_labels.get('cluster', '') != pmm_cluster_name_effective or item.custom_labels.get('environment', '') != pmm_environment_effective
+      no_log: true
+
+
+
+    - name: "Odśwież PMM node inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_nodes_after_cleanup
+      no_log: true
+
+    - name: "Utwórz generic nodes dla hostów klastra"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes"
+        method: POST
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        body_format: json
+        body:
+          generic:
+            node_name: "{{ pmm_cluster_name_effective }}-{{ item }}"
+            address: "{{ hostvars[item].get('galera_node_address', hostvars[item].get('proxysql_node_address', hostvars[item].ansible_host)) }}"
+            distro: "rocky-9"
+            custom_labels:
+              cluster: "{{ pmm_cluster_name_effective }}"
+              environment: "{{ pmm_environment_effective }}"
+        status_code: 200
+      loop: "{{ pmm_node_hosts }}"
+      when: (pmm_cluster_name_effective ~ '-' ~ item) not in (pmm_nodes_after_cleanup.json.generic | default([]) | map(attribute='node_name') | list)
+      no_log: true
+
+    - name: "Pobierz docelowy PMM node inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_nodes
+      no_log: true
+
+    - name: "Zbuduj mapę node name do node ID"
+      ansible.builtin.set_fact:
+        pmm_node_ids: "{{ pmm_node_ids | default({}) | combine({item.node_name: item.node_id}) }}"
+      loop: "{{ pmm_nodes.json.generic | default([]) }}"
+      when: item.node_name in pmm_node_names
+
+    - name: "Pobierz początkowy PMM service inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/services"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_services_initial
+      no_log: true
+
+    - name: "Usuń stare usługi external o nazwach hostów"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/management/services/{{ item.service_id }}"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      loop: "{{ pmm_services_initial.json.external | default([]) }}"
+      when:
+        - item.service_name in pmm_node_hosts
+        - item.cluster == pmm_cluster_name_effective
+      no_log: true
+    - name: "Usuń nieaktualne node_exporter services bieżącego klastra"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/management/services/{{ item.service_id }}"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      loop: "{{ pmm_services_initial.json.external | default([]) }}"
+      when:
+        - item.cluster == pmm_cluster_name_effective
+        - item.group == 'node-exporter'
+        - item.service_name not in pmm_external_service_names
+      no_log: true
+
+
+    - name: "Usuń external services przypięte do niewłaściwych nodes"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/management/services/{{ item.service_id }}"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      vars:
+        pmm_service_node_name: "{{ item.service_name | regex_replace('-node-exporter$', '') }}"
+      loop: "{{ pmm_services_initial.json.external | default([]) }}"
+      when:
+        - item.service_name in pmm_external_service_names
+        - item.node_id != pmm_node_ids[pmm_service_node_name] or item.cluster != pmm_cluster_name_effective or item.environment != pmm_environment_effective or item.group != 'node-exporter'
+      no_log: true
+
+    - name: "Usuń MySQL services przypięte do niewłaściwych nodes"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/management/services/{{ item.service_id }}"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      vars:
+        pmm_service_node_name: "{{ item.service_name | regex_replace('-mysql$', '') }}"
+        pmm_inventory_host: "{{ pmm_service_node_name | regex_replace('^' ~ pmm_cluster_name_effective ~ '-', '') }}"
+        pmm_expected_address: "{{ hostvars[pmm_inventory_host].galera_node_address }}"
+      loop: "{{ pmm_services_initial.json.mysql | default([]) }}"
+      when:
+        - item.service_name in pmm_mysql_service_names
+        - item.node_id != pmm_node_ids[pmm_service_node_name] or item.address != pmm_expected_address or (item.port | int) != 3306 or item.cluster != pmm_cluster_name_effective or item.environment != pmm_environment_effective
+      no_log: true
+    - name: "Usuń nieaktualne MySQL services bieżącego klastra"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/management/services/{{ item.service_id }}"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      loop: "{{ pmm_services_initial.json.mysql | default([]) }}"
+      when:
+        - item.cluster == pmm_cluster_name_effective
+        - item.service_name not in pmm_mysql_service_names
+      no_log: true
+
+
+    - name: "Odśwież PMM service inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/services"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_services_after_cleanup
+      no_log: true
+
+    - name: "Utwórz natywne usługi node_exporter"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/services"
+        method: POST
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        body_format: json
+        body:
+          external:
+            service_name: "{{ pmm_cluster_name_effective }}-{{ item }}-node-exporter"
+            node_id: "{{ pmm_node_ids[pmm_cluster_name_effective ~ '-' ~ item] }}"
+            environment: "{{ pmm_environment_effective }}"
+            cluster: "{{ pmm_cluster_name_effective }}"
+            group: "node-exporter"
+        status_code: 200
+      loop: "{{ pmm_node_hosts }}"
+      when: (pmm_cluster_name_effective ~ '-' ~ item ~ '-node-exporter') not in (pmm_services_after_cleanup.json.external | default([]) | map(attribute='service_name') | list)
+      no_log: true
+
+    - name: "Utwórz natywne usługi MySQL"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/services"
+        method: POST
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        body_format: json
+        body:
+          mysql:
+            service_name: "{{ pmm_cluster_name_effective }}-{{ item }}-mysql"
+            node_id: "{{ pmm_node_ids[pmm_cluster_name_effective ~ '-' ~ item] }}"
+            address: "{{ hostvars[item].galera_node_address }}"
+            port: 3306
+            environment: "{{ pmm_environment_effective }}"
+            cluster: "{{ pmm_cluster_name_effective }}"
+        status_code: 200
+      loop: "{{ pmm_mysql_hosts }}"
+      when: (pmm_cluster_name_effective ~ '-' ~ item ~ '-mysql') not in (pmm_services_after_cleanup.json.mysql | default([]) | map(attribute='service_name') | list)
+      no_log: true
+
+    - name: "Pobierz docelowy PMM service inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/services"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_services
+      no_log: true
+
+    - name: "Zbuduj mapę external service name do service ID"
+      ansible.builtin.set_fact:
+        pmm_external_service_ids: "{{ pmm_external_service_ids | default({}) | combine({item.service_name: item.service_id}) }}"
+        pmm_external_service_node_ids: "{{ pmm_external_service_node_ids | default({}) | combine({item.service_id: item.node_id}) }}"
+      loop: "{{ pmm_services.json.external | default([]) }}"
+      when: item.service_name in pmm_external_service_names
+
+    - name: "Zbuduj mapę MySQL service name do service ID"
+      ansible.builtin.set_fact:
+        pmm_mysql_service_ids: "{{ pmm_mysql_service_ids | default({}) | combine({item.service_name: item.service_id}) }}"
+      loop: "{{ pmm_services.json.mysql | default([]) }}"
+      when: item.service_name in pmm_mysql_service_names
+
+    - name: "Pobierz początkowy PMM agent inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_agents_initial
+      no_log: true
+    - name: "Policz external exporter agents per service"
+      ansible.builtin.set_fact:
+        pmm_external_agent_counts: "{{ pmm_external_agent_counts | default({}) | combine({item.service_id: (pmm_external_agent_counts[item.service_id] | default(0) | int) + 1}) }}"
+      loop: "{{ pmm_agents_initial.json.external_exporter | default([]) }}"
+      when: item.service_id in (pmm_external_service_ids.values() | list)
+
+    - name: "Usuń zduplikowane lub błędnie skierowane external exporter agents"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents/{{ item.agent_id }}"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      loop: "{{ pmm_agents_initial.json.external_exporter | default([]) }}"
+      when:
+        - item.service_id in (pmm_external_service_ids.values() | list)
+        - (pmm_external_agent_counts[item.service_id] | int) > 1 or item.runs_on_node_id != pmm_external_service_node_ids[item.service_id] or item.scheme != 'http' or item.metrics_path != '/metrics' or (item.listen_port | int) != 9100
+      no_log: true
+
+
+    - name: "Usuń agenty MySQL przypisane do innego PMM Agent"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents/{{ item.agent_id }}"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        status_code: 200
+      loop: "{{ (pmm_agents_initial.json.mysqld_exporter | default([])) + (pmm_agents_initial.json.qan_mysql_perfschema_agent | default([])) }}"
+      when:
+        - item.service_id in (pmm_mysql_service_ids.values() | list)
+        - item.pmm_agent_id | default('') != pmm_agent_id_effective
+      no_log: true
+
+    - name: "Odśwież PMM agent inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_agents_after_cleanup
+      no_log: true
+    - name: "Uzgodnij dane dostępowe istniejących mysqld_exporter"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents/{{ item.agent_id }}"
+        method: PUT
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        body_format: json
+        body:
+          mysqld_exporter:
+            username: "{{ pmm_monitor_user }}"
+            password: "{{ pmm_monitor_password }}"
+            skip_connection_check: true
+            custom_labels:
+              values:
+                cluster: "{{ pmm_cluster_name_effective }}"
+                environment: "{{ pmm_environment_effective }}"
+                credentials_revision: "{{ pmm_credentials_revision_effective }}"
+        status_code: 200
+      loop: "{{ pmm_agents_after_cleanup.json.mysqld_exporter | default([]) }}"
+      when:
+        - item.service_id in (pmm_mysql_service_ids.values() | list)
+        - item.custom_labels.get('credentials_revision', '') != pmm_credentials_revision_effective
+      no_log: true
+
+    - name: "Uzgodnij dane dostępowe istniejących QAN Performance Schema agents"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents/{{ item.agent_id }}"
+        method: PUT
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        body_format: json
+        body:
+          qan_mysql_perfschema_agent:
+            username: "{{ pmm_monitor_user }}"
+            password: "{{ pmm_monitor_password }}"
+            skip_connection_check: true
+            disable_comments_parsing: true
+            custom_labels:
+              values:
+                cluster: "{{ pmm_cluster_name_effective }}"
+                environment: "{{ pmm_environment_effective }}"
+                credentials_revision: "{{ pmm_credentials_revision_effective }}"
+        status_code: 200
+      loop: "{{ pmm_agents_after_cleanup.json.qan_mysql_perfschema_agent | default([]) }}"
+      when:
+        - item.service_id in (pmm_mysql_service_ids.values() | list)
+        - item.custom_labels.get('credentials_revision', '') != pmm_credentials_revision_effective
+      no_log: true
+
+    - name: "Utwórz external exporter agents dla node_exporter"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents"
+        method: POST
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        body_format: json
+        body:
+          external_exporter:
+            runs_on_node_id: "{{ pmm_node_ids[item] }}"
+            service_id: "{{ pmm_external_service_ids[item + '-node-exporter'] }}"
+            scheme: "http"
+            metrics_path: "/metrics"
+            listen_port: 9100
+        status_code: 200
+      loop: "{{ pmm_node_names }}"
+      when: pmm_external_service_ids[item + '-node-exporter'] not in (pmm_agents_after_cleanup.json.external_exporter | default([]) | map(attribute='service_id') | list)
+      no_log: true
+
+    - name: "Utwórz PMM-managed mysqld_exporter agents"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents"
+        method: POST
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        body_format: json
+        body:
+          mysqld_exporter:
+            pmm_agent_id: "{{ pmm_agent_id_effective }}"
+            service_id: "{{ pmm_mysql_service_ids[item + '-mysql'] }}"
+            username: "{{ pmm_monitor_user }}"
+            password: "{{ pmm_monitor_password }}"
+            skip_connection_check: true
+            custom_labels:
+              cluster: "{{ pmm_cluster_name_effective }}"
+              environment: "{{ pmm_environment_effective }}"
+              credentials_revision: "{{ pmm_credentials_revision_effective }}"
+        status_code: 200
+      loop: "{{ pmm_mysql_names }}"
+      when: pmm_mysql_service_ids[item + '-mysql'] not in (pmm_agents_after_cleanup.json.mysqld_exporter | default([]) | map(attribute='service_id') | list)
+      no_log: true
+
+    - name: "Utwórz QAN Performance Schema agents"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents"
+        method: POST
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        body_format: json
+        body:
+          qan_mysql_perfschema_agent:
+            pmm_agent_id: "{{ pmm_agent_id_effective }}"
+            service_id: "{{ pmm_mysql_service_ids[item + '-mysql'] }}"
+            username: "{{ pmm_monitor_user }}"
+            password: "{{ pmm_monitor_password }}"
+            skip_connection_check: true
+            disable_comments_parsing: true
+            custom_labels:
+              cluster: "{{ pmm_cluster_name_effective }}"
+              environment: "{{ pmm_environment_effective }}"
+              credentials_revision: "{{ pmm_credentials_revision_effective }}"
+        status_code: 200
+      loop: "{{ pmm_mysql_names }}"
+      when: pmm_mysql_service_ids[item + '-mysql'] not in (pmm_agents_after_cleanup.json.qan_mysql_perfschema_agent | default([]) | map(attribute='service_id') | list)
+      no_log: true
+
+    - name: "Czekaj na uruchomienie natywnych exporterów PMM"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/agents"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_agents_final
+      until:
+        - (pmm_agents_final.json.external_exporter | default([]) | selectattr('service_id', 'in', (pmm_external_service_ids.values() | list)) | list | length) == (pmm_node_names | length)
+        - (pmm_agents_final.json.external_exporter | default([]) | selectattr('service_id', 'in', (pmm_external_service_ids.values() | list)) | rejectattr('status', 'equalto', 'AGENT_STATUS_RUNNING') | list | length) == 0
+        - (pmm_agents_final.json.mysqld_exporter | default([]) | selectattr('service_id', 'in', (pmm_mysql_service_ids.values() | list)) | list | length) == (pmm_mysql_names | length)
+        - (pmm_agents_final.json.mysqld_exporter | default([]) | selectattr('service_id', 'in', (pmm_mysql_service_ids.values() | list)) | rejectattr('status', 'equalto', 'AGENT_STATUS_RUNNING') | list | length) == 0
+        - (pmm_agents_final.json.qan_mysql_perfschema_agent | default([]) | selectattr('service_id', 'in', (pmm_mysql_service_ids.values() | list)) | list | length) == (pmm_mysql_names | length)
+        - (pmm_agents_final.json.qan_mysql_perfschema_agent | default([]) | selectattr('service_id', 'in', (pmm_mysql_service_ids.values() | list)) | rejectattr('status', 'equalto', 'AGENT_STATUS_RUNNING') | rejectattr('status', 'equalto', 'AGENT_STATUS_WAITING') | list | length) == 0
+      retries: 12
+      delay: 5
+      no_log: true
+
+    - name: "Potwierdź natywną rejestrację PMM"
+      ansible.builtin.debug:
+        msg: >-
+          PMM Inventory: {{ pmm_node_names | length }} nodes,
+          {{ pmm_external_service_ids | length }} node exporters,
+          {{ pmm_mysql_service_ids | length }} MySQL services.
+
+- name: "F11 - Usuń zastąpiony monitoring standalone"
+  hosts: galera
+  gather_facts: false
   become: true
 
   tasks:
-    - name: "Sprawdz czy node_exporter dziala (port 9100)"
-      ansible.builtin.shell: "curl -s -o /dev/null -w '%{http_code}' http://localhost:9100/metrics 2>/dev/null || echo '000'"
-      changed_when: false
-      register: node_exp_check
+    - name: "Usuń legacy replikowane konto eksportera"
+      community.mysql.mysql_user:
+        name: pmm
+        host: "%"
+        state: absent
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        column_case_sensitive: true
+      when: galera_node_idx | int == 1
+      no_log: true
 
-    - name: "Wypisz status node_exporter"
-      ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: node_exporter {{ 'OK' if node_exp_check.stdout == '200' else 'FAILED' }}"
+    - name: "Usuń znane legacy lokalne konta eksporterów"
+      community.mysql.mysql_user:
+        name: "{{ item }}"
+        host: localhost
+        state: absent
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        column_case_sensitive: true
+      loop:
+        - pmm
+        - pmm_monitor
+      when: galera_node_idx | int == 1
+      no_log: true
 
-    # MariaDB monitoring — tylko na węzłach Galera z działającym MariaDB
-    - name: "Instaluj mysqld_exporter na węzłach Galera"
-      block:
-        - name: "Pobierz mysqld_exporter (aarch64)"
-          ansible.builtin.unarchive:
-            src: "https://github.com/prometheus/mysqld_exporter/releases/download/v0.16.0/mysqld_exporter-0.16.0.linux-arm64.tar.gz"
-            dest: /usr/local/bin/
-            remote_src: true
-            extra_opts: ["--strip-components=1"]
-            include: "mysqld_exporter-0.16.0.linux-arm64/mysqld_exporter"
-          ignore_errors: true
+    - name: "Zatrzymaj legacy standalone mysqld_exporter"
+      ansible.builtin.command:
+        argv:
+          - pkill
+          - -x
+          - mysqld_exporter
+      register: pmm_legacy_exporter_stop
+      changed_when: pmm_legacy_exporter_stop.rc == 0
+      failed_when: pmm_legacy_exporter_stop.rc not in [0, 1]
 
-        - name: "Utworz .my.cnf dla mysqld_exporter"
-          ansible.builtin.copy:
-            dest: /var/lib/mysql/.my.cnf
-            content: |
-              [client]
-              user=pmm_monitor
-              password=pmm_monitor_password
-              socket=/var/lib/mysql/mysql.sock
-            owner: mysql
-            group: mysql
-            mode: "0600"
-
-        - name: "Utworz uzytkownika pmm_monitor w MariaDB (gnode1)"
-          community.mysql.mysql_user:
-            name: pmm_monitor
-            password: pmm_monitor_password
-            priv: "*.*:PROCESS,REPLICATION CLIENT,SELECT,SHOW DATABASES,RELOAD"
-            host: localhost
-            state: present
-            login_unix_socket: /var/lib/mysql/mysql.sock
-          when: galera_node_idx | default(1) == 1
-
-        - name: "Uruchom mysqld_exporter"
-          ansible.builtin.shell: |
-            pkill mysqld_exporter 2>/dev/null || true
-            nohup /usr/local/bin/mysqld_exporter \
-              --config.my-cnf=/var/lib/mysql/.my.cnf \
-              --web.listen-address=:9104 \
-              > /var/tmp/mysqld_exporter.log 2>&1 &
-            sleep 3
-          changed_when: false
-
-        - name: "Sprawdz mysqld_exporter"
-          ansible.builtin.shell: "curl -s -o /dev/null -w '%{http_code}' http://localhost:9104/metrics 2>/dev/null || echo '000'"
-          changed_when: false
-          register: mysql_exp_check
-
-        - name: "Wypisz status mysqld_exporter"
-          ansible.builtin.debug:
-            msg: "{{ inventory_hostname }}: mysqld_exporter {{ 'OK' if mysql_exp_check.stdout == '200' else 'FAILED' }}"
-      when: "'galera' in group_names"
-
-  handlers: []
+    - name: "Usuń legacy plik danych dostępowych eksportera"
+      ansible.builtin.file:
+        path: /var/lib/mysql/.my.cnf
+        state: absent

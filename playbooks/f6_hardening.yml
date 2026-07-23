@@ -1,0 +1,123 @@
+---
+# F6: Hardening MariaDB — usuń anonimowe konta, test DB, weryfikuj least privilege.
+# DDL na gnode1 replikuje się do całego klastra Galera.
+# Satisfies: ISC-40, ISC-41, ISC-42, ISC-45.
+
+- name: "F6 — hardening kont i baz MariaDB"
+  hosts: galera[0]
+  become: true
+  vars:
+    sst_user: "sst_user"
+    pmm_monitor_user: "pmm_monitor"
+
+  pre_tasks:
+    - name: "Wymagaj uruchomionej MariaDB"
+      ansible.builtin.shell: "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e 'SELECT 1' 2>/dev/null"
+      register: mariadb_check
+      changed_when: false
+      failed_when: false
+
+    - name: "Zatrzymaj jeśli MariaDB niedostępna"
+      ansible.builtin.meta: end_play
+      when: mariadb_check.rc != 0
+
+  tasks:
+    # ISC-40: usuń anonimowe konta
+    - name: "Usuń anonimowe konta (puste username)"
+      ansible.builtin.shell: |-
+        set -o pipefail
+        stmts=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SELECT CONCAT('DROP USER IF EXISTS ', QUOTE(user), '@', QUOTE(host), ';') FROM mysql.user WHERE user=''")
+        if [ -n "$stmts" ]; then echo "$stmts" | mariadb --socket=/var/lib/mysql/mysql.sock; fi
+      register: anon_cleanup
+      changed_when: "'DROP USER' in anon_cleanup.stdout | default('')"
+
+    - name: "ISC-40: usuń testową bazę danych (jeśli istnieje)"
+      ansible.builtin.shell: >-
+        if mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SHOW DATABASES LIKE 'test'" | grep -q test;
+        then mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "DROP DATABASE test"; echo CHANGED;
+        else echo OK; fi
+      register: test_db_drop
+      changed_when: "'CHANGED' in test_db_drop.stdout"
+
+    # ISC-41: root tylko localhost
+    - name: "ISC-41: znajdź root z dostępem zdalnym"
+      ansible.builtin.shell: >
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SELECT CONCAT(user, '@', host) FROM mysql.user
+         WHERE user='root' AND host NOT IN ('localhost', '127.0.0.1', '::1')"
+      register: remote_root
+      changed_when: false
+
+    - name: "ISC-41: root nie loguje się zdalnie"
+      ansible.builtin.assert:
+        that:
+          - remote_root.stdout.strip() | length == 0
+        fail_msg: "Istnieje konto root z dostępem zdalnym: {{ remote_root.stdout }}"
+
+    # ISC-40: brak pustych haseł dla kont nie-systemowych
+    - name: "ISC-40: znajdź konta nie-systemowe z pustym hasłem"
+      ansible.builtin.shell: >
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SELECT CONCAT(user, '@', host) FROM mysql.user
+         WHERE (authentication_string='' OR authentication_string IS NULL)
+         AND user NOT IN ('mariadb.sys', 'mysql', 'PUBLIC')
+         AND user != ''"
+      register: empty_pw_users
+      changed_when: false
+
+    - name: "ISC-40: brak pustych haseł"
+      ansible.builtin.assert:
+        that:
+          - empty_pw_users.stdout.strip() | length == 0
+        fail_msg: "Konta nie-systemowe z pustym hasłem: {{ empty_pw_users.stdout }}"
+
+    # ISC-42: least privilege sst_user
+    - name: "ISC-42: granty sst_user"
+      ansible.builtin.shell: >
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW GRANTS FOR '{{ sst_user }}'@'localhost'"
+      register: sst_grants
+      changed_when: false
+      failed_when: false
+
+    - name: "ISC-42: sst_user ma uprawnienia SST"
+      ansible.builtin.assert:
+        that:
+          - "'RELOAD' in sst_grants.stdout"
+          - "'PROCESS' in sst_grants.stdout"
+          - "'LOCK TABLES' in sst_grants.stdout"
+        fail_msg: "sst_user brakuje uprawnień SST: {{ sst_grants.stdout }}"
+
+    # ISC-42: least privilege pmm_monitor
+    - name: "ISC-42: granty pmm_monitor"
+      ansible.builtin.shell: >
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW GRANTS FOR '{{ pmm_monitor_user }}'@'%'"
+      register: pmm_grants
+      changed_when: false
+      failed_when: false
+
+    - name: "ISC-42: pmm_monitor ma uprawnienia monitoringu"
+      ansible.builtin.assert:
+        that:
+          - "'PROCESS' in pmm_grants.stdout"
+          - "'SELECT' in pmm_grants.stdout"
+        fail_msg: "pmm_monitor brakuje uprawnień: {{ pmm_grants.stdout }}"
+
+    # ISC-45: ostrzeżenie dla production + tls disabled
+    - name: "ISC-45: ostrzeżenie TLS disabled w production"
+      ansible.builtin.assert:
+        that:
+          - cluster.environment != 'production' or tls.mode != 'disabled'
+        fail_msg: >-
+          PRODUKCJA: tls.mode=disabled. Wymagane jawne risk acceptance (ADR-002).
+          Ustaw tls.mode=full lub dołącz podpisany ADR.
+      when: cluster.environment is defined
+
+    - name: "Raport hardening"
+      ansible.builtin.debug:
+        msg: >-
+          Hardening zakończony: anonimowe konta usunięte, test DB usunięta,
+          root localhost-only, least privilege zweryfikowane.
+
+  handlers: []

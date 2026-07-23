@@ -1,0 +1,46 @@
+# Keepalived — redundantny endpoint ProxySQL (VIP).
+# Generowany z repo (F8). Nie wpisuj danych klastra na stałe.
+# VRRP unicast (stabilne w sieciach bez multicast, np. Docker/OrbStack).
+# MASTER = proxysql_node_idx 1; pozostałe = BACKUP z niższym priorytetem.
+
+global_defs {
+    enable_script_security
+    script_user root
+}
+
+vrrp_script chk_proxysql {
+    script "/usr/local/bin/check_proxysql.sh"
+    interval 2
+    weight -60
+    fall 2
+    rise 2
+    timeout 3
+}
+
+vrrp_instance PROXYSQL_VIP {
+    state {{ 'MASTER' if proxysql_node_idx | int == 1 else 'BACKUP' }}
+    interface {{ keepalived_interface }}
+    virtual_router_id {{ keepalived_virtual_router_id }}
+    priority {{ 150 if proxysql_node_idx | int == 1 else 100 }}
+    advert_int 1
+
+    unicast_src_ip {{ proxysql_node_address }}
+    unicast_peer {
+{% for peer in groups['proxysql'] if peer != inventory_hostname %}
+        {{ hostvars[peer].proxysql_node_address }}
+{% endfor %}
+    }
+
+    authentication {
+        auth_type PASS
+        auth_pass {{ keepalived_auth_pass }}
+    }
+
+    virtual_ipaddress {
+        {{ proxysql.endpoint.address }}/{{ keepalived_vip_prefix }} dev {{ keepalived_interface }}
+    }
+
+    track_script {
+        chk_proxysql
+    }
+}

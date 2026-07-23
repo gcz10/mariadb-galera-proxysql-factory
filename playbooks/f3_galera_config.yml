@@ -13,7 +13,7 @@
     galera_cluster_name: "lab_galera"
     galera_nodes_csv: "172.28.0.11,172.28.0.12,172.28.0.13"
     sst_user: "sst_user"
-    sst_password: "sst_password_change_me"
+    sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
     gcache_size: "128M"
     mariadb_config_dir: /etc/my.cnf.d
 

@@ -1,74 +1,336 @@
 ---
-# F11-partial: Instalacja node_exporter na wszystkich węzłach lab cluster.
-# Prometheus + Grafana już działają jako kontenery (tests/lab/docker-compose.yml).
+# F11-partial: instalacja node_exporter na hostach klastra.
+# F11 rejestruje endpointy jako natywne external services w PMM Inventory.
 # node_exporter: port 9100, metryki systemowe.
-# myqld_exporter: port 9104, instalowany po F3 (gdy MariaDB działa).
-# Satisfies (partial): ISC-46 (metryki trafiają do systemu monitoringowego).
+# Satisfies (partial): ISC-46 (metryki trafiają do PMM).
 
 - name: "Monitoring - instaluj node_exporter"
   hosts: all
   become: true
   serial: 1
+  vars_files:
+    - "../{{ versions.lock_file }}"
+
+
+  vars:
+    node_exporter_version: "{{ node_exporter.version }}"
+    node_exporter_arch_map:
+      aarch64: arm64
+      arm64: arm64
+      x86_64: amd64
+      amd64: amd64
+    node_exporter_asset_arch: "{{ node_exporter_arch_map.get(ansible_facts['architecture'], '') }}"
+    node_exporter_sha256: "{{ node_exporter.linux_sha256 }}"
+    node_exporter_managed_dir: "/usr/local/lib/node_exporter/{{ node_exporter_version }}-{{ node_exporter_asset_arch }}"
+    node_exporter_managed_binary: "{{ node_exporter_managed_dir }}/node_exporter"
+    node_exporter_archive: "/var/tmp/node_exporter-{{ node_exporter_version }}.linux-{{ node_exporter_asset_arch }}.tar.gz"
+    node_exporter_textfile_dir: /var/lib/node_exporter/textfile_collector
+    node_exporter_args: >-
+      --web.listen-address=:9100
+      --collector.textfile.directory={{ node_exporter_textfile_dir }}
 
   tasks:
-    - name: "Instaluj node_exporter przez dnf"
-      ansible.builtin.dnf:
+    - name: "Wymagaj wspieranej architektury node_exporter"
+      ansible.builtin.assert:
+        that:
+          - node_exporter_asset_arch | length > 0
+        fail_msg: "Brak przypiętego artefaktu node_exporter dla {{ ansible_facts['architecture'] }}."
+    - name: "Sprawdź stan firewalld dla node_exporter"
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - --state
+      register: node_exporter_firewalld
+      changed_when: false
+      failed_when: false
+
+    - name: "Wymagaj aktywnego firewalld poza laboratorium"
+      ansible.builtin.assert:
+        that:
+          - cluster.environment == 'laboratory' or node_exporter_firewalld.rc == 0
+        fail_msg: "node_exporter nie zostanie wystawiony bez aktywnego firewalld poza profilem laboratory."
+
+    - name: "Wymagaj zdefiniowanych źródeł monitoringu poza laboratorium"
+      ansible.builtin.assert:
+        that:
+          - cluster.environment == 'laboratory' or network.monitoring_cidrs | length > 0
+        fail_msg: "network.monitoring_cidrs nie może być puste poza profilem laboratory."
+
+
+    - name: "Utwórz nieuprzywilejowanego użytkownika node_exporter"
+      ansible.builtin.user:
         name: node_exporter
+        system: true
+        shell: /sbin/nologin
+        create_home: false
         state: present
-      ignore_errors: true
-      register: node_exporter_dnf
+      register: node_exporter_user
 
-    - name: "Fallback - pobierz node_exporter binary (jeśli dnf niedostepny)"
+    - name: "Utwórz katalog przypiętej wersji node_exporter"
+      ansible.builtin.file:
+        path: "{{ node_exporter_managed_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "Pobierz przypięte archiwum node_exporter"
+      ansible.builtin.get_url:
+        url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-{{ node_exporter_asset_arch }}.tar.gz"
+        dest: "{{ node_exporter_archive }}"
+        checksum: "sha256:{{ node_exporter_sha256[node_exporter_asset_arch] }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: "Rozpakuj przypięty node_exporter"
       ansible.builtin.unarchive:
-        src: "https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-arm64.tar.gz"
-        dest: /usr/local/bin/
+        src: "{{ node_exporter_archive }}"
+        dest: "{{ node_exporter_managed_dir }}"
         remote_src: true
-        extra_opts: ["--strip-components=1"]
-        include: "node_exporter-1.8.2.linux-arm64/node_exporter"
-      when: node_exporter_dnf.failed | default(false)
-      register: node_exporter_binary
+        extra_opts:
+          - --strip-components=1
+        include:
+          - "node_exporter-{{ node_exporter_version }}.linux-{{ node_exporter_asset_arch }}/node_exporter"
+        creates: "{{ node_exporter_managed_binary }}"
+      register: node_exporter_install
 
-    - name: "Utworz systemd service dla node_exporter (jeśli brak)"
+    - name: "Sprawdź zarządzaną ścieżkę node_exporter"
+      ansible.builtin.stat:
+        path: /usr/local/bin/node_exporter
+        follow: false
+      register: node_exporter_link
+
+    - name: "Usuń legacy binarkę node_exporter z zarządzanej ścieżki"
+      ansible.builtin.file:
+        path: /usr/local/bin/node_exporter
+        state: absent
+      when:
+        - node_exporter_link.stat.exists
+        - not node_exporter_link.stat.islnk
+      register: node_exporter_legacy_removed
+
+    - name: "Wskaż zarządzaną ścieżkę na przypięty node_exporter"
+      ansible.builtin.file:
+        src: "{{ node_exporter_managed_binary }}"
+        dest: /usr/local/bin/node_exporter
+        state: link
+        owner: root
+        group: root
+        force: true
+      register: node_exporter_symlink
+
+    - name: "Utwórz katalog atomowych metryk stanu klastra"
+      ansible.builtin.file:
+        path: "{{ node_exporter_textfile_dir }}"
+        state: directory
+        owner: root
+        group: node_exporter
+        mode: "0750"
+
+    - name: "Zapisz sygnaturę argumentów node_exporter"
+      ansible.builtin.copy:
+        dest: /etc/node_exporter.args
+        content: "{{ node_exporter_args }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      register: node_exporter_runtime_signature
+
+    - name: "Opublikuj konfigurację monitorowanych cykli życia"
+      ansible.builtin.copy:
+        dest: "{{ node_exporter_textfile_dir }}/isa_monitoring_config.prom"
+        content: |
+          # HELP isa_backup_monitoring_enabled Whether backup freshness is required.
+          # TYPE isa_backup_monitoring_enabled gauge
+          isa_backup_monitoring_enabled{cluster="{{ monitoring.pmm.cluster_name }}"} {{ backup.enabled | ternary(1, 0) }}
+          # HELP isa_restore_test_monitoring_enabled Whether restore drill freshness is required.
+          # TYPE isa_restore_test_monitoring_enabled gauge
+          isa_restore_test_monitoring_enabled{cluster="{{ monitoring.pmm.cluster_name }}"} {{ (backup.restore_test_schedule | length > 0) | ternary(1, 0) }}
+          # HELP isa_tls_monitoring_enabled Whether certificate expiry monitoring is required.
+          # TYPE isa_tls_monitoring_enabled gauge
+          isa_tls_monitoring_enabled{cluster="{{ monitoring.pmm.cluster_name }}"} {{ (tls.mode == 'full') | ternary(1, 0) }}
+        owner: root
+        group: node_exporter
+        mode: "0640"
+      when: inventory_hostname == groups['galera'][0]
+
+    - name: "Zainicjuj trwałe metryki cyklu życia bez nadpisywania dowodów"
+      ansible.builtin.copy:
+        dest: "{{ node_exporter_textfile_dir }}/isa_monitoring_state.prom"
+        content: |
+          # Ten plik aktualizują atomowo feature backup/restore/TLS.
+          # Wartość 0 oznacza brak potwierdzonego sukcesu.
+          # HELP isa_backup_last_success_unixtime Unix time of the last verified off-cluster backup.
+          # TYPE isa_backup_last_success_unixtime gauge
+          isa_backup_last_success_unixtime{cluster="{{ monitoring.pmm.cluster_name }}"} 0
+          # HELP isa_restore_test_last_success_unixtime Unix time of the last successful restore drill.
+          # TYPE isa_restore_test_last_success_unixtime gauge
+          isa_restore_test_last_success_unixtime{cluster="{{ monitoring.pmm.cluster_name }}"} 0
+          # HELP isa_tls_cert_expiry_unixtime Unix time when the monitored certificate expires.
+          # TYPE isa_tls_cert_expiry_unixtime gauge
+          isa_tls_cert_expiry_unixtime{cluster="{{ monitoring.pmm.cluster_name }}"} 0
+        owner: root
+        group: node_exporter
+        mode: "0640"
+        force: false
+      when: inventory_hostname == groups['galera'][0]
+
+    - name: "Ogranicz odczyt trwałych metryk cyklu życia"
+      ansible.builtin.file:
+        path: "{{ node_exporter_textfile_dir }}/isa_monitoring_state.prom"
+        owner: root
+        group: node_exporter
+        mode: "0640"
+      when: inventory_hostname == groups['galera'][0]
+
+
+    - name: "Sprawdź dostępność systemd"
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: node_exporter_systemd
+
+    - name: "Utwórz unit systemd node_exporter"
       ansible.builtin.copy:
         dest: /etc/systemd/system/node_exporter.service
         content: |
           [Unit]
-          Description=Node Exporter
-          After=network.target
+          Description=Prometheus Node Exporter
+          After=network-online.target
+          Wants=network-online.target
+
           [Service]
-          ExecStart=/usr/local/bin/node_exporter --web.listen-address=:9100
-          Restart=always
+          User=node_exporter
+          Group=node_exporter
+          ExecStart=/usr/local/bin/node_exporter {{ node_exporter_args }}
+          Restart=on-failure
+          NoNewPrivileges=true
+          PrivateTmp=true
+          ProtectHome=true
+          ProtectSystem=strict
+          ProtectKernelTunables=true
+          ProtectKernelModules=true
+          ProtectControlGroups=true
+          RestrictAddressFamilies=AF_INET AF_INET6
+
           [Install]
           WantedBy=multi-user.target
+        owner: root
+        group: root
         mode: "0644"
-      when: node_exporter_dnf.failed | default(false)
+      when: node_exporter_systemd.stat.exists
+      register: node_exporter_unit
 
-    - name: "Wlacz i uruchom node_exporter (systemd)"
+    - name: "Włącz i uruchom node_exporter przez systemd"
       ansible.builtin.systemd:
         name: node_exporter
-        state: started
+        state: "{{ 'restarted' if ((node_exporter_user.changed | default(false)) or (node_exporter_install.changed | default(false)) or (node_exporter_symlink.changed | default(false)) or (node_exporter_runtime_signature.changed | default(false)) or (node_exporter_unit.changed | default(false))) else 'started' }}"
         enabled: true
         daemon_reload: true
-      ignore_errors: true
+      when: node_exporter_systemd.stat.exists
+    - name: "Zatrzymaj bezpośredni proces po zmianie binarki"
+      ansible.builtin.command:
+        argv:
+          - pkill
+          - -x
+          - node_exporter
+      register: node_exporter_direct_stop
+      changed_when: node_exporter_direct_stop.rc == 0
+      failed_when: node_exporter_direct_stop.rc not in [0, 1]
+      when:
+        - not node_exporter_systemd.stat.exists
+        - (node_exporter_user.changed | default(false)) or (node_exporter_install.changed | default(false)) or (node_exporter_symlink.changed | default(false)) or (node_exporter_runtime_signature.changed | default(false))
 
-    - name: "Fallback - uruchom node_exporter bezposrednio (brak systemd w kontenerze)"
-      ansible.builtin.shell: |
-        pkill node_exporter 2>/dev/null || true
-        nohup /usr/local/bin/node_exporter --web.listen-address=:9100 > /var/tmp/node_exporter.log 2>&1 &
+
+    - name: "Sprawdź proces node_exporter bez systemd"
+      ansible.builtin.command:
+        argv:
+          - pgrep
+          - -x
+          - node_exporter
+      register: node_exporter_process
+      changed_when: false
+      failed_when: false
+      when: not node_exporter_systemd.stat.exists
+
+    - name: "Uruchom node_exporter bez systemd"
+      ansible.builtin.shell: >-
+        nohup runuser --user node_exporter -- /usr/local/bin/node_exporter {{ node_exporter_args }}
+        > /var/tmp/node_exporter.log 2>&1 &
+      when:
+        - not node_exporter_systemd.stat.exists
+        - node_exporter_process.rc != 0
       changed_when: true
-      when: node_exporter_dnf.failed | default(false)
 
-    - name: "Sprawdz czy node_exporter odpowiada"
+
+    - name: "Utwórz dedykowaną strefę firewalld dla PMM"
+      ansible.posix.firewalld:
+        zone: pmm-monitoring
+        permanent: true
+        state: present
+      register: node_exporter_firewall_zone
+      when: node_exporter_firewalld.rc == 0
+
+    - name: "Przeładuj firewalld po utworzeniu strefy PMM"
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - --reload
+      when:
+        - node_exporter_firewalld.rc == 0
+        - node_exporter_firewall_zone.changed
+
+    - name: "Pobierz źródła strefy PMM"
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - --permanent
+          - --zone=pmm-monitoring
+          - --list-sources
+      register: node_exporter_firewall_sources
+      changed_when: false
+      when: node_exporter_firewalld.rc == 0
+
+    - name: "Usuń nieaktualne źródła strefy PMM"
+      ansible.posix.firewalld:
+        zone: pmm-monitoring
+        source: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: disabled
+      loop: "{{ (node_exporter_firewall_sources.stdout | default('')).split() }}"
+      when:
+        - node_exporter_firewalld.rc == 0
+        - item not in network.monitoring_cidrs
+
+    - name: "Dodaj aktualne źródła strefy PMM"
+      ansible.posix.firewalld:
+        zone: pmm-monitoring
+        source: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ network.monitoring_cidrs }}"
+      when: node_exporter_firewalld.rc == 0
+
+    - name: "Otwórz node_exporter wyłącznie w strefie PMM"
+      ansible.posix.firewalld:
+        zone: pmm-monitoring
+        port: 9100/tcp
+        permanent: true
+        immediate: true
+        state: enabled
+      when: node_exporter_firewalld.rc == 0
+
+
+    - name: "Czekaj na endpoint node_exporter"
       ansible.builtin.wait_for:
+        host: 127.0.0.1
         port: 9100
-        timeout: 5
-      ignore_errors: true
-      register: node_exporter_check
+        timeout: 10
 
-    - name: "Wypisz status node_exporter"
-      ansible.builtin.debug:
-        msg: >-
-          node_exporter on {{ inventory_hostname }}:
-          {{ 'OK (port 9100)' if node_exporter_check.failed == false else 'FAILED (port 9100 not listening)' }}
-
-  handlers: []
+    - name: "Sprawdź endpoint metryk node_exporter"
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9100/metrics
+        status_code: 200
+        return_content: false

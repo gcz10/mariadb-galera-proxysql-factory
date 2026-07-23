@@ -102,22 +102,44 @@
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
-        "destination": { "type": "string" },
+        "destination": { "type": "string", "enum": ["smb", "s3"] },
         "full_backup_schedule": { "type": "string" },
         "incremental_backup_schedule": { "type": "string" },
         "retention_days": { "type": ["integer", "string"] },
         "encryption_enabled": { "type": "boolean" },
         "immutable_or_offsite_copy": { "type": "boolean" },
-        "restore_test_schedule": { "type": "string" }
+        "restore_test_schedule": { "type": "string" },
+        "s3": {
+          "type": "object",
+          "properties": {
+            "endpoint": { "type": "string" },
+            "bucket": { "type": "string" },
+            "region": { "type": "string" },
+            "secure": { "type": "boolean" }
+          }
+        }
       }
     },
     "monitoring": {
       "type": "object",
       "properties": {
+        "pmm": {
+          "type": "object",
+          "properties": {
+            "server_url": { "type": "string", "pattern": "^https://" },
+            "agent_id": { "type": "string", "minLength": 1 },
+            "cluster_name": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$" },
+            "validate_certs": { "type": "boolean" },
+            "credentials_revision": { "type": "integer", "minimum": 1 }
+          },
+          "required": ["server_url", "agent_id", "cluster_name", "validate_certs", "credentials_revision"],
+          "additionalProperties": false
+        },
         "system": { "type": "string" },
-        "alert_target": { "type": "string" },
         "log_destination": { "type": "string" }
-      }
+      },
+      "required": ["pmm", "system", "log_destination"],
+      "additionalProperties": false
     },
     "workload": {
       "type": "object",

@@ -1,0 +1,142 @@
+---
+# F5: Dołącz węzły Galera do Primary Component.
+# Wymaga: gnode1 uruchomiony jako Primary Component (F4 bootstrap).
+# Satisfies: ISC-14 (SST mariabackup), ISC-29 (auto rejoin).
+# Lab: brak systemd — MariaDB uruchamiana jako daemon.
+
+- name: "F5 — wdróż konfigurację mariabackup SST"
+  hosts: galera
+  become: true
+  serial: 1
+  max_fail_percentage: 0
+  vars:
+    galera_cluster_name: "lab_galera"
+    galera_nodes_csv: "172.28.0.11,172.28.0.12,172.28.0.13"
+    sst_user: "sst_user"
+    sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
+    gcache_size: "128M"
+    mariadb_config_dir: /etc/my.cnf.d
+
+  tasks:
+    - name: "Utwórz katalogi MariaDB"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ 'mysql' if 'mysql' in item or 'log' in item else 'root' }}"
+        group: "{{ 'mysql' if 'mysql' in item or 'log' in item else 'root' }}"
+        mode: "0755"
+      loop:
+        - /var/run/mysqld
+        - /var/log/mariadb
+        - "{{ mariadb_config_dir }}"
+
+    - name: "Wdróż server.cnf z mariabackup SST"
+      ansible.builtin.template:
+        src: ../roles/mariadb_install/templates/server.cnf.j2
+        dest: "{{ mariadb_config_dir }}/server.cnf"
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: "F5 — zapewnij konto SST na klastrze"
+  hosts: galera[0]
+  become: true
+  vars:
+    sst_user: "sst_user"
+    sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
+
+  tasks:
+    - name: "Sprawdź czy MariaDB jest uruchomiona"
+      ansible.builtin.shell: "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e 'SELECT 1' 2>/dev/null"
+      register: mariadb_check
+      changed_when: false
+      failed_when: false
+
+    - name: "Utwórz konto SST (jeśli brak)"
+      community.mysql.mysql_user:
+        name: "{{ sst_user }}"
+        password: "{{ sst_password }}"
+        priv: "*.*:RELOAD,PROCESS,LOCK TABLES,BINLOG ADMIN,REPLICATION CLIENT"
+        host: localhost
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      when: mariadb_check.rc == 0
+      no_log: true
+
+- name: "F5 — dołącz węzły do Primary Component"
+  hosts: galera
+  become: true
+  serial: 1
+  max_fail_percentage: 0
+  vars:
+    expected_cluster_size: 3
+
+  tasks:
+    - name: "Pomiń węzeł Primary (gnode1)"
+      ansible.builtin.meta: end_host
+      when: galera_node_idx | default(1) == 1
+
+    - name: "Sprawdź czy MariaDB już działa i jest Synced"
+      ansible.builtin.shell: >
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name='wsrep_local_state'" 2>/dev/null
+      register: node_state
+      changed_when: false
+      failed_when: false
+
+    - name: "Pomiń jeśli węzeł już Synced"
+      ansible.builtin.meta: end_host
+      when: "'4' in (node_state.stdout | default(''))"
+
+    - name: "Zatrzymaj ewentualny proces MariaDB"
+      ansible.builtin.shell: "pkill -x mariadbd 2>/dev/null; sleep 2; true"
+      changed_when: false
+
+    - name: "Usuń aria log (zapobiega konfliktom startu)"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/mysql/aria_log_control
+        - /var/lib/mysql/aria_log.00000001
+      changed_when: false
+
+    - name: "Wydrukuj adres klastra dla dołączającego węzła"
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} dołącza do klastra jako node {{ galera_node_idx }}"
+
+    - name: "Uruchom MariaDB jako węzeł dołączający (lab: bez systemd)"
+      ansible.builtin.shell: |
+        mariadbd --user=mysql --datadir=/var/lib/mysql \
+          --socket=/var/lib/mysql/mysql.sock \
+          > /var/log/mariadb/mariadb.log 2>&1 &
+      changed_when: true
+
+    - name: "Czekaj na osiągnięcie stanu Synced"
+      ansible.builtin.shell: >
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name='wsrep_local_state'" 2>/dev/null
+      register: join_state
+      until: "'4' in (join_state.stdout | default(''))"
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: "Weryfikuj rozmiar klastra po dołączeniu"
+      ansible.builtin.shell: >
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name='wsrep_cluster_size'" 2>/dev/null
+      register: cluster_size_after
+      changed_when: false
+
+    - name: "Potwierdź dołączenie"
+      ansible.builtin.assert:
+        that:
+          - "'4' in (join_state.stdout | default(''))"
+          - cluster_size_after.stdout | regex_search('\d+') | int >= galera_node_idx | int
+        fail_msg: >
+          {{ inventory_hostname }} nie osiągnął stanu Synced lub rozmiar klastra
+          jest niepoprawny: state={{ join_state.stdout }}, size={{ cluster_size_after.stdout }}
+        success_msg: "{{ inventory_hostname }} dołączył do klastra (Synced, size={{ cluster_size_after.stdout | regex_search('\\d+') }})"
+
+  handlers: []

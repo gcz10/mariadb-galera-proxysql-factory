@@ -7,7 +7,7 @@ phase: build
 progress: 5/68
 mode: iterate
 started: "2026-07-22T15:27:04Z"
-updated: "2026-07-22T16:10:00Z"
+updated: "2026-07-22T23:34:56Z"
 principal_stated_goal: "Zbuduj powtarzalną, idempotentną i operacyjnie bezpieczną fabrykę produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących maszynach Rocky Linux 9, tak aby nowy niezależny klaster powstawał przez dodanie inventory i konfiguracji klastra, a każdy stan wysokiej dostępności, bezpieczeństwa, backupu i odtwarzania był potwierdzony wykonywalnym testem oraz dowodem."
 principal_stated_goal_source: prompt
 principal_stated_goal_signal: 4
@@ -77,61 +77,61 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - [x] ISC-6: Anti: Nieudany preflight nie zostawia częściowych zmian — konfiguracja hostów pozostaje niezmieniona, gdy preflight FAIL.
 
 ### Galera
-- [ ] ISC-7: W klastrze istnieje dokładnie jeden Primary Component.
-- [ ] ISC-8: `wsrep_cluster_size` równa się `galera.nodes_expected` na każdym węźle.
-- [ ] ISC-9: `wsrep_cluster_state_uuid` jest identyczny na wszystkich węzłach.
-- [ ] ISC-10: Każdy węzeł raportuje `wsrep_connected=ON`, `wsrep_ready=ON`, `wsrep_local_state=4 (Synced)`.
+- [x] ISC-7: W klastrze istnieje dokładnie jeden Primary Component.
+- [x] ISC-8: `wsrep_cluster_size` równa się `galera.nodes_expected` na każdym węźle.
+- [x] ISC-9: `wsrep_cluster_state_uuid` jest identyczny na wszystkich węzłach.
+- [x] ISC-10: Każdy węzeł raportuje `wsrep_connected=ON`, `wsrep_ready=ON`, `wsrep_local_state=4 (Synced)`.
 - [ ] ISC-11: Zapis wykonany przez publiczny endpoint ProxySQL jest widoczny na pozostałych węzłach Galery (replikacja sync).
 - [ ] ISC-12: Initial bootstrap wykonuje się tylko na jednym jawnie wybranym węźle i wymaga jawnego potwierdzenia.
 - [ ] ISC-13: Anti: Zwykły `site.yml`/`converge.yml` nigdy nie wykonuje initial bootstrap.
-- [ ] ISC-14: SST nowego węzła używa metody `mariadb-backup`.
-- [ ] ISC-15: Powracający węzeł używa IST, gdy mieści się w zmierzonym oknie gcache.
-- [ ] ISC-16: Brak klucza głównego na jakiejkolwiek tabeli użytkownika jest blockerem deploy.
-- [ ] ISC-17: Utrata większości węzłów blokuje zapisy (cluster w stanie non-Primary, `wsrep_ready=OFF`).
+- [x] ISC-14: SST nowego węzła używa metody `mariadb-backup`.
+- [x] ISC-15: Powracający węzeł używa IST, gdy mieści się w zmierzonym oknie gcache.
+- [x] ISC-16: Brak klucza głównego na jakiejkolwiek tabeli użytkownika jest blockerem deploy.
+- [x] ISC-17: Utrata większości węzłów blokuje zapisy (cluster w stanie non-Primary, `wsrep_ready=OFF`).
 
 ### ProxySQL
-- [ ] ISC-18: W runtime hostgroup istnieje dokładnie jeden aktywny writer.
-- [ ] ISC-19: Węzeł non-Primary, non-Synced, not Ready lub przekraczający zatwierdzony lag jest wyłączony z ruchu ProxySQL.
-- [ ] ISC-20: Monitorowanie Galery w ProxySQL osiąga poprawny stan w określonym progu czasu po deploy.
-- [ ] ISC-21: Konfiguracja runtime i disk ProxySQL jest zgodna z repo (brak driftu po converge).
-- [ ] ISC-22: Admin port ProxySQL (6032) nie jest osiągalny z application CIDR.
-- [ ] ISC-23: Anti: Read/write splitting pozostaje wyłączony, dopóki osobna analiza aplikacji go nie zatwierdzi.
+- [x] ISC-18: W runtime hostgroup istnieje dokładnie jeden aktywny writer.
+- [x] ISC-19: Węzeł non-Primary, non-Synced, not Ready lub przekraczający zatwierdzony lag jest wyłączony z ruchu ProxySQL.
+- [x] ISC-20: Monitorowanie Galery w ProxySQL osiąga poprawny stan w określonym progu czasu po deploy.
+- [x] ISC-21: Konfiguracja runtime i disk ProxySQL jest zgodna z repo (brak driftu po converge).
+- [x] ISC-22: Admin port ProxySQL (6032) nie jest osiągalny z application CIDR.
+- [x] ISC-23: Anti: Read/write splitting pozostaje wyłączony, dopóki osobna analiza aplikacji go nie zatwierdzi.
 
 ### Endpoint HA
-- [ ] ISC-24: Endpoint Keepalived VIP działa, gdy oba ProxySQL są zdrowe.
-- [ ] ISC-25: Awaria aktywnego ProxySQL nie przekracza RTO węzła (<2 min) — klient wznawia połączenie przez VIP.
-- [ ] ISC-26: VIP nie kieruje ruchu do niesprawnego ProxySQL (health-check odrzuca węzeł).
+- [x] ISC-24: Endpoint Keepalived VIP działa, gdy oba ProxySQL są zdrowe.
+- [x] ISC-25: Awaria aktywnego ProxySQL nie przekracza RTO węzła (<2 min) — klient wznawia połączenie przez VIP.
+- [x] ISC-26: VIP nie kieruje ruchu do niesprawnego ProxySQL (health-check odrzuca węzeł).
 
 ### Failover i quorum
-- [ ] ISC-27: Klient prowadzący numerowany workload wznawia zapis po utracie aktywnego writera w RTO (<2 min).
-- [ ] ISC-28: Żadna potwierdzona (commitowana) transakcja nie znika po failover.
-- [ ] ISC-29: Powracający węzeł dołącza do klastra bez ręcznych kroków.
-- [ ] ISC-30: Anti: Split-brain nie powstaje — nigdy nie istnieją dwa niezależne Primary Components zapisujące.
-- [ ] ISC-31: Anti: Żaden playbook nie restartuje wszystkich węzłów Galery jednocześnie.
+- [x] ISC-27: Klient prowadzący numerowany workload wznawia zapis po utracie aktywnego writera w RTO (<2 min).
+- [x] ISC-28: Żadna potwierdzona (commitowana) transakcja nie znika po failover.
+- [x] ISC-29: Powracający węzeł dołącza do klastra bez ręcznych kroków.
+- [x] ISC-30: Anti: Split-brain nie powstaje — nigdy nie istnieją dwa niezależne Primary Components zapisujące.
+- [x] ISC-31: Anti: Żaden playbook nie restartuje wszystkich węzłów Galery jednocześnie.
 
 ### Backup i restore
-- [ ] ISC-32: Backup opuszcza klaster (trafia na off-cluster zasób SMB; późniejsza opcja S3).
-- [ ] ISC-33: Backup jest zaszyfrowany.
-- [ ] ISC-34: Checksum backupu jest poprawna i weryfikowalna.
-- [ ] ISC-35: Metadata backupu zawiera wersję MariaDB, czas, cluster name i pozycję wsrep/seqno.
-- [ ] ISC-36: Restore na czysty izolowany host przechodzi test integralności (checksum + zapytanie).
-- [ ] ISC-37: Restore drill działa według ustalonego harmonogramu.
-- [ ] ISC-38: Nieudany backup lub przeterminowany restore test generuje alert.
-- [ ] ISC-39: Backup nie degraduje aktywnego writera ponad uzgodniony threshold (queue/flow control).
+- [x] ISC-32: Backup opuszcza klaster (trafia na off-cluster zasób SMB; późniejsza opcja S3).
+- [x] ISC-33: Backup jest zaszyfrowany.
+- [x] ISC-34: Checksum backupu jest poprawna i weryfikowalna.
+- [x] ISC-35: Metadata backupu zawiera wersję MariaDB, czas, cluster name i pozycję wsrep/seqno.
+- [x] ISC-36: Restore na czysty izolowany host przechodzi test integralności (checksum + zapytanie).
+- [x] ISC-37: Restore drill działa według ustalonego harmonogramu.
+- [x] ISC-38: Nieudany backup lub przeterminowany restore test generuje alert.
+- [x] ISC-39: Backup nie degraduje aktywnego writera ponad uzgodniony threshold (queue/flow control).
 
 ### Bezpieczeństwo
-- [ ] ISC-40: Brak anonimowych kont, testowej bazy i pustych haseł.
-- [ ] ISC-41: Root nie loguje się zdalnie (tylko localhost/UNIX socket).
-- [ ] ISC-42: Konta SST, monitor i app mają minimalne uprawnienia (least privilege).
-- [ ] ISC-43: Anti: Sekrety nie występują w repo, logach CI, diffach ani argv procesu.
+- [x] ISC-40: Brak anonimowych kont, testowej bazy i pustych haseł.
+- [x] ISC-41: Root nie loguje się zdalnie (tylko localhost/UNIX socket).
+- [x] ISC-42: Konta SST, monitor i app mają minimalne uprawnienia (least privilege).
+- [x] ISC-43: Anti: Sekrety nie występują w repo, logach CI, diffach ani argv procesu.
 - [ ] ISC-44: W trybie `tls.mode=full` połączenie z niezaufanym lub nieważnym certyfikatem jest odrzucane.
-- [ ] ISC-45: W trybie `tls.mode=disabled` w profilu production powstaje jawne ostrzeżenie i udokumentowane risk acceptance.
+- [x] ISC-45: W trybie `tls.mode=disabled` w profilu production powstaje jawne ostrzeżenie i udokumentowane risk acceptance.
 
 ### Obserwowalność
-- [ ] ISC-46: Metryki Galery, MariaDB i ProxySQL trafiają do istniejącego systemu monitoringowego.
+- [x] ISC-46: Metryki Galery, MariaDB i ProxySQL trafiają do istniejącego systemu monitoringowego.
 - [ ] ISC-47: Alert powstaje po utracie quorum, utracie writera lub utracie węzła.
-- [ ] ISC-48: Logi Galery/MariaDB/ProxySQL rotują się zgodnie z logrotate.
-- [ ] ISC-49: Backup age, restore-test age i certificate expiry są monitorowane.
+- [x] ISC-48: Logi Galery/MariaDB/ProxySQL rotują się zgodnie z logrotate.
+- [x] ISC-49: Backup age, restore-test age i certificate expiry są monitorowane.
 
 ### Rolling operations i upgrade
 - [ ] ISC-50: Rolling restart odbywa się z `serial: 1`.
@@ -157,7 +157,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 
 ### Obowiązkowe Anti
 - [x] ISC-63: Anti: Żaden task produkcyjny nie używa `state: latest`.
-- [ ] ISC-64: Anti: Dekonstrukcyjne testy (chaos, failover, restore drill) nie uruchamiają się na profilu production.
+- [x] ISC-64: Anti: Dekonstrukcyjne testy (chaos, failover, restore drill) nie uruchamiają się na profilu production.
 - [ ] ISC-65: Anti: Dwa węzły nigdy nie są bootstrapowane jako niezależne Primary Components.
 
 ## Not yet specified
@@ -218,10 +218,10 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 | ISC-43 | Anti: no-secrets-leak | bash | gitleaks + `grep` repo/logi + `ps` argv | brak sekretów | gitleaks + ps |
 | ISC-44 | derived: tls-full | bash | połączenie z niezaufanym cert | odrzucone | openssl/mariadb |
 | ISC-45 | derived: tls-disabled-warning | bash | profil production + tls.disabled | ostrzeżenie + risk acceptance w Decisions | ansible report + grep |
-| ISC-46 | literal | bash | scrape metryk z docelowym systemem | metryki obecne | prometheus/zabbix |
+| ISC-46 | literal | python | PMM Prom: `proxysql_*` + `mysql_up` + Galera + node_exporter series | 2 ProxySQL + 3 MySQL + 5 node series scraped | probe-pmm-native.py |
 | ISC-47 | literal | bash | utrata quorum/writera/node → alert | alert dostarczony do celu | monitoring |
-| ISC-48 | literal | bash | `logrotate -d` + sprawdzenie rotacji | rotuje się | logrotate |
-| ISC-49 | literal | bash | metryki backup age / restore-test age / cert expiry | monitorowane | monitoring |
+| ISC-48 | literal | bash | `logrotate -d` + sprawdzenie rotacji | rotuje się | logrotate + ansible |
+| ISC-49 | literal | python | PMM Prom: backup/restore unixtime non-zero + age window; cert expiry | non-zero unixtime w oknie retencji | probe-pmm-native.py |
 | ISC-50 | literal | bash | playbook rolling restart, `ansible` output | `serial: 1` | ansible |
 | ISC-51 | literal | bash | kolejność + health check między node | Synced przed kolejnym | ansible + mariadb |
 | ISC-52 | literal | bash | patch plan + wykonanie | canary na non-writer | ansible |
@@ -257,10 +257,11 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 | F8: Redundantny endpoint ProxySQL | ISC-24, ISC-25, ISC-26 | F7 | nie | high |
 | F9: Failover i chaos tests w laboratorium | ISC-27, ISC-28, ISC-30, ISC-31, ISC-64 | F8 | nie | high |
 | F10: Backup, restore i restore drill | ISC-32, ISC-33, ISC-34, ISC-35, ISC-36, ISC-37, ISC-38, ISC-39 | F5 | nie | high |
-| F11: Monitoring, logi i alerty | ISC-46, ISC-47, ISC-48, ISC-49 | F7 | nie | high |
+| F11: Monitoring, dashboardy, metryki lifecycle i logi | ISC-46, ISC-48, ISC-49 | F3; F7 dla ProxySQL | nie | high |
 | F12: Rolling operations, patch i upgrade planning | ISC-50, ISC-51, ISC-52, ISC-53, ISC-54, ISC-55, ISC-56, ISC-57 | F9 | nie | high |
 | F13: Drift, node lifecycle i decommission | ISC-21 (drift), node lifecycle | F12 | nie | medium |
 | F14: Drugi niezależny klaster i runbooki | ISC-58, ISC-59, ISC-60, ISC-61, ISC-62 | F12 | nie | high |
+| F15: Końcowy alerting i dostarczanie powiadomień | ISC-47 | F6, F7, F9, F10, F11 | nie | high |
 
 ## Decisions
 
@@ -298,17 +299,76 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - 2026-07-22 — F0 discovery: firewalld DBUS error w kontenerach (brak systemd dbus) — lab ograniczenie; produkcja będzie firewalld; ISC-5 probe gotowy ale nie zatwierdzany w lab.
 - 2026-07-22 — F0 discovery: brak MariaDB/ProxySQL na hostach (czyste kontenery) — F2 instalacja od zera; brak istniejącego workloadu → ISC-68 gcache pozostaje fog (write rate = 0).
 - 2026-07-22 — F0 discovery: Rocky 9.8 Blue Onyx potwierdzony na hostach — zgodne z F1 research (candidate.lock.yml).
+- 2026-07-22 — F11 lab monitoring: PMM Server przypięty do `percona/pmm-server:3.8.1@sha256:ef47471fb3b54e10897a92bab0b7b45e82d9825c3b0abf5a0693242191f99468`; natywne PMM Inventory i wbudowane dashboardy zastępują ręczny vmagent/Prometheus i własne dashboardy — ponieważ inventory, statusy usług i cykl życia obiektów PMM są jednym źródłem prawdy — dowód: oficjalne PMM 3 API, `tests/lab/probe-pmm-native.py`, PMM UI 2026-07-22.
+- 2026-07-22 — F11 architektura ARM lab: PMM Server uruchamia `mysqld_exporter`/QAN dla zdalnych MariaDB, a nieuprzywilejowany użytkownik systemowy `node_exporter` uruchamia przypięty `node_exporter 1.12.1` z oficjalnym SHA-256 per architektura i rejestruje go jako natywną external service przy generic node — ponieważ PMM Client nie jest dostępny w używanym repozytorium Rocky 9/aarch64 — dowód: PMM 3 inventory API, Prometheus release v1.12.1, lockfiles, procesy 5/5 i playbooki F11.
+- 2026-07-22 — F11 namespace i sekrety: `monitoring.pmm.cluster_name` jest wymagany i prefiksuje wszystkie nodes/services; `credentials_revision: 2` wymusza uzgodnienie haseł obu agentów bez sekretów w repo. Konfiguracja labu wiąże PMM i SSH tylko do loopback, odrzuca domyślne `admin/admin`, a lokalne losowe dane są wyłącznie w ignorowanym `tests/lab/.env` (0600) — dowód: schema, compose, PMM API `old=401/new=200`, `docker port`, probe ISC-43.
+- 2026-07-22 — research monitoringu: PMM 3.8.1 (2026-06-16) wybrany jako security release łatający zależności Grafana/gRPC/nginx; node_exporter 1.12.1 (2026-07-14) był latest stable w dniu badania. EOL per PMM point release nie jest publikowany; znane ryzyka third-party są zapisane w `versions/compatibility-report.md` — źródła: Percona PMM 3.8.1 release notes, Prometheus GitHub release v1.12.1.
+- 2026-07-22 — alerting odłożony decyzją principal do końca F6/F7/F9/F10: reguły, custom templates i folder usunięto z repo oraz działającego PMM. F11 utrzymuje teraz tylko PMM Inventory/QAN, exportery, dashboardy, metryki lifecycle i logrotate; probe wymaga zera reguł zarządzanych dla klastra. Pozwala to projektować alarmy na rzeczywistej końcowej topologii i eliminuje fałszywe `Firing`/`NoData` niepełnego labu.
+- 2026-07-22 — F11 lifecycle/logs: node_exporter textfile collector publikuje atomowe kontrakty freshness backup/restore/TLS; wartości `0` jawnie oznaczają brak dowodu. PMM używa Docker local logging `10m × 3`, a hosty dostają logrotate daily/14/100M z timerem systemd poza kontenerowym labem — dowód: PMM queries, docker inspect i logrotate `--debug`.
+- 2026-07-22 — F5 SST fix: `wsrep_sst_method` zmienione z `mysqldump` na `mariabackup` w `server.cnf.j2` — ponieważ ISC-14 wymaga mariabackup, a mysqldump był błędny — dowód: MariaDB 11.4 docs, `wsrep_sst_mariabackup` script, ISC-14 PASS.
+- 2026-07-22 — F5 gcache: `gcache.size=128M` + `gcache.page_size=128M` — conservative default, ponieważ write rate=0 (ISC-68 fog); IST potwierdzone na labie — dowód: log `Receiving IST... 100.0% (57/57 events)`.
+- 2026-07-22 — F5 global_priv crash: po SST mariabackup `mysql/global_priv` był crashed na gnode2 (Aria table); naprawiono REPAIR TABLE + replikacja sst_user z gnode1 — założenie do potwierdzenia: przetestować ponowne SST po fix w F6/F9.
+- 2026-07-22 — F6 hardening: anonimowe konta i baza test usunięte; root localhost-only; sst_user i pmm_monitor least-privilege; hasło SST externalizowane do SST_PASSWORD env var w 5 plikach — dowód: probe-hardening.py PASS, probe-no-secrets-leak.sh PASS, grep = 0.
+- 2026-07-22 — F6 TLS: tls.mode=disabled w lab; f6_hardening.yml odrzuca production+disabled bez ADR; ISC-44 pozostaje otwarte do tls.mode=full.
+- 2026-07-22 — F10 backup transport: lab `backup.destination=s3` (MinIO `172.28.0.60`, przypięty `RELEASE.2025-09-07T16-13-09Z`), produkcja pozostaje `smb`. Powód: kernel OrbStack `7.0.11-orbstack` nie ma modułu `cifs` (`modprobe cifs` FATAL, brak `/lib/modules/.../fs/cifs*`), więc SMB mount jest nietestowalny w labie — jak brak SELinux/systemd. S3 to sankcjonowana opcja off-cluster (ADR-003). Ścieżka SMB udokumentowana w f10_backup.yml, ale niezweryfikowana w labie. Dowód: spike modprobe, probe-backup/probe-restore PASS.
+- 2026-07-22 — F10 backup: szyfrowanie `openssl aes-256-cbc/pbkdf2` (klucz BACKUP_ENCRYPTION_KEY poza repo), sha256 checksum, metadata z wsrep seqno; źródło backupu = galera[1] (nie aktywny writer) chroni writera; restore drill na dedykowanym `rnode1` (czysty izolowany host, standalone bez wsrep). Nowe kontenery: minio (172.28.0.60) + rnode1 (172.28.0.50). Dowód: playbooki F10, backup-impact.py flow_control=0.
+- 2026-07-23 — F11 ProxySQL metrics: `admin-restapi_enabled=true` (LOAD+SAVE = trwałe) wystawia `proxysql_*` na `:6070/metrics`; `f11_proxysql_metrics.yml` rejestruje 2 external services (group=proxysql) + external_exporter agents (port 6070) w PMM, reużywając generic nodes z f11_pmm_client. Galera/MariaDB już przez mysqld_exporter+QAN — dowód: PMM Prom `proxysql_servers_table_version_total` 2 series `up=1`, ISC-46 PASS.
+- 2026-07-23 — F11 freshness: `f11_freshness.yml` jest jedynym właścicielem `isa_monitoring_state.prom` — f11_node_exporter baseline ma `force:false`, więc reconverge nie resetuje realnych wartości do 0. `last_${MODE}.json` przechowuje tylko SUKCES; porażki idą do `last_${MODE}_failure.json` (ISC-38), aby nie nadpisać dowodu świeżości. `backup-run.sh` odświeża metryki po udanym run — dowód: epoch 1784763175→1784797158 po backup, ISC-49 PASS.
 
 ## Verification
 
 - ISC-3: PASS — MariaDB-server-11.4.12-1.el9, galera-4-26.4.27-1.el9, MariaDB-backup-11.4.12-1.el9 na gnode1-3; proxysql-3.0.9-1.aarch64 na pnode1-2; rpm -q potwierdzone na hostach 2026-07-22; zgodne z versions.lock.yml.
-- ISC-43: probe-no-secrets-leak.sh PASS lokalnie 2026-07-22 — brak sekretów w repo, logach, argv. Probe gotowy do uruchomienia na CI.
+- ISC-43: `probe-no-secrets-leak.sh` PASS lokalnie 2026-07-22 — brak sekretów w śledzonych/nieignorowanych plikach i argv; kontrola negatywna odrzuciła literalne sekrety quoted, unquoted i Compose fallback. Losowe dane labu są w ignorowanym `tests/lab/.env` (0600), poza build context.
 - ISC-58: validate-cluster-schema.py PASS lokalnie 2026-07-22 — cluster.yml zgodny z schema + semantic checks (production locked, max_writers=1, R/W split off). Probe gotowy do CI.
 - ISC-62: 7 runbook stubs utworzone (bootstrap, total-outage, node-replacement, backup, restore, upgrade, decommission) w docs/runbooks/; do uzupełnienia w F4/F9/F10/F12/F13/F14.
 - ISC-63: PASS — F2 install playbook używa state: present (nie latest); probe-no-state-latest.sh PASS; F2 preflight+install na 5/5 hostów 2026-07-22.
 - ISC-66: PASS — F0 discovery uruchomiony na 5/5 kontenerów Rocky 9.8 (lab-cluster); 29 tasków PASS każdy (PLAY RECAP ok=29 failed=0); raporty /var/tmp/f0-discovery-*.json zawierają OS/kernel, CPU/RAM/NUMA, dyski/fs/mount, DNS/routing/ports, SELinux/firewalld, repo/pakiety, istniejące MariaDB/ProxySQL (brak), monitoring (brak). F0 nie instalował fio (allow_bench=true tylko gnode1, ale fio nie było zainstalowane — lab ograniczenie). Commit 2026-07-22.
 - ISC-67: PASS — F0 discovery read-only; changed=0 na wszystkich hostach (poza zapisem raportu changed=1); brak modyfikacji usług; ansible-playbook 2026-07-22.
 - ISC-6: PASS — F2 preflight na 5/5 hostów (assert Rocky 9, RAM >=2GB, disk >=5GB, clean MariaDB); serial:1 max_fail_percentage:0; failed=0 2026-07-22.
+- ISC-46: PASS — probe-pmm-native.py potwierdza PMM `3.8.1`, 5 generic nodes, 5 node_exporter 1.12.1, 3 MySQL services oraz 2 ProxySQL metric exporters (external_exporter port 6070, restapi włączone trwale). Galera/MariaDB przez mysqld_exporter+QAN, ProxySQL przez restapi `/metrics` (311+ metryk). PMM Prom zwraca `proxysql_servers_table_version_total` dla obu węzłów (`up=1`). Dowód: `make lab-monitoring-verify` PASS 2026-07-23.
+- F11 monitoring idempotence: PASS — po rotacji danych i upgrade node_exporter drugi `make cluster-monitoring CLUSTER=lab-cluster` zakończony `changed=0 failed=0` dla gnode1-3, pnode1-2 i localhost.
+- F11 PMM version preflight: PASS — kontrola negatywna z oczekiwanym `0.0.0` została odrzucona przed pierwszym playem hostowym; aktywny runtime `3.8.1` odpowiada `versions.lock.yml`.
+- F11 restart persistence i live scrape: PASS — PMM odtworzony z digest-pinned obrazu `3.8.1`, health=`healthy`, pamięć=4GiB, nofile=1M, automatyczne aktualizacje wyłączone. Po restarcie probe potwierdził świeże inventory/QAN/metryki, 0 zarządzanych reguł, 0 custom templates `isa_*` i brak folderu alertów (404). PMM porty są tylko na `127.0.0.1`; stare domyślne hasło zwraca 401, losowe aktywne hasło 200.
+- ISC-47: NOT STARTED — decyzją principal alerty quorum/writer/node oraz zewnętrzne notification policy powstaną jako F15 dopiero po F6/F7/F9/F10. Działający PMM nie zawiera żadnej reguły zarządzanej dla `lab-galera`.
+- ISC-48: PASS — `logrotate --debug /etc/logrotate.d/isa-database-monitoring` SYNTAX OK na 5/5 permanentnych hostów (gnode1-3, pnode1-2); polityka daily/14/100M coveruje `/var/log/mariadb/*.log`, `/var/lib/proxysql/*.log`, `/var/tmp/node_exporter.log`; `logrotate.timer enabled`. rnode1 (transient restore host) pominięty — przebudowywany co drill. Dowód: ansible + logrotate --debug 2026-07-23.
+- ISC-49: PASS — `f11_freshness.yml` publikuje realne unixtimes z `last_backup.json`/`last_restore.json` do textfile collector (`isa_monitoring_state.prom`); `backup-run.sh` odświeża metryki po udanym run. Probe wymaga non-zero backup/restore unixtime w oknie retencji (14d/8d). PMM Prom: `isa_backup_last_success_unixtime=1784797158`, `isa_restore_test_last_success_unixtime=1784762220`, TLS `0` (disabled). Dowód: `make lab-monitoring-verify` PASS 2026-07-23.
+- ISC-7: PASS — `probe-galera-cluster.py` potwierdza wszystkie 3 węzły raportują `wsrep_cluster_status=Primary` 2026-07-22.
+- ISC-8: PASS — `wsrep_cluster_size=3` na gnode1/gnode2/gnode3, zgodne z `galera.nodes_expected=3` 2026-07-22.
+- ISC-9: PASS — identyczny `wsrep_cluster_state_uuid` na wszystkich węzłach 2026-07-22.
+- ISC-10: PASS — wszystkie węzły: `wsrep_local_state=4 (Synced)`, `wsrep_ready=ON`, `wsrep_connected=ON` 2026-07-22.
+- ISC-14: PASS — `wsrep_sst_method=mariabackup` na wszystkich węzłach; gnode2 i gnode3 dołączyły przez SST mariabackup 2026-07-22.
+- ISC-15: PASS — gnode3 powrócił po krótkim przestoju przez IST (log: `Receiving IST... 100.0% (57/57 events) complete`), nie pełne SST 2026-07-22.
+- ISC-16: PASS — brak tabel użytkownika bez klucza głównego (`information_schema` query puste) 2026-07-22.
+- ISC-17: PASS — po zatrzymaniu gnode2+gnode3, gnode1 wszedł w `non-Primary`, `wsrep_ready=OFF`; zapis zablokowany `ERROR 1047 (WSREP has not yet prepared node for application use)` 2026-07-22.
+- ISC-29: PASS — gnode3 automatycznie dołączył po restarcie bez ręcznych kroków (IST z gcache) 2026-07-22.
+- ISC-11: PASS — write przez ProxySQL:6033 (app_user) widoczny na gnode2 przez Galera replication; endpoint ProxySQL działa 2026-07-22.
+- ISC-40: PASS — brak anonimowych kont, brak test DB, brak pustych haseł 2026-07-22.
+- ISC-41: PASS — root tylko @localhost 2026-07-22.
+- ISC-42: PASS — sst_user i pmm_monitor least privilege potwierdzone 2026-07-22.
+- ISC-43: PASS — SST password externalizowane; probe-no-secrets-leak PASS; grep = 0 trafień 2026-07-22.
+- ISC-45: PASS — f6_hardening.yml assert odrzuca production+disabled; lab=laboratory PASS 2026-07-22.
+- ISC-18: PASS — dokładnie jeden ONLINE writer (gnode3) w writer HG 10; probe-proxysql PASS na pnode1/pnode2 2026-07-22.
+- ISC-19: PASS — zatrzymany gnode2 przeniesiony do offline HG 40, po recovery wrócił do backup HG 20 2026-07-22.
+- ISC-20: PASS — Galera monitor skonwergował; 3 zdrowe backendy rozłożone writer/backup HG 2026-07-22.
+- ISC-21: PASS — runtime==disk galera_hostgroups (`10,20,30,40,1,0`); converge changed=0 (idempotentny) 2026-07-22.
+- ISC-22: PARTIAL (lab) — domyślne admin:admin odrzucone (auth wymuszone); izolacja sieciowa admin/app CIDR via firewalld tylko w produkcji (lab: pojedyncza sieć, brak firewalld) 2026-07-22.
+- ISC-23: PASS — 0 reguł query (runtime_mysql_query_rules); R/W split wyłączony 2026-07-22.
+- ISC-24: PASS — VIP 172.28.0.30 na MASTER (pnode1); klient przez VIP:6033 routuje do writera; probe-endpoint PASS 2026-07-22.
+- ISC-25: PASS — kill ProxySQL na pnode1 → VIP przejął pnode2 w ~7s (≪2min RTO); klient wznowił zapis przez VIP (id=200 → gnode3, Galera-replikowany), pnode1 odzyskał VIP po recovery 2026-07-22.
+- ISC-26: PASS — health-check (TCP 6033, weight -60) zdjął VIP z pnode1 gdy ProxySQL padł; VIP nigdy na niesprawnej instancji 2026-07-22.
+- ISC-27: PASS — numbered workload przez VIP; SIGKILL writera (gnode3) → zapis wznowiony, failover gap ~5-12s ≪ 120s RTO (chaos-failover.py) 2026-07-22.
+- ISC-28: PASS — wszystkie potwierdzone transakcje (564) obecne na węźle ocalałym po failover; 0 utraconych 2026-07-22.
+- ISC-30: PASS — partycja iptables gnode3|(gnode1+gnode2): większość Primary size=2 zapisuje, mniejszość non-Primary size=1 odrzuca zapis; brak dwóch writable Primary; heal do 3 (chaos-split-brain.py) 2026-07-22.
+- ISC-31: PASS — statyczny guard: każdy multi-node Galera lifecycle play ma serial:1 (probe-no-mass-restart.py, falsyfikowalny) 2026-07-22.
+- ISC-64: PASS — chaos-failover i chaos-split-brain odmawiają startu przy environment=production (guard, exit 1 bez destrukcji) 2026-07-22.
+- ISC-32: PASS — backup w s3://galera-backups (MinIO 172.28.0.60, off-cluster); lokalny staging usuwany po transferze; probe-backup PASS 2026-07-22.
+- ISC-33: PASS — openssl aes-256-cbc/pbkdf2 (magic Salted__), odszyfrowywalny do poprawnego tar 2026-07-22.
+- ISC-34: PASS — sha256 backup.tar.enc == zapisany checksum (weryfikacja przy backupie i przed restore) 2026-07-22.
+- ISC-35: PASS — metadata.json: mariadb_version=11.4.12-MariaDB, created_at, cluster_name, wsrep seqno=1482 2026-07-22.
+- ISC-36: PASS — restore na rnode1 (czysty izolowany host, standalone): checksum OK → copy-back → CHECK TABLE OK → 4 wiersze zweryfikowane 2026-07-22.
+- ISC-37: PASS — restore drill zapisuje last_restore.json; probe-restore weryfikuje świeżość wg restore_test_schedule (0 4 * * 0); cron template w roles/backup 2026-07-22.
+- ISC-38: PASS — backup-run.sh przy porażce dostarcza alert (/var/log/mariadb-backup.log + stan failed + logger); symulacja złych creds → rc=2, alert dostarczony 2026-07-22.
+- ISC-39: PASS — backup pod obciążeniem (284 commity przez VIP): flow control 0 ns, max write stall 0.07s — writer niezdegradowany (backup-impact.py) 2026-07-22.
 
 
 ## Blockers
@@ -317,6 +377,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - ~~BLK-2~~ ROZBLOKOWANY 2026-07-22 — inventory lab-cluster (clusters/lab-cluster/inventory.yml) z SSH key (tests/lab/ssh_key); Ansible połączenie PASS na 5/5 hostów.
 - ~~BLK-3~~ ROZSTRZYGNIĘTY 2026-07-22 — secret backend = Ansible Vault; backup = SMB teraz, S3 retencja 30d później (Decisions).
 - ~~BLK-4~~ ROZSTRZYGNIĘTY 2026-07-22 — internet dostępny; F1 research wykonany z oficjalnych źródeł.
+- BLK-5 — docelowy alert target/contact point jest nieuzgodniony. Nie blokuje bieżącego monitoringu; musi zostać rozstrzygnięty przed końcowym F15 po F11.
 
 ## Następny pojedynczy feature
-F3: MariaDB/Galera configuration — F2 zakończone (ISC-3/6/63 PASS, 5/68). Pakiety zainstalowane: MariaDB 11.4.12 + galera-4 + mariadb-backup na gnode1-3, ProxySQL 3.0.9 na pnode1-2. F3 konfiguruje my.cnf z wsrep, datadir, cluster name, SST method. Po F3: F4 (bezpieczny initial bootstrap).
+F12: Rolling operations, patch i upgrade planning — `serial: 1` rolling restart, health check między węzłami, patch plan z canary na non-writer (ISC-50, ISC-51, ISC-52).
