@@ -146,8 +146,8 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 ### Multi-cluster
 - [x] ISC-58: Nowy klaster wymaga wyłącznie nowego katalogu `clusters/<name>/` (inventory.yml + cluster.yml).
 - [x] ISC-59: Role i playbooki nie zawierają danych konkretnego klastra (zero hardcodowanych IP/nazw/sekretów).
-- [ ] ISC-60: Dwa klastry mają osobne nazwy, sieci, sekrety i endpointy.
-- [ ] ISC-61: Uruchomienie drugiego klastra przechodzi te same testy co pierwszy.
+- [x] ISC-60: Dwa klastry mają osobne nazwy, sieci, sekrety i endpointy.
+- [x] ISC-61: Uruchomienie drugiego klastra przechodzi te same testy co pierwszy.
 - [x] ISC-62: README i runbooki obejmują bootstrap, total outage, node replacement, backup, restore, upgrade i decommission.
 
 ### F0 Discovery
@@ -321,6 +321,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - 2026-07-23 — F13 node lifecycle: remove-node wymaga planu (f13_remove_node_plan.yml read-only: quorum guard, writer-detection) + confirm=yes (f13_remove_node.yml, jak bootstrap). Quorum guard odmawia jeśli size-1 < 2. Lab: 3→2 bezpieczne, nie testowano destruktywnego usunięcia (plan + guard zweryfikowane).
 - 2026-07-23 — F14 portability: usunięto hardcoding z 4 playbooków (site.yml, f3_galera_config.yml, f5_join.yml: galera_cluster_name→galera.cluster_name, galera_nodes_csv→groups['galera']|galera_node_address; f7_proxysql.yml: galera_backends→inventory, 'lab-galera'→monitoring.pmm.cluster_name). Weryfikacja: f3 renderuje server.cnf idempotentnie (changed=False), klaster zdrowy. ISC-59 PASS (probe-zero-hardcode: 0 trafień w roles/playbooks).
 - 2026-07-23 — F14 ISC-60/61 scope: drugi klaster LIVE (docker-compose druga sieć 172.29.0.x + 5 kontenerów + bootstrap + converge + probes) pozostaje jako acceptance gate — fundament (zero hardcode + parametryzacja + example-cluster template + runbooki) jest kompletny; drugi klaster powstaje wyłącznie przez clusters/<name>/.
+- 2026-07-23 — F14 drugi klaster LIVE: clusters/lab2-cluster/ (osobna sieć 172.29.0.x, osobny VIP/MinIO/namespace) wdrożony zero-zmian-w-rolach; bootstrap + SST + ProxySQL + Keepalived. Poprawki portability wykryte przy wdrożeniu: (1) f2_install musi instalować klienta mariadb na węzłach ProxySQL (admin port 6032), (2) ProxySQL w labie wymaga czystego startu --initial z proxysql.db writable (ownership proxysql:proxysql). Dowód: probe-galera/probe-proxysql PASS na lab2, lab1 nienaruszony, izolowane UUID/sieci/VIP.
 
 ## Verification
 
@@ -388,6 +389,8 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - ISC-58: PASS — clusters/example-cluster/{cluster.yml,inventory.yml} template; roles/playbooks nie referencjują clusters/lab-cluster (probe-zero-hardcode). Nowy klaster = clusters/<name>/ tylko. 2026-07-23.
 - ISC-59: PASS — 0 hardcodowanych IP/nazw/secretów w roles/playbooks (probe-zero-hardcode.py); parametryzacja zweryfikowana idempotentnym renderem f3 (changed=False, klaster zdrowy). 2026-07-23.
 - ISC-62: PASS — 7 runbooków (bootstrap, total-outage, node-replacement, backup, restore, upgrade, decommission) zaktualizowane; 0 STUB; wszystkie komendy istnieją w Makefile. 2026-07-23.
+- ISC-60: PASS — dwa klastry izolowane: lab1 (UUID 69c257c2, sieć 172.28.0.x, VIP 172.28.0.30, nazwa lab_galera) vs lab2 (UUID 951cfac6, sieć 172.29.0.x, VIP 172.29.0.30, nazwa lab2_galera) — osobne docker networks, osobny MinIO (172.29.0.60), osobny PMM namespace (lab2-galera). 2026-07-23.
+- ISC-61: PASS — drugi klaster (clusters/lab2-cluster/, zero zmian w rolach/playbookach) przechodzi te same probes: probe-galera-cluster (3×Primary/Synced), probe-proxysql (writer ONLINE, runtime==disk). Lab1 nienaruszony po wdrożeniu lab2. 2026-07-23.
 - ISC-65: PASS — `probe-no-double-bootstrap.py`: jedyny bootstrap play (bootstrap.yml) jest single-host-safe (serial:1 + assert ansible_play_hosts==1) + confirm-gated; 0 innych playbooków z --wsrep-new-cluster w shell/command. 2026-07-23.
 - F13 node lifecycle: PASS — `f13_remove_node_plan.yml` read-only (quorum guard 3→2 OK, writer-detection: gnode2=nie, gnode3=TAK+warn); `f13_remove_node.yml` confirm-gated (odmawia bez confirm=yes). Plan + guard zweryfikowane; destruktywne usunięcie nie testowane w labie (3→2). 2026-07-23.
 
@@ -401,4 +404,4 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - BLK-5 — docelowy alert target/contact point jest nieuzgodniony. Nie blokuje bieżącego monitoringu; musi zostać rozstrzygnięty przed końcowym F15 po F11.
 
 ## Następny pojedynczy feature
-F14 drugi-klaster-LIVE (ISC-60/61): wdrożyć drugi niezależny klaster w labie (druga sieć docker 172.29.0.x + 5 kontenerów + bootstrap + converge) i uruchomić te same probes — ostateczny dowód fabryki. Następnie F15: końcowy alerting (ISC-47, BLK-5 alert target). Fundament F14 kompletny: ISC-58/59/62 PASS (zero hardcode, parametryzacja, runbooki).
+F15: Końcowy alerting i dostarczanie powiadomień (ISC-47) — reguły alertów quorum/writer/node + notification policy do uzgodnionego celu (BLK-5: docelowy alert target nieuzgodniony — wymaga decyzji principal). Fabryka udowodniona: dwa niezależne klastry (lab1+lab2) z tego samego kodu.

@@ -65,6 +65,11 @@
         name: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/9/proxysql-3.0.9-1-centos9.aarch64.rpm"
         state: present
         disable_gpg_check: true
+    - name: "ProxySQL - instaluj klienta mariadb (wymagany do admin port 6032)"
+      ansible.builtin.dnf:
+        name: mariadb
+        state: present
+      when: "'proxysql' in group_names"
 
     # === Wspolne: time sync ===
     - name: Instaluj i wlacz chrony

@@ -1,0 +1,95 @@
+---
+# Drugi niezależny klaster (lab2) — ISC-60/61.
+# Osobne nazwy (lab2_galera / lab2-galera), osobny VIP (172.29.0.30),
+# osobny MinIO (172.29.0.60), osobny PMM namespace (lab2-galera).
+# Powstaje wyłącznie przez ten katalog — zero zmian w rolach/playbookach.
+
+cluster:
+  name: "lab2-cluster"
+  environment: "laboratory"
+  profile: "laboratory"
+  automation_release: "0.1.0"
+
+platform:
+  virtualization: "docker_orbstack"
+  rocky_linux_major: 9
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/versions.lock.yml"
+
+galera:
+  cluster_name: "lab2_galera"
+  nodes_expected: 3
+
+proxysql:
+  nodes_expected: 2
+  max_writers: 1
+  read_write_split_enabled: false
+  endpoint:
+    type: "keepalived_vip"
+    address: "172.29.0.30"
+    port: 6033
+
+tls:
+  mode: "disabled"
+  certificate_source: ""
+  ca_reference: ""
+  certificate_reference: ""
+  private_key_reference: ""
+
+network:
+  application_cidrs: []
+  database_cluster_cidrs: []
+  administration_cidrs: []
+  monitoring_cidrs: []
+
+secrets:
+  backend: "ansible_vault"
+
+storage:
+  data_directory: "/var/lib/mysql"
+  backup_staging_directory: "/var/tmp/mariadb-backup"
+  filesystem: "xfs"
+  expected_database_size_gb: "unknown"
+  expected_growth_gb_per_month: "unknown"
+  available_iops: "unknown"
+
+workload:
+  peak_qps: "unknown"
+  peak_connections: "unknown"
+  read_write_ratio: "unknown"
+  largest_transaction_mb: "unknown"
+  largest_table_gb: "unknown"
+  expected_write_latency_ms: "unknown"
+
+availability:
+  rpo: "0"
+  rto_node_failure: "2m"
+  rto_full_cluster_failure: "30m"
+  maintenance_window: "weekend"
+  allowed_service_interruption: "2m"
+
+backup:
+  enabled: true
+  destination: "s3"
+  full_backup_schedule: "0 2 * * *"
+  incremental_backup_schedule: "disabled"
+  retention_days: 14
+  encryption_enabled: true
+  immutable_or_offsite_copy: true
+  restore_test_schedule: "0 4 * * 0"
+  s3:
+    endpoint: "172.29.0.60:9000"
+    bucket: "lab2-galera-backups"
+    secure: false
+
+monitoring:
+  pmm:
+    server_url: "https://172.29.0.100:8443"
+    agent_id: "pmm-server"
+    cluster_name: "lab2-galera"
+    validate_certs: false
+    credentials_revision: 2
+  system: "pmm"
+  log_destination: "docker-local"
