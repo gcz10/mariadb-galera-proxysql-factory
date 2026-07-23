@@ -1,0 +1,151 @@
+---
+# F12 — Plan major upgrade MariaDB/Galera (ISC-53, ISC-54, ISC-56).
+#
+# ISC-53: plan jest READ-ONLY — generuje plan, nie modyfikuje hostów.
+#         Wszystkie taski na hostach są changed_when:false (odczyt). Po uruchomieniu
+#         (--check lub nie) changed=0 na hostach Galera.
+# ISC-54: ścieżka major upgrade pochodzi z oficjalnej dokumentacji MariaDB/Galera
+#         (mariadb.com/kb/en/upgrading-galera-cluster): 11.4 LTS → 11.8 LTS, in-place,
+#         mariadb-upgrade --skip-write-binlog, Galera 4 (wsrep API 26) wspiera rolling.
+# ISC-56: anti — major rollback NIE wykonuje downgrade istniejącego datadir
+#         (mariadb.com/kb/en/downgrading-between-major-mariadb-versions: "data files
+#         modified by a higher major version are forward-incompatible"). Rollback
+#         wymaga odtworzenia datadir z backupu (mariadb-backup), NIE downgrade pakietów.
+#
+# Źródła (hierarchia dowodów, official docs):
+#   - https://mariadb.com/kb/en/upgrading-galera-cluster/
+#   - https://mariadb.com/kb/en/upgrading-between-major-mariadb-versions/
+#   - https://mariadb.com/kb/en/downgrading-between-major-mariadb-versions/
+#   - https://mariadb.com/kb/en/mariadb-server-release-model/
+#   - https://galeracluster.com/library/documentation/upgrading.html
+
+# === Play 1: zbierz fakty read-only z węzłów Galera ===
+- name: "F12 — zbierz fakty do planu major upgrade (read-only)"
+  hosts: galera
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: "Odczytaj wersję MariaDB"
+      ansible.builtin.shell: "mariadbd --version | awk '{print $3}'"
+      register: f12_mariadb_version
+      changed_when: false
+
+    - name: "Odczytaj gcache.size (IST wymaga wystarczającego okna)"
+      ansible.builtin.shell: >-
+        grep -ioE 'gcache.size\s*=\s*[0-9]+[MG]' {{ mariadb_config_dir | default('/etc/mysql') }}/server.cnf
+        | awk -F= '{print $2}' | tr -d ' '
+      register: f12_gcache_size
+      changed_when: false
+      failed_when: false
+
+    - name: "ISC-56: odczytaj wersję zapisaną w grastate.dat (detekcja downgrade)"
+      ansible.builtin.shell: >-
+        grep -i '^SAFE_TO_BOOTSTRAP\|^seqno' /var/lib/mysql/grastate.dat 2>/dev/null || echo "brak grastate.dat"
+      register: f12_grastate
+      changed_when: false
+      failed_when: false
+
+    - name: "Odczytaj rozmiar datadir (kontekst planu)"
+      ansible.builtin.shell: "du -sh /var/lib/mysql 2>/dev/null | awk '{print $1}'"
+      register: f12_datadir_size
+      changed_when: false
+      failed_when: false
+
+# === Play 2: wygeneruj plan + strażnik anti-downgrade (localhost) ===
+- name: "F12 — wygeneruj plan major upgrade (read-only, ISC-53/54/56)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_become: false
+    f12_current_raw: "{{ hostvars[groups['galera'][0]].f12_mariadb_version.stdout | default('unknown') }}"
+    # Normalizuj "11.4.12-MariaDB" → "11.4.12" dla porównania wersji
+    f12_current_version: "{{ f12_current_raw | regex_replace('(-.*)?$', '') }}"
+    f12_current_major_minor: "{{ f12_current_version | regex_replace('^(\\d+\\.\\d+)\\..*$', '\\1') }}"
+    # Oficjalna ścieżka (ISC-54): 11.4 LTS → 11.8 LTS (najbliższe LTS, Galera 4 kompatybilne)
+    f12_target_version: "11.8"
+    f12_target_lts_eol: "2029-08"
+    f12_gcache: "{{ hostvars[groups['galera'][0]].f12_gcache_size.stdout | default('nieustawiony') }}"
+
+  tasks:
+    - name: "ISC-56: strażnik anti-downgrade — odmów jeśli obecna wersja >= docelowa"
+      ansible.builtin.assert:
+        that:
+          - f12_current_major_minor is version_compare(f12_target_version, '<', strict=true)
+        fail_msg: >-
+          ISC-56 ANTI: obecna wersja {{ f12_current_version }} ({{ f12_current_major_minor }}) >= docelowej {{ f12_target_version }}.
+          Major downgrade istniejącego datadir jest NIEWSPARTY (mariadb.com/kb/en/downgrading-between-major-mariadb-versions:
+          "data files modified by a higher major version are forward-incompatible").
+          Rollback wymaga odtworzenia datadir z backupu (mariadb-backup), NIE downgrade pakietów.
+      when: f12_current_version != 'unknown' and f12_current_major_minor is match('\\d+\\.\\d+')
+    - name: "Zapewnij katalog docs/plans"
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../docs/plans"
+        state: directory
+        mode: "0755"
+
+
+    - name: "ISC-54: wygeneruj plan major upgrade z oficjalnej ścieżki"
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/../docs/plans/major-upgrade-plan.md"
+        content: |
+          # Plan major upgrade: MariaDB {{ f12_current_version }} → {{ f12_target_version }} LTS
+
+          _Wygenerowany przez `f12_upgrade_plan.yml` (ISC-53/54/56). Read-only — ten plik
+          jest planem, nie wykonaniem. Źródło: oficjalna dokumentacja MariaDB/Galera._
+
+          ## Ścieżka (ISC-54 — oficjalna dokumentacja)
+          - **Obecna wersja:** MariaDB {{ f12_current_version }} (Galera 4, wsrep API 26)
+          - **Cel:** MariaDB {{ f12_target_version }} LTS (EOL {{ f12_target_lts_eol }})
+          - **Metoda:** rolling in-place upgrade (Galera 4 wspiera 10.11/11.4/11.8, brak dump/restore)
+          - **Źródła:**
+            - https://mariadb.com/kb/en/upgrading-galera-cluster/
+            - https://mariadb.com/kb/en/upgrading-between-major-mariadb-versions/
+            - https://galeracluster.com/library/documentation/upgrading.html
+
+          ## Warunki wstępne
+          1. **Pełny backup** mariadb-backup PRZED upgrade (ISC-32 — off-cluster, szyfrowany).
+          2. **gcache.size** wystarczające dla IST (obecnie: {{ f12_gcache }}); zalecane >=2G na czas upgrade,
+             aby węzły powracały przez IST, nie pełne SST.
+          3. **Brak DDL** w klastrze podczas rolling upgrade.
+          4. Wersja Galera 4 zgodna między węzłami (wsrep API 26).
+
+          ## Procedura rolling (jeden węzeł naraz, non-writer pierwszy, writer ostatni)
+          1. Drain węzła w ProxySQL (`status='OFFLINE_SOFT'` w mysql_servers).
+          2. `systemctl stop mariadb`.
+          3. Aktualizuj repo → swap pakietów (MariaDB-server, MariaDB-client, galera-4).
+             Uwaga: dla 12.3+ zainstaluj jawnie `mariadb-server-galera`.
+          4. Usuń zdeprecjonowane zmienne z server.cnf.
+          5. `systemctl start mariadb` — węzeł powraca przez IST (jeśli gcache wystarczy).
+          6. **`mariadb-upgrade --skip-write-binlog`** — aktualizuje tabele systemowe LOKALNIE,
+             bez replikacji DDL do nie-uaktualnionych węzłów (`--skip-write-binlog` kluczowe).
+          7. Weryfikuj zdrowie: `wsrep_local_state=4`, `Primary`, `wsrep_ready=ON`, pełny size.
+          8. Re-enble traffic w ProxySQL, powtórz dla kolejnego węzła.
+
+          ## ISC-55: stop przy utracie zdrowia
+          Po każdym węźle brama zdrowia (wsrep_local_state=4 + Primary + size). Jeśli węzeł
+          nie odzyska zdrowia → STOP, nie kontynuuj rolling (klaster może utracić quorum).
+
+          ## ISC-56: ANTI — rollback NIE downgraduje datadir
+          MariaDB nie wspiera downgrade datadir między major wersjami:
+          > "Data files modified by a higher major version or mariadb-upgrade
+          >  are forward-incompatible." (mariadb.com/kb/en/downgrading-between-major-mariadb-versions)
+          **Rollback = odtworzenie datadir z backupu (mariadb-backup), NIE downgrade pakietów.**
+          Przed upgrade ustaw `innodb_fast_shutdown=0` (czysty flush) dla awaryjnego rollbacku.
+
+          ## Weryfikacja po upgrade
+          - Wszystkie węzły: `SELECT VERSION();` == {{ f12_target_version }}
+          - `wsrep_cluster_status=Primary`, `wsrep_cluster_size={{ galera.nodes_expected }}`
+          - `mariadb-upgrade --skip-write-binlog` raportuje OK na każdym węźle
+          - `CHECK TABLE` na tabelach użytkownika (integralność)
+          - Backup + restore drill po upgrade (ISC-36)
+        mode: "0644"
+      register: f12_plan_written
+
+    - name: "ISC-53: raport — plan wygenerowany, brak zmian na hostach"
+      ansible.builtin.debug:
+        msg: >-
+          ISC-53/54/56: plan major upgrade {{ f12_current_version }} → {{ f12_target_version }} LTS
+          wygenerowany do docs/plans/major-upgrade-plan.md ({{ f12_plan_written.dest | default('') }}).
+          Hosty Galera: changed=0 (read-only). ISC-56 anti-downgrade strażnik aktywny.

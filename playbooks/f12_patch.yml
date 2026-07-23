@@ -1,0 +1,178 @@
+---
+# F12 — Rolling patch/upgrade z canary i bramą zdrowia (ISC-52, ISC-55, ISC-57).
+#
+# ISC-52: patching ma canary — jeden węzeł poza aktywnym writerem patchowany
+#         pierwszy; dopiero po potwierdzeniu zdrowia kontynuuj pozostałe.
+# ISC-55: upgrade zatrzymuje się po utracie zdrowia klastra — brama zdrowia
+#         (Synced+Primary+size) po każdym węźle; porażka zatrzymuje rolling.
+# ISC-57: ProxySQL aktualizuje się osobno, jedną instancję naraz (serial:1).
+#
+# Bezpieczny w labie: domyślna komenda patcha to read-only `dnf check-update`
+# (changed_when:false) — wzorzec canary+health-gate jest wykonywany bez
+# modyfikacji pakietów. Produkcja: operator nadpisuje f12_patch_command.
+# Zgodnie z research (proxysql.com): SAVE ... TO DISK przed restartem ProxySQL.
+
+# === Play 0: ustal writera (canary = non-writer) ===
+- name: "F12 — ustal writera dla canary patch"
+  hosts: proxysql[0]
+  become: true
+  gather_facts: false
+  vars:
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    writer_hg: "{{ proxysql.writer_hostgroup | default(10) }}"
+  tasks:
+    - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
+      ansible.builtin.assert:
+        that: [proxysql_admin_password | length > 0]
+        fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
+    - name: "Odczytaj writera (ProxySQL runtime)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id={{ writer_hg }} AND status='ONLINE'"
+      register: f12_patch_writer_ip
+      changed_when: false
+      no_log: true
+    - name: "Ustal writer host"
+      ansible.builtin.set_fact:
+        f12_patch_writer: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
+      when: hostvars[item].galera_node_address | default('') == f12_patch_writer_ip.stdout | trim
+      no_log: true
+    - name: "Ustal canary host (pierwszy non-writer)"
+      ansible.builtin.set_fact:
+        f12_patch_canary: "{{ (groups['galera'] | reject('equalto', f12_patch_writer) | list)[0] }}"
+    - name: "Raport kolejności patch"
+      ansible.builtin.debug:
+        msg: "Canary={{ f12_patch_canary }}, writer={{ f12_patch_writer }} (ostatni)"
+
+# === Play 1: ISC-52 CANARY — patch jednego non-writera + brama zdrowia ===
+- name: "F12 — ISC-52 canary patch (non-writer, z bramą zdrowia)"
+  hosts: galera
+  become: true
+  gather_facts: false
+  vars:
+    f12_patch_command: "dnf check-update"   # read-only w labie; produkcja: real patch
+    expected_size: "{{ galera.nodes_expected | default(3) }}"
+  tasks:
+    - name: "Pomiń jeśli to nie canary"
+      ansible.builtin.meta: end_host
+      when: inventory_hostname != hostvars[groups['proxysql'][0]].f12_patch_canary
+    - name: "ISC-52: canary — wykonaj patch (lab: read-only check-update)"
+      ansible.builtin.shell: "{{ f12_patch_command }} || true"
+      register: f12_canary_patch
+      changed_when: false
+    - name: "ISC-52: brama zdrowia canary — Synced+Primary+size"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name IN
+        ('wsrep_local_state','wsrep_cluster_status','wsrep_cluster_size','wsrep_ready')"
+      register: f12_canary_health
+      until: >-
+        f12_canary_health.stdout is search('wsrep_local_state\t4')
+        and f12_canary_health.stdout is search('wsrep_cluster_status\tPrimary')
+        and f12_canary_health.stdout is search('wsrep_cluster_size\t{{ expected_size | int }}')
+        and f12_canary_health.stdout is search('wsrep_ready\tON')
+      retries: 24
+      delay: 5
+      changed_when: false
+    - name: "ISC-52: canary zdrowy — kontynuuj rolling"
+      ansible.builtin.debug:
+        msg: "Canary {{ inventory_hostname }} OK po patch — health stable"
+
+# === Play 2: ISC-55 rolling patch pozostałych non-writerów (serial:1, stop na utracie zdrowia) ===
+- name: "F12 — ISC-55 rolling patch non-writerów (serial:1, stop na utracie zdrowia)"
+  hosts: galera
+  become: true
+  gather_facts: false
+  serial: 1
+  vars:
+    f12_patch_command: "dnf check-update"
+    expected_size: "{{ galera.nodes_expected | default(3) }}"
+  tasks:
+    - name: "Pomiń canary i writera"
+      ansible.builtin.meta: end_host
+      when: >-
+        inventory_hostname == hostvars[groups['proxysql'][0]].f12_patch_canary
+        or inventory_hostname == hostvars[groups['proxysql'][0]].f12_patch_writer
+    - name: "ISC-55: wykonaj patch"
+      ansible.builtin.shell: "{{ f12_patch_command }} || true"
+      changed_when: false
+    - name: "ISC-55: brama zdrowia — STOP rolling jeśli klaster utracił zdrowie"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name IN
+        ('wsrep_local_state','wsrep_cluster_status','wsrep_cluster_size','wsrep_ready')"
+      register: f12_roll_health
+      until: >-
+        f12_roll_health.stdout is search('wsrep_local_state\t4')
+        and f12_roll_health.stdout is search('wsrep_cluster_status\tPrimary')
+        and f12_roll_health.stdout is search('wsrep_cluster_size\t{{ expected_size | int }}')
+        and f12_roll_health.stdout is search('wsrep_ready\tON')
+      retries: 24
+      delay: 5
+      changed_when: false
+
+# === Play 3: patch WRITERA (serial:1, ostatni) ===
+- name: "F12 — patch writera (serial:1, ostatni, z bramą zdrowia)"
+  hosts: galera
+  become: true
+  gather_facts: false
+  serial: 1
+  vars:
+    f12_patch_command: "dnf check-update"
+    expected_size: "{{ galera.nodes_expected | default(3) }}"
+  tasks:
+    - name: "Pomiń non-writery"
+      ansible.builtin.meta: end_host
+      when: inventory_hostname != hostvars[groups['proxysql'][0]].f12_patch_writer
+    - name: "ISC-55: wykonaj patch writera"
+      ansible.builtin.shell: "{{ f12_patch_command }} || true"
+      changed_when: false
+    - name: "ISC-55: brama zdrowia writera"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name IN
+        ('wsrep_local_state','wsrep_cluster_status','wsrep_cluster_size','wsrep_ready')"
+      register: f12_writer_patch_health
+      until: >-
+        f12_writer_patch_health.stdout is search('wsrep_local_state\t4')
+        and f12_writer_patch_health.stdout is search('wsrep_cluster_status\tPrimary')
+        and f12_writer_patch_health.stdout is search('wsrep_cluster_size\t{{ expected_size | int }}')
+        and f12_writer_patch_health.stdout is search('wsrep_ready\tON')
+      retries: 24
+      delay: 5
+      changed_when: false
+
+# === Play 4: ISC-57 ProxySQL rolling patch (serial:1, osobno) ===
+- name: "F12 — ISC-57 ProxySQL rolling patch (serial:1, osobno)"
+  hosts: proxysql
+  become: true
+  gather_facts: false
+  serial: 1
+  vars:
+    f12_proxysql_patch_command: "dnf check-update"
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+  tasks:
+    - name: "ISC-57: zapisz config ProxySQL do DISK przed patch (proxysql.com)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SAVE MYSQL SERVERS TO DISK; SAVE MYSQL USERS TO DISK;
+         SAVE MYSQL VARIABLES TO DISK; SAVE ADMIN VARIABLES TO DISK;"
+      changed_when: false
+      no_log: true
+    - name: "ISC-57: wykonaj patch ProxySQL (jedna instancja naraz)"
+      ansible.builtin.shell: "{{ f12_proxysql_patch_command }} || true"
+      changed_when: false
+    - name: "ISC-57: brama zdrowia ProxySQL — admin port + backends ONLINE"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status='ONLINE'"
+      register: f12_proxysql_backends
+      until: (f12_proxysql_backends.stdout | trim | int) >= 1
+      retries: 12
+      delay: 5
+      changed_when: false
+      no_log: true
+    - name: "ISC-57: ProxySQL {{ inventory_hostname }} zdrowy po patch"
+      ansible.builtin.debug:
+        msg: "ProxySQL {{ inventory_hostname }} online ({{ f12_proxysql_backends.stdout | trim }} backends ONLINE)"

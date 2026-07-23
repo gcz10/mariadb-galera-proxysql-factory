@@ -116,3 +116,23 @@ cluster-monitoring-refresh:  ## F11 — odśwież metryki świeżości (po backu
 lab-monitoring-verify:  ## Zweryfikuj natywne PMM Inventory i metryki laboratorium
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
+
+cluster-rolling-restart:  ## F12 — rolling restart Galera serial:1 + brama zdrowia (ISC-50/51)
+	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	ansible-playbook playbooks/f12_rolling_restart.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+
+lab-rolling-restart-verify:  ## F12 — zweryfikuj rolling restart (ISC-50/51)
+	tests/lab/probe-rolling-restart.py
+
+cluster-upgrade-plan:  ## F12 — wygeneruj read-only plan major upgrade (ISC-53/54/56)
+	ansible-playbook playbooks/f12_upgrade_plan.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+
+lab-upgrade-plan-verify:  ## F12 — zweryfikuj plan major upgrade (ISC-53/54/56)
+	tests/lab/probe-upgrade-plan.py
+
+cluster-patch:  ## F12 — rolling patch z canary + brama zdrowia (ISC-52/55/57)
+	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	ansible-playbook playbooks/f12_patch.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+
+lab-patch-verify:  ## F12 — zweryfikuj wzorzec canary patch (ISC-52/55/57)
+	tests/lab/probe-patch.py

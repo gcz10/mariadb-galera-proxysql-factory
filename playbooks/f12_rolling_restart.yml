@@ -1,0 +1,170 @@
+---
+# F12 — Rolling restart klastra Galera (ISC-50, ISC-51).
+#
+# ISC-50: restart odbywa się z serial:1 (jeden węzeł naraz).
+# ISC-51: kolejny węzeł nie jest ruszany, dopóki poprzedni nie odzyska zdrowia
+#         (wsrep_local_state=4 Synced + Primary + pełny cluster_size).
+#
+# Kolejność (research galeracluster.com): najpierw non-writer węzły, writer na końcu.
+# ProxySQL mysql_galera_hostgroups automatycznie promuje backup-writera gdy writer
+# pada, więc restart writera jest bezpieczny, ale minimalizujemy churn failoveru.
+#
+# Lab: brak systemd → restart przez pkill mariadbd + start daemon (join, NIE
+# --wsrep-new-cluster, bo klaster już działa). Produkcja: systemctl restart mariadb.
+
+# === Play 0: ustal aktywnego writera i kolejność restartu ===
+- name: "F12 — ustal aktywnego writera (ProxySQL runtime)"
+  hosts: proxysql[0]
+  become: true
+  gather_facts: false
+  vars:
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    writer_hg: "{{ proxysql.writer_hostgroup | default(10) }}"
+
+  tasks:
+    - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
+      ansible.builtin.assert:
+        that:
+          - proxysql_admin_password | length > 0
+        fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
+
+    - name: "Odczytaj aktywnego writera z ProxySQL runtime_mysql_servers"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "SELECT hostname FROM runtime_mysql_servers
+         WHERE hostgroup_id={{ writer_hg }} AND status='ONLINE'"
+      register: writer_ip_raw
+      changed_when: false
+      no_log: true
+
+    - name: "Ustal writer host (mapowanie IP inventory → hostname)"
+      ansible.builtin.set_fact:
+        f12_writer_host: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
+      when: hostvars[item].galera_node_address | default('') == writer_ip_raw.stdout | trim
+      no_log: true
+
+    - name: "Wymagaj jednoznacznego writera"
+      ansible.builtin.assert:
+        that:
+          - f12_writer_host is defined
+          - f12_writer_host | length > 0
+        fail_msg: "Nie udało się ustalić aktywnego writera (runtime_mysql_servers puste?)."
+
+    - name: "Kolejność restartu: non-writers potem writer"
+      ansible.builtin.set_fact:
+        f12_restart_order: >-
+          {{
+            (groups['galera'] | reject('equalto', f12_writer_host) | list)
+            + [f12_writer_host]
+          }}
+
+    - name: "Pokaż kolejność restartu"
+      ansible.builtin.debug:
+        msg: "Restart order: {{ f12_restart_order }} (writer={{ f12_writer_host }} ostatni)"
+
+# === Play 1: rolling restart NON-WRITER węzłów (serial:1) ===
+- name: "F12 — rolling restart non-writer węzłów Galera (serial:1)"
+  hosts: galera
+  become: true
+  gather_facts: false
+  serial: 1
+  vars:
+    expected_size: "{{ galera.nodes_expected | default(3) }}"
+
+  tasks:
+    - name: "Pomiń writera (restart na końcu, osobny play)"
+      ansible.builtin.meta: end_host
+      when: inventory_hostname == hostvars[groups['proxysql'][0]].f12_writer_host
+
+    - name: "ISC-50: status wsrep PRZED restartem"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name IN
+        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+      register: wsrep_before
+      changed_when: false
+
+    - name: "ISC-50: zatrzymaj mariadbd (lab: brak systemd)"
+      ansible.builtin.shell: "pkill -x mariadbd; sleep 3; true"
+      changed_when: true
+
+    - name: "ISC-50: uruchom mariadbd (join — bez --wsrep-new-cluster)"
+      ansible.builtin.shell: >-
+        mariadbd --user=mysql --datadir=/var/lib/mysql
+        --socket=/var/lib/mysql/mysql.sock > /var/log/mariadb/mariadb.log 2>&1 &
+        sleep 8
+      changed_when: true
+
+    - name: "ISC-51: czekaj na socket MariaDB"
+      ansible.builtin.wait_for:
+        path: /var/lib/mysql/mysql.sock
+        timeout: 60
+
+    - name: "ISC-51: brama zdrowia — Synced + Primary + pełny size (przed kolejnym węzłem)"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name IN
+        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+      register: wsrep_after
+      until: >-
+        wsrep_after.stdout is search('wsrep_local_state\t4')
+        and wsrep_after.stdout is search('wsrep_cluster_status\tPrimary')
+        and wsrep_after.stdout is search('wsrep_ready\tON')
+        and wsrep_after.stdout is search('wsrep_cluster_size\t{{ expected_size | int }}')
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: "ISC-51: potwierdzenie zdrowia węzła"
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} rejoined: {{ wsrep_after.stdout | replace('\t',' = ') | replace('\n',', ') }}"
+
+# === Play 2: restart WRITERA (serial:1, na końcu) ===
+- name: "F12 — restart writera Galera (serial:1, ostatni)"
+  hosts: galera
+  become: true
+  gather_facts: false
+  serial: 1
+  vars:
+    expected_size: "{{ galera.nodes_expected | default(3) }}"
+
+  tasks:
+    - name: "Pomiń non-writery (obsłużone w Play 1)"
+      ansible.builtin.meta: end_host
+      when: inventory_hostname != hostvars[groups['proxysql'][0]].f12_writer_host
+
+    - name: "ISC-50: zatrzymaj mariadbd writera"
+      ansible.builtin.shell: "pkill -x mariadbd; sleep 3; true"
+      changed_when: true
+
+    - name: "ISC-50: uruchom mariadbd writera (join)"
+      ansible.builtin.shell: >-
+        mariadbd --user=mysql --datadir=/var/lib/mysql
+        --socket=/var/lib/mysql/mysql.sock > /var/log/mariadb/mariadb.log 2>&1 &
+        sleep 8
+      changed_when: true
+
+    - name: "ISC-51: czekaj na socket MariaDB writera"
+      ansible.builtin.wait_for:
+        path: /var/lib/mysql/mysql.sock
+        timeout: 60
+
+    - name: "ISC-51: brama zdrowia writera — Synced + Primary + pełny size"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name IN
+        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+      register: wsrep_writer_after
+      until: >-
+        wsrep_writer_after.stdout is search('wsrep_local_state\t4')
+        and wsrep_writer_after.stdout is search('wsrep_cluster_status\tPrimary')
+        and wsrep_writer_after.stdout is search('wsrep_ready\tON')
+        and wsrep_writer_after.stdout is search('wsrep_cluster_size\t{{ expected_size | int }}')
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: "ISC-51: potwierdzenie zdrowia writera"
+      ansible.builtin.debug:
+        msg: "Writer {{ inventory_hostname }} rejoined: {{ wsrep_writer_after.stdout | replace('\t',' = ') | replace('\n',', ') }}"

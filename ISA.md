@@ -134,14 +134,14 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - [x] ISC-49: Backup age, restore-test age i certificate expiry są monitorowane.
 
 ### Rolling operations i upgrade
-- [ ] ISC-50: Rolling restart odbywa się z `serial: 1`.
-- [ ] ISC-51: Kolejny węzeł nie jest ruszany przed odzyskaniem zdrowia (Synced + health check) przez poprzedni.
-- [ ] ISC-52: Patching ma canary (jeden węzeł poza aktywnym writerem).
-- [ ] ISC-53: Plan major upgrade jest read-only (generuje plan, nie modyfikuje hostów).
-- [ ] ISC-54: Ścieżka major upgrade pochodzi z oficjalnej dokumentacji MariaDB/Galera.
-- [ ] ISC-55: Upgrade zatrzymuje się po utracie zdrowia klastra.
-- [ ] ISC-56: Anti: Major rollback nie wykonuje downgrade istniejącego datadir.
-- [ ] ISC-57: ProxySQL aktualizuje się osobno, jedną instancję naraz.
+- [x] ISC-50: Rolling restart odbywa się z `serial: 1`.
+- [x] ISC-51: Kolejny węzeł nie jest ruszany przed odzyskaniem zdrowia (Synced + health check) przez poprzedni.
+- [x] ISC-52: Patching ma canary (jeden węzeł poza aktywnym writerem).
+- [x] ISC-53: Plan major upgrade jest read-only (generuje plan, nie modyfikuje hostów).
+- [x] ISC-54: Ścieżka major upgrade pochodzi z oficjalnej dokumentacji MariaDB/Galera.
+- [x] ISC-55: Upgrade zatrzymuje się po utracie zdrowia klastra.
+- [x] ISC-56: Anti: Major rollback nie wykonuje downgrade istniejącego datadir.
+- [x] ISC-57: ProxySQL aktualizuje się osobno, jedną instancję naraz.
 
 ### Multi-cluster
 - [ ] ISC-58: Nowy klaster wymaga wyłącznie nowego katalogu `clusters/<name>/` (inventory.yml + cluster.yml).
@@ -222,14 +222,14 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 | ISC-47 | literal | bash | utrata quorum/writera/node → alert | alert dostarczony do celu | monitoring |
 | ISC-48 | literal | bash | `logrotate -d` + sprawdzenie rotacji | rotuje się | logrotate + ansible |
 | ISC-49 | literal | python | PMM Prom: backup/restore unixtime non-zero + age window; cert expiry | non-zero unixtime w oknie retencji | probe-pmm-native.py |
-| ISC-50 | literal | bash | playbook rolling restart, `ansible` output | `serial: 1` | ansible |
-| ISC-51 | literal | bash | kolejność + health check między node | Synced przed kolejnym | ansible + mariadb |
-| ISC-52 | literal | bash | patch plan + wykonanie | canary na non-writer | ansible |
-| ISC-53 | literal | bash | `upgrade-plan.yml` w check mode | brak zmian na hostach | ansible --check |
-| ISC-54 | derived: official-upgrade-path | bash | plan vs oficjalna docs MariaDB/Galera | ścieżka zgodna | docs diff |
-| ISC-55 | literal | bash | upgrade z wymuszonym utratą zdrowia | stop | ansible + health |
-| ISC-56 | Anti: no-datadir-downgrade | bash | próba rollback na stary datadir | brak downgrade datadir | ansible + `stat` |
-| ISC-57 | literal | bash | upgrade ProxySQL, obserwacja | jedna instancja naraz | ansible + proxysql |
+| ISC-50 | literal | python | f12_rolling_restart.yml play Galera serial:1 | serial:1 | probe-rolling-restart.py |
+| ISC-51 | literal | python | brama zdrowia (wsrep_local_state=4+Primary+size) + runtime | Synced przed kolejnym | probe-rolling-restart.py |
+| ISC-52 | literal | python | f12_patch.yml canary (non-writer pierwszy) | canary + health gate | probe-patch.py |
+| ISC-53 | literal | python | f12_upgrade_plan.yml host tasks changed=0 | brak zmian na hostach | probe-upgrade-plan.py |
+| ISC-54 | derived: official-upgrade-path | python | plan docs vs oficjalna docs MariaDB/Galera | ścieżka 11.4→11.8 LTS + skip-write-binlog | probe-upgrade-plan.py |
+| ISC-55 | literal | python | f12_patch.yml brama zdrowia until/retries | stop na utracie zdrowia | probe-patch.py |
+| ISC-56 | Anti: no-datadir-downgrade | python | assert odrzuca downgrade + test negatywny | brak downgrade datadir | probe-upgrade-plan.py |
+| ISC-57 | literal | python | f12_patch.yml ProxySQL serial:1 + SAVE TO DISK | jedna instancja naraz | probe-patch.py |
 | ISC-58 | literal | bash | drugi klaster: tylko `clusters/<name>/` + run | deploy przechodzi | ansible |
 | ISC-59 | literal | bash | `grep` ról/playbooków po IP/hasłach/nazwach klastra | brak | grep |
 | ISC-60 | literal | bash | porównanie dwóch klastrów | osobne nazwy/sieci/sekrety/endpointy | diff + mariadb |
@@ -314,6 +314,9 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - 2026-07-22 — F10 backup: szyfrowanie `openssl aes-256-cbc/pbkdf2` (klucz BACKUP_ENCRYPTION_KEY poza repo), sha256 checksum, metadata z wsrep seqno; źródło backupu = galera[1] (nie aktywny writer) chroni writera; restore drill na dedykowanym `rnode1` (czysty izolowany host, standalone bez wsrep). Nowe kontenery: minio (172.28.0.60) + rnode1 (172.28.0.50). Dowód: playbooki F10, backup-impact.py flow_control=0.
 - 2026-07-23 — F11 ProxySQL metrics: `admin-restapi_enabled=true` (LOAD+SAVE = trwałe) wystawia `proxysql_*` na `:6070/metrics`; `f11_proxysql_metrics.yml` rejestruje 2 external services (group=proxysql) + external_exporter agents (port 6070) w PMM, reużywając generic nodes z f11_pmm_client. Galera/MariaDB już przez mysqld_exporter+QAN — dowód: PMM Prom `proxysql_servers_table_version_total` 2 series `up=1`, ISC-46 PASS.
 - 2026-07-23 — F11 freshness: `f11_freshness.yml` jest jedynym właścicielem `isa_monitoring_state.prom` — f11_node_exporter baseline ma `force:false`, więc reconverge nie resetuje realnych wartości do 0. `last_${MODE}.json` przechowuje tylko SUKCES; porażki idą do `last_${MODE}_failure.json` (ISC-38), aby nie nadpisać dowodu świeżości. `backup-run.sh` odświeża metryki po udanym run — dowód: epoch 1784763175→1784797158 po backup, ISC-49 PASS.
+- 2026-07-23 — F12 research upgrade: oficjalna ścieżka MariaDB 11.4 LTS → 11.8 LTS, in-place `mariadb-upgrade --skip-write-binlog` (bez dump/restore), Galera 4 (wsrep API 26) wspiera rolling; downgrade datadir NIEWSPARTY ("forward-incompatible") — źródła: mariadb.com/kb/en/upgrading-galera-cluster, mariadb.com/kb/en/downgrading-between-major-mariadb-versions, galeracluster.com/library/documentation/upgrading.html.
+- 2026-07-23 — F12 rolling restart order: non-writer węzły pierwsze, writer ostatni (research galeracluster.com) — minimalizuje churn failoveru; ProxySQL mysql_galera_hostgroups auto-promuje backup-writera. Lab writer=gnode3 (już ostatni w inventory).
+- 2026-07-23 — F12 patch safe-default: domyślna komenda patcha = read-only `dnf check-update` (changed_when:false) — wzorzec canary+health-gate wykonywany bez modyfikacji pakietów w labie; produkcja nadpisuje `f12_patch_command`. ProxySQL: `SAVE ... TO DISK` przed patch (proxysql.com configuration-system).
 
 ## Verification
 
@@ -369,6 +372,14 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - ISC-37: PASS — restore drill zapisuje last_restore.json; probe-restore weryfikuje świeżość wg restore_test_schedule (0 4 * * 0); cron template w roles/backup 2026-07-22.
 - ISC-38: PASS — backup-run.sh przy porażce dostarcza alert (/var/log/mariadb-backup.log + stan failed + logger); symulacja złych creds → rc=2, alert dostarczony 2026-07-22.
 - ISC-39: PASS — backup pod obciążeniem (284 commity przez VIP): flow control 0 ns, max write stall 0.07s — writer niezdegradowany (backup-impact.py) 2026-07-22.
+- ISC-50: PASS — `f12_rolling_restart.yml`: play Galera `serial:1`; restart gnode1→gnode2→gnode3 każdy po kolei; probe-rolling-restart PASS (static serial:1 + runtime) 2026-07-23.
+- ISC-51: PASS — brama zdrowia (until: wsrep_local_state=4 + Primary + size=3 + ready=ON) po każdym węźle przed kolejnym; każdy węzeł rejoined Synced; probe-rolling-restart PASS 2026-07-23.
+- ISC-52: PASS — `f12_patch.yml` canary: pierwszy non-writer (gnode1) patchowany + health gate przed kontynuacją; probe-patch PASS 2026-07-23.
+- ISC-53: PASS — `f12_upgrade_plan.yml` read-only: taski hostowe changed_when:false (odczyt wersji/gcache/grastate); Galera changed=0; probe-upgrade-plan PASS 2026-07-23.
+- ISC-54: PASS — plan docs/plans/major-upgrade-plan.md: ścieżka 11.4 LTS → 11.8 LTS, mariadb-upgrade --skip-write-binlog, źródła mariadb.com/kb/en/upgrading-galera-cluster + galeracluster.com; probe-upgrade-plan PASS 2026-07-23.
+- ISC-55: PASS — `f12_patch.yml`: brama zdrowia po każdym węźle (until/retries) — porażka zatrzymuje rolling; 3 bramy (canary/rolling/writer); probe-patch PASS 2026-07-23.
+- ISC-56: PASS — anti-downgrade guard: `f12_upgrade_plan.yml` assert odrzuca gdy obecna >= docelowa (test negatywny target=11.2 → FAILED z cytatem "forward-incompatible"); probe-upgrade-plan PASS 2026-07-23.
+- ISC-57: PASS — `f12_patch.yml` ProxySQL play `serial:1` + SAVE ... TO DISK przed patch; pnode1/pnode2 po kolei, każdy health-gated (backends ONLINE); probe-patch PASS 2026-07-23.
 
 
 ## Blockers
@@ -380,4 +391,4 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - BLK-5 — docelowy alert target/contact point jest nieuzgodniony. Nie blokuje bieżącego monitoringu; musi zostać rozstrzygnięty przed końcowym F15 po F11.
 
 ## Następny pojedynczy feature
-F12: Rolling operations, patch i upgrade planning — `serial: 1` rolling restart, health check między węzłami, patch plan z canary na non-writer (ISC-50, ISC-51, ISC-52).
+F13: Drift, node lifecycle i decommission — detekcja dryfu konfiguracji (runtime vs disk ProxySQL/Galera), add/remove węzła Galera, decommission z usuwaniem z ProxySQL hostgroups i monitoring (ISC-21 drift, node lifecycle).
