@@ -71,6 +71,7 @@
         "SHOW STATUS LIKE 'wsrep_flow_control_paused_ns'" | awk '{print $2}'
       register: fc_before
       changed_when: false
+      delegate_to: "{{ groups['galera'][0] }}"
 
     - name: "Wyczyść staging"
       ansible.builtin.file:
@@ -100,6 +101,7 @@
         "SHOW STATUS LIKE 'wsrep_flow_control_paused_ns'" | awk '{print $2}'
       register: fc_after
       changed_when: false
+      delegate_to: "{{ groups['galera'][0] }}"
 
     - name: "ISC-39: backup nie wywołał flow control ponad threshold"
       ansible.builtin.assert:
@@ -116,7 +118,7 @@
       changed_when: false
 
     - name: "ISC-35: odczytaj wersję MariaDB"
-      ansible.builtin.shell: "mariadbd --version | awk '{print $3}'"
+      ansible.builtin.shell: "mariadbd --version | sed -E 's/.*Distrib ([0-9]+\\.[0-9]+\\.[0-9]+).*/\\1/'"
       register: mariadb_version
       changed_when: false
 
@@ -124,6 +126,12 @@
       ansible.builtin.command: >-
         tar -czf {{ backup_staging }}/backup.tar -C {{ backup_staging }}/raw .
       changed_when: true
+
+    - name: "ISC-34: policz sha256 PLAINTEXT backupu (wykryje uszkodzenie przed szyfrowaniem)"
+      ansible.builtin.shell: >-
+        sha256sum {{ backup_staging }}/backup.tar | awk '{print $1}'
+      register: plaintext_sha
+      changed_when: false
 
     - name: "ISC-33: zaszyfruj backup (openssl aes-256-cbc, pbkdf2)"
       ansible.builtin.shell: >-
@@ -165,6 +173,7 @@
             "wsrep_seqno": "{{ galera_info.stdout.split(':')[1] | default('') }}",
             "sha256": "{{ backup_sha.stdout }}",
             "size_bytes": {{ enc_stat.stat.size }},
+            "sha256_plaintext": "{{ plaintext_sha.stdout }}",
             "encryption": "aes-256-cbc/pbkdf2",
             "source_host": "{{ inventory_hostname }}"
           }

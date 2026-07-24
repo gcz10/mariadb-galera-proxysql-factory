@@ -3,18 +3,18 @@
 # MASTER_PROMPT §714: remove node wymaga planu + jawnego potwierdzenia.
 # Użycie: ansible-playbook f13_remove_node.yml -e node=gnode2 -e confirm=yes
 # NIGDY bez -e confirm=yes. Najpierw uruchom f13_remove_node_plan.yml.
+#
+# Struktura: prawdziwe playe na docelowych hostach (NIE zagnieżdżony `ansible` ad-hoc
+# z localhost — to robiło hasło admina ProxySQL widocznym w argv procesu shella).
+# Sekrety: ProxySQL admin przez MYSQL_PWD (env, nie argv); PMM przez uri.url_password.
 
-- name: "F13 — remove node Galera (confirm-gated, quorum-guarded)"
+# === Play 0: walidacja wejścia + quorum guard ===
+- name: "F13 — walidacja + strażnik quorum"
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
     ansible_become: false
-    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
-    pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
-    writer_hg: "{{ proxysql.writer_hostgroup | default(10) }}"
-    pmm_api_url: "{{ monitoring.pmm.server_url }}"
-    pmm_cluster_name: "{{ monitoring.pmm.cluster_name }}"
 
   tasks:
     - name: "Wymagaj confirm=yes + node= (galera host)"
@@ -24,61 +24,179 @@
           - node is defined and node | length > 0
           - node in groups['galera']
         fail_msg: >-
-          Remove-node wymaga -e confirm=yes -e node=<gnodeX>. Najpierw uruchom
-          f13_remove_node_plan.yml. Nigdy bez jawnego potwierdzenia.
+          Remove-node wymaga -e confirm=yes -e node=<gnodeX> należącego do grupy galera.
+          Najpierw uruchom f13_remove_node_plan.yml. Nigdy bez jawnego potwierdzenia.
 
-    - name: "Strażnik quorum: odmów jeśli usunięcie zejdzie poniżej 2 węzłów"
-      ansible.builtin.shell: >-
-        ansible {{ groups['galera'][0] }} -i {{ inventory_file }} -m shell -a
-        "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        \"SHOW STATUS WHERE Variable_name='wsrep_cluster_size'\"" | awk '{print $2}'
-      register: f13_rm_size
-      changed_when: false
+    - name: "Pozostali członkowie galera (poza usuwanym węzłem)"
+      ansible.builtin.set_fact:
+        f13_survivors: "{{ groups['galera'] | reject('equalto', node) | list }}"
 
-    - name: "Quorum guard"
+    - name: "Strażnik quorum: odmów jeśli zostanie mniej niż 2 węzły"
       ansible.builtin.assert:
         that:
-          - (f13_rm_size.stdout | trim | int) - 1 >= 2
+          - f13_survivors | length >= 2
         fail_msg: >-
-          ODRZUCONE: usunięcie {{ node }} zejdzie poniżej quorum ({{ f13_rm_size.stdout | trim }} →
-          {{ (f13_rm_size.stdout | trim | int) - 1 }}). Minimum 2 dla Primary.
+          ODRZUCONE: usunięcie {{ node }} zejdzie poniżej quorum (zostanie
+          {{ f13_survivors | length }} węzłów). Minimum 2 dla Primary Component.
 
-    - name: "Krok 1: usuń węzeł z ProxySQL hostgroups (drain + delete)"
+# === Play 1: drain + usuń węzeł z ProxySQL hostgroups ===
+- name: "F13 — usuń węzeł z ProxySQL hostgroups (drain + delete)"
+  hosts: proxysql[0]
+  become: true
+  gather_facts: false
+  vars:
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    writer_hg: "{{ proxysql.writer_hostgroup | default(10) }}"
+  environment:
+    MYSQL_PWD: "{{ proxysql_admin_password }}"
+
+  tasks:
+    - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
+      ansible.builtin.assert:
+        that: [proxysql_admin_password | length > 0]
+        fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
+
+    - name: "Drain + usuń backend usuwanego węzła z ProxySQL"
       ansible.builtin.shell: >-
-        ansible {{ groups['proxysql'][0] }} -i {{ inventory_file }} -m shell -a
-        "mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
-        \"DELETE FROM mysql_servers WHERE hostname='{{ hostvars[node].galera_node_address }}';
-         LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;\""
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
+        "DELETE FROM mysql_servers WHERE hostname='{{ hostvars[node].galera_node_address }}';
+         LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;"
       changed_when: true
       no_log: true
 
-    - name: "Krok 2: usuń usługi węzła z PMM Inventory"
-      ansible.builtin.shell: >-
-        for sid in $(curl -sk -u "admin:{{ pmm_admin_password }}" {{ pmm_api_url }}/v1/inventory/services |
-        python3 -c "import json,sys; [print(s['service_id']) for s in json.load(sys.stdin).get('external',[]) if '{{ pmm_cluster_name }}-{{ node }}' in s.get('service_name','')]");
-        do curl -sk -u "admin:{{ pmm_admin_password }}" -X DELETE {{ pmm_api_url }}/v1/management/services/$sid; done
-      changed_when: true
+# === Play 2: usuń usługi węzła z PMM Inventory (uri, nie curl z hasłem w argv) ===
+- name: "F13 — usuń usługi węzła z PMM Inventory"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_become: false
+    pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    pmm_api_url: "{{ monitoring.pmm.server_url }}"
+    pmm_cluster_name: "{{ monitoring.pmm.cluster_name }}"
+    pmm_validate_certs: "{{ monitoring.get('pmm', {}).get('validate_certs', true) | bool }}"
+
+  tasks:
+    - name: "Wymagaj PMM_ADMIN_PASSWORD"
+      ansible.builtin.assert:
+        that: [pmm_admin_password | length > 0]
+        fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium."
+
+    - name: "Pobierz usługi PMM Inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/services"
+        method: GET
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        return_content: true
+        status_code: 200
+      register: pmm_services
       no_log: true
 
-    - name: "Krok 3: stop mariadbd na usuwanym węźle"
+    - name: "Service ID węzła do usunięcia"
+      ansible.builtin.set_fact:
+        f13_pmm_service_ids: >-
+          {{
+            pmm_services.json.get('external', [])
+            | selectattr('service_name', 'search', pmm_cluster_name ~ '-' ~ node)
+            | map(attribute='service_id')
+            | list
+          }}
+
+    - name: "Usuń usługi PMM węzła"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/management/services/{{ item }}"
+        method: DELETE
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        status_code: 200
+      loop: "{{ f13_pmm_service_ids }}"
+      no_log: true
+
+# === Play 3: zatrzymaj mariadbd na usuwanym węźle ===
+- name: "F13 — stop mariadbd na usuwanym węźle"
+  hosts: "{{ node | default('localhost') }}"
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: "Zatrzymaj mariadbd (graceful, potem kill)"
       ansible.builtin.shell: >-
-        ansible {{ node }} -i {{ inventory_file }} -m shell -a
-        "pkill -x mariadbd; sleep 2; true"
+        mariadb-admin --socket=/var/lib/mysql/mysql.sock shutdown 2>/dev/null;
+        sleep 3; pkill -x mariadbd 2>/dev/null; true
       changed_when: true
 
-    - name: "Czekaj na stabilizację klastra (quorum utrzymane)"
+# === Play 4: zaktualizuj wsrep_cluster_address na ocalałych węzłach ===
+- name: "F13 — zaktualizuj wsrep_cluster_address na ocalałych węzłach"
+  hosts: galera
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: "Pomiń usuwany węzeł"
+      ansible.builtin.meta: end_host
+      when: inventory_hostname == node
+
+    - name: "Nowa lista peerów (bez usuwanego węzła)"
+      ansible.builtin.set_fact:
+        f13_new_cluster_address: >-
+          gcomm://{{
+            groups['galera']
+            | reject('equalto', node)
+            | map('extract', hostvars, 'galera_node_address')
+            | join(',')
+          }}
+
+    - name: "Zaktualizuj wsrep_cluster_address w runtime (odrzuć martwy seed)"
       ansible.builtin.shell: >-
-        ansible {{ groups['galera'][0] }} -i {{ inventory_file }} -m shell -a
-        "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        \"SHOW STATUS WHERE Variable_name='wsrep_cluster_size'\"" | awk '{print $2}'
-      register: f13_rm_after
-      until: (f13_rm_after.stdout | trim | int) == (f13_rm_size.stdout | trim | int) - 1
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SET GLOBAL wsrep_cluster_address='{{ f13_new_cluster_address }}'"
+      changed_when: true
+      failed_when: false
+
+    - name: "Utrwal nowy adres w server.cnf (next restart nie spróbuje martwego seeda)"
+      ansible.builtin.replace:
+        path: /etc/my.cnf.d/server.cnf
+        regexp: '^wsrep_cluster_address = gcomm://.*$'
+        replace: 'wsrep_cluster_address = {{ f13_new_cluster_address }}'
+
+# === Play 5: czekaj na stabilizację klastra + raport ===
+- name: "F13 — weryfikuj quorum po usunięciu"
+  hosts: "{{ (groups.get('galera', []) | reject('equalto', node | default('')) | list | first) | default('localhost') }}"
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: "Czekaj na ustabilizowanie rozmiaru klastra (quorum utrzymane)"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name='wsrep_cluster_size'"
+      register: f13_size_after
+      until: (f13_size_after.stdout | regex_search('\d+') | int) == (groups['galera'] | length) - 1
       retries: 12
       delay: 5
       changed_when: false
 
+    - name: "Weryfikuj Primary Component"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name='wsrep_cluster_status'"
+      register: f13_status_after
+      changed_when: false
+
+    - name: "Quorum utrzymane"
+      ansible.builtin.assert:
+        that:
+          - "'Primary' in f13_status_after.stdout"
+        fail_msg: "Klaster nie jest Primary po usunięciu {{ node }}: {{ f13_status_after.stdout }}"
+
     - name: "Raport remove-node"
       ansible.builtin.debug:
         msg: >-
-          Usunięto {{ node }}: cluster size {{ f13_rm_size.stdout | trim }} → {{ f13_rm_after.stdout | trim }},
-          ProxySQL hostgroups zaktualizowane, PMM usługi usunięte, mariadbd zatrzymany.
+          Usunięto {{ node }}: cluster size = {{ (groups['galera'] | length) - 1 }}
+          (Primary utrzymane). ProxySQL hostgroups zaktualizowane, usługi PMM usunięte,
+          mariadbd zatrzymany, wsrep_cluster_address zaktualizowany na ocalałych węzłach.

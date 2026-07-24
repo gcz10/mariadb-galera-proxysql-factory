@@ -124,10 +124,33 @@
         BACKUP_ENCRYPTION_KEY: "{{ backup_enc_key }}"
       changed_when: true
 
+    - name: "ISC-34: odczytaj zapisany sha256 PLAINTEXT (jeśli w metadanych)"
+      ansible.builtin.shell: >-
+        python3 -c "import json;d=json.load(open('{{ restore_work }}/metadata.json'));print(d.get('sha256_plaintext',''))"
+      register: stored_plaintext_sha
+      changed_when: false
+
+    - name: "ISC-34: policz sha256 odszyfrowanego backupu (end-to-end integralność)"
+      ansible.builtin.shell: "sha256sum {{ restore_work }}/backup.tar | awk '{print $1}'"
+      register: computed_plaintext_sha
+      changed_when: false
+
+    - name: "ISC-34: plaintext checksum musi się zgadzać (gdy zapisany)"
+      ansible.builtin.assert:
+        that:
+          - stored_plaintext_sha.stdout | length == 0 or computed_plaintext_sha.stdout == stored_plaintext_sha.stdout
+        fail_msg: "Checksum PLAINTEXT niezgodny — backup uszkodzony pomimo poprawnego szyfrowania."
+
     # === Przygotuj czysty datadir i odtwórz ===
     - name: "Zatrzymaj ewentualny mariadbd na rnode1"
       ansible.builtin.shell: "pkill -x mariadbd 2>/dev/null; sleep 2; true"
       changed_when: false
+
+    - name: "Waliduj restore_datadir (ochrona przed rm -rf złej ścieżki)"
+      ansible.builtin.assert:
+        that:
+          - restore_datadir == '/var/lib/mysql'
+        fail_msg: "restore_datadir musi być /var/lib/mysql, dostałem {{ restore_datadir }}."
 
     - name: "Wyczyść zawartość datadir (mount point — opróżnij, nie usuwaj)"
       ansible.builtin.shell: "find {{ restore_datadir }} -mindepth 1 -delete"
@@ -174,19 +197,25 @@
         path: /var/lib/mysql/mysql.sock
         timeout: 30
 
-    - name: "ISC-36: CHECK TABLE na odtworzonych tabelach"
+    - name: "ISC-36: CHECK TABLE na WSZYSTKICH tabelach użytkownika"
       ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "CHECK TABLE isa_test.replication_probe, isa_test.isa_failover"
+        set -o pipefail;
+        TBL=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SELECT CONCAT('`',TABLE_SCHEMA,'`.`',TABLE_NAME,'`') FROM information_schema.TABLES
+         WHERE TABLE_TYPE='BASE TABLE' AND TABLE_SCHEMA NOT IN ('mysql','sys','performance_schema','information_schema')");
+        if [ -z "$TBL" ]; then echo "NO_USER_TABLES"; exit 1; fi;
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "CHECK TABLE $TBL" |
+        awk '{if($3!="status" || $4!="OK"){print; bad++}} END{exit bad?1:0}'
       register: check_table
       changed_when: false
 
-    - name: "ISC-36: integralność — wszystkie CHECK TABLE OK"
+    - name: "ISC-36: integralność — wszystkie tabele użytkownika OK"
       ansible.builtin.assert:
         that:
-          - "'error' not in check_table.stdout | lower"
-          - "'corrupt' not in check_table.stdout | lower"
-        fail_msg: "CHECK TABLE wykrył problem: {{ check_table.stdout }}"
+          - check_table.rc == 0
+          - "'NO_USER_TABLES' not in (check_table.stdout | default(''))"
+        fail_msg: "CHECK TABLE wykrył problem lub brak tabel: rc={{ check_table.rc }} out={{ check_table.stdout }}"
+        success_msg: "Wszystkie tabele użytkownika: CHECK TABLE OK"
 
     - name: "ISC-36: liczba wierszy w odtworzonej tabeli"
       ansible.builtin.shell: >-

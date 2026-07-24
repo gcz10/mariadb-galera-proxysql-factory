@@ -8,6 +8,12 @@
 # Użycie: backup-run.sh backup|restore
 # Wymaga zmiennych środowiskowych sekretów (MINIO_ROOT_USER/PASSWORD, BACKUP_ENCRYPTION_KEY).
 set -uo pipefail
+# Wczytaj sekrety z chronionego pliku (cron/systemd timer nie ma środowiska operatora).
+# Plik (np. /etc/mariadb-backup/secrets.env, mode 0600 root) musi eksportować:
+# MINIO_ROOT_USER, MINIO_ROOT_PASSWORD, BACKUP_ENCRYPTION_KEY.
+if [ -n "${BACKUP_SECRETS_FILE:-}" ] && [ -f "${BACKUP_SECRETS_FILE:-}" ]; then
+  set -a; . "${BACKUP_SECRETS_FILE}"; set +a
+fi
 
 MODE="${1:?Uzycie: backup-run.sh backup|restore}"
 CLUSTER="${CLUSTER:-lab-cluster}"
