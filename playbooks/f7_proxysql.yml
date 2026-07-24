@@ -59,6 +59,8 @@
     galera_offline_hg: 40
     galera_backends: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | list }}"
     tls_use_ssl: "{{ 1 if (tls | default({})).mode | default('disabled') == 'full' else 0 }}"
+  environment:
+    MYSQL_PWD: "{{ proxysql_admin_password }}"
 
   pre_tasks:
     - name: "Wymagaj haseł"
@@ -104,7 +106,7 @@
 
     - name: "Sprawdź czy hasło ProxySQL jest już ustawione"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e "SELECT 1"
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e "SELECT 1"
       register: proxysql_pw_check
       changed_when: false
       failed_when: false
@@ -119,6 +121,17 @@
       when: proxysql_pw_check.rc != 0
       changed_when: true
 
+    - name: "Wdróż /etc/proxysql/admin-check.cnf (0600) dla health-checku VIP (bez hasła w argv)"
+      ansible.builtin.copy:
+        content: |
+          [client]
+          password = "{{ proxysql_admin_password }}"
+        dest: /etc/proxysql/admin-check.cnf
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
     - name: "TLS: rozprowadź CA na węzeł ProxySQL (walidacja backendu; gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
       vars:
@@ -128,7 +141,7 @@
 
     - name: "TLS: ProxySQL → backend Galera przez TLS (mysql-ssl_p2s_ca; gdy tls.mode=full)"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "UPDATE global_variables SET variable_value='/etc/mysql/tls/ca.pem'
          WHERE variable_name='mysql-ssl_p2s_ca';
          LOAD MYSQL VARIABLES TO RUNTIME; SAVE MYSQL VARIABLES TO DISK;"
@@ -138,7 +151,7 @@
 
     - name: "Ustaw monitor Galera"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "UPDATE global_variables SET variable_value='{{ proxysql_monitor_user }}'
          WHERE variable_name='mysql-monitor_username';
          UPDATE global_variables SET variable_value='{{ proxysql_monitor_password }}'
@@ -149,7 +162,7 @@
 
     - name: "Sprawdź aktualne backendy Galera"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "SELECT GROUP_CONCAT(DISTINCT CONCAT(hostname,'|',use_ssl) ORDER BY hostname) FROM mysql_servers
          WHERE hostgroup_id IN ({{ galera_writer_hg }},{{ galera_backup_hg }},{{ galera_reader_hg }},{{ galera_offline_hg }})"
       register: current_backends
@@ -158,7 +171,7 @@
 
     - name: "Skonfiguruj backendy Galera (jeśli różne od repo)"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "DELETE FROM mysql_servers WHERE hostgroup_id IN ({{ galera_writer_hg }},{{ galera_backup_hg }},{{ galera_reader_hg }},{{ galera_offline_hg }});
          {% for backend in galera_backends %}
          INSERT INTO mysql_servers (hostgroup_id, hostname, port, use_ssl) VALUES ({{ galera_writer_hg }}, '{{ backend }}', 3306, {{ tls_use_ssl }});
@@ -170,7 +183,7 @@
 
     - name: "Sprawdź aktualną konfigurację galera_hostgroups"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "SELECT CONCAT_WS(',', writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, max_writers, writer_is_also_reader)
          FROM mysql_galera_hostgroups WHERE writer_hostgroup={{ galera_writer_hg }}"
       register: current_galera_hg
@@ -179,7 +192,7 @@
 
     - name: "Skonfiguruj mysql_galera_hostgroups (jeśli różne od repo)"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "DELETE FROM mysql_galera_hostgroups WHERE writer_hostgroup={{ galera_writer_hg }};
          INSERT INTO mysql_galera_hostgroups
          (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup,
@@ -193,7 +206,7 @@
 
     - name: "Sprawdź aktualnego app_user w ProxySQL"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "SELECT CONCAT_WS(',', username, default_hostgroup, active) FROM mysql_users WHERE username='{{ app_user }}'"
       register: current_app_user
       changed_when: false
@@ -201,7 +214,7 @@
 
     - name: "Zarejestruj app_user w ProxySQL (jeśli brak/różny)"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "DELETE FROM mysql_users WHERE username='{{ app_user }}';
          INSERT INTO mysql_users (username, password, default_hostgroup, active)
          VALUES ('{{ app_user }}', '{{ app_password }}', {{ galera_writer_hg }}, 1);
@@ -212,7 +225,7 @@
 
     - name: "ISC-23: wyłącz read/write split (rule 1 jeśli istnieje)"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "DELETE FROM mysql_query_rules;
          LOAD MYSQL QUERY RULES TO RUNTIME; SAVE MYSQL QUERY RULES TO DISK;"
       no_log: true
@@ -220,7 +233,7 @@
 
     - name: "ISC-20: czekaj na konwergencję Galera monitora (jeden aktywny writer)"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id={{ galera_writer_hg }} AND status='ONLINE'"
       register: writer_count
       until: writer_count.stdout | trim == '1'
@@ -289,7 +302,7 @@
 
     - name: "Raport ProxySQL (runtime hostgroups)"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "SELECT hostgroup_id, hostname, status FROM runtime_mysql_servers ORDER BY hostgroup_id, hostname"
       register: server_status
       changed_when: false

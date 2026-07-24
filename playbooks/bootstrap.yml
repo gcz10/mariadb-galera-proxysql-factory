@@ -1,11 +1,11 @@
 ---
 # bootstrap.yml — initial bootstrap klastra Galera (OSOBNY od site.yml)
 # Wymaga: site.yml (config deployed)
-# Uruchomienie: ansible-playbook bootstrap.yml -i clusters/<name>/inventory.yml -e confirm=yes -l gnode1
-# NIGDY nie uruchamiaj bez -e confirm=yes (ISC-12, ISC-13, ISC-65)
+# Uruchomienie: ansible-playbook bootstrap.yml -i clusters/<name>/inventory.yml -e confirm=yes
+# NIGDY nie uruchamiaj bez -e confirm=yes (ISC-12, ISC-13, ISC-65). Celuje w galera[0].
 
 - name: "Bootstrap - initial Galera cluster (JEDEN węzeł, jawne potwierdzenie)"
-  hosts: galera
+  hosts: galera[0]
   become: true
   serial: 1
   vars:
@@ -20,12 +20,17 @@
           - confirm is defined
           - confirm | bool
         fail_msg: "Bootstrap wymaga -e confirm=yes. Nigdy nie uruchamiaj bez jawnego potwierdzenia."
+    - name: "Wymagaj SST_PASSWORD"
+      ansible.builtin.assert:
+        that:
+          - sst_password | length > 0
+        fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env). Puste hasło = konto SST bez hasła."
 
     - name: "Tylko jeden węzeł do bootstrap"
       ansible.builtin.assert:
         that:
           - ansible_play_hosts | length == 1
-        fail_msg: "Bootstrap na jednym węźle. Użyj -l gnode1. (ISC-12, ISC-65)"
+        fail_msg: "Bootstrap na jednym węźle (galera[0], hosts: galera[0]). (ISC-12, ISC-65)"
 
     - name: "Zabij stary proces MariaDB (tylko lab: brak systemd)"
       ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null || true"

@@ -14,7 +14,7 @@
     galera_nodes_csv: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | join(',') }}"
     sst_user: "sst_user"
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
-    gcache_size: "128M"
+    gcache_size: "{{ (mariadb_tuning | default({})).gcache_size | default('128M') }}"
     mariadb_config_dir: /etc/my.cnf.d
 
   tasks:
@@ -35,8 +35,8 @@
         src: ../roles/mariadb_install/templates/server.cnf.j2
         dest: "{{ mariadb_config_dir }}/server.cnf"
         owner: root
-        group: root
-        mode: "0644"
+        group: mysql
+        mode: "0640"
 
     - name: "Dystrybuuj certyfikaty TLS (gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
@@ -48,6 +48,12 @@
   vars:
     sst_user: "sst_user"
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
+  pre_tasks:
+    - name: "Wymagaj SST_PASSWORD"
+      ansible.builtin.assert:
+        that:
+          - sst_password | length > 0
+        fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env)."
 
   tasks:
     - name: "Sprawdź czy MariaDB jest uruchomiona"

@@ -30,6 +30,7 @@ environment_reference = re.compile(
     r"(?:\$\{[A-Z_][A-Z0-9_]*(?::\?[^}]*)?\}|\$[A-Z_][A-Z0-9_]*)"
 )
 private_key = re.compile(r"BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY")
+password_in_argv = re.compile(r"-[pW]\s*\{\{[^}]*(?:password|passwd|secret|auth_pass)", re.IGNORECASE)
 unquoted_code_suffixes = {".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java"}
 findings = []
 
@@ -55,6 +56,8 @@ for name in filter(None, paths):
             findings.append(f"{path}:{line_number}:{line.strip()}")
         if private_key.search(line):
             findings.append(f"{path}:{line_number}:private key marker")
+        for m in password_in_argv.finditer(line):
+            findings.append(f"{path}:{line_number}:password passed to shell -p/-W via Jinja (argv leak; use MYSQL_PWD env): {line.strip()}")
 
 for finding in findings:
     print(f"FAIL: ISC-43 — potential secret in {finding}")

@@ -19,6 +19,8 @@
   vars:
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
     restapi_port: 6070
+  environment:
+    MYSQL_PWD: "{{ proxysql_admin_password }}"
 
   pre_tasks:
     - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
@@ -30,7 +32,7 @@
   tasks:
     - name: "Sprawdź aktualny stan admin-restapi_enabled (runtime)"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "SELECT variable_value FROM global_variables WHERE variable_name='admin-restapi_enabled'"
       register: restapi_current
       changed_when: false
@@ -38,7 +40,7 @@
 
     - name: "Włącz admin-restapi_enabled=true (trwale)"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "UPDATE global_variables SET variable_value='true' WHERE variable_name='admin-restapi_enabled';
          LOAD ADMIN VARIABLES TO RUNTIME; SAVE ADMIN VARIABLES TO DISK;"
       when: restapi_current.stdout | trim != 'true'
@@ -47,7 +49,7 @@
 
     - name: "Zapewnij trwałość dla już-włączonego restapi (SAVE TO DISK)"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "SAVE ADMIN VARIABLES TO DISK;"
       when: restapi_current.stdout | trim == 'true'
       changed_when: false

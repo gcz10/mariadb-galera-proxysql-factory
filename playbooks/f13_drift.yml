@@ -29,6 +29,8 @@
       - { rt: "mysql_servers", disk: "disk.mysql_servers", norm: "hostgroup_id,hostname,port,weight" }
       - { rt: "mysql_galera_hostgroups", disk: "disk.mysql_galera_hostgroups", norm: "writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active" }
       - { rt: "mysql_users", disk: "disk.mysql_users", norm: "username,default_hostgroup,active" }
+  environment:
+    MYSQL_PWD: "{{ proxysql_admin_password }}"
 
   tasks:
     - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
@@ -39,9 +41,9 @@
     - name: "Drift ProxySQL — runtime vs disk per tabela (checksum)"
       ansible.builtin.shell: >-
         set -o pipefail;
-        rt=$(mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        rt=$(mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "SELECT {{ item.norm }} FROM {{ item.rt }} ORDER BY 1,2" | sort | md5sum | awk '{print $1}');
-        dk=$(mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        dk=$(mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "SELECT {{ item.norm }} FROM {{ item.disk }} ORDER BY 1,2" | sort | md5sum | awk '{print $1}');
         if [ "$rt" = "$dk" ]; then echo "{{ item.rt }}=CLEAN"; else echo "{{ item.rt }}=DRIFT rt=$rt disk=$dk"; fi
       loop: "{{ f13_proxysql_tables }}"
