@@ -164,3 +164,7 @@ cluster-remove-node:  ## F13 — usuń węzeł Galera (confirm-gated, wymaga NOD
 cluster-alerts:  ## F15 — provision alert rules ISC-47 (quorum/writer/node loss + freshness)
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	ansible-playbook playbooks/f15_alerts.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+
+lab-gcache-verify:  ## F0/ISC-68 — zmierz write rate + weryfikuj gcache.size (IST window)
+	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	PROXYSQL_ADMIN_PASSWORD="$${PROXYSQL_ADMIN_PASSWORD}" tests/lab/probe-gcache.py

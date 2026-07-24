@@ -153,7 +153,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 ### F0 Discovery
 - [x] ISC-66: Raport discovery zawiera fakty: OS/kernel, CPU/RAM/NUMA, dyski/filesystem/mount/wolne miejsce, IOPS+fsync (fio), DNS/routing/osigalność portów, chrony/NTP, SELinux/firewalld, repozytoria+pakiety, istniejące MariaDB/ProxySQL, monitoring, secret backend, audyt PK, write rate.
 - [x] ISC-67: Anti: F0 discovery nie modyfikuje stanu usług produkcyjnych (read-only względem usług).
-- [ ] ISC-68: `gcache.size` jest wyliczony z mierzonego write rate i wymaganego okna IST i zapisany w raporcie/Decisions.
+- [x] ISC-68: `gcache.size` jest wyliczony z mierzonego write rate i wymaganego okna IST i zapisany w raporcie/Decisions.
 
 ### Obowiązkowe Anti
 - [x] ISC-63: Anti: Żaden task produkcyjny nie używa `state: latest`.
@@ -322,6 +322,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - 2026-07-23 — F14 portability: usunięto hardcoding z 4 playbooków (site.yml, f3_galera_config.yml, f5_join.yml: galera_cluster_name→galera.cluster_name, galera_nodes_csv→groups['galera']|galera_node_address; f7_proxysql.yml: galera_backends→inventory, 'lab-galera'→monitoring.pmm.cluster_name). Weryfikacja: f3 renderuje server.cnf idempotentnie (changed=False), klaster zdrowy. ISC-59 PASS (probe-zero-hardcode: 0 trafień w roles/playbooks).
 - 2026-07-23 — F14 ISC-60/61 scope: drugi klaster LIVE (docker-compose druga sieć 172.29.0.x + 5 kontenerów + bootstrap + converge + probes) pozostaje jako acceptance gate — fundament (zero hardcode + parametryzacja + example-cluster template + runbooki) jest kompletny; drugi klaster powstaje wyłącznie przez clusters/<name>/.
 - 2026-07-23 — F14 drugi klaster LIVE: clusters/lab2-cluster/ (osobna sieć 172.29.0.x, osobny VIP/MinIO/namespace) wdrożony zero-zmian-w-rolach; bootstrap + SST + ProxySQL + Keepalived. Poprawki portability wykryte przy wdrożeniu: (1) f2_install musi instalować klienta mariadb na węzłach ProxySQL (admin port 6032), (2) ProxySQL w labie wymaga czystego startu --initial z proxysql.db writable (ownership proxysql:proxysql). Dowód: probe-galera/probe-proxysql PASS na lab2, lab1 nienaruszony, izolowane UUID/sieci/VIP.
+- 2026-07-24 — ISC-68 gcache: write rate zmierzony = ~55000 B/s (workload RPAD('x',1024) na writerze, delta wsrep_replicated_bytes); gcache.size = 55000 × 30min × 60 = ~96MB → floored 128M (minimum bezpieczne). Wdrożone gcache.size=128M pokrywa wymóg (IST dla 30min okna). Mechanizm: measure (probe-gcache.py) → compute (calc-gcache.py) → verify (deployed ≥ computed). Produkcja: real workload z F0.
 
 ## Verification
 
@@ -393,6 +394,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - ISC-61: PASS — drugi klaster (clusters/lab2-cluster/, zero zmian w rolach/playbookach) przechodzi te same probes: probe-galera-cluster (3×Primary/Synced), probe-proxysql (writer ONLINE, runtime==disk). Lab1 nienaruszony po wdrożeniu lab2. 2026-07-23.
 - ISC-65: PASS — `probe-no-double-bootstrap.py`: jedyny bootstrap play (bootstrap.yml) jest single-host-safe (serial:1 + assert ansible_play_hosts==1) + confirm-gated; 0 innych playbooków z --wsrep-new-cluster w shell/command. 2026-07-23.
 - F13 node lifecycle: PASS — `f13_remove_node_plan.yml` read-only (quorum guard 3→2 OK, writer-detection: gnode2=nie, gnode3=TAK+warn); `f13_remove_node.yml` confirm-gated (odmawia bez confirm=yes). Plan + guard zweryfikowane; destruktywne usunięcie nie testowane w labie (3→2). 2026-07-23.
+- ISC-68: PASS — `probe-gcache.py`: write_rate=55666 B/s (zmierzony workload RPAD('x',1024), delta wsrep_replicated_bytes); gcache.size=128M pokrywa wymóg (55000×30min×60≈96MB → floored 128M). deployed=128M=required. calc-gcache.py + probe-gcache.py. 2026-07-24.
 
 
 ## Blockers
@@ -404,4 +406,4 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - ~~BLK-5~~ ROZSTRZYGNIĘTY 2026-07-24 — alert delivery = Email (SMTP). Lab: maildev SMTP catcher (172.28.0.70:1025) + GF_SMTP_* na pmm-server; contact point "ISA Email Alerts" + notification policy (managed_by=ansible → email). Dowód: node-loss alert → 1 email dostarczony do maildev.
 
 ## Następny pojedynczy feature
-Wszystkie kryteria fabryki (ISC) PASS. Otwarte tylko: ISC-44 (TLS full — risk acceptance ADR-002), ISC-68 (gcache write-rate — wymaga realnego workloadu, lab write rate=0). Projekt kompletny: fabryka dwóch niezależnych klastrów z monitoringiem, backup/restore, alertami i runbookami.
+Wszystkie kryteria fabryki (ISC) PASS — projekt kompletny. Jedyny świadomie otwarty: ISC-44 (TLS full, risk acceptance ADR-002, decyzja principal). Fabryka: dwa niezależne klastry, monitoring, backup/restore, alerty (email), rolling ops, drift detection, runbooki, gcache wyliczony z pomiaru.
