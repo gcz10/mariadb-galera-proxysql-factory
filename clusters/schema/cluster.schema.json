@@ -59,7 +59,8 @@
         "certificate_source": { "type": "string" },
         "ca_reference": { "type": "string" },
         "certificate_reference": { "type": "string" },
-        "private_key_reference": { "type": "string" }
+        "private_key_reference": { "type": "string" },
+        "require_secure_transport": { "type": "boolean" }
       }
     },
     "network": {

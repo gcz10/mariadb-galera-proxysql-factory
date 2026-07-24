@@ -37,11 +37,30 @@ max_connections = {{ (mariadb_tuning | default({})).max_connections | default(50
 log_error = /var/log/mariadb/mariadb.log
 slow_query_log = OFF
 
-# === gcache ===
-wsrep_provider_options = "gcache.size={{ gcache_size }};gcache.page_size={{ gcache_size }}"
+# === TLS (opcjonalne, per-klaster: tls.mode=full) ===
+{% if (tls | default({})).mode | default('disabled') == 'full' %}
+ssl_ca = {{ tls_ca_path | default('/etc/mysql/tls/ca.pem') }}
+ssl_cert = {{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }}
+ssl_key = {{ tls_key_path | default('/etc/mysql/tls/server-key.pem') }}
+{% if (tls | default({})).require_secure_transport | default(false) %}
+require_secure_transport = ON
+{% endif %}
+{% endif %}
+
+# === gcache (+ szyfrowanie replikacji Galera gdy tls.mode=full) ===
+{% if (tls | default({})).mode | default('disabled') == 'full' %}
+wsrep_provider_options = "gcache.size={{ gcache_size }};gcache.page_size={{ (mariadb_tuning | default({})).gcache_page_size | default('128M') }};socket.ssl_ca={{ tls_ca_path | default('/etc/mysql/tls/ca.pem') }};socket.ssl_cert={{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }};socket.ssl_key={{ tls_key_path | default('/etc/mysql/tls/server-key.pem') }}"
+{% else %}
+wsrep_provider_options = "gcache.size={{ gcache_size }};gcache.page_size={{ (mariadb_tuning | default({})).gcache_page_size | default('128M') }}"
+{% endif %}
 
 [client]
 socket = /var/lib/mysql/mysql.sock
 
 [sst]
 streamfmt = mbstream
+{% if (tls | default({})).mode | default('disabled') == 'full' %}
+tca = {{ tls_ca_path | default('/etc/mysql/tls/ca.pem') }}
+tcert = {{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }}
+tkey = {{ tls_key_path | default('/etc/mysql/tls/server-key.pem') }}
+{% endif %}

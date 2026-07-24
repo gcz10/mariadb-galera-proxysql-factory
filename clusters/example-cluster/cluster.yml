@@ -30,12 +30,16 @@ proxysql:
     address: "VIP_PLACEHOLDER"
     port: 6033
 
+# TLS opcjonalne per-klaster. mode=full => serwer prezentuje cert, replikacja Galera
+# + SST + ProxySQL->backend szyfrowane. references = ścieżki na hoście kontrolnym
+# (certificate_source=file) lub artefakty PKI produkcji (jeden cert z SAN wszystkich węzłów+VIP).
 tls:
-  mode: "disabled"
-  certificate_source: ""
-  ca_reference: ""
-  certificate_reference: ""
-  private_key_reference: ""
+  mode: "disabled"                    # disabled | full
+  certificate_source: ""             # "file" gdy references to ścieżki na hoście kontrolnym
+  ca_reference: ""                   # CA (pem)
+  certificate_reference: ""          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
+  private_key_reference: ""          # klucz prywatny serwera
+  require_secure_transport: false    # true => wymusza TLS na WSZYSTKICH poł. TCP (klienci muszą mieć TLS)
 
 network:
   application_cidrs: []

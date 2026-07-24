@@ -43,6 +43,10 @@
       when: not use_systemd
 
   tasks:
+    - name: "Dystrybuuj certyfikaty TLS (gdy tls.mode=full)"
+      ansible.builtin.include_tasks: tls_certs.yml
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
     - name: "Bootstrap Galera — lab (--wsrep-new-cluster, bez systemd)"
       ansible.builtin.shell: |
         mariadbd --user=mysql --datadir=/var/lib/mysql --socket=/var/lib/mysql/mysql.sock \

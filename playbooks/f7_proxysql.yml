@@ -58,6 +58,7 @@
     galera_reader_hg: 30
     galera_offline_hg: 40
     galera_backends: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | list }}"
+    tls_use_ssl: "{{ 1 if (tls | default({})).mode | default('disabled') == 'full' else 0 }}"
 
   pre_tasks:
     - name: "Wymagaj haseł"
@@ -118,6 +119,23 @@
       when: proxysql_pw_check.rc != 0
       changed_when: true
 
+    - name: "TLS: rozprowadź CA na węzeł ProxySQL (walidacja backendu; gdy tls.mode=full)"
+      ansible.builtin.include_tasks: tls_certs.yml
+      vars:
+        tls_file_owner: root
+        tls_deploy_key: false
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
+    - name: "TLS: ProxySQL → backend Galera przez TLS (mysql-ssl_p2s_ca; gdy tls.mode=full)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        "UPDATE global_variables SET variable_value='/etc/mysql/tls/ca.pem'
+         WHERE variable_name='mysql-ssl_p2s_ca';
+         LOAD MYSQL VARIABLES TO RUNTIME; SAVE MYSQL VARIABLES TO DISK;"
+      no_log: true
+      changed_when: true
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
     - name: "Ustaw monitor Galera"
       ansible.builtin.shell: >-
         mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
@@ -132,7 +150,7 @@
     - name: "Sprawdź aktualne backendy Galera"
       ansible.builtin.shell: >-
         mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
-        "SELECT GROUP_CONCAT(DISTINCT hostname ORDER BY hostname) FROM mysql_servers
+        "SELECT GROUP_CONCAT(DISTINCT CONCAT(hostname,'|',use_ssl) ORDER BY hostname) FROM mysql_servers
          WHERE hostgroup_id IN ({{ galera_writer_hg }},{{ galera_backup_hg }},{{ galera_reader_hg }},{{ galera_offline_hg }})"
       register: current_backends
       changed_when: false
@@ -143,10 +161,10 @@
         mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
         "DELETE FROM mysql_servers WHERE hostgroup_id IN ({{ galera_writer_hg }},{{ galera_backup_hg }},{{ galera_reader_hg }},{{ galera_offline_hg }});
          {% for backend in galera_backends %}
-         INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES ({{ galera_writer_hg }}, '{{ backend }}', 3306);
+         INSERT INTO mysql_servers (hostgroup_id, hostname, port, use_ssl) VALUES ({{ galera_writer_hg }}, '{{ backend }}', 3306, {{ tls_use_ssl }});
          {% endfor %}
          LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;"
-      when: current_backends.stdout | trim != (galera_backends | sort | join(','))
+      when: current_backends.stdout | trim != (galera_backends | sort | map('regex_replace', '^(.*)$', '\1|' ~ tls_use_ssl) | join(','))
       changed_when: true
       no_log: true
 

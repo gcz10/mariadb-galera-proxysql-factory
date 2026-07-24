@@ -64,6 +64,10 @@
       register: config_result
       notify: "Restart MariaDB (systemd, on config change)"
 
+    - name: "Dystrybuuj certyfikaty TLS (gdy tls.mode=full)"
+      ansible.builtin.include_tasks: tls_certs.yml
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
     - name: "Inicjalizuj datadir (jeśli pusty)"
       ansible.builtin.command: mariadb-install-db --user=mysql --datadir=/var/lib/mysql
       args:

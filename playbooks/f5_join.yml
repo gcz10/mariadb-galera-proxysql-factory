@@ -38,6 +38,10 @@
         group: root
         mode: "0644"
 
+    - name: "Dystrybuuj certyfikaty TLS (gdy tls.mode=full)"
+      ansible.builtin.include_tasks: tls_certs.yml
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
 - name: "F5 — zapewnij konto SST na klastrze"
   hosts: galera[0]
   become: true

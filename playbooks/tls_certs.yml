@@ -1,0 +1,41 @@
+# tls_certs.yml — dystrybucja certyfikatów TLS na węzeł (gdy tls.mode == 'full').
+# Include z site.yml / bootstrap.yml / f5_join.yml (węzły Galera, owner=mysql)
+#   oraz f7_proxysql.yml (ProxySQL, owner=root, bez klucza prywatnego).
+# Źródło: tls.ca_reference / tls.certificate_reference / tls.private_key_reference
+#   = ścieżki na hoście kontrolnym (certificate_source=file) lub artefakty PKI produkcji.
+# Zmienne sterujące:
+#   tls_file_owner  (domyślnie 'mysql')  — właściciel plików/katalogu
+#   tls_deploy_key  (domyślnie true)     — czy kopiować klucz prywatny (ProxySQL: false)
+---
+- name: "TLS: utwórz katalog na certyfikaty"
+  ansible.builtin.file:
+    path: /etc/mysql/tls
+    state: directory
+    owner: "{{ tls_file_owner | default('mysql') }}"
+    group: "{{ tls_file_owner | default('mysql') }}"
+    mode: "0750"
+
+- name: "TLS: skopiuj CA"
+  ansible.builtin.copy:
+    src: "{{ tls.ca_reference }}"
+    dest: /etc/mysql/tls/ca.pem
+    owner: "{{ tls_file_owner | default('mysql') }}"
+    group: "{{ tls_file_owner | default('mysql') }}"
+    mode: "0644"
+
+- name: "TLS: skopiuj certyfikat serwera"
+  ansible.builtin.copy:
+    src: "{{ tls.certificate_reference }}"
+    dest: /etc/mysql/tls/server-cert.pem
+    owner: "{{ tls_file_owner | default('mysql') }}"
+    group: "{{ tls_file_owner | default('mysql') }}"
+    mode: "0644"
+
+- name: "TLS: skopiuj klucz prywatny (0600, tylko gdy potrzebny na węźle)"
+  ansible.builtin.copy:
+    src: "{{ tls.private_key_reference }}"
+    dest: /etc/mysql/tls/server-key.pem
+    owner: "{{ tls_file_owner | default('mysql') }}"
+    group: "{{ tls_file_owner | default('mysql') }}"
+    mode: "0600"
+  when: tls_deploy_key | default(true)
