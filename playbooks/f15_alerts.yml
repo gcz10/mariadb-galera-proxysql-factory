@@ -1,0 +1,156 @@
+---
+# F15 — Reguły alertów ISC-47 (quorum/writer/node loss + freshness).
+#
+# Decyzja principal: reguły BEZ delivery (contact point odłożony do BLK-5).
+# Reguły są zarządzane przez Ansible w PMM/Grafana — wykrywają warunki alertu.
+# Weryfikacja: symulacja utraty węzła → reguła przechodzi w FIRING.
+#
+# ISC-47: Alert powstaje po utracie quorum, utracie writera lub utracie węzła.
+# - node loss / writer loss: wsrep_cluster_size < expected (writer jest węzłem)
+# - quorum loss: wsrep_cluster_status != 1 (Primary)
+# - node not Synced: wsrep_local_state != 4
+# - backup stale: ostatni backup > retention_days
+#
+# Kontakt/delivery: BLK-5 (nieuzgodniony target) — reguły bez contact point.
+
+- name: "F15 — reguły alertów ISC-47 w PMM/Grafana"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_become: false
+    pmm_api_url: "{{ monitoring.pmm.server_url }}"
+    pmm_admin_user: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_USER') | default('admin', true) }}"
+    pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    pmm_validate_certs: "{{ monitoring.get('pmm', {}).get('validate_certs', true) | bool }}"
+    cluster_label: "{{ monitoring.pmm.cluster_name }}"
+    folder_uid: "{{ f15_folder_uid | default('aft0ucgo59d6of') }}"
+    ds_uid: "{{ f15_ds_uid | default('PA58DA793C7250F1B') }}"
+    backup_retention_days: "{{ backup.retention_days | default(14) }}"
+
+    f15_rules:
+      - uid: "isa-galera-node-loss"
+        title: "Galera node loss (cluster size < expected)"
+        expr: "mysql_global_status_wsrep_cluster_size{cluster=\"{{ cluster_label }}\"} < {{ galera.nodes_expected }}"
+        summary: "Galera cluster size dropped below {{ galera.nodes_expected }} (node/writer lost)"
+        severity: "critical"
+      - uid: "isa-galera-quorum-loss"
+        title: "Galera quorum loss (not Primary)"
+        expr: "mysql_global_status_wsrep_cluster_status{cluster=\"{{ cluster_label }}\"} != 1"
+        summary: "Galera node left Primary Component (quorum at risk)"
+        severity: "critical"
+      - uid: "isa-galera-not-synced"
+        title: "Galera node not Synced"
+        expr: "mysql_global_status_wsrep_local_state{cluster=\"{{ cluster_label }}\"} != 4"
+        summary: "Galera node not in Synced (local_state != 4)"
+        severity: "warning"
+      - uid: "isa-backup-stale"
+        title: "Backup freshness stale"
+        expr: "(time() - isa_backup_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) > {{ backup_retention_days }} * 86400"
+        summary: "Last successful backup older than {{ backup_retention_days }} days"
+        severity: "critical"
+
+  pre_tasks:
+    - name: "Wymagaj PMM_ADMIN_PASSWORD"
+      ansible.builtin.assert:
+        that: [pmm_admin_password | length > 0]
+        fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium."
+
+  tasks:
+    # === Zapewnij folder ISA Alerts ===
+    - name: "Pobierz foldery alertów"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/folders"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        return_content: true
+        status_code: 200
+      register: f15_folders
+      no_log: true
+
+    - name: "Utwórz folder ISA Alerts (jeśli brak)"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/folders"
+        method: POST
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        body_format: json
+        body: {title: "ISA Alerts"}
+        status_code: 200
+      register: f15_folder_create
+      no_log: true
+      when: folder_uid not in (f15_folders.json | map(attribute='uid') | list)
+
+    - name: "Ustaw folder_uid (istniejący lub nowy)"
+      ansible.builtin.set_fact:
+        f15_effective_folder: "{{ folder_uid if folder_uid in (f15_folders.json | map(attribute='uid') | list) else (f15_folder_create.json.uid | default(folder_uid)) }}"
+
+    # === Pobierz istniejące reguły ===
+    - name: "Pobierz istniejące reguły alertów"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/alert-rules"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        return_content: true
+        status_code: 200
+      register: f15_existing_rules
+      no_log: true
+
+    - name: "Ustal zestaw UID istniejących reguł"
+      ansible.builtin.set_fact:
+        f15_existing_uids: "{{ f15_existing_rules.json | map(attribute='uid') | list }}"
+
+    # === Provisioning reguł (idempotentne: PUT jeśli istnieje, POST jeśli brak) ===
+    - name: "Utwórz/aktualizuj reguły alertów ISC-47"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/alert-rules{{ '' if item.uid not in f15_existing_uids else '/' ~ item.uid }}"
+        method: "{{ 'POST' if item.uid not in f15_existing_uids else 'PUT' }}"
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        body_format: json
+        body:
+          uid: "{{ item.uid }}"
+          orgID: 1
+          folderUID: "{{ f15_effective_folder }}"
+          ruleGroup: "isa-{{ cluster_label }}"
+          title: "{{ item.title }}"
+          condition: "A"
+          for: "0s"
+          noDataState: "OK"
+          execErrState: "Error"
+          isPaused: false
+          data:
+            - refId: "A"
+              relativeTimeRange: {from: 600, to: 0}
+              datasourceUid: "{{ ds_uid }}"
+              model:
+                expr: "{{ item.expr }}"
+                instant: true
+                refId: "A"
+                editorMode: "code"
+          annotations:
+            summary: "{{ item.summary }}"
+          labels:
+            managed_by: "ansible"
+            cluster: "{{ cluster_label }}"
+            severity: "{{ item.severity }}"
+            isc: "ISC-47"
+        status_code: 200
+      loop: "{{ f15_rules }}"
+      no_log: true
+
+    - name: "Raport reguł alertów"
+      ansible.builtin.debug:
+        msg: >-
+          ISC-47: z/provisionowane {{ f15_rules | length }} reguł alertów (folder ISA Alerts,
+          cluster={{ cluster_label }}). Brak contact point — delivery odłożony do BLK-5.

@@ -123,15 +123,23 @@ def main():
         f"PMM runtime differs from Docker lock {EXPECTED_PMM_VERSION}: {version}",
         failures,
     )
+    # ISC-47: F15 managed alert rules present (quorum/writer/node loss + freshness).
+    # Delivery (contact point) deferred to BLK-5; rules detect the conditions.
+    EXPECTED_ALERT_RULES = {
+        "isa-galera-node-loss", "isa-galera-quorum-loss",
+        "isa-galera-not-synced", "isa-backup-stale",
+    }
     managed_alert_rules = [
         rule
         for rule in alert_rules
         if rule.get("labels", {}).get("managed_by") == "ansible"
         and rule.get("labels", {}).get("cluster") == CLUSTER
     ]
+    managed_uids = {rule.get("uid") for rule in managed_alert_rules}
     check(
-        not managed_alert_rules,
-        "managed alert rules exist even though alerting is deferred",
+        managed_uids == EXPECTED_ALERT_RULES,
+        f"ISC-47 managed alert rules differ: got {sorted(managed_uids)}, "
+        f"expected {sorted(EXPECTED_ALERT_RULES)}",
         failures,
     )
 
@@ -568,7 +576,7 @@ def main():
         f"PASS: PMM {EXPECTED_PMM_VERSION}, 5 namespaced nodes, "
         f"5 node exporters {EXPECTED_NODE_EXPORTER_VERSION}, 3 MySQL services, "
         f"{len(EXPECTED_PROXYSQL)} ProxySQL metric exporters, "
-        "QAN and live Galera/freshness/lifecycle metrics verified; alerting deferred"
+        "QAN, live Galera/freshness/lifecycle metrics + ISC-47 alert rules verified (delivery pending BLK-5)"
     )
 
 

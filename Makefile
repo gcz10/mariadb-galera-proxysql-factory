@@ -160,3 +160,7 @@ cluster-remove-node:  ## F13 — usuń węzeł Galera (confirm-gated, wymaga NOD
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (destrukcyjne)"; exit 1)
 	@test -n "$(NODE)" || (echo "Ustaw NODE=gnodeX"; exit 1)
 	ansible-playbook playbooks/f13_remove_node.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e node=$(NODE) -e confirm=yes $(ANSIBLE_OPTS)
+
+cluster-alerts:  ## F15 — provision alert rules ISC-47 (quorum/writer/node loss + freshness)
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	ansible-playbook playbooks/f15_alerts.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
