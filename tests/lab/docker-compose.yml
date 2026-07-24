@@ -94,6 +94,11 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: "${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD}"
       PMM_ENABLE_UPDATES: "0"
+      # BLK-5: SMTP relay do maildev (email alert delivery, ISC-47)
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: "172.28.0.70:1025"
+      GF_SMTP_FROM: "pmm-alerts@lab.local"
+      GF_SMTP_SKIP_VERIFY: "true"
     networks:
       galera-net:
         ipv4_address: 172.28.0.100
@@ -154,6 +159,19 @@ services:
     cap_add:
       - SYS_ADMIN
       - NET_ADMIN
+
+  maildev:
+    image: maildev/maildev:2.2.1
+    platform: linux/amd64
+    container_name: maildev
+    hostname: maildev
+    networks:
+      galera-net:
+        ipv4_address: 172.28.0.70
+    ports:
+      - "127.0.0.1:8025:1080"   # web UI / JSON API
+      - "127.0.0.1:1025:1025"   # SMTP
+    restart: unless-stopped
 
 
   # === Drugi niezależny klaster (lab2) — ISC-60/61: osobna sieć 172.29.0.x ===

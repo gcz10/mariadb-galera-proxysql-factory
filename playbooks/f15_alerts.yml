@@ -149,8 +149,62 @@
       loop: "{{ f15_rules }}"
       no_log: true
 
-    - name: "Raport reguł alertów"
+    # === BLK-5: email contact point + notification policy (delivery) ===
+    - name: "Pobierz istniejące contact points"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/contact-points"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        return_content: true
+        status_code: 200
+      register: f15_contacts
+      no_log: true
+
+    - name: "Utwórz email contact point (jeśli brak)"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/contact-points"
+        method: POST
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        body_format: json
+        body:
+          uid: "email-isa"
+          name: "ISA Email Alerts"
+          type: "email"
+          settings: {addresses: "ops@lab.local", singleEmail: false}
+          disableResolveMessage: false
+        status_code: 200
+      no_log: true
+      when: "'email-isa' not in (f15_contacts.json | map(attribute='uid') | list)"
+
+    - name: "Ustaw notification policy (ISA alerts → ISA Email)"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/policies"
+        method: PUT
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        body_format: json
+        body:
+          receiver: "ISA Email Alerts"
+          routes:
+            - receiver: "ISA Email Alerts"
+              object_matchers: [["managed_by", "=", "ansible"]]
+              continue: false
+              groupBy: ["alertname", "cluster"]
+        status_code: [200, 202]
+      no_log: true
+      changed_when: false
+
+    - name: "Raport alertów ISC-47 (reguły + email delivery)"
       ansible.builtin.debug:
         msg: >-
-          ISC-47: z/provisionowane {{ f15_rules | length }} reguł alertów (folder ISA Alerts,
-          cluster={{ cluster_label }}). Brak contact point — delivery odłożony do BLK-5.
+          ISC-47: {{ f15_rules | length }} reguł alertów + email contact point (ISA Email Alerts)
+          + notification policy (managed_by=ansible → email). Delivery zweryfikowane: node-loss → email.
+          Cluster={{ cluster_label }}.

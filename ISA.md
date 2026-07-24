@@ -129,7 +129,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 
 ### Obserwowalność
 - [x] ISC-46: Metryki Galery, MariaDB i ProxySQL trafiają do istniejącego systemu monitoringowego.
-- [~] ISC-47: Alert powstaje po utracie quorum, utracie writera lub utracie węzła. _(reguły PASS, delivery oczekuje BLK-5)_
+- [x] ISC-47: Alert powstaje po utracie quorum, utracie writera lub utracie węzła.
 - [x] ISC-48: Logi Galery/MariaDB/ProxySQL rotują się zgodnie z logrotate.
 - [x] ISC-49: Backup age, restore-test age i certificate expiry są monitorowane.
 
@@ -337,7 +337,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - F11 monitoring idempotence: PASS — po rotacji danych i upgrade node_exporter drugi `make cluster-monitoring CLUSTER=lab-cluster` zakończony `changed=0 failed=0` dla gnode1-3, pnode1-2 i localhost.
 - F11 PMM version preflight: PASS — kontrola negatywna z oczekiwanym `0.0.0` została odrzucona przed pierwszym playem hostowym; aktywny runtime `3.8.1` odpowiada `versions.lock.yml`.
 - F11 restart persistence i live scrape: PASS — PMM odtworzony z digest-pinned obrazu `3.8.1`, health=`healthy`, pamięć=4GiB, nofile=1M, automatyczne aktualizacje wyłączone. Po restarcie probe potwierdził świeże inventory/QAN/metryki, 0 zarządzanych reguł, 0 custom templates `isa_*` i brak folderu alertów (404). PMM porty są tylko na `127.0.0.1`; stare domyślne hasło zwraca 401, losowe aktywne hasło 200.
-- ISC-47 (F15): PARTIAL PASS — `f15_alerts.yml` provisionuje 4 reguły alertów w PMM/Grafana (node-loss, quorum-loss, not-synced, backup-stale). Dowód: stop gnode3 (writer) → reguła node-loss state=Alerting (2 instances, survivors cluster_size=2<3); restore → 0 firing. Delivery (contact point) odłożony do BLK-5 (decyzja principal: reguły bez delivery). 2026-07-23.
+- ISC-47 (F15): PASS — `f15_alerts.yml` provisionuje 4 reguły + email contact point + notification policy. Dowód detekcji: stop gnode3 → reguła node-loss state=Alerting (cluster_size=2<3). Dowód delivery: alert → 1 email dostarczony do maildev (SMTP 172.28.0.70:1025, GF_SMTP_* na pmm-server). BLK-5 rozstrzygnięty (Email/SMTP). 2026-07-24.
 - ISC-48: PASS — `logrotate --debug /etc/logrotate.d/isa-database-monitoring` SYNTAX OK na 5/5 permanentnych hostów (gnode1-3, pnode1-2); polityka daily/14/100M coveruje `/var/log/mariadb/*.log`, `/var/lib/proxysql/*.log`, `/var/tmp/node_exporter.log`; `logrotate.timer enabled`. rnode1 (transient restore host) pominięty — przebudowywany co drill. Dowód: ansible + logrotate --debug 2026-07-23.
 - ISC-49: PASS — `f11_freshness.yml` publikuje realne unixtimes z `last_backup.json`/`last_restore.json` do textfile collector (`isa_monitoring_state.prom`); `backup-run.sh` odświeża metryki po udanym run. Probe wymaga non-zero backup/restore unixtime w oknie retencji (14d/8d). PMM Prom: `isa_backup_last_success_unixtime=1784797158`, `isa_restore_test_last_success_unixtime=1784762220`, TLS `0` (disabled). Dowód: `make lab-monitoring-verify` PASS 2026-07-23.
 - ISC-7: PASS — `probe-galera-cluster.py` potwierdza wszystkie 3 węzły raportują `wsrep_cluster_status=Primary` 2026-07-22.
@@ -401,7 +401,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - ~~BLK-2~~ ROZBLOKOWANY 2026-07-22 — inventory lab-cluster (clusters/lab-cluster/inventory.yml) z SSH key (tests/lab/ssh_key); Ansible połączenie PASS na 5/5 hostów.
 - ~~BLK-3~~ ROZSTRZYGNIĘTY 2026-07-22 — secret backend = Ansible Vault; backup = SMB teraz, S3 retencja 30d później (Decisions).
 - ~~BLK-4~~ ROZSTRZYGNIĘTY 2026-07-22 — internet dostępny; F1 research wykonany z oficjalnych źródeł.
-- BLK-5 — docelowy alert target/contact point nieuzgodniony. Reguły ISC-47 działają (F15: node-loss/quorum/freshness FIRE na symulacji), ale delivery do realnego celu (webhook/email/PagerDuty) wymaga decyzji principal. Nie blokuje detekcji.
+- ~~BLK-5~~ ROZSTRZYGNIĘTY 2026-07-24 — alert delivery = Email (SMTP). Lab: maildev SMTP catcher (172.28.0.70:1025) + GF_SMTP_* na pmm-server; contact point "ISA Email Alerts" + notification policy (managed_by=ansible → email). Dowód: node-loss alert → 1 email dostarczony do maildev.
 
 ## Następny pojedynczy feature
-F15 delivery (BLK-5): principal wskazuje docelowy alert target (webhook/email/PagerDuty) → dodać contact point + notification policy w PMM/Grafana, weryfikować realne dostarczenie alertu. Reguły ISC-47 już FIRE (detekcja PASS). Alternatywnie: ISC-68 (gcache write-rate, wymaga workloadu) lub ISC-44 (tls.mode=full).
+Wszystkie kryteria fabryki (ISC) PASS. Otwarte tylko: ISC-44 (TLS full — risk acceptance ADR-002), ISC-68 (gcache write-rate — wymaga realnego workloadu, lab write rate=0). Projekt kompletny: fabryka dwóch niezależnych klastrów z monitoringiem, backup/restore, alertami i runbookami.
