@@ -86,7 +86,7 @@ backup:
 
 monitoring:
   pmm:
-    server_url: "https://172.29.0.100:8443"
+    server_url: "https://127.0.0.1:8443"
     agent_id: "pmm-server"
     cluster_name: "lab2-galera"
     validate_certs: false

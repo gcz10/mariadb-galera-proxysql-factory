@@ -26,7 +26,9 @@ ADMIN_PW = os.environ.get("PROXYSQL_ADMIN_PASSWORD", "")
 
 RTO_SECONDS = 120
 WORKLOAD_LOCAL = "tests/lab/workload-numbered.sh"
-WORKLOAD_HOST = "gnode1"          # runs the client; not necessarily the writer
+_inv = yaml.safe_load(open(INVENTORY))
+WORKLOAD_HOST = list(_inv["all"]["children"]["galera"]["hosts"])[0]  # first galera node (portable)
+PROXYSQL_NODE = list(_inv["all"]["children"]["proxysql"]["hosts"])[0]
 CNF_REMOTE = "/root/.workload.cnf"
 SCRIPT_REMOTE = "/tmp/workload-numbered.sh"
 LOG_REMOTE = "/tmp/workload.log"
@@ -69,8 +71,8 @@ def galera_ip_to_host():
 def active_writer_ip():
     q = ("SELECT hostname FROM runtime_mysql_servers "
          "WHERE hostgroup_id=10 AND status='ONLINE'")
-    r = sh("pnode1", f'mariadb -h127.0.0.1 -P6032 -uadmin -p{ADMIN_PW} -N -B -e "{q}"')
-    return body("pnode1", r).strip()
+    r = sh(PROXYSQL_NODE, f'mariadb -h127.0.0.1 -P6032 -uadmin -p{ADMIN_PW} -N -B -e "{q}"')
+    return body(PROXYSQL_NODE, r).strip()
 
 
 def present_seqs(exclude=None):

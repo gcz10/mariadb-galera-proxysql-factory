@@ -47,3 +47,12 @@ all:
           ansible_user: "ansible"
           proxysql_node_idx: 2
           proxysql_node_address: "172.29.0.22"
+
+    restore:
+      vars:
+        restore_role: "restore"
+      hosts:
+        rnode1b:
+          ansible_host: "127.0.0.1"
+          ansible_port: 2236
+          ansible_user: "ansible"

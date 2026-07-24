@@ -9,6 +9,8 @@ import yaml
 
 INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
+_inv = yaml.safe_load(open(INVENTORY))
+GALERA_NODE = list(_inv["all"]["children"]["galera"]["hosts"])[0]
 
 
 def run_query(node, query):
@@ -44,32 +46,32 @@ def main():
     failures = []
 
     # ISC-40: no anonymous users
-    anon = run_query("gnode1", "SELECT CONCAT(user,'@',host) FROM mysql.user WHERE user=''")
-    anon_users = anon.get("gnode1", "").strip()
+    anon = run_query(GALERA_NODE, "SELECT CONCAT(user,'@',host) FROM mysql.user WHERE user=''")
+    anon_users = anon.get(GALERA_NODE, "").strip()
     check(not anon_users, f"ISC-40: anonymous users exist: {anon_users}", failures)
 
     # ISC-40: no test database
-    testdb = run_query("gnode1", "SHOW DATABASES LIKE 'test'")
-    test_result = testdb.get("gnode1", "").strip()
+    testdb = run_query(GALERA_NODE, "SHOW DATABASES LIKE 'test'")
+    test_result = testdb.get(GALERA_NODE, "").strip()
     check(not test_result, f"ISC-40: test database exists: {test_result}", failures)
 
     # ISC-40: no empty passwords for non-system accounts
     empty_pw = run_query(
-        "gnode1",
+        GALERA_NODE,
         "SELECT CONCAT(user,'@',host) FROM mysql.user "
         "WHERE (authentication_string='' OR authentication_string IS NULL) "
         "AND user NOT IN ('mariadb.sys','mysql','PUBLIC') AND user != ''"
     )
-    empty_users = empty_pw.get("gnode1", "").strip()
+    empty_users = empty_pw.get(GALERA_NODE, "").strip()
     check(not empty_users, f"ISC-40: empty password accounts: {empty_users}", failures)
 
     # ISC-41: root localhost-only
     remote_root = run_query(
-        "gnode1",
+        GALERA_NODE,
         "SELECT CONCAT(user,'@',host) FROM mysql.user "
         "WHERE user='root' AND host NOT IN ('localhost','127.0.0.1','::1')"
     )
-    remote_root_result = remote_root.get("gnode1", "").strip()
+    remote_root_result = remote_root.get(GALERA_NODE, "").strip()
     check(
         not remote_root_result,
         f"ISC-41: root has remote access: {remote_root_result}",
@@ -77,8 +79,8 @@ def main():
     )
 
     # ISC-42: sst_user least privilege
-    sst_grants = run_query("gnode1", "SHOW GRANTS FOR 'sst_user'@'localhost'")
-    sst_result = sst_grants.get("gnode1", "")
+    sst_grants = run_query(GALERA_NODE, "SHOW GRANTS FOR 'sst_user'@'localhost'")
+    sst_result = sst_grants.get(GALERA_NODE, "")
     check(
         "RELOAD" in sst_result and "PROCESS" in sst_result and "LOCK TABLES" in sst_result,
         f"ISC-42: sst_user missing required grants: {sst_result}",
@@ -86,8 +88,8 @@ def main():
     )
 
     # ISC-42: pmm_monitor least privilege
-    pmm_grants = run_query("gnode1", "SHOW GRANTS FOR 'pmm_monitor'@'%'")
-    pmm_result = pmm_grants.get("gnode1", "")
+    pmm_grants = run_query(GALERA_NODE, "SHOW GRANTS FOR 'pmm_monitor'@'%'")
+    pmm_result = pmm_grants.get(GALERA_NODE, "")
     check(
         "PROCESS" in pmm_result and "SELECT" in pmm_result,
         f"ISC-42: pmm_monitor missing required grants: {pmm_result}",

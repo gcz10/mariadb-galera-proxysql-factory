@@ -26,6 +26,8 @@ import yaml
 INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
 CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
+_inv = yaml.safe_load(open(INVENTORY))
+GALERA_NODE = list(_inv["all"]["children"]["galera"]["hosts"])[0]
 IST_WINDOW_MIN = int(os.environ.get("ISC68_IST_WINDOW_MIN", "30"))
 WORKLOAD_SECONDS = int(os.environ.get("ISC68_WORKLOAD_SECONDS", "20"))
 
@@ -76,8 +78,8 @@ echo "RATE_BPS=$(( (ELAPSED>0 ? DELTA/ELAPSED : 0) )) DELTA=$DELTA ELAPSED=${{EL
 
 
 def deployed_gcache():
-    r = sh("gnode1", "grep -ioE 'gcache.size=[0-9]+[MG]' /etc/my.cnf.d/server.cnf")
-    m = re.search(r'gcache.size=(\d+)([MG])', body("gnode1", r), re.I)
+    r = sh(GALERA_NODE, "grep -ioE 'gcache.size=[0-9]+[MG]' /etc/my.cnf.d/server.cnf")
+    m = re.search(r'gcache.size=(\d+)([MG])', body(GALERA_NODE, r), re.I)
     if not m:
         return 0
     val = int(m.group(1))
