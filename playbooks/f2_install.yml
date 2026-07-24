@@ -82,6 +82,6 @@
         name: chronyd
         state: started
         enabled: true
-      ignore_errors: true
+      when: ansible_service_mgr == 'systemd'
 
   handlers: []

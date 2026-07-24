@@ -1,7 +1,7 @@
 # Makefile — stabilny interfejs operatora.
 # Komendy dodawane INKREMENTALNIE wraz z działającym feature.
 
-.PHONY: help lab-up cluster-discover cluster-validate cluster-deploy cluster-bootstrap cluster-health cluster-monitoring lab-monitoring-verify
+.PHONY: help lab-up lab-start-services cluster-discover cluster-validate cluster-deploy cluster-bootstrap cluster-health cluster-monitoring lab-monitoring-verify
 
 CLUSTER ?= example-cluster
 ANSIBLE_OPTS ?=
@@ -16,6 +16,11 @@ lab-up:  ## Zbuduj i uruchom laboratorium, usuwając osierocone usługi
 	@chmod 644 tests/lab/ssh_key.pub
 	docker compose -f tests/lab/docker-compose.yml up -d --build --remove-orphans
 
+lab-start-services:  ## Lab-only: (re)start ProxySQL po restarcie kontenera (brak systemd, idempotentny)
+	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	ansible proxysql -i clusters/$(CLUSTER)/inventory.yml -m shell -a "pgrep -x proxysql >/dev/null || proxysql --idle-threads -c /etc/proxysql.cnf" $(ANSIBLE_OPTS)
+	ansible proxysql -i clusters/$(CLUSTER)/inventory.yml -m wait_for -a "host=127.0.0.1 port=6032 timeout=20" $(ANSIBLE_OPTS)
+
 
 cluster-discover:  ## F0 Discovery — zbierz fakty z hostów (read-only)
 	ansible-playbook playbooks/f0_discovery.yml -i clusters/$(CLUSTER)/inventory.yml $(ANSIBLE_OPTS)
@@ -26,12 +31,12 @@ cluster-validate:  ## Waliduj konfigurację klastra (schema + preflight)
 
 cluster-deploy:  ## F2+F3 — instaluj pakiety + konfiguruj (idempotentny converge)
 	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/f2_install.yml -i clusters/$(CLUSTER)/inventory.yml $(ANSIBLE_OPTS)
-	ansible-playbook playbooks/site.yml -i clusters/$(CLUSTER)/inventory.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f2_install.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/site.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 cluster-bootstrap:  ## F4 — initial bootstrap (JEDEN węzeł, wymaga confirm=yes)
 	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/bootstrap.yml -i clusters/$(CLUSTER)/inventory.yml -e confirm=yes -l gnode1 $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/bootstrap.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e confirm=yes -l gnode1 $(ANSIBLE_OPTS)
 
 cluster-health:  ## Weryfikuj cluster status (wsrep)
 	ansible-playbook playbooks/f2_preflight.yml -i clusters/$(CLUSTER)/inventory.yml $(ANSIBLE_OPTS) --check

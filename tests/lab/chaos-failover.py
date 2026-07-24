@@ -128,7 +128,8 @@ def main():
         # Setup: workload table (Galera-replicated), creds file, workload script.
         sh(WORKLOAD_HOST,
            'mariadb --socket=/var/lib/mysql/mysql.sock -e '
-           '"CREATE TABLE IF NOT EXISTS isa_test.isa_failover '
+           '"CREATE DATABASE IF NOT EXISTS isa_test; '
+           'CREATE TABLE IF NOT EXISTS isa_test.isa_failover '
            '(seq BIGINT PRIMARY KEY, ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"',
            check=True)
         sh(WORKLOAD_HOST,

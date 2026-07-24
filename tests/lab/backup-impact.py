@@ -98,7 +98,8 @@ def main():
     try:
         sh(WORKLOAD_HOST,
            'mariadb --socket=/var/lib/mysql/mysql.sock -e '
-           '"CREATE TABLE IF NOT EXISTS isa_test.isa_failover '
+           '"CREATE DATABASE IF NOT EXISTS isa_test; '
+           'CREATE TABLE IF NOT EXISTS isa_test.isa_failover '
            '(seq BIGINT PRIMARY KEY, ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"', check=True)
 
         fd, local_cnf = tempfile.mkstemp()
