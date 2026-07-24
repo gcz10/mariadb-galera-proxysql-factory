@@ -13,7 +13,7 @@ user = mysql
 binlog_format = ROW
 default_storage_engine = InnoDB
 innodb_autoinc_lock_mode = 2
-innodb_flush_log_at_trx_commit = 0
+innodb_flush_log_at_trx_commit = {{ (mariadb_tuning | default({})).innodb_flush_log_at_trx_commit | default(0) }}
 
 # === wsrep ===
 wsrep_on = ON
@@ -28,10 +28,10 @@ wsrep_sst_auth = "{{ sst_user }}:{{ sst_password }}"
 # === Bind ===
 bind-address = 0.0.0.0
 
-# === Tuning (lab: minimalne wartości) ===
-innodb_buffer_pool_size = 256M
-innodb_log_file_size = 128M
-max_connections = 50
+# === Tuning (produkcja: nadpisz przez mariadb_tuning w cluster.yml; lab: minimalne wartości) ===
+innodb_buffer_pool_size = {{ (mariadb_tuning | default({})).innodb_buffer_pool_size | default('256M') }}
+innodb_log_file_size = {{ (mariadb_tuning | default({})).innodb_log_file_size | default('128M') }}
+max_connections = {{ (mariadb_tuning | default({})).max_connections | default(50) }}
 
 # === Logi ===
 log_error = /var/log/mariadb/mariadb.log

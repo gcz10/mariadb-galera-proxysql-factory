@@ -62,6 +62,14 @@ workload:
   largest_table_gb: "unknown"
   expected_write_latency_ms: "unknown"
 
+# Tuning MariaDB (opcjonalne). Pominięcie => bezpieczne minimalne wartości lab (server.cnf.j2 default).
+# PRODUKCJA: dostosuj do RAM/IOPS węzła (patrz storage/workload powyżej).
+mariadb_tuning:
+  innodb_buffer_pool_size: "256M"    # produkcja: ~70% RAM węzła (np. "24G")
+  innodb_log_file_size: "128M"       # produkcja: ~25% buffer pool (np. "2G")
+  max_connections: 50                # produkcja: peak_connections + zapas
+  innodb_flush_log_at_trx_commit: 0  # 1=pełne ACID; 0/2=wydajność (Galera: trwałość z replikacji klastra)
+
 availability:
   rpo: "0"
   rto_node_failure: "2m"

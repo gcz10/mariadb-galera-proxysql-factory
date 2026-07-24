@@ -60,11 +60,12 @@
         path: /etc/yum.repos.d/proxysql.repo
         state: absent
       when: "'proxysql' in group_names"
-    - name: "ProxySQL - instaluj z bezposredniego RPM (lab: centos/9, aarch64)"
+    - name: "ProxySQL - instaluj z bezposredniego RPM (arch auto: lab aarch64, prod x86_64)"
       ansible.builtin.dnf:
-        name: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/9/proxysql-3.0.9-1-centos9.aarch64.rpm"
+        name: "{{ proxysql_rpm_url | default('https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/9/proxysql-3.0.9-1-centos9.' ~ ansible_architecture ~ '.rpm') }}"
         state: present
-        disable_gpg_check: true
+        disable_gpg_check: "{{ proxysql_disable_gpg_check | default(true) }}"
+      when: "'proxysql' in group_names"
     - name: "ProxySQL - instaluj klienta mariadb (wymagany do admin port 6032)"
       ansible.builtin.dnf:
         name: mariadb
