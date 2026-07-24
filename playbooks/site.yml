@@ -15,13 +15,15 @@
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
     gcache_size: "128M"
     mariadb_config_dir: /etc/my.cnf.d
+    use_systemd: "{{ ansible_service_mgr == 'systemd' }}"
 
   pre_tasks:
-    - name: "Zabij stary proces MariaDB (lab: brak systemd)"
+    - name: "Zabij stary proces MariaDB (tylko lab: brak systemd)"
       ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :4567 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :4568 2>/dev/null | xargs kill -9 2>/dev/null; true"
       changed_when: false
+      when: not use_systemd
 
-    - name: "Wyczyść aria log (po crashu)"
+    - name: "Wyczyść aria log (tylko lab: brak systemd, po crashu)"
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
@@ -29,6 +31,7 @@
         - /var/lib/mysql/aria_log_control
         - /var/lib/mysql/aria_log.00000001
       changed_when: false
+      when: not use_systemd
 
     - name: "Utworz katalogi"
       ansible.builtin.file:
@@ -59,6 +62,7 @@
         group: root
         mode: "0644"
       register: config_result
+      notify: "Restart MariaDB (systemd, on config change)"
 
     - name: "Inicjalizuj datadir (jeśli pusty)"
       ansible.builtin.command: mariadb-install-db --user=mysql --datadir=/var/lib/mysql
@@ -66,12 +70,26 @@
         creates: /var/lib/mysql/mysql
       register: init_result
 
-    - name: "Uruchom MariaDB (lab: bez systemd, jako daemon)"
+    - name: "Uruchom MariaDB (tylko lab: bez systemd, jako daemon)"
       ansible.builtin.shell: |
         mariadbd --user=mysql --datadir=/var/lib/mysql --socket=/var/lib/mysql/mysql.sock \
           > /var/log/mariadb/mariadb.log 2>&1 &
         sleep 15
       changed_when: false
+      when: not use_systemd
+
+    - name: "Włącz mariadb.service na starcie (produkcja: systemd; start przez bootstrap/join, NIE converge)"
+      ansible.builtin.systemd:
+        name: mariadb
+        enabled: true
+      when: use_systemd
+
+    - name: "Sprawdź czy MariaDB działa (produkcja: converge nie startuje zatrzymanego węzła)"
+      ansible.builtin.command: systemctl is-active mariadb
+      register: mariadb_active
+      changed_when: false
+      failed_when: false
+      when: use_systemd
 
     - name: "Czekaj na gotowość MariaDB"
       ansible.builtin.wait_for:
@@ -91,4 +109,11 @@
       when: galera_node_idx | default(1) == 1 and mariadb_ready.failed == false
       no_log: true
 
-  handlers: []
+  handlers:
+    - name: "Restart MariaDB (systemd, on config change)"
+      ansible.builtin.systemd:
+        name: mariadb
+        state: restarted
+      when:
+        - use_systemd
+        - (mariadb_active | default({})).rc | default(1) == 0

@@ -70,6 +70,7 @@
   max_fail_percentage: 0
   vars:
     expected_cluster_size: 3
+    use_systemd: "{{ ansible_service_mgr == 'systemd' }}"
 
   tasks:
     - name: "Pomiń węzeł Primary (gnode1)"
@@ -88,11 +89,12 @@
       ansible.builtin.meta: end_host
       when: "'4' in (node_state.stdout | default(''))"
 
-    - name: "Zatrzymaj ewentualny proces MariaDB"
+    - name: "Zatrzymaj ewentualny proces MariaDB (tylko lab: brak systemd)"
       ansible.builtin.shell: "pkill -x mariadbd 2>/dev/null; sleep 2; true"
       changed_when: false
+      when: not use_systemd
 
-    - name: "Usuń aria log (zapobiega konfliktom startu)"
+    - name: "Usuń aria log (tylko lab: brak systemd)"
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
@@ -100,17 +102,26 @@
         - /var/lib/mysql/aria_log_control
         - /var/lib/mysql/aria_log.00000001
       changed_when: false
+      when: not use_systemd
 
     - name: "Wydrukuj adres klastra dla dołączającego węzła"
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }} dołącza do klastra jako node {{ galera_node_idx }}"
 
-    - name: "Uruchom MariaDB jako węzeł dołączający (lab: bez systemd)"
+    - name: "Uruchom MariaDB jako węzeł dołączający — lab (bez systemd)"
       ansible.builtin.shell: |
         mariadbd --user=mysql --datadir=/var/lib/mysql \
           --socket=/var/lib/mysql/mysql.sock \
           > /var/log/mariadb/mariadb.log 2>&1 &
       changed_when: true
+      when: not use_systemd
+
+    - name: "Uruchom MariaDB jako węzeł dołączający — produkcja (systemctl start → SST/IST)"
+      ansible.builtin.systemd:
+        name: mariadb
+        state: started
+        enabled: true
+      when: use_systemd
 
     - name: "Czekaj na osiągnięcie stanu Synced"
       ansible.builtin.shell: >

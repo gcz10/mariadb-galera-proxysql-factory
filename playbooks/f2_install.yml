@@ -42,6 +42,14 @@
         state: present
       when: "'galera' in group_names"
 
+    - name: "Włącz mariadb.service na starcie (produkcja: boot persistence; start przez bootstrap/join)"
+      ansible.builtin.systemd:
+        name: mariadb
+        enabled: true
+      when:
+        - "'galera' in group_names"
+        - ansible_service_mgr == 'systemd'
+
     # === ProxySQL nodes: ProxySQL repo + pakiet ===
     - name: "ProxySQL - pobierz GPG key"
       ansible.builtin.get_url:

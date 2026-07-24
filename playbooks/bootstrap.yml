@@ -11,6 +11,7 @@
   vars:
     sst_user: "sst_user"
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
+    use_systemd: "{{ ansible_service_mgr == 'systemd' }}"
 
   pre_tasks:
     - name: "Blokuj bootstrap bez confirm=yes"
@@ -26,11 +27,12 @@
           - ansible_play_hosts | length == 1
         fail_msg: "Bootstrap na jednym węźle. Użyj -l gnode1. (ISC-12, ISC-65)"
 
-    - name: "Zabij stary proces MariaDB"
+    - name: "Zabij stary proces MariaDB (tylko lab: brak systemd)"
       ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null || true"
       changed_when: false
+      when: not use_systemd
 
-    - name: "Wyczyść aria log"
+    - name: "Wyczyść aria log (tylko lab: brak systemd)"
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
@@ -38,14 +40,27 @@
         - /var/lib/mysql/aria_log_control
         - /var/lib/mysql/aria_log.00000001
       changed_when: false
+      when: not use_systemd
 
   tasks:
-    - name: "Bootstrap Galera (--wsrep-new-cluster)"
+    - name: "Bootstrap Galera — lab (--wsrep-new-cluster, bez systemd)"
       ansible.builtin.shell: |
         mariadbd --user=mysql --datadir=/var/lib/mysql --socket=/var/lib/mysql/mysql.sock \
           --wsrep-new-cluster > /var/log/mariadb/mariadb.log 2>&1 &
         sleep 15
       changed_when: false
+      when: not use_systemd
+
+    - name: "Bootstrap Galera — produkcja (galera_new_cluster przez systemd)"
+      ansible.builtin.command: galera_new_cluster
+      changed_when: true
+      when: use_systemd
+
+    - name: "Włącz mariadb.service na starcie (produkcja)"
+      ansible.builtin.systemd:
+        name: mariadb
+        enabled: true
+      when: use_systemd
 
     - name: "Czekaj na Primary Component"
       ansible.builtin.wait_for:
