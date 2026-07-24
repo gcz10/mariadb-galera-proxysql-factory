@@ -24,8 +24,8 @@
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     pmm_validate_certs: "{{ monitoring.get('pmm', {}).get('validate_certs', true) | bool }}"
     cluster_label: "{{ monitoring.pmm.cluster_name }}"
-    folder_uid: "{{ f15_folder_uid | default('aft0ucgo59d6of') }}"
-    ds_uid: "{{ f15_ds_uid | default('PA58DA793C7250F1B') }}"
+    folder_uid: "{{ (monitoring.alerts | default({})).folder_uid | default('isa-alerts') }}"
+    ds_uid: "{{ (monitoring.alerts | default({})).datasource_uid | default('') }}"
     backup_retention_days: "{{ backup.retention_days | default(14) }}"
 
     f15_rules:
@@ -90,6 +90,24 @@
       ansible.builtin.set_fact:
         f15_effective_folder: "{{ folder_uid if folder_uid in (f15_folders.json | map(attribute='uid') | list) else (f15_folder_create.json.uid | default(folder_uid)) }}"
 
+    - name: "Pobierz datasources PMM (znajdź Prometheus UID)"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/datasources"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        return_content: true
+        status_code: 200
+      register: f15_datasources
+      no_log: true
+
+    - name: "Ustaw datasource_uid (Prometheus z PMM; fallback na ds_uid z config)"
+      ansible.builtin.set_fact:
+        f15_effective_ds: "{{ (f15_datasources.json | selectattr('type', 'equalto', 'prometheus') | map(attribute='uid') | list | first) | default(ds_uid) }}"
+
+
     # === Pobierz istniejące reguły ===
     - name: "Pobierz istniejące reguły alertów"
       ansible.builtin.uri:
@@ -125,14 +143,14 @@
           ruleGroup: "isa-{{ cluster_label }}"
           title: "{{ item.title }}"
           condition: "A"
-          for: "0s"
-          noDataState: "OK"
+          for: "2m"
+          noDataState: "Alerting"
           execErrState: "Error"
           isPaused: false
           data:
             - refId: "A"
               relativeTimeRange: {from: 600, to: 0}
-              datasourceUid: "{{ ds_uid }}"
+              datasourceUid: "{{ f15_effective_ds }}"
               model:
                 expr: "{{ item.expr }}"
                 instant: true
@@ -176,7 +194,7 @@
           uid: "email-isa"
           name: "ISA Email Alerts"
           type: "email"
-          settings: {addresses: "ops@lab.local", singleEmail: false}
+          settings: {addresses: "{{ (monitoring.alerts | default({})).email | default('alerts@CHANGE_ME.invalid') }}", singleEmail: false}
           disableResolveMessage: false
         status_code: 200
       no_log: true

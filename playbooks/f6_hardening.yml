@@ -108,7 +108,7 @@
     - name: "ISC-45: ostrzeżenie TLS disabled w production"
       ansible.builtin.assert:
         that:
-          - cluster.environment != 'production' or tls.mode != 'disabled'
+          - cluster.environment != 'production' or (tls | default({})).mode | default('disabled') != 'disabled'
         fail_msg: >-
           PRODUKCJA: tls.mode=disabled. Wymagane jawne risk acceptance (ADR-002).
           Ustaw tls.mode=full lub dołącz podpisany ADR.
