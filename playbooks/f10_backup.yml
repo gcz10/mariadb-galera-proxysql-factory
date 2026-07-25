@@ -118,7 +118,7 @@
       changed_when: false
 
     - name: "ISC-35: odczytaj wersję MariaDB"
-      ansible.builtin.shell: "mariadbd --version | sed -E 's/.*Distrib ([0-9]+\\.[0-9]+\\.[0-9]+).*/\\1/'"
+      ansible.builtin.shell: "mariadbd --version | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"
       register: mariadb_version
       changed_when: false
 

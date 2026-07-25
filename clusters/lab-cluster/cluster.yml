@@ -95,4 +95,6 @@ monitoring:
     validate_certs: false
     credentials_revision: 2
   system: "pmm"
+  alerts:
+    email: "ops@lab.local"
   log_destination: "unknown"

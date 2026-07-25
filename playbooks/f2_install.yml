@@ -100,7 +100,7 @@
       when: ansible_service_mgr == 'systemd'
 
     - name: "ISC-3: asercja zainstalowanej wersji MariaDB zgodnej z lockfile"
-      ansible.builtin.shell: "mariadbd --version | sed -E 's/.*Distrib ([0-9]+\\.[0-9]+\\.[0-9]+).*/\\1/'"
+      ansible.builtin.shell: "mariadbd --version | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"
       register: f2_installed_mariadb
       changed_when: false
       failed_when: false

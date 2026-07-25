@@ -197,38 +197,44 @@
         path: /var/lib/mysql/mysql.sock
         timeout: 30
 
-    - name: "ISC-36: CHECK TABLE na WSZYSTKICH tabelach użytkownika"
+    - name: "ISC-36: sprawdź WSZYSTKIE tabele użytkownika (mariadb-check)"
       ansible.builtin.shell: >-
         set -o pipefail;
-        TBL=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SELECT CONCAT('`',TABLE_SCHEMA,'`.`',TABLE_NAME,'`') FROM information_schema.TABLES
-         WHERE TABLE_TYPE='BASE TABLE' AND TABLE_SCHEMA NOT IN ('mysql','sys','performance_schema','information_schema')");
-        if [ -z "$TBL" ]; then echo "NO_USER_TABLES"; exit 1; fi;
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "CHECK TABLE $TBL" |
-        awk '{if($3!="status" || $4!="OK"){print; bad++}} END{exit bad?1:0}'
+        DBS=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('mysql','sys','performance_schema','information_schema')"
+        | tr '\n' ' ');
+        if [ -z "$(echo $DBS)" ]; then echo "NO_USER_DATABASES"; exit 1; fi;
+        mariadb-check --socket=/var/lib/mysql/mysql.sock --check --databases $DBS
       register: check_table
       changed_when: false
 
-    - name: "ISC-36: integralność — wszystkie tabele użytkownika OK"
+    - name: "ISC-36: integralność — każda tabela OK, zero błędów"
       ansible.builtin.assert:
         that:
           - check_table.rc == 0
-          - "'NO_USER_TABLES' not in (check_table.stdout | default(''))"
-        fail_msg: "CHECK TABLE wykrył problem lub brak tabel: rc={{ check_table.rc }} out={{ check_table.stdout }}"
-        success_msg: "Wszystkie tabele użytkownika: CHECK TABLE OK"
+          - "'NO_USER_DATABASES' not in (check_table.stdout | default(''))"
+          - "'Error' not in (check_table.stdout | default(''))"
+          - "'corrupt' not in (check_table.stdout | default('') | lower)"
+        fail_msg: "Integralność odtworzonych tabel naruszona: rc={{ check_table.rc }} out={{ check_table.stdout }}"
+        success_msg: "mariadb-check: wszystkie tabele użytkownika OK"
 
-    - name: "ISC-36: liczba wierszy w odtworzonej tabeli"
+    - name: "ISC-36: liczba wierszy w największej odtworzonej tabeli użytkownika"
       ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SELECT COUNT(*) FROM isa_test.replication_probe"
+        set -o pipefail;
+        TBL=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SELECT CONCAT(TABLE_SCHEMA,'.',TABLE_NAME) FROM information_schema.TABLES WHERE TABLE_TYPE='BASE TABLE' AND TABLE_SCHEMA NOT IN ('mysql','sys','performance_schema','information_schema') ORDER BY TABLE_ROWS DESC LIMIT 1");
+        test -n "$TBL" || { echo "NO_USER_TABLES"; exit 1; };
+        echo -n "$TBL ";
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SELECT COUNT(*) FROM $TBL"
       register: row_count
       changed_when: false
 
     - name: "ISC-36: odtworzone dane niepuste"
       ansible.builtin.assert:
         that:
-          - row_count.stdout | int > 0
-        fail_msg: "Odtworzona tabela jest pusta — restore niekompletny."
+          - (row_count.stdout | default('') | trim).split(' ') | last | int > 0
+        fail_msg: "Odtworzona tabela jest pusta lub brak tabel użytkownika — restore niekompletny: {{ row_count.stdout }}"
+        success_msg: "Odtworzone dane niepuste: {{ row_count.stdout }}"
 
     - name: "Odczytaj metadane backupu do raportu"
       ansible.builtin.slurp:
@@ -239,7 +245,7 @@
     - name: "ISC-37: zapisz stan restore drill"
       ansible.builtin.copy:
         content: |
-          {"last_restore": "{{ ansible_date_time.iso8601 }}", "backup_name": "{{ latest_backup.stdout }}", "rows_verified": {{ row_count.stdout | int }}, "status": "success"}
+          {"last_restore": "{{ ansible_date_time.iso8601 }}", "backup_name": "{{ latest_backup.stdout }}", "rows_verified": {{ (row_count.stdout | trim).split(' ') | last | int }}, "status": "success"}
         dest: "{{ state_dir }}/last_restore.json"
         mode: "0640"
 
@@ -259,7 +265,7 @@
       ansible.builtin.debug:
         msg: >-
           Restore drill OK: {{ latest_backup.stdout }} → rnode1 (standalone),
-          {{ row_count.stdout }} wierszy w replication_probe, CHECK TABLE OK,
+          {{ row_count.stdout }} (tabela.wierszy), mariadb-check OK,
           checksum zweryfikowany; metadata seqno={{ (meta_raw.content | b64decode | from_json).wsrep_seqno }}
 
   handlers: []

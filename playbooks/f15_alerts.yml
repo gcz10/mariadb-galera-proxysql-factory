@@ -71,7 +71,7 @@
       register: f15_folders
       no_log: true
 
-    - name: "Utwórz folder ISA Alerts (jeśli brak)"
+    - name: "Utwórz folder ISA Alerts (jeśli brak wg tytułu; jawny uid = deterministyczny)"
       ansible.builtin.uri:
         url: "{{ pmm_api_url }}/graph/api/folders"
         method: POST
@@ -80,15 +80,17 @@
         force_basic_auth: true
         validate_certs: "{{ pmm_validate_certs }}"
         body_format: json
-        body: {title: "ISA Alerts"}
+        body: {uid: "{{ folder_uid }}", title: "ISA Alerts"}
         status_code: 200
       register: f15_folder_create
       no_log: true
-      when: folder_uid not in (f15_folders.json | map(attribute='uid') | list)
+      when: "'ISA Alerts' not in (f15_folders.json | map(attribute='title') | list)"
 
-    - name: "Ustaw folder_uid (istniejący lub nowy)"
+    # UID folderu bierzemy z listy po TYTULE (Grafana generuje własne uid, gdy folder
+    # powstał wcześniej); dopiero gdy folder tworzymy my — ma uid = folder_uid.
+    - name: "Ustal folder UID (istniejący wg tytułu albo nowo utworzony)"
       ansible.builtin.set_fact:
-        f15_effective_folder: "{{ folder_uid if folder_uid in (f15_folders.json | map(attribute='uid') | list) else (f15_folder_create.json.uid | default(folder_uid)) }}"
+        f15_effective_folder: "{{ (f15_folders.json | selectattr('title', 'equalto', 'ISA Alerts') | map(attribute='uid') | list | first) | default(folder_uid) }}"
 
     - name: "Pobierz datasources PMM (znajdź Prometheus UID)"
       ansible.builtin.uri:
@@ -196,7 +198,7 @@
           type: "email"
           settings: {addresses: "{{ (monitoring.alerts | default({})).email | default('alerts@CHANGE_ME.invalid') }}", singleEmail: false}
           disableResolveMessage: false
-        status_code: 200
+        status_code: [200, 202]
       no_log: true
       when: "'email-isa' not in (f15_contacts.json | map(attribute='uid') | list)"
 
