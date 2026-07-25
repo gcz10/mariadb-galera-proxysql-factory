@@ -63,9 +63,19 @@
     # Normalizuj "11.4.12-MariaDB" → "11.4.12" dla porównania wersji
     f12_current_version: "{{ f12_current_raw | regex_replace('(-.*)?$', '') }}"
     f12_current_major_minor: "{{ f12_current_version | regex_replace('^(\\d+\\.\\d+)\\..*$', '\\1') }}"
-    # Oficjalna ścieżka (ISC-54): 11.4 LTS → 11.8 LTS (najbliższe LTS, Galera 4 kompatybilne)
-    f12_target_version: "11.8"
-    f12_target_lts_eol: "2029-08"
+    # Cel upgrade jest KONFIGUROWALNY (-e f12_target_version=...). Domyślnie 12.3 LTS,
+    # bo to jedyny LTS z EOL późniejszym niż obecna 11.4 (2029-06-30 vs 2029-05-29).
+    # EOL wg endoflife.date/api/mariadb.json (zweryfikowane 2026-07-25):
+    #   11.4 -> 2029-05-29 | 11.8 -> 2028-06-04 | 12.3 -> 2029-06-30
+    # UWAGA: 11.8 ma EOL WCZEŚNIEJSZY niż 11.4 — upgrade 11.4->11.8 SKRACA wsparcie o ~12 mies.
+    f12_target_version: "{{ f12_target | default('12.3') }}"
+    f12_eol_map:
+      "10.11": "2028-02-16"
+      "11.4": "2029-05-29"
+      "11.8": "2028-06-04"
+      "12.3": "2029-06-30"
+    f12_target_lts_eol: "{{ f12_eol_map[f12_target_version] | default('nieznany') }}"
+    f12_current_eol: "{{ f12_eol_map[f12_current_major_minor] | default('nieznany') }}"
     f12_gcache: "{{ hostvars[groups['galera'][0]].f12_gcache_size.stdout | default('nieustawiony') }}"
 
   tasks:
@@ -79,6 +89,21 @@
           "data files modified by a higher major version are forward-incompatible").
           Rollback wymaga odtworzenia datadir z backupu (mariadb-backup), NIE downgrade pakietów.
       when: f12_current_version != 'unknown' and f12_current_major_minor is match('\\d+\\.\\d+')
+
+    - name: "Strażnik regresji wsparcia — odmów celu, który SKRACA okno EOL"
+      ansible.builtin.assert:
+        that:
+          - f12_target_lts_eol == 'nieznany' or f12_current_eol == 'nieznany'
+            or f12_target_lts_eol >= f12_current_eol
+        fail_msg: >-
+          REGRESJA WSPARCIA: cel {{ f12_target_version }} ma EOL {{ f12_target_lts_eol }},
+          czyli WCZEŚNIEJ niż obecna {{ f12_current_major_minor }} (EOL {{ f12_current_eol }}).
+          Upgrade skróciłby okno wsparcia. Wybierz nowszy LTS przez -e f12_target=<seria>
+          albo świadomie pomiń ten strażnik (-e f12_allow_eol_regression=true) z uzasadnieniem w ADR.
+        success_msg: "EOL {{ f12_current_major_minor }} ({{ f12_current_eol }}) -> {{ f12_target_version }} ({{ f12_target_lts_eol }}): wsparcie nie skraca się."
+      when:
+        - not (f12_allow_eol_regression | default(false) | bool)
+        - f12_current_version != 'unknown'
     - name: "Zapewnij katalog docs/plans"
       ansible.builtin.file:
         path: "{{ playbook_dir }}/../docs/plans"

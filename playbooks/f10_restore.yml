@@ -141,6 +141,34 @@
           - stored_plaintext_sha.stdout | length == 0 or computed_plaintext_sha.stdout == stored_plaintext_sha.stdout
         fail_msg: "Checksum PLAINTEXT niezgodny — backup uszkodzony pomimo poprawnego szyfrowania."
 
+    # Pliki danych dotknięte wyższą wersją major są forward-incompatible
+    # (mariadb.com/kb/en/downgrading-between-major-mariadb-versions). Bez tego guardu
+    # drill potrafi "zaliczyć" odtworzenie backupu 11.8 na serwerze 11.4 i dać
+    # fałszywe zapewnienie o zdatności ścieżki DR.
+    - name: "ISC-36: odczytaj wersję MariaDB, którą wykonano backup"
+      ansible.builtin.shell: >-
+        python3 -c "import json;d=json.load(open('{{ restore_work }}/metadata.json'));print(d.get('mariadb_version',''))"
+      register: backup_mariadb_version
+      changed_when: false
+
+    - name: "ISC-36: odczytaj wersję MariaDB na hoście restore"
+      ansible.builtin.shell: "mariadbd --version | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"
+      register: restore_host_version
+      changed_when: false
+
+    - name: "ISC-36: host restore nie może być STARSZY (major.minor) niż wersja backupu"
+      ansible.builtin.assert:
+        that:
+          - backup_mariadb_version.stdout | length == 0
+            or (restore_host_version.stdout.split('.')[0:2] | join('.'))
+               is version(backup_mariadb_version.stdout.split('.')[0:2] | join('.'), '>=')
+        fail_msg: >-
+          Backup wykonano na MariaDB {{ backup_mariadb_version.stdout }}, a host restore ma
+          {{ restore_host_version.stdout }}. Odtwarzanie na STARSZĄ wersję major jest niewspierane
+          (forward-incompatible) — drill dałby fałszywe zapewnienie. Podnieś mariadb_version
+          na hoście restore do serii backupu.
+        success_msg: "Wersje zgodne: backup {{ backup_mariadb_version.stdout }} -> host restore {{ restore_host_version.stdout }}."
+
     # === Przygotuj czysty datadir i odtwórz ===
     - name: "Zatrzymaj ewentualny mariadbd na rnode1"
       ansible.builtin.shell: "pkill -x mariadbd 2>/dev/null; sleep 2; true"
