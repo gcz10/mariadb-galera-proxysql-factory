@@ -7,9 +7,10 @@
 #         (Synced+Primary+size) po każdym węźle; porażka zatrzymuje rolling.
 # ISC-57: ProxySQL aktualizuje się osobno, jedną instancję naraz (serial:1).
 #
-# Bezpieczny w labie: domyślna komenda patcha to read-only `dnf check-update`
-# (changed_when:false) — wzorzec canary+health-gate jest wykonywany bez
-# modyfikacji pakietów. Produkcja: operator nadpisuje f12_patch_command.
+# audit#11: NIE ma już fałszywego "patcha". Bez -e f12_patch_packages/f12_patch_command
+# playbook jawnie raportuje DRY-RUN (0 pakietów zmienionych) i ćwiczy tylko canary+health-gate.
+# Realny patch: dnf update wskazanych pakietów + restart usługi gdy binarium się zmienił
+# + weryfikacja wersji runtime przed/po (playbooks/f12_apply_patch.yml).
 # Zgodnie z research (proxysql.com): SAVE ... TO DISK przed restartem ProxySQL.
 
 # === Play 0: ustal writera (canary = non-writer) ===
@@ -62,17 +63,16 @@
   gather_facts: false
   any_errors_fatal: true
   vars:
-    f12_patch_command: "dnf check-update"   # read-only w labie; produkcja: real patch
+    f12_role: "galera"
+    f12_service: "mariadb"
+    f12_version_cmd: "mariadbd --version"
     expected_size: "{{ galera.nodes_expected | default(3) }}"
   tasks:
     - name: "Pomiń jeśli to nie canary"
       ansible.builtin.meta: end_host
       when: inventory_hostname != hostvars[groups['proxysql'][0]].f12_patch_canary
-    - name: "ISC-52: canary — wykonaj patch (lab: read-only check-update)"
-      ansible.builtin.shell: "{{ f12_patch_command }}"
-      register: f12_canary_patch
-      changed_when: f12_patch_command != 'dnf check-update'
-      failed_when: (f12_patch_command != 'dnf check-update') and (f12_canary_patch.rc != 0)
+    - name: "ISC-52: canary — patch (real gdy podano pakiety/komendę; inaczej DRY-RUN)"
+      ansible.builtin.include_tasks: f12_apply_patch.yml
     - name: "ISC-52: brama zdrowia canary — Synced+Primary+size"
       ansible.builtin.shell: >-
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
@@ -100,7 +100,9 @@
   max_fail_percentage: 0
   any_errors_fatal: true
   vars:
-    f12_patch_command: "dnf check-update"
+    f12_role: "galera"
+    f12_service: "mariadb"
+    f12_version_cmd: "mariadbd --version"
     expected_size: "{{ galera.nodes_expected | default(3) }}"
   tasks:
     - name: "Pomiń canary i writera"
@@ -108,11 +110,8 @@
       when: >-
         inventory_hostname == hostvars[groups['proxysql'][0]].f12_patch_canary
         or inventory_hostname == hostvars[groups['proxysql'][0]].f12_patch_writer
-    - name: "ISC-55: wykonaj patch"
-      ansible.builtin.shell: "{{ f12_patch_command }}"
-      register: f12_roll_patch
-      changed_when: f12_patch_command != 'dnf check-update'
-      failed_when: (f12_patch_command != 'dnf check-update') and (f12_roll_patch.rc != 0)
+    - name: "ISC-55: patch non-writera (real lub DRY-RUN)"
+      ansible.builtin.include_tasks: f12_apply_patch.yml
     - name: "ISC-55: brama zdrowia — STOP rolling jeśli klaster utracił zdrowie"
       ansible.builtin.shell: >-
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
@@ -137,17 +136,16 @@
   max_fail_percentage: 0
   any_errors_fatal: true
   vars:
-    f12_patch_command: "dnf check-update"
+    f12_role: "galera"
+    f12_service: "mariadb"
+    f12_version_cmd: "mariadbd --version"
     expected_size: "{{ galera.nodes_expected | default(3) }}"
   tasks:
     - name: "Pomiń non-writery"
       ansible.builtin.meta: end_host
       when: inventory_hostname != hostvars[groups['proxysql'][0]].f12_patch_writer
-    - name: "ISC-55: wykonaj patch writera"
-      ansible.builtin.shell: "{{ f12_patch_command }}"
-      register: f12_writer_patch
-      changed_when: f12_patch_command != 'dnf check-update'
-      failed_when: (f12_patch_command != 'dnf check-update') and (f12_writer_patch.rc != 0)
+    - name: "ISC-55: patch writera (real lub DRY-RUN)"
+      ansible.builtin.include_tasks: f12_apply_patch.yml
     - name: "ISC-55: brama zdrowia writera"
       ansible.builtin.shell: >-
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
@@ -172,7 +170,11 @@
   max_fail_percentage: 0
   any_errors_fatal: true
   vars:
-    f12_proxysql_patch_command: "dnf check-update"
+    f12_role: "proxysql"
+    f12_service: "proxysql"
+    f12_version_cmd: "proxysql --version"
+    f12_patch_command: "{{ f12_proxysql_patch_command | default('') }}"
+    f12_patch_packages: "{{ f12_proxysql_patch_packages | default([]) }}"
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
   environment:
     MYSQL_PWD: "{{ proxysql_admin_password }}"
@@ -184,11 +186,8 @@
          SAVE MYSQL VARIABLES TO DISK; SAVE ADMIN VARIABLES TO DISK;"
       changed_when: false
       no_log: true
-    - name: "ISC-57: wykonaj patch ProxySQL (jedna instancja naraz)"
-      ansible.builtin.shell: "{{ f12_proxysql_patch_command }}"
-      register: f12_proxysql_patch
-      changed_when: f12_proxysql_patch_command != 'dnf check-update'
-      failed_when: (f12_proxysql_patch_command != 'dnf check-update') and (f12_proxysql_patch.rc != 0)
+    - name: "ISC-57: patch ProxySQL, jedna instancja naraz (real lub DRY-RUN)"
+      ansible.builtin.include_tasks: f12_apply_patch.yml
     - name: "ISC-57: brama zdrowia ProxySQL — admin port + backends ONLINE"
       ansible.builtin.shell: >-
         mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e

@@ -19,6 +19,13 @@
       register: f13_current_size
       changed_when: false
 
+    - name: "Cluster state UUID (odcisk stanu do walidacji planu; audit#18)"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name='wsrep_cluster_state_uuid'" | awk '{print $2}'
+      register: f13_state_uuid
+      changed_when: false
+
 # === Play 2: odczytaj writera (direct, read-only) ===
 - name: "F13 — odczytaj writera (ProxySQL runtime)"
   hosts: proxysql[0]
@@ -88,3 +95,32 @@
           writer={{ f13_node_is_writer | bool | ternary('TAK (failover)', 'nie') }},
           quorum=OK. Kroki (wymaga confirm=yes w f13_remove_node.yml):
           (1) drain z ProxySQL hostgroups, (2) usuń z PMM Inventory, (3) stop mariadbd.
+
+    # audit#18: plan MUSI zostawić artefakt — f13_remove_node.yml go wymaga i waliduje
+    # (ten sam węzeł, świeży TTL, niezmieniony stan klastra). Bez tego "plan" był ozdobą.
+    - name: "Utwórz katalog planów"
+      ansible.builtin.file:
+        path: "{{ f13_plan_dir | default('/tmp/isa-plans') }}"
+        state: directory
+        mode: "0700"
+
+    - name: "audit#18: zapisz artefakt planu remove-node"
+      ansible.builtin.copy:
+        content: |
+          {
+            "cluster": "{{ cluster.name }}",
+            "node": "{{ node }}",
+            "cluster_size": {{ f13_current_size | int }},
+            "size_after": {{ f13_size_after | int }},
+            "node_is_writer": {{ f13_node_is_writer | bool | lower }},
+            "cluster_state_uuid": "{{ hostvars[groups['galera'][0]].f13_state_uuid.stdout | trim }}",
+            "generated_unix": {{ lookup('ansible.builtin.pipe', 'date +%s') | int }}
+          }
+        dest: "{{ f13_plan_dir | default('/tmp/isa-plans') }}/remove-node-{{ cluster.name }}-{{ node }}.json"
+        mode: "0600"
+
+    - name: "audit#18: gdzie leży plan"
+      ansible.builtin.debug:
+        msg: >-
+          Plan zapisany: {{ f13_plan_dir | default('/tmp/isa-plans') }}/remove-node-{{ cluster.name }}-{{ node }}.json
+          — wymagany przez f13_remove_node.yml (TTL {{ f13_plan_ttl | default(3600) }}s, walidacja stanu klastra).

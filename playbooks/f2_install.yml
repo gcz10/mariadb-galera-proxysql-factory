@@ -36,13 +36,15 @@
         creates: /etc/yum.repos.d/mariadb.repo
       when: "'galera' in group_names"
 
-    - name: Instaluj MariaDB Server + Galera + Backup (z lockfile, nie latest)
+    - name: Instaluj MariaDB Server + Galera + Backup (wersje PRZYPIĘTE z lockfile; audit#12)
       ansible.builtin.dnf:
         name:
-          - MariaDB-server
-          - MariaDB-client
-          - MariaDB-backup
-          - galera-4
+          # audit#12: NEVRA z lockfile zamiast samej nazwy — bez tego dnf brał najnowszą
+          # dostępną wersję, a zgodność sprawdzano dopiero PO mutacji hosta.
+          - "{{ lock.mariadb.server_package | default('MariaDB-server') }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+          - "{{ lock.mariadb.client_package | default('MariaDB-client') }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+          - "{{ lock.mariadb.mariadb_backup_package | default('MariaDB-backup') }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+          - "{{ lock.mariadb.galera_provider | default('galera-4') }}-{{ lock.mariadb.galera_provider_version }}-{{ lock.mariadb.galera_provider_rpm_release }}"
           - socat
           - rsync
           - lsof

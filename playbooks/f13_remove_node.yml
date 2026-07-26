@@ -28,6 +28,39 @@
           Remove-node wymaga -e confirm=yes -e node=<gnodeX> należącego do grupy galera.
           Najpierw uruchom f13_remove_node_plan.yml. Nigdy bez jawnego potwierdzenia.
 
+    # audit#18: plan nie może być ozdobą — wymagamy jego artefaktu, świeżości (TTL)
+    # i zgodności ze stanem klastra. Bez tego "wymaga planu" było tylko w komentarzu.
+    - name: "audit#18: wczytaj artefakt planu remove-node"
+      ansible.builtin.slurp:
+        src: "{{ f13_plan_dir | default('/tmp/isa-plans') }}/remove-node-{{ cluster.name }}-{{ node }}.json"
+      register: f13_plan_raw
+      failed_when: false
+
+    - name: "audit#18: plan musi istnieć (uruchom najpierw f13_remove_node_plan.yml)"
+      ansible.builtin.assert:
+        that:
+          - not f13_plan_raw.failed
+        fail_msg: >-
+          Brak artefaktu planu dla {{ node }}. Uruchom najpierw:
+          make cluster-remove-node-plan CLUSTER={{ cluster.name }} NODE={{ node }}
+
+    - name: "audit#18: sparsuj plan"
+      ansible.builtin.set_fact:
+        f13_plan: "{{ f13_plan_raw.content | b64decode | from_json }}"
+
+    - name: "audit#18: plan świeży (TTL) i dla właściwego węzła/klastra"
+      ansible.builtin.assert:
+        that:
+          - f13_plan.node == node
+          - f13_plan.cluster == cluster.name
+          - (lookup('ansible.builtin.pipe', 'date +%s') | int) - (f13_plan.generated_unix | int)
+            < (f13_plan_ttl | default(3600) | int)
+        fail_msg: >-
+          Plan nieaktualny lub dla innego węzła/klastra
+          (plan: {{ f13_plan.cluster }}/{{ f13_plan.node }}, wiek
+          {{ (lookup('ansible.builtin.pipe', 'date +%s') | int) - (f13_plan.generated_unix | int) }}s,
+          TTL {{ f13_plan_ttl | default(3600) }}s). Wygeneruj plan ponownie.
+
     - name: "Pozostali członkowie galera (poza usuwanym węzłem)"
       ansible.builtin.set_fact:
         f13_survivors: "{{ groups['galera'] | reject('equalto', node) | list }}"
@@ -39,6 +72,21 @@
         fail_msg: >-
           ODRZUCONE: usunięcie {{ node }} zejdzie poniżej quorum (zostanie
           {{ f13_survivors | length }} węzłów). Minimum 2 dla Primary Component.
+
+    # audit#18: po usunięciu klaster ma inną liczebność niż galera.nodes_expected.
+    # Walidator schema, brama zdrowia i alerty nadal oczekują starej wartości, a 2-węzłowa
+    # Galera bez arbitra traci odporność na awarię pojedynczego węzła — wymagaj świadomej zgody.
+    - name: "audit#18: zmiana topologii wymaga -e accept_topology_change=yes"
+      ansible.builtin.assert:
+        that:
+          - accept_topology_change is defined and accept_topology_change | bool
+        fail_msg: >-
+          Usunięcie {{ node }} zmienia topologię {{ galera.nodes_expected }} → {{ f13_survivors | length }}.
+          Po operacji MUSISZ zaktualizować galera.nodes_expected w clusters/{{ cluster.name }}/cluster.yml
+          oraz usunąć węzeł z inventory, inaczej cluster-validate/health-gate/alerty będą zgłaszać awarię.
+          Klaster 2-węzłowy bez arbitra (garbd) nie przetrwa awarii jednego węzła — wymaga decyzji/ADR.
+          Potwierdź świadomie: -e accept_topology_change=yes
+      when: (f13_survivors | length) != (galera.nodes_expected | int)
     - name: "Odczytaj stan klastra przed operacją destrukcyjną"
       ansible.builtin.command:
         argv:

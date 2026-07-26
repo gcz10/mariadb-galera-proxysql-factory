@@ -1,0 +1,68 @@
+---
+# f12_apply_patch.yml — wspólna logika patcha dla f12_patch.yml (audit#11).
+# Wcześniej domyślna komenda `dnf check-update` udawała patch (operator dostawał
+# "zdrowy raport" bez zmiany pakietów), a nadpisana komenda nie restartowała usługi
+# ani nie weryfikowała runtime.
+#
+# Vars (ustawiane przez play-rodzica):
+#   f12_role:           'galera' | 'proxysql'
+#   f12_service:        usługa systemd do restartu gdy binarium się zmieni ('mariadb' / 'proxysql' / 'proxysql-nr')
+#   f12_version_cmd:    komenda zwracająca wersję binaria ('mariadbd --version' / 'proxysql --version')
+#   f12_patch_packages: lista pakietów do `dnf update` (real) — domyślnie [] → dry-run
+#   f12_patch_command:  komenda operatora (real) — domyślnie '' → dry-run
+
+- name: "audit#11: odczytaj wersję binaria PRZED patch"
+  ansible.builtin.command: "{{ f12_version_cmd }}"
+  register: f12_ver_before
+  changed_when: false
+
+- name: "audit#11: tryb patcha (real gdy pakiety LUB komenda operatora)"
+  ansible.builtin.set_fact:
+    f12_real_patch: >-
+      {{ ((f12_patch_packages | default([])) | length > 0)
+         or ((f12_patch_command | default('')) | length > 0) }}
+
+- name: "audit#11: DRY-RUN — brak f12_patch_packages/f12_patch_command (0 pakietów zmienionych)"
+  ansible.builtin.debug:
+    msg: >-
+      DRY-RUN {{ inventory_hostname }}: wykonano tylko bramę zdrowia; 0 pakietów zmienionych.
+      Realny patch: -e f12_patch_packages='[pkg1,pkg2]' (dnf update) lub f12_patch_command='...'.
+  when: not (f12_real_patch | bool)
+
+- name: "audit#11: real patch — dnf update wskazanych pakietów"
+  ansible.builtin.dnf:
+    name: "{{ f12_patch_packages }}"
+    state: latest
+  register: f12_dnf_result
+  when:
+    - f12_real_patch | bool
+    - (f12_patch_packages | default([]) | length) > 0
+
+- name: "audit#11: real patch — komenda operatora"
+  ansible.builtin.shell: "{{ f12_patch_command }}"
+  register: f12_cmd_result
+  changed_when: true
+  when:
+    - f12_real_patch | bool
+    - (f12_patch_command | default('') | length) > 0
+    - (f12_patch_packages | default([]) | length) == 0
+
+- name: "audit#11: odczytaj wersję binaria PO patch"
+  ansible.builtin.command: "{{ f12_version_cmd }}"
+  register: f12_ver_after
+  changed_when: false
+
+- name: "audit#11: restart usługi gdy binarium się zmienił (kontrolowany; bramę zdrowia sprawdzi play)"
+  ansible.builtin.systemd:
+    name: "{{ f12_service }}"
+    state: restarted
+  when:
+    - f12_real_patch | bool
+    - f12_ver_before.stdout != f12_ver_after.stdout
+
+- name: "audit#11: raport wersji (przed/po) + decyzja restart"
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} [{{ f12_role }}]
+      przed={{ f12_ver_before.stdout }} | po={{ f12_ver_after.stdout }}
+      {{ ' | RESTART ' ~ f12_service if ((f12_real_patch | bool) and f12_ver_before.stdout != f12_ver_after.stdout) else (' | bez restartu (binarium niezmieniony)' if (f12_real_patch | bool) else ' | DRY-RUN') }}

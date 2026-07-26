@@ -15,13 +15,18 @@ mariadb:
   series: "11.4"
   type: "LTS"
   eol: "2029-05"
-  rpm_release: "to-confirm-F0"  # dnf info na hostach
+  rpm_release: "1.el9"          # audit#12: potwierdzone na hostach (MariaDB-server-11.4.12-1.el9)
   repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
   repo_setup_args: "--mariadb-server-version=11.4"
   repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"  # audit#6: integralność skryptu (v2026-06-30, 44184B)
   galera_provider: "galera-4"
+  galera_provider_version: "26.4.27"   # audit#12: galera-4-26.4.27-1.el9
+  galera_provider_rpm_release: "1.el9"
   galera_provider_wsrep_api: 26
-  mariadb_backup_package: "mariadb-backup"
+  # audit#12: pakiet z oficjalnego repo nazywa się MariaDB-backup (wielkie M), nie mariadb-backup
+  mariadb_backup_package: "MariaDB-backup"
+  server_package: "MariaDB-server"
+  client_package: "MariaDB-client"
   eol_warning_10_6: "2026-07-06"
 
 proxysql:
@@ -29,7 +34,7 @@ proxysql:
   series: "3.0"
   tier: "Stable"
   released: "2026-06-05"
-  rpm_release: "to-confirm-F0"
+  rpm_release: "1"              # audit#12: potwierdzone na hostach (proxysql-3.0.9-1.x86_64)
   repo_baseurl: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/"
   repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
   # audit#6: klucz repo_pub_key.gpg jest binarny (nie ASCII-armored) → rpm --import odrzuca.
@@ -84,17 +89,20 @@ ansible:
       version: "5.1.0"
       note: "successor of deprecated community.mysql; FQCN ansible.mysql.*"
     - name: "community.general"
-      version: "latest-stable"
+      version: "10.3.0"          # audit#12: przypięte zgodnie z requirements.yml (było latest-stable)
     - name: "ansible.posix"
-      version: "latest-stable"
+      version: "1.5.4"           # audit#12: przypięte zgodnie z requirements.yml (było latest-stable)
 
 repositories:
   - name: "mariadb-official"
     url: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
-    gpg_fingerprint: "to-verify-F2"  # F2: gpg --recv-keys przed gpgcheck=1
+    # audit#12/#6: integralność skryptu repo_setup jest wymuszana przez sha256 (mariadb.repo_setup_sha256),
+    # a pakiety przez gpgcheck repo MariaDB (klucz instalowany przez sam mariadb_repo_setup).
+    integrity_control: "sha256-pinned-repo-setup"
   - name: "proxysql-official"
     url: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/"
     gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
-    gpg_fingerprint: "to-verify-F2"
+    # audit#6: klucz jest binarny (nie ASCII-armored) → rpm --import go odrzuca.
+    integrity_control: "sha256-pinned-rpm"   # proxysql.rpm_sha256
 
 # Status: LOCKED — promowany z candidate.lock.yml 2026-07-22 (F0 PASS na lab-cluster).

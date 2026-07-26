@@ -16,24 +16,25 @@ FAIL=0
 # MariaDB
 MARIADB_VER=$(grep -E '^  version:' "$LOCKFILE" | head -1 | sed 's/.*version: *"//' | sed 's/"//')
 if [ -n "$MARIADB_VER" ]; then
-  INSTALLED=$(rpm -q --qf '%{VERSION}' mariadb-server 2>/dev/null || echo "not-installed")
+  INSTALLED=$(rpm -q --qf '%{VERSION}' MariaDB-server 2>/dev/null || echo "not-installed")
   if [ "$INSTALLED" = "$MARIADB_VER" ]; then
-    echo "PASS: ISC-3 — mariadb-server $INSTALLED matches lockfile"
+    echo "PASS: ISC-3 — MariaDB-server $INSTALLED matches lockfile"
   else
-    echo "FAIL: ISC-3 — mariadb-server '$INSTALLED' != lockfile '$MARIADB_VER'"
+    echo "FAIL: ISC-3 — MariaDB-server '$INSTALLED' != lockfile '$MARIADB_VER'"
     FAIL=1
   fi
 fi
 
 # mariadb-backup
-MB_VER=$(grep -E 'mariadb_backup' "$LOCKFILE" | head -1)
-if echo "$MB_VER" | grep -q 'mariadb-backup'; then
-  if rpm -q mariadb-backup >/dev/null 2>&1; then
-    echo "PASS: ISC-3 — mariadb-backup installed"
-  else
-    echo "FAIL: ISC-3 — mariadb-backup not installed"
-    FAIL=1
-  fi
+# audit#12: oficjalne repo instaluje MariaDB-backup (wielkie M); wcześniej sprawdzano
+# mariadb-backup → rpm -q nigdy nie trafiał i test dawał fałszywy sygnał.
+MB_PKG=$(grep -E 'mariadb_backup_package:' "$LOCKFILE" | head -1 | sed 's/.*: *"//' | sed 's/".*//')
+MB_PKG=${MB_PKG:-MariaDB-backup}
+if rpm -q "$MB_PKG" >/dev/null 2>&1; then
+  echo "PASS: ISC-3 — $MB_PKG installed"
+else
+  echo "FAIL: ISC-3 — $MB_PKG not installed"
+  FAIL=1
 fi
 
 # ProxySQL
