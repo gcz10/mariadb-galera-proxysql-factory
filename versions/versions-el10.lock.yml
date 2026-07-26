@@ -1,0 +1,118 @@
+---
+# versions-el10.lock.yml — lockfile platformy Rocky Linux 10 (EL10).
+# Równoległy do versions.lock.yml (EL9); kod playbooków jest wspólny i nie zna platformy.
+# Wybór następuje przez `versions.lock_file` w clusters/<name>/cluster.yml.
+#
+# Wszystkie wersje i sumy kontrolne ZWERYFIKOWANE realnym zapytaniem do repozytoriów
+# 2026-07-26 (repomd.xml + pobranie RPM-a i policzenie sha256), nie przepisane z pamięci.
+# Produkcja używa wyłącznie tego pliku. Nigdy state: latest.
+
+rocky_linux:
+  major: 10
+  allowed_minors:
+    - "10.2"                       # zweryfikowane: download.rockylinux.org/pub/rocky/{10.0,10.1,10.2}
+  major_eol: "2035-05-31"
+
+mariadb:
+  # KLUCZOWE: EL10 ma DOKŁADNIE te same wersje co EL9. To zmiana OS, nie upgrade bazy.
+  version: "11.4.12"
+  series: "11.4"
+  type: "LTS"
+  eol: "2029-05"
+  rpm_release: "1.el10"            # zweryfikowane w repodata: MariaDB-server-11.4.12-1.el10
+  repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
+  repo_setup_args: "--mariadb-server-version=11.4"
+  # Skrypt repo_setup jest OS-agnostyczny — ta sama suma co w lockfile EL9 (v2026-06-30, 44184B).
+  repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"
+  galera_provider: "galera-4"
+  galera_provider_version: "26.4.27"
+  galera_provider_rpm_release: "1.el10"
+  galera_provider_wsrep_api: 26
+  mariadb_backup_package: "MariaDB-backup"
+  server_package: "MariaDB-server"
+  client_package: "MariaDB-client"
+  # PUŁAPKA: MariaDB mapuje Rocky na "rhel", a downloads.mariadb.com/.../rocky/10/ zwraca
+  # marketingowy HTML z kodem 200 — to NIE jest dowód istnienia repo. Realny baseurl to
+  # https://dlm.mariadb.com/repo/mariadb-server/11.4/yum/rhel/10/x86_64 (repomd.xml, application/xml).
+  # Sam mariadb_repo_setup składa tę ścieżkę poprawnie; pole jest tu jako ostrzeżenie dla operatora.
+  verified_baseurl: "https://dlm.mariadb.com/repo/mariadb-server/11.4/yum/rhel/10/x86_64"
+
+proxysql:
+  version: "3.0.9"
+  series: "3.0"
+  tier: "Stable"
+  released: "2026-06-05"
+  rpm_release: "1"
+  # PUŁAPKA: ProxySQL nie publikuje ścieżki `rocky/*` (404 dla 9 i 10) — oficjalna jest `centos/<major>`.
+  repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+  # audit#6: klucz repo_pub_key.gpg jest binarny (nie ASCII-armored) → rpm --import odrzuca.
+  # Kontrolą integralności jest przypięty sha256 RPM-u (weryfikowany przez get_url).
+  rpm_sha256:
+    x86_64: "4a3e86ef6f96668028398e4841c6d894c3ac058d9a8de0fa60dc9875dc59832e"  # proxysql-3.0.9-1-centos10.x86_64.rpm, 40324733B
+  cves_patched:
+    - "CVE-2026-48772"
+    - "CVE-2026-48773"
+
+pmm:
+  # Kontener — niezależny od OS hosta; identyczny z lockfile EL9.
+  version: "3.8.1"
+  released: "2026-06-16"
+  image: "percona/pmm-server:3.8.1"
+  image_digest: "sha256:ef47471fb3b54e10897a92bab0b7b45e82d9825c3b0abf5a0693242191f99468"
+  deployment: "docker-volume"
+  support_eol: "not-published-per-point-release"
+  source: "https://github.com/percona/pmm/blob/main/documentation/docs/release-notes/3.8.1.md"
+
+docker:
+  # Zweryfikowane w repodata download.docker.com/linux/centos/10/x86_64/stable:
+  # identyczne numery wersji co EL9, wyłącznie inny sufiks release.
+  engine_version: "3:29.6.2-1.el10"
+  cli_version: "1:29.6.2-1.el10"
+  containerd_version: "2.2.6-1.el10"
+  buildx_version: "0.35.0-1.el10"
+  compose_version: "5.3.1-1.el10"
+  repo_baseurl: "https://download.docker.com/linux/centos/$releasever/$basearch/stable"
+  repo_gpgkey: "https://download.docker.com/linux/centos/gpg"
+
+minio:
+  image: "minio/minio:RELEASE.2025-09-07T16-13-09Z"
+  image_digest: "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+  sdk_version: "7.2.7"
+
+maildev:
+  image: "maildev/maildev:2.2.1"
+
+node_exporter:
+  # Statyczny binarz Go — ta sama suma dla EL9 i EL10.
+  version: "1.12.1"
+  released: "2026-07-14"
+  source: "https://github.com/prometheus/node_exporter/releases/tag/v1.12.1"
+  linux_sha256:
+    amd64: "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
+    arm64: "ad35b605f9954b9f1ffddf5ba054bdc5a98d790b9eae5291e1eeb83f1ecbd0e7"
+
+ansible:
+  # Warstwa kontrolera — niezależna od platformy hostów.
+  core_version: "2.21.2"
+  core_released: "2026-07-13"
+  collections:
+    - name: "ansible.mysql"
+      version: "5.1.0"
+      note: "successor of deprecated community.mysql; FQCN ansible.mysql.*"
+    - name: "community.general"
+      version: "10.3.0"
+    - name: "ansible.posix"
+      version: "1.5.4"
+
+repositories:
+  - name: "mariadb-official"
+    url: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
+    integrity_control: "sha256-pinned-repo-setup"
+  - name: "proxysql-official"
+    url: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/10/"
+    gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+    integrity_control: "sha256-pinned-rpm"   # proxysql.rpm_sha256
+
+# Status: LOCKED dla warstwy pakietowej — wszystkie wersje i sumy potwierdzone realnym
+# zapytaniem do repozytoriów 2026-07-26. NIEZWERYFIKOWANE URUCHOMIENIEM: SELinux/SST
+# (moduł polityki mariadb-server.te pod checkpolicy 3.10) — bramka R3 planu dual-platform.

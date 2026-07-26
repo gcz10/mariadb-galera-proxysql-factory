@@ -105,7 +105,7 @@ repositories:
     # a pakiety przez gpgcheck repo MariaDB (klucz instalowany przez sam mariadb_repo_setup).
     integrity_control: "sha256-pinned-repo-setup"
   - name: "proxysql-official"
-    url: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/"
+    url: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/9/"   # R1: bylo rocky/9 -> 404
     gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
     # audit#6: klucz jest binarny (nie ASCII-armored) → rpm --import go odrzuca.
     integrity_control: "sha256-pinned-rpm"   # proxysql.rpm_sha256
