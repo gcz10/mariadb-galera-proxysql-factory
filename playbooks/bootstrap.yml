@@ -27,7 +27,7 @@
           - sst_password | length > 0
         fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env). Puste hasło = konto SST bez hasła."
 
-    - name: "Sprawdź, czy którykolwiek węzeł już należy do Primary Component"
+    - name: "Sonduj każdy węzeł Galera: osiągalność + Primary Component (audit#2)"
       ansible.builtin.command:
         argv:
           - mariadb
@@ -38,22 +38,72 @@
           - "SHOW STATUS LIKE 'wsrep_cluster_status'"
       delegate_to: "{{ item }}"
       loop: "{{ groups['galera'] }}"
-      register: bootstrap_primary_checks
+      register: bootstrap_node_probe
       changed_when: false
       failed_when: false
       ignore_unreachable: true
 
-    - name: "ISC-65: blokuj bootstrap, gdy istnieje Primary Component"
+    - name: "Klasyfikuj węzły: żywy Primary / nieosiągalne"
+      ansible.builtin.set_fact:
+        bootstrap_live_primary: >-
+          {{
+            bootstrap_node_probe.results
+            | selectattr('stdout', 'defined')
+            | map(attribute='stdout')
+            | select('search', 'Primary')
+            | list
+          }}
+        bootstrap_unreachable: >-
+          {{
+            bootstrap_node_probe.results
+            | rejectattr('stdout', 'defined')
+            | map(attribute='item')
+            | list
+          }}
+
+    - name: "ISC-65: brak żywego Primary Component (anti split-brain)"
       ansible.builtin.assert:
         that:
-          - (bootstrap_primary_checks.results | map(attribute='stdout', default='') | join('\n')) is not search('wsrep_cluster_status\\s+Primary')
-        fail_msg: "Bootstrap zablokowany: co najmniej jeden węzeł już raportuje Primary Component."
+          - bootstrap_live_primary | length == 0
+        fail_msg: >-
+          Żywy Primary Component wykryty: {{ bootstrap_live_primary }}.
+          Bootstrap = drugi Primary → split-brain / utrata danych. Dołącz zamiast bootstrappować.
+
+    - name: "audit#2: nieosiągalne węzły wymagają bootstrap_confirm_all_down=true"
+      ansible.builtin.assert:
+        that:
+          - (bootstrap_unreachable | length == 0) or (bootstrap_confirm_all_down | default(false) | bool)
+        fail_msg: >-
+          Nieosiągalne węzły: {{ bootstrap_unreachable }}. Nie można wykluczyć, że któryś
+          działa jako Primary (sieć/partycja). Jeśli na PEWNO wszystkie stoją — przekaż
+          -e bootstrap_confirm_all_down=true. W przeciwnym razie zbadaj osiągalność najpierw.
 
     - name: "Tylko jeden węzeł do bootstrap"
       ansible.builtin.assert:
         that:
           - ansible_play_hosts | length == 1
         fail_msg: "Bootstrap na jednym węźle (galera[0], hosts: galera[0]). (ISC-12, ISC-65)"
+
+    - name: "Odczytaj grastate.dat na węźle bootstrap (recovery guard)"
+      ansible.builtin.slurp:
+        path: /var/lib/mysql/grastate.dat
+      register: bootstrap_grastate
+      failed_when: false
+      changed_when: false
+
+    - name: "ISC-65: recovery — safe_to_bootstrap=1 na węźle bootstrap"
+      ansible.builtin.assert:
+        that:
+          - >-
+            bootstrap_grastate.failed
+            or (bootstrap_grastate.content | b64decode is search('(?m)^safe_to_bootstrap:\\s*1'))
+        fail_msg: >-
+          grastate.dat na {{ inventory_hostname }} nie ma safe_to_bootstrap:1.
+          Klaster nie został czysto zatrzymany LUB to nie ten węzeł ma najwyższy seqno.
+          Recovery: znajdź węzeł z safe_to_bootstrap:1 (lub max seqno w grastate.dat/
+          wsrep_local_causes_uuid) i bootstrappuj go przez -e bootstrap_node=<ten_węzeł>.
+          Bootstrappowanie dowolnego węzła = ryzyko utraty zatwierdzonych transakcji.
+      when: not bootstrap_grastate.failed
 
     - name: "Zabij stary proces MariaDB (tylko lab: brak systemd)"
       ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null || true"
@@ -94,16 +144,33 @@
         enabled: true
       when: use_systemd
 
-    - name: "Czekaj na Primary Component"
+    - name: "Czekaj na Primary Component (port + socket)"
       ansible.builtin.wait_for:
         port: 3306
         timeout: 30
 
+    - name: "Czekaj na gniazdo unix"
+      ansible.builtin.wait_for:
+        path: /var/lib/mysql/mysql.sock
+        timeout: 30
+
     - name: "Weryfikuj cluster status"
       ansible.mysql.mysql_query:
-        query: "SHOW STATUS WHERE Variable_name IN ('wsrep_cluster_status','wsrep_cluster_size','wsrep_connected','wsrep_ready','wsrep_local_state','wsrep_provider_name','wsrep_provider_version')"
+        query: "SHOW STATUS WHERE Variable_name IN ('wsrep_cluster_status','wsrep_cluster_size','wsrep_connected','wsrep_ready','wsrep_local_state')"
         login_unix_socket: /var/lib/mysql/mysql.sock
       register: wsrep_status
+
+    - name: "ISC-12/65: asercje stanu po bootstrap (Primary/Synced/Ready/size=1)"
+      ansible.builtin.assert:
+        that:
+          - wsrep_status.query_result[0] | selectattr('Variable_name', 'equalto', 'wsrep_cluster_status') | map(attribute='Value') | first == 'Primary'
+          - wsrep_status.query_result[0] | selectattr('Variable_name', 'equalto', 'wsrep_local_state') | map(attribute='Value') | first == '4'
+          - wsrep_status.query_result[0] | selectattr('Variable_name', 'equalto', 'wsrep_ready') | map(attribute='Value') | first == 'ON'
+          - wsrep_status.query_result[0] | selectattr('Variable_name', 'equalto', 'wsrep_cluster_size') | map(attribute='Value') | first == '1'
+        fail_msg: >-
+          Bootstrap nie osiągnął zdrowego Primary: {{ wsrep_status.query_result }}.
+          Oczekiwano: cluster_status=Primary, local_state=4 (Synced), ready=ON, cluster_size=1.
+        success_msg: "Bootstrap OK: Primary/Synced/Ready, size=1"
 
     - name: "Wypisz cluster status"
       ansible.builtin.debug:
