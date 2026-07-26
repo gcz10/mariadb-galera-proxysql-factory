@@ -2,8 +2,30 @@
 
 **Status:** PLAN — nie rozpoczęto implementacji.
 **Data ustaleń:** 2026-07-26. Wszystkie wersje/URL/sumy **zweryfikowane realnym zapytaniem do repozytoriów**, nie z pamięci.
-**Zasada nadrzędna:** kod Rocky 9 **zostaje**. To dodanie drugiej platformy, nie migracja.
+**Zasada nadrzędna:** kod jest **uniwersalny** — zero wersji i zero platformy w playbookach.
+Wszystko platformowe/wersyjne pochodzi z **lockfile wskazanego per klaster** (`versions.lock_file` w `cluster.yml`; schema tego wymaga).
+Kod Rocky 9 **zostaje** — to dodanie drugiej platformy, nie migracja.
 
+## Decyzje operatora (zatwierdzone)
+
+| # | decyzja |
+|---|---|
+| 1 | Nazwa klastra: **`claude-r10`** |
+| 2 | PMM/infra (`infranode`) **także na Rocky 10** |
+| 3 | Adresacja: **nowa, dobrana** — `192.168.1.30-36`, VIP `192.168.1.40` (blok zweryfikowany jako wolny; `.25-.28` zajęte, brama `.1`, kontroler `.190`) |
+| 4 | Backup: **mechanizm S3/MinIO zostaje**, MinIO również na Rocky 10. `#10` (SMB) **poza zakresem** tej pracy |
+
+### Proponowany przydział adresów
+
+```
+gnode1 .30   gnode2 .31   gnode3 .32      (Galera)
+pnode1 .33   pnode2 .34                   (ProxySQL)
+rnode1 .35                                (restore drill, poza klastrem)
+infranode .36                             (PMM + MinIO + Maildev)
+VIP    .40                                (Keepalived)
+.37-.39 wolne                             (zapas: 4. wezel Galera / arbiter garbd)
+```
+Układ celowo lustrzany wobec EL9 (`.10-.16` + VIP `.20`), żeby mapowanie 1:1 było oczywiste.
 ---
 
 ## 0. Kontekst i konsekwencja do zaakceptowania
@@ -67,24 +89,52 @@ ProxySQL (UWAGA: sciezka "rocky/*" zwraca 404 — trzeba uzyc "centos"):
 
 Wystarczy nowy lockfile + nowy katalog klastra wskazujący na niego.
 
-**Wyjątek:** cztery miejsca omijają ten mechanizm i mają EL9 wpisane na sztywno. To cała lista zmian w kodzie.
+**Wyjątek:** osiem miejsc omija ten mechanizm (platforma lub wersja wpisana na sztywno),
+a dwa playbooki backupu/restore **w ogóle nie ładują lockfile**. To pełna lista zmian w kodzie.
 
 ---
 
-## 3. Lista zmian w kodzie (dokładna, 4 miejsca)
+## 3. Lista zmian w kodzie (audyt 2026-07-26)
 
+### 3a. Co JUŻ poprawnie pochodzi z lockfile (nie ruszać)
+`mariadb.version` · `server/client/backup_package` · `rpm_release` · `galera_provider` + `_version` + `_rpm_release`
+· `repo_setup_args` + `repo_setup_sha256` · `proxysql.series/version/rpm_sha256`
+· wszystkie 5 wersji Dockera · `pmm.image_digest` · `minio.image_digest`
+
+### 3b. Zahardcodowana PLATFORMA
 | # | plik:linia | obecnie | docelowo |
 |---|---|---|---|
-| A1 | `playbooks/f2_preflight.yml:13` | `lockfile: "{{ lookup('file', 'versions/versions.lock.yml') \| from_yaml }}"` | ścieżka z `versions.lock_file` |
-| A2 | `playbooks/f2_preflight.yml:19-21` | `ansible_distribution_major_version == "9"` + `fail_msg` „Rocky Linux 9" | porównanie z `lockfile.rocky_linux.major`, komunikat generowany |
-| A3 | `playbooks/f2_install.yml:13` | `proxysql_repo_baseurl: ".../proxysql-3.0.x/rocky/9/"` | `centos/{{ major }}` z lockfile |
-| A4 | `playbooks/f2_install.yml:183` | `...centos/9/proxysql-...-1-centos9.<arch>.rpm` | `centos/{{ major }}/...-1-centos{{ major }}.<arch>.rpm` |
+| A1 | `f2_preflight.yml:13` | ścieżka `versions/versions.lock.yml` wpisana wprost | z `versions.lock_file` |
+| A2 | `f2_preflight.yml:19-21` | `major_version == "9"` + `fail_msg` „Rocky Linux 9" | z `lockfile.rocky_linux.major`, komunikat generowany |
+| A3 | `f2_install.yml:13` | `proxysql_repo_baseurl: ".../rocky/9/"` | `centos/{{ major }}` z lockfile |
+| A4 | `f2_install.yml:183` | `centos/9/...-1-centos9.<arch>.rpm` | `centos/{{ major }}/...-1-centos{{ major }}.<arch>.rpm` |
+
+### 3c. Zahardcodowane WERSJE
+| # | plik:linia | obecnie | docelowo |
+|---|---|---|---|
+| B1 | `f2_install.yml:12` | `mariadb_version: "11.4"` | `lock.mariadb.series` |
+| B2 | `f10_restore.yml:14` | `mariadb_version: "11.4"` | `lock.mariadb.series` |
+| B3 | `f10_backup.yml:74` | `minio_sdk_version: "7.2.7"` | lockfile (nowe pole `minio.sdk_version`) |
+| B4 | `f10_restore.yml:18` | `minio_sdk_version: "7.2.7"` | jw. |
+| B5 | `f10_restore.yml:64-66` | `MariaDB-server/client/backup` wprost | `lock.mariadb.*_package` + przypięte NEVRA |
+
+### 3d. BŁĘDY wykryte przy audycie (do naprawy w R1)
+**C1 — `f10_restore.yml:49-53` pobiera `mariadb_repo_setup` BEZ weryfikacji sha256.**
+Ta sama dziura supply-chain co `audit#6`, naprawiona w `f2_install`, ale **przeoczona w restore**.
+
+**C2 — `f10_backup.yml` i `f10_restore.yml` nie ładują lockfile w ogóle** (0 wystąpień `include_vars`).
+Skutek: host restore instaluje MariaDB po samej nazwie z `state: present`, czyli **najnowszą z serii, nie przypiętą**
+— ta sama klasa błędu co `audit#12`. Restore drill może odtwarzać na innej wersji niż klaster;
+dodany wcześniej guard zgodności wersji wykryje to dopiero po fakcie.
 
 **Pozostałe trafienia `el9` są DANYMI platformy EL9, nie kodem** — zostają nietknięte:
 `versions/versions.lock.yml`, `versions/candidate.lock.yml`, `versions/discovered-versions.json`,
 `versions/compatibility-report.md`, `clusters/claude-pve/*`.
 
 Dodatkowo: `allowed_minors` musi dopuścić `10.2` w nowym lockfile (preflight to egzekwuje).
+
+**Kryterium wyjścia z R1:** `grep` po playbookach nie znajduje ani numeru wersji, ani numeru majora OS.
+Po tym dodanie EL10 = **wyłącznie nowy lockfile + nowy katalog klastra**, zero zmian w playbookach.
 
 ---
 
