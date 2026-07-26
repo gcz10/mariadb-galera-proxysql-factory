@@ -1,0 +1,90 @@
+---
+# CI — gate merge na sprawdzeniach, które realnie łapią błędy (audit#22).
+# validate (blocking): schema, ansible syntax-check, python compile, bash -n.
+# lint (non-blocking): ansible-lint — 119 istniejących naruszeń (głównie styl +
+# parsowanie include-files jako playbook); nie blokuje dopóki dług nie zostanie spłacony.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate (schema + syntax + compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps
+        run: pip install ansible-core jsonschema pyyaml
+
+      - name: Install Ansible collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Schema validation (all clusters)
+        run: |
+          set -e
+          rc=0
+          for c in clusters/*/cluster.yml; do
+            [ -f "$c" ] || continue
+            if python3 tests/validation/validate-cluster-schema.py "$c" clusters/schema/cluster.schema.json; then
+              echo "OK: $c"
+            else
+              echo "FAIL: $c"; rc=1
+            fi
+          done
+          exit $rc
+
+      - name: ansible syntax-check (playbooks only; skip include-only files)
+        run: |
+          set -e
+          rc=0
+          for pb in playbooks/*.yml; do
+            # pomiń pliki bez ,hosts:' (include_tasks jak tls_certs.yml — nie są playbookami)
+            if ! grep -qE '^[[:space:]]*hosts:' "$pb"; then
+              echo "skip (include-only): $pb"; continue
+            fi
+            if ansible-playbook "$pb" -i clusters/example-cluster/inventory.yml --syntax-check >/tmp/sx.out 2>&1; then
+              echo "syntax OK: $pb"
+            else
+              echo "syntax FAIL: $pb"; cat /tmp/sx.out; rc=1
+            fi
+          done
+          exit $rc
+
+      - name: python compile (tests + validation)
+        run: python3 -m compileall -q tests
+
+      - name: bash -n (all shell scripts)
+        run: |
+          set -e
+          rc=0
+          while IFS= read -r -d '' f; do
+            bash -n "$f" || { echo "bash -n FAIL: $f"; rc=1; }
+          done < <(find . -name '*.sh' -not -path './.git/*' -print0)
+          exit $rc
+
+      - name: JSON schema file valid
+        run: python3 -c "import json; json.load(open('clusters/schema/cluster.schema.json')); print('schema JSON valid')"
+
+  lint:
+    name: ansible-lint (non-blocking — debt tracked)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install ansible-lint ansible-core
+      - run: ansible-galaxy collection install -r requirements.yml
+      - run: ansible-lint playbooks roles
