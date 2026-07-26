@@ -1,17 +1,18 @@
 ---
 # bootstrap.yml — initial bootstrap klastra Galera (OSOBNY od site.yml)
 # Wymaga: site.yml (config deployed)
-# Uruchomienie: ansible-playbook bootstrap.yml -i clusters/<name>/inventory.yml -e confirm=yes -l gnode1
-# NIGDY nie uruchamiaj bez -e confirm=yes (ISC-12, ISC-13, ISC-65)
+# Uruchomienie: ansible-playbook bootstrap.yml -i clusters/<name>/inventory.yml -e confirm=yes
+# NIGDY nie uruchamiaj bez -e confirm=yes (ISC-12, ISC-13, ISC-65). Celuje w galera[0].
 
 - name: "Bootstrap - initial Galera cluster (JEDEN węzeł, jawne potwierdzenie)"
-  hosts: galera
+  hosts: "{{ bootstrap_node | default('galera[0]') }}"
   become: true
   serial: 1
+  max_fail_percentage: 0
   vars:
     sst_user: "sst_user"
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
-    use_systemd: "{{ ansible_service_mgr == 'systemd' }}"
+    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   pre_tasks:
     - name: "Blokuj bootstrap bez confirm=yes"
@@ -20,12 +21,39 @@
           - confirm is defined
           - confirm | bool
         fail_msg: "Bootstrap wymaga -e confirm=yes. Nigdy nie uruchamiaj bez jawnego potwierdzenia."
+    - name: "Wymagaj SST_PASSWORD"
+      ansible.builtin.assert:
+        that:
+          - sst_password | length > 0
+        fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env). Puste hasło = konto SST bez hasła."
+
+    - name: "Sprawdź, czy którykolwiek węzeł już należy do Primary Component"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SHOW STATUS LIKE 'wsrep_cluster_status'"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
+      register: bootstrap_primary_checks
+      changed_when: false
+      failed_when: false
+      ignore_unreachable: true
+
+    - name: "ISC-65: blokuj bootstrap, gdy istnieje Primary Component"
+      ansible.builtin.assert:
+        that:
+          - (bootstrap_primary_checks.results | map(attribute='stdout', default='') | join('\n')) is not search('wsrep_cluster_status\\s+Primary')
+        fail_msg: "Bootstrap zablokowany: co najmniej jeden węzeł już raportuje Primary Component."
 
     - name: "Tylko jeden węzeł do bootstrap"
       ansible.builtin.assert:
         that:
           - ansible_play_hosts | length == 1
-        fail_msg: "Bootstrap na jednym węźle. Użyj -l gnode1. (ISC-12, ISC-65)"
+        fail_msg: "Bootstrap na jednym węźle (galera[0], hosts: galera[0]). (ISC-12, ISC-65)"
 
     - name: "Zabij stary proces MariaDB (tylko lab: brak systemd)"
       ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null || true"
@@ -72,7 +100,7 @@
         timeout: 30
 
     - name: "Weryfikuj cluster status"
-      community.mysql.mysql_query:
+      ansible.mysql.mysql_query:
         query: "SHOW STATUS WHERE Variable_name IN ('wsrep_cluster_status','wsrep_cluster_size','wsrep_connected','wsrep_ready','wsrep_local_state','wsrep_provider_name','wsrep_provider_version')"
         login_unix_socket: /var/lib/mysql/mysql.sock
       register: wsrep_status
@@ -82,7 +110,7 @@
         msg: "{{ wsrep_status.query_result }}"
 
     - name: "Utworz SST user"
-      community.mysql.mysql_user:
+      ansible.mysql.mysql_user:
         name: "{{ sst_user }}"
         password: "{{ sst_password }}"
         priv: "*.*:RELOAD,PROCESS,LOCK TABLES,BINLOG ADMIN,REPLICATION CLIENT"
@@ -93,7 +121,7 @@
 
     - name: "Zapisz dowód bootstrap"
       ansible.builtin.copy:
-        content: "Bootstrap completed at {{ ansible_date_time.iso8601 }} on {{ inventory_hostname }}\n{{ wsrep_status.query_result }}"
+        content: "Bootstrap completed at {{ ansible_facts['date_time']['iso8601'] }} on {{ inventory_hostname }}\n{{ wsrep_status.query_result }}"
         dest: /var/lib/mysql/.isa_bootstrap_proof
         mode: "0644"
 

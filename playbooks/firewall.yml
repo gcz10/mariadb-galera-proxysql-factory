@@ -1,0 +1,186 @@
+---
+# Jeden właściciel polityki firewalld dla wszystkich hostów klastra.
+# Reguły rich-rule pozwalają nakładającym się CIDR-om korzystać z różnych usług
+# bez przechwytywania całego źródła przez osobną strefę.
+
+- name: "Firewall — minimalne wejście według roli hosta"
+  hosts: "{{ firewall_target_hosts | default('all') }}"
+  become: true
+  gather_facts: true
+  serial: 1
+  max_fail_percentage: 0
+  vars:
+    firewall_legacy_zones:
+      - pmm-monitoring
+      - proxysql-admin
+    firewall_galera_tcp_rules: >-
+      {{
+        (
+          (network.database_cluster_cidrs + network.monitoring_cidrs)
+          | unique
+          | product(['3306'])
+          | list
+        )
+        +
+        (
+          network.database_cluster_cidrs
+          | product(['4444', '4567', '4568'])
+          | list
+        )
+      }}
+    firewall_proxysql_tcp_rules: >-
+      {{
+        (network.application_cidrs | product(['6033']) | list)
+        + (network.administration_cidrs | product(['6032']) | list)
+        + (network.monitoring_cidrs | product(['6070', '9100']) | list)
+      }}
+    firewall_infra_tcp_rules: >-
+      {{
+        (network.administration_cidrs | product(['80', '9001', '8025']) | list)
+        +
+        (
+          (
+            network.administration_cidrs
+            + network.database_cluster_cidrs
+            + network.monitoring_cidrs
+          )
+          | unique
+          | product(['443'])
+          | list
+        )
+        + (network.database_cluster_cidrs | product(['9000']) | list)
+      }}
+
+  pre_tasks:
+    - name: "Wymagaj jawnych źródeł ruchu"
+      ansible.builtin.assert:
+        that:
+          - network.administration_cidrs | length > 0
+          - network.database_cluster_cidrs | length > 0
+          - network.application_cidrs | length > 0
+          - network.monitoring_cidrs | length > 0
+        fail_msg: "Polityka firewalld wymaga niepustych CIDR administracji, bazy, aplikacji i monitoringu."
+
+  tasks:
+    - name: "Zainstaluj firewalld"
+      ansible.builtin.dnf:
+        name: firewalld
+        state: present
+
+    - name: "Zainicjalizuj listę zarządzanych interfejsów ingress"
+      ansible.builtin.set_fact:
+        firewall_managed_interfaces: []
+
+    - name: "Wybierz aktywne interfejsy IPv4 spoza sieci kontenerowych"
+      ansible.builtin.set_fact:
+        firewall_managed_interfaces: "{{ firewall_managed_interfaces + [item] }}"
+      loop: "{{ ansible_facts.interfaces }}"
+      when:
+        - ansible_facts[item].active | default(false) | bool
+        - ansible_facts[item].ipv4.address is defined
+        - ansible_facts[item].ipv4.address != '127.0.0.1'
+        - item is not match('^(docker|br-|veth|virbr|cni|podman)')
+
+    - name: "Wymagaj zarządzanego interfejsu dla adresu inventory"
+      ansible.builtin.assert:
+        that:
+          - firewall_managed_interfaces | length > 0
+          - ansible_host in ansible_facts.all_ipv4_addresses
+        fail_msg: >-
+          Adres inventory {{ ansible_host }} nie należy do aktywnego interfejsu IPv4;
+          nie można bezpiecznie przypisać polityki ingress.
+
+    - name: "Utwórz katalog stref firewalld"
+      ansible.builtin.file:
+        path: /etc/firewalld/zones
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: "Usuń legacy strefy źródłowe"
+      ansible.posix.firewalld:
+        zone: "{{ item }}"
+        state: absent
+        permanent: true
+        offline: true
+      loop: "{{ firewall_legacy_zones }}"
+      register: firewall_legacy_cleanup
+
+    - name: "Włącz firewalld"
+      ansible.builtin.systemd_service:
+        name: firewalld
+        enabled: true
+        state: started
+
+    - name: "Odtwórz public zone z dokładnej allowlisty roli"
+      ansible.builtin.template:
+        src: ../roles/firewall/templates/public.xml.j2
+        dest: /etc/firewalld/zones/public.xml
+        owner: root
+        group: root
+        mode: "0640"
+      register: firewall_public_zone
+
+    - name: "Przeładuj kompletną politykę firewalld (usuń także dryf runtime)"
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - --reload
+      changed_when: false
+
+    - name: "Przypisz każdy zewnętrzny interfejs do zarządzanej public zone"
+      ansible.posix.firewalld:
+        zone: public
+        interface: "{{ item }}"
+        state: enabled
+        permanent: true
+        immediate: true
+      loop: "{{ firewall_managed_interfaces }}"
+
+    - name: "Potwierdź aktywny firewalld"
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - --state
+      register: firewall_runtime_state
+      changed_when: false
+      failed_when: firewall_runtime_state.stdout | trim != 'running'
+
+    - name: "Odczytaj target public zone"
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - --zone=public
+          - --permanent
+          - --get-target
+      register: firewall_public_target
+      changed_when: false
+      failed_when: firewall_public_target.stdout | trim != 'default'
+
+    - name: "Potwierdź strefę każdego zewnętrznego interfejsu"
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - "--get-zone-of-interface={{ item }}"
+      loop: "{{ firewall_managed_interfaces }}"
+      register: firewall_interface_zones
+      changed_when: false
+      failed_when: firewall_interface_zones.stdout | trim != 'public'
+
+    - name: "Odczytaj wszystkie aktywne powiązania stref"
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - --get-active-zones
+      register: firewall_active_zones
+      changed_when: false
+
+    - name: "Blokuj źródłowe strefy, które mogłyby ominąć allowlistę"
+      ansible.builtin.assert:
+        that:
+          - firewall_active_zones.stdout is not search('(?m)^\\s*sources:\\s+\\S')
+        fail_msg: >-
+          Wykryto aktywną strefę z przypisaniem source, która ma pierwszeństwo przed
+          public zone i mogłaby ominąć zarządzaną allowlistę:
+          {{ firewall_active_zones.stdout }}

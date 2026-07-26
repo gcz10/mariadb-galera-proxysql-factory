@@ -21,7 +21,7 @@ make lab-patch-verify CLUSTER=<name>
 ## Major upgrade — ISC-53/54/56
 
 ```bash
-# 1. Plan (read-only) — ISC-53/54: oficjalna ścieżka MariaDB/Galera (11.4 → 11.8 LTS)
+# 1. Plan (read-only) — ISC-53/54: oficjalna ścieżka MariaDB/Galera do wspieranego LTS (obecnie 12.3)
 #    Generuje docs/plans/major-upgrade-plan.md. Nie modyfikuje hostów.
 make cluster-upgrade-plan CLUSTER=<name>
 

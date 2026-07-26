@@ -6,7 +6,7 @@ active hostgroups / offline HG empty when cluster healthy), ISC-20 (Galera
 monitor converged), ISC-21 (runtime == disk, no drift), ISC-22 (default
 admin credentials rejected), ISC-23 (read/write split off — no query rules).
 
-Requires PROXYSQL_ADMIN_PASSWORD in the environment.
+Requires `/etc/proxysql/admin-check.cnf` deployed by F7 on each ProxySQL node.
 """
 
 import os
@@ -18,7 +18,6 @@ import yaml
 CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
 INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
-ADMIN_PW = os.environ.get("PROXYSQL_ADMIN_PASSWORD", "")
 
 with open(CONFIG_PATH, encoding="utf-8") as fh:
     CLUSTER_CONFIG = yaml.safe_load(fh)
@@ -29,15 +28,15 @@ BACKUP_HG = 20
 READER_HG = 30
 OFFLINE_HG = 40
 # ProxySQL factory-default admin credential — asserted to be REJECTED (ISC-22).
-FACTORY_DEFAULT_CRED = "admin"
 
 
-def run_admin_query(query, password=None):
+def run_admin_query(query, factory_default=False):
     """Run a ProxySQL admin query on all proxysql nodes, return {node: body}."""
-    pw = password if password is not None else ADMIN_PW
+    env_prefix = "MYSQL_PWD=admin " if factory_default else ""
+    auth = "" if factory_default else "--defaults-extra-file=/etc/proxysql/admin-check.cnf "
     cmd = [
         ANSIBLE, "proxysql", "-i", INVENTORY, "-m", "ansible.builtin.shell",
-        "-a", f'mariadb -h127.0.0.1 -P6032 -uadmin -p{pw} -N -B -e "{query}"',
+        "-a", f'{env_prefix}mariadb {auth}-h127.0.0.1 -P6032 -uadmin -N -B -e "{query}"',
         "--fork", "5",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -66,9 +65,6 @@ def check(condition, message, failures):
 def main():
     failures = []
 
-    if not ADMIN_PW:
-        print("FAIL: PROXYSQL_ADMIN_PASSWORD not set in environment")
-        return 1
 
     # Runtime server distribution per ProxySQL node
     servers_raw = run_admin_query(
@@ -137,7 +133,7 @@ def main():
         )
 
     # ISC-22: default admin:admin credentials must be rejected
-    default_raw = run_admin_query("SELECT 1", password=FACTORY_DEFAULT_CRED)
+    default_raw = run_admin_query("SELECT 1", factory_default=True)
     for node, body in default_raw.items():
         check(
             "Access denied" in body or "ERROR" in body,

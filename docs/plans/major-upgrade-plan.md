@@ -1,11 +1,11 @@
-# Plan major upgrade: MariaDB 11.4.12 → 11.8 LTS
+# Plan major upgrade: MariaDB 11.4.12 → 12.3 LTS
 
 _Wygenerowany przez `f12_upgrade_plan.yml` (ISC-53/54/56). Read-only — ten plik
 jest planem, nie wykonaniem. Źródło: oficjalna dokumentacja MariaDB/Galera._
 
 ## Ścieżka (ISC-54 — oficjalna dokumentacja)
 - **Obecna wersja:** MariaDB 11.4.12 (Galera 4, wsrep API 26)
-- **Cel:** MariaDB 11.8 LTS (EOL 2029-08)
+- **Cel:** MariaDB 12.3 LTS (EOL 2029-06-30)
 - **Metoda:** rolling in-place upgrade (Galera 4 wspiera 10.11/11.4/11.8, brak dump/restore)
 - **Źródła:**
   - https://mariadb.com/kb/en/upgrading-galera-cluster/
@@ -43,7 +43,7 @@ MariaDB nie wspiera downgrade datadir między major wersjami:
 Przed upgrade ustaw `innodb_fast_shutdown=0` (czysty flush) dla awaryjnego rollbacku.
 
 ## Weryfikacja po upgrade
-- Wszystkie węzły: `SELECT VERSION();` == 11.8
+- Wszystkie węzły: `SELECT VERSION();` == 12.3
 - `wsrep_cluster_status=Primary`, `wsrep_cluster_size=3`
 - `mariadb-upgrade --skip-write-binlog` raportuje OK na każdym węźle
 - `CHECK TABLE` na tabelach użytkownika (integralność)

@@ -27,7 +27,7 @@ proxysql:
   read_write_split_enabled: false
   endpoint:
     type: "keepalived_vip"
-    address: "VIP_PLACEHOLDER"
+    address: "10.0.0.100"   # PLACEHOLDER — zastąp rzeczywistym VIP z sieci klastra
     port: 6033
 
 # TLS opcjonalne per-klaster. mode=full => serwer prezentuje cert, replikacja Galera
@@ -73,6 +73,7 @@ mariadb_tuning:
   innodb_log_file_size: "128M"       # produkcja: ~25% buffer pool (np. "2G")
   max_connections: 50                # produkcja: peak_connections + zapas
   innodb_flush_log_at_trx_commit: 0  # 1=pełne ACID; 0/2=wydajność (Galera: trwałość z replikacji klastra)
+  gcache_size: "128M"                 # ISC-68: wylicz z calc-gcache.py; podbij przy realnym write rate
 
 availability:
   rpo: "0"
@@ -98,5 +99,9 @@ monitoring:
     cluster_name: "example-cluster"
     validate_certs: true
     credentials_revision: 1
+  alerts:
+    email: "alerts@example.invalid"
+    folder_uid: "isa-alerts"
+    datasource_uid: ""
   system: "pmm"
   log_destination: "unknown"

@@ -14,6 +14,12 @@
     proxysql_repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
 
   tasks:
+    # Załaduj lockfile do namespace `lock` (nie kolizjonuje z proxysql/mariadb z cluster.yml).
+    - name: "Załaduj versions.lock.yml (reprodukowalne wersje)"
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
     # === Galera nodes: MariaDB repo + pakiety ===
     - name: "MariaDB repo - pobierz mariadb_repo_setup"
       ansible.builtin.get_url:
@@ -23,8 +29,8 @@
       when: "'galera' in group_names"
 
 
-    - name: "MariaDB repo - konfiguruj wersje 11.4"
-      ansible.builtin.command: /usr/local/bin/mariadb_repo_setup --mariadb-server-version={{ mariadb_version }} --skip-check-installed
+    - name: "MariaDB repo - konfiguruj wersje z lockfile"
+      ansible.builtin.command: "/usr/local/bin/mariadb_repo_setup {{ lock.mariadb.repo_setup_args | default('--mariadb-server-version=11.4') }} --skip-check-installed"
       args:
         creates: /etc/yum.repos.d/mariadb.repo
       when: "'galera' in group_names"
@@ -39,8 +45,115 @@
           - socat
           - rsync
           - lsof
+          - python3-PyMySQL
+          - policycoreutils-python-utils
+          - checkpolicy
         state: present
       when: "'galera' in group_names"
+
+    # Oficjalny pakiet MariaDB dostarcza źródło polityki Galera, ale nie ładuje
+    # skompilowanego modułu. Bez niego SST mariabackup jest blokowany m.in. na setpgid.
+    - name: "SELinux - przygotuj katalog budowy polityki MariaDB Galera"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      loop:
+        - /var/cache/isa-selinux
+        - /var/cache/isa-selinux/active
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - skompiluj pakietową politykę MariaDB Galera"
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/checkmodule
+          - -M
+          - -m
+          - -o
+          - /var/cache/isa-selinux/mariadb-server.mod
+          - /usr/share/mariadb/policy/selinux/mariadb-server.te
+      changed_when: false
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - zbuduj moduł MariaDB Galera"
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/semodule_package
+          - -o
+          - /var/cache/isa-selinux/mariadb-server.pp
+          - -m
+          - /var/cache/isa-selinux/mariadb-server.mod
+      changed_when: false
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - usuń poprzednią kopię aktywnego modułu"
+      ansible.builtin.file:
+        path: /var/cache/isa-selinux/active/mariadb-server.pp
+        state: absent
+      changed_when: false
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - pobierz aktywny moduł MariaDB Galera"
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/semodule
+          - -X
+          - "400"
+          - -E
+          - mariadb-server
+      args:
+        chdir: /var/cache/isa-selinux/active
+      register: mariadb_galera_policy_extract
+      changed_when: false
+      failed_when: false
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - oblicz checksumę zbudowanego modułu"
+      ansible.builtin.stat:
+        path: /var/cache/isa-selinux/mariadb-server.pp
+        checksum_algorithm: sha256
+      register: mariadb_galera_policy_candidate
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - oblicz checksumę aktywnego modułu"
+      ansible.builtin.stat:
+        path: /var/cache/isa-selinux/active/mariadb-server.pp
+        checksum_algorithm: sha256
+      register: mariadb_galera_policy_active
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - załaduj politykę MariaDB Galera gdy zmieniona"
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/semodule
+          - -X
+          - "400"
+          - -i
+          - /var/cache/isa-selinux/mariadb-server.pp
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+        - >-
+          not mariadb_galera_policy_active.stat.exists or
+          mariadb_galera_policy_candidate.stat.checksum !=
+          (mariadb_galera_policy_active.stat.checksum | default(''))
+
 
     - name: "Włącz mariadb.service na starcie (produkcja: boot persistence; start przez bootstrap/join)"
       ansible.builtin.systemd:
@@ -48,7 +161,7 @@
         enabled: true
       when:
         - "'galera' in group_names"
-        - ansible_service_mgr == 'systemd'
+        - ansible_facts['service_mgr'] == 'systemd'
 
     # === ProxySQL nodes: ProxySQL repo + pakiet ===
     - name: "ProxySQL - pobierz GPG key"
@@ -68,9 +181,9 @@
         path: /etc/yum.repos.d/proxysql.repo
         state: absent
       when: "'proxysql' in group_names"
-    - name: "ProxySQL - instaluj z bezposredniego RPM (arch auto: lab aarch64, prod x86_64)"
+    - name: "ProxySQL - instaluj z bezposredniego RPM (wersja z lockfile, arch auto)"
       ansible.builtin.dnf:
-        name: "{{ proxysql_rpm_url | default('https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/9/proxysql-3.0.9-1-centos9.' ~ ansible_architecture ~ '.rpm') }}"
+        name: "{{ proxysql_rpm_url | default('https://repo.proxysql.com/ProxySQL/proxysql-' ~ (lock.proxysql.series | default('3.0')) ~ '.x/centos/9/proxysql-' ~ (lock.proxysql.version | default('3.0.9')) ~ '-1-centos9.' ~ ansible_architecture ~ '.rpm') }}"
         state: present
         disable_gpg_check: "{{ proxysql_disable_gpg_check | default(true) }}"
       when: "'proxysql' in group_names"
@@ -91,6 +204,34 @@
         name: chronyd
         state: started
         enabled: true
-      when: ansible_service_mgr == 'systemd'
+      when: ansible_facts['service_mgr'] == 'systemd'
+
+    - name: "Zainstaluj qemu-guest-agent (Proxmox widzi IP VM + graceful shutdown)"
+      ansible.builtin.dnf:
+        name: qemu-guest-agent
+        state: present
+
+    - name: "Wlacz qemu-guest-agent (gdy systemd; nieblokujace — wymaga kanalu virtio-serial)"
+      ansible.builtin.systemd:
+        name: qemu-guest-agent
+        state: started
+        enabled: true
+      when: ansible_facts['service_mgr'] == 'systemd'
+      failed_when: false
+      changed_when: false
+
+    - name: "ISC-3: asercja zainstalowanej wersji MariaDB zgodnej z lockfile"
+      ansible.builtin.shell: "mariadbd --version | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"
+      register: f2_installed_mariadb
+      changed_when: false
+      failed_when: false
+      when: "'galera' in group_names"
+
+    - name: "ISC-3: zatrzymaj jeśli wersja MariaDB odbiega od lockfile"
+      ansible.builtin.assert:
+        that:
+          - f2_installed_mariadb.stdout == (lock.mariadb.version | default(f2_installed_mariadb.stdout))
+        fail_msg: "Zainstalowana MariaDB {{ f2_installed_mariadb.stdout }} != lockfile {{ lock.mariadb.version | default('?') }}. Deployment zatrzymany (ISC-3)."
+      when: "'galera' in group_names"
 
   handlers: []

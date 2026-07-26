@@ -1,0 +1,242 @@
+---
+# Usługi wspierające klastra na dedykowanym hoście infra.
+# Zakres: Docker CE + PMM Server + MinIO + Maildev. Bez Samby.
+
+- name: "Infra — wymuś dokładną politykę host firewall przed uruchomieniem usług"
+  ansible.builtin.import_playbook: firewall.yml
+  vars:
+    firewall_target_hosts: infra
+
+- name: "Infra — PMM, MinIO i Maildev"
+  hosts: infra
+  become: true
+  gather_facts: true
+  serial: 1
+  max_fail_percentage: 0
+  vars:
+    pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
+    minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
+    infra_compose_dir: /etc/isa-infra
+    infra_compose_file: /etc/isa-infra/compose.yml
+    infra_firewall_rules: >-
+      {{
+        (
+          network.administration_cidrs
+          | product(['80', '443', '9001', '8025'])
+          | list
+        )
+        +
+        (
+          network.database_cluster_cidrs
+          | product(['443', '9000'])
+          | list
+        )
+        +
+        (network.monitoring_cidrs | product(['443']) | list)
+      }}
+    infra_published_ports:
+      - 80
+      - 443
+      - 9000
+      - 9001
+      - 8025
+
+  pre_tasks:
+    - name: "Załaduj lockfile wersji"
+      ansible.builtin.include_vars:
+        file: "../{{ versions.lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
+    - name: "Wymagaj kompletnej konfiguracji infra"
+      ansible.builtin.assert:
+        that:
+          - cluster.environment != 'production'
+          - groups['infra'] | length == 1
+          - ansible_facts.architecture == 'x86_64'
+          - pmm_admin_password | length >= 12
+          - minio_root_user | length >= 3
+          - minio_root_password | length >= 12
+          - lock.docker.engine_version | length > 0
+          - lock.pmm.image_digest is match('^sha256:[0-9a-f]{64}$')
+          - lock.minio.image_digest is match('^sha256:[0-9a-f]{64}$')
+        fail_msg: >-
+          Infra wymaga jednego hosta x86_64, środowiska nieprodukcyjnego oraz
+          PMM_ADMIN_PASSWORD, MINIO_ROOT_USER i MINIO_ROOT_PASSWORD poza repozytorium.
+      no_log: true
+
+  tasks:
+    - name: "Zainstaluj zależności repozytorium Docker"
+      ansible.builtin.dnf:
+        name: dnf-plugins-core
+        state: present
+
+
+    - name: "Skonfiguruj oficjalne repozytorium Docker CE"
+      ansible.builtin.yum_repository:
+        name: docker-ce-stable
+        description: Docker CE Stable - $basearch
+        baseurl: "{{ lock.docker.repo_baseurl }}"
+        enabled: true
+        gpgcheck: true
+        gpgkey: "{{ lock.docker.repo_gpgkey }}"
+        module_hotfixes: true
+
+    - name: "Zainstaluj przypięty Docker Engine i Compose"
+      ansible.builtin.dnf:
+        name:
+          - "docker-ce-{{ lock.docker.engine_version }}"
+          - "docker-ce-cli-{{ lock.docker.cli_version }}"
+          - "containerd.io-{{ lock.docker.containerd_version }}"
+          - "docker-buildx-plugin-{{ lock.docker.buildx_version }}"
+          - "docker-compose-plugin-{{ lock.docker.compose_version }}"
+        state: present
+
+
+    - name: "Wdróż filtr DOCKER-USER dla opublikowanych portów"
+      ansible.builtin.template:
+        src: ../roles/infra_services/templates/docker-user-firewall.sh.j2
+        dest: /usr/local/sbin/isa-docker-firewall
+        owner: root
+        group: root
+        mode: "0750"
+      register: infra_docker_firewall_script
+
+    - name: "Wdróż unit trwałości filtra Docker"
+      ansible.builtin.template:
+        src: ../roles/infra_services/templates/isa-docker-firewall.service.j2
+        dest: /etc/systemd/system/isa-docker-firewall.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: infra_docker_firewall_unit
+    - name: "Utwórz katalog drop-in docker.service"
+      ansible.builtin.file:
+        path: /etc/systemd/system/docker.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "Wymagaj filtra ingress przed startem Docker"
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Requires=isa-docker-firewall.service
+          After=isa-docker-firewall.service
+        dest: /etc/systemd/system/docker.service.d/isa-firewall.conf
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: "Włącz filtr portów publikowanych przez Docker"
+      ansible.builtin.systemd:
+        name: isa-docker-firewall.service
+        daemon_reload: true
+        enabled: true
+        state: "{{ 'restarted' if infra_docker_firewall_script.changed or infra_docker_firewall_unit.changed else 'started' }}"
+
+    - name: "Włącz Docker dopiero po aktywacji filtra ingress"
+      ansible.builtin.systemd:
+        name: docker
+        daemon_reload: true
+        enabled: true
+        state: started
+
+    - name: "Utwórz prywatny katalog konfiguracji infra"
+      ansible.builtin.file:
+        path: "{{ infra_compose_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: "Wdróż konfigurację Compose bez sekretów w argv"
+      ansible.builtin.template:
+        src: ../roles/infra_services/templates/compose.yml.j2
+        dest: "{{ infra_compose_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      register: infra_compose_config
+      no_log: true
+
+    - name: "Uruchom usługi infra"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --file
+          - "{{ infra_compose_file }}"
+          - up
+          - --detach
+          - --remove-orphans
+          - --pull
+          - always
+      register: infra_compose_up
+      changed_when: >-
+        'Created' in (infra_compose_up.stdout ~ infra_compose_up.stderr)
+        or 'Recreated' in (infra_compose_up.stdout ~ infra_compose_up.stderr)
+        or 'Started' in (infra_compose_up.stdout ~ infra_compose_up.stderr)
+
+    - name: "Czekaj na porty usług infra"
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ item }}"
+        timeout: 300
+      loop:
+        - 443
+        - 9000
+        - 8025
+
+    - name: "Sprawdź gotowość PMM"
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}/"
+        method: GET
+        validate_certs: false
+        status_code: 200
+      register: pmm_readiness
+      until: pmm_readiness.status == 200
+      retries: 60
+      delay: 5
+
+    - name: "Sprawdź gotowość MinIO"
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:9000/minio/health/live"
+        method: GET
+        status_code: 200
+      register: minio_readiness
+      until: minio_readiness.status == 200
+      retries: 30
+      delay: 2
+
+    - name: "Sprawdź gotowość Maildev"
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:8025/"
+        method: GET
+        status_code: 200
+      register: maildev_readiness
+      until: maildev_readiness.status == 200
+      retries: 30
+      delay: 2
+
+    - name: "Pobierz listę uruchomionych usług Compose"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --file
+          - "{{ infra_compose_file }}"
+          - ps
+          - --status
+          - running
+          - --services
+      register: infra_running_services
+      changed_when: false
+
+    - name: "Potwierdź komplet usług infra"
+      ansible.builtin.assert:
+        that:
+          - infra_running_services.stdout_lines | sort == ['maildev', 'minio', 'pmm-server']
+        fail_msg: "Nie wszystkie usługi infra są uruchomione: {{ infra_running_services.stdout_lines }}"
+        success_msg: "PMM, MinIO i Maildev działają na {{ inventory_hostname }}."

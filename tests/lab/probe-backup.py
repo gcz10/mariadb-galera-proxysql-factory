@@ -6,8 +6,8 @@ ISC-34 (sha256 checksum matches), ISC-35 (metadata has MariaDB version, time,
 cluster name and wsrep seqno).
 
 Requires MINIO_ROOT_USER / MINIO_ROOT_PASSWORD in the environment.
-The probe reaches MinIO on the host-forwarded endpoint (default 127.0.0.1:9000);
-the cluster nodes use the in-network endpoint from cluster.yml.
+The probe resolves the configured S3 hostname through the selected inventory;
+S3_PROBE_ENDPOINT remains an optional controller-side override.
 """
 
 import hashlib
@@ -15,17 +15,34 @@ import json
 import os
 import sys
 import tempfile
+from urllib.parse import urlparse
 
 import yaml
 from minio import Minio
 
 CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
-PROBE_ENDPOINT = os.environ.get("S3_PROBE_ENDPOINT", "127.0.0.1:9000")
+INVENTORY_PATH = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
+PROBE_ENDPOINT_OVERRIDE = os.environ.get("S3_PROBE_ENDPOINT", "")
 ACCESS = os.environ.get("MINIO_ROOT_USER", "")
 SECRET = os.environ.get("MINIO_ROOT_PASSWORD", "")
 
 with open(CONFIG_PATH, encoding="utf-8") as fh:
     CLUSTER = yaml.safe_load(fh)
+with open(INVENTORY_PATH, encoding="utf-8") as fh:
+    INVENTORY = yaml.safe_load(fh)
+
+endpoint_text = str(CLUSTER["backup"]["s3"]["endpoint"])
+configured_endpoint = urlparse(endpoint_text if "://" in endpoint_text else f"//{endpoint_text}")
+configured_host = configured_endpoint.hostname or ""
+inventory_addresses = {
+    host: values.get("ansible_host", host)
+    for group in INVENTORY["all"]["children"].values()
+    for host, values in group.get("hosts", {}).items()
+}
+probe_host = inventory_addresses.get(configured_host, configured_host)
+PROBE_SECURE = bool(CLUSTER["backup"]["s3"].get("secure", configured_endpoint.scheme == "https"))
+probe_port = configured_endpoint.port or (443 if PROBE_SECURE else 80)
+PROBE_ENDPOINT = PROBE_ENDPOINT_OVERRIDE or f"{probe_host}:{probe_port}"
 
 BUCKET = CLUSTER["backup"]["s3"]["bucket"]
 CLUSTER_NAME = CLUSTER["cluster"]["name"]
@@ -43,7 +60,7 @@ def main():
         print("FAIL: MINIO_ROOT_USER / MINIO_ROOT_PASSWORD must be set")
         return 1
 
-    c = Minio(PROBE_ENDPOINT, access_key=ACCESS, secret_key=SECRET, secure=False)
+    c = Minio(PROBE_ENDPOINT, access_key=ACCESS, secret_key=SECRET, secure=PROBE_SECURE)
 
     # ISC-32: backup exists in off-cluster object storage.
     if not c.bucket_exists(BUCKET):

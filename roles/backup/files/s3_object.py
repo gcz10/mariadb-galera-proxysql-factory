@@ -45,7 +45,16 @@ def main():
         print(f"bucket-ready:{bucket}")
     elif cmd == "put":
         obj, path = sys.argv[3], sys.argv[4]
-        c.fput_object(bucket, obj, path)
+        try:
+            c.fput_object(bucket, obj, path)
+        except Exception as exc:
+            # Nie zostawiaj częściowego obiektu — zanieczyszcza bucket i prunowanie.
+            try:
+                c.remove_object(bucket, obj)
+            except Exception:
+                pass
+            print(f"put-failed:{obj} {exc}", file=sys.stderr)
+            return 1
         print(f"put:{obj}")
     elif cmd == "get":
         obj, path = sys.argv[3], sys.argv[4]

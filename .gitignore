@@ -18,3 +18,11 @@ __pycache__/
 ssh_key
 ssh_key.pub
 tests/lab/tls/
+
+# Terraform - stan, binarki providerów, plany (NIGDY do commita)
+terraform/**/.terraform/
+terraform/**/*.tfstate
+terraform/**/*.tfstate.backup
+terraform/**/*.tfplan
+# SSH known_hosts - artefakt klienta
+clusters/**/known_hosts

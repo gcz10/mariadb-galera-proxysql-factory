@@ -26,6 +26,7 @@
         that:
           - backup_enc_key | length > 0
           - lookup('ansible.builtin.env', 'MINIO_ROOT_USER') | length > 0
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') | length > 0
           - backup.destination == 's3'
         fail_msg: "Ustaw BACKUP_ENCRYPTION_KEY/MINIO creds; restore w labie wymaga destination=s3."
 
@@ -50,6 +51,8 @@
           - MariaDB-client
           - MariaDB-backup
           - socat
+          - python3-pip
+          - openssl
         state: present
 
     - name: "Zainstaluj klienta S3 (minio SDK, przypięty)"
@@ -74,9 +77,12 @@
 
     # === Wybierz najnowszy backup ===
     - name: "Znajdź najnowszy backup w S3"
-      ansible.builtin.shell: >-
+      ansible.builtin.shell: |
+        set -o pipefail
         python3 /usr/local/bin/s3_object.py list {{ backup.s3.bucket }} |
-        grep '/metadata.json$' | sort | tail -1 | sed 's#/metadata.json##'
+          grep '/metadata.json$' | sort | tail -1 | sed 's#/metadata.json##'
+      args:
+        executable: /bin/bash
       register: latest_backup
       changed_when: false
 
@@ -98,36 +104,108 @@
 
     # === ISC-34: weryfikuj checksum PRZED odtworzeniem ===
     - name: "ISC-34: policz sha256 pobranego backupu"
-      ansible.builtin.shell: "sha256sum {{ restore_work }}/backup.tar.enc | awk '{print $1}'"
+      ansible.builtin.stat:
+        path: "{{ restore_work }}/backup.tar.enc"
+        get_checksum: true
+        checksum_algorithm: sha256
       register: computed_sha
-      changed_when: false
 
     - name: "ISC-34: odczytaj zapisany checksum"
-      ansible.builtin.shell: "awk '{print $1}' {{ restore_work }}/backup.sha256"
+      ansible.builtin.command:
+        argv:
+          - awk
+          - "{print $1}"
+          - "{{ restore_work }}/backup.sha256"
       register: stored_sha
       changed_when: false
 
     - name: "ISC-34: checksum musi się zgadzać"
       ansible.builtin.assert:
         that:
-          - computed_sha.stdout == stored_sha.stdout
+          - computed_sha.stat.checksum == stored_sha.stdout
         fail_msg: "Checksum backupu niezgodny — uszkodzony transfer/tampering."
 
     # === ISC-33: odszyfruj ===
     - name: "ISC-33: odszyfruj backup"
-      ansible.builtin.shell: >-
-        openssl enc -d -aes-256-cbc -pbkdf2
-        -in {{ restore_work }}/backup.tar.enc
-        -out {{ restore_work }}/backup.tar
-        -pass env:BACKUP_ENCRYPTION_KEY
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - enc
+          - -d
+          - -aes-256-cbc
+          - -pbkdf2
+          - -in
+          - "{{ restore_work }}/backup.tar.enc"
+          - -out
+          - "{{ restore_work }}/backup.tar"
+          - -pass
+          - env:BACKUP_ENCRYPTION_KEY
       environment:
         BACKUP_ENCRYPTION_KEY: "{{ backup_enc_key }}"
       changed_when: true
+      no_log: true
+
+    - name: "ISC-34: odczytaj zapisany sha256 PLAINTEXT (jeśli w metadanych)"
+      ansible.builtin.shell: >-
+        python3 -c "import json;d=json.load(open('{{ restore_work }}/metadata.json'));print(d.get('sha256_plaintext',''))"
+      register: stored_plaintext_sha
+      changed_when: false
+
+    - name: "ISC-34: policz sha256 odszyfrowanego backupu"
+      ansible.builtin.stat:
+        path: "{{ restore_work }}/backup.tar"
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: computed_plaintext_sha
+
+    - name: "ISC-34: plaintext checksum musi się zgadzać (gdy zapisany)"
+      ansible.builtin.assert:
+        that:
+          - stored_plaintext_sha.stdout | length == 0 or computed_plaintext_sha.stat.checksum == stored_plaintext_sha.stdout
+        fail_msg: "Checksum PLAINTEXT niezgodny — backup uszkodzony pomimo poprawnego szyfrowania."
+
+    # Pliki danych dotknięte wyższą wersją major są forward-incompatible
+    # (mariadb.com/kb/en/downgrading-between-major-mariadb-versions). Bez tego guardu
+    # drill potrafi "zaliczyć" odtworzenie backupu 11.8 na serwerze 11.4 i dać
+    # fałszywe zapewnienie o zdatności ścieżki DR.
+    - name: "ISC-36: odczytaj wersję MariaDB, którą wykonano backup"
+      ansible.builtin.shell: >-
+        python3 -c "import json;d=json.load(open('{{ restore_work }}/metadata.json'));print(d.get('mariadb_version',''))"
+      register: backup_mariadb_version
+      changed_when: false
+
+    - name: "ISC-36: odczytaj wersję MariaDB na hoście restore"
+      ansible.builtin.shell: |
+        set -o pipefail
+        mariadbd --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+      args:
+        executable: /bin/bash
+      register: restore_host_version
+      changed_when: false
+
+    - name: "ISC-36: host restore nie może być STARSZY (major.minor) niż wersja backupu"
+      ansible.builtin.assert:
+        that:
+          - backup_mariadb_version.stdout | length == 0
+            or (restore_host_version.stdout.split('.')[0:2] | join('.'))
+               is version(backup_mariadb_version.stdout.split('.')[0:2] | join('.'), '>=')
+        fail_msg: >-
+          Backup wykonano na MariaDB {{ backup_mariadb_version.stdout }}, a host restore ma
+          {{ restore_host_version.stdout }}. Odtwarzanie na STARSZĄ wersję major jest niewspierane
+          (forward-incompatible) — drill dałby fałszywe zapewnienie. Podnieś mariadb_version
+          na hoście restore do serii backupu.
+        success_msg: "Wersje zgodne: backup {{ backup_mariadb_version.stdout }} -> host restore {{ restore_host_version.stdout }}."
 
     # === Przygotuj czysty datadir i odtwórz ===
     - name: "Zatrzymaj ewentualny mariadbd na rnode1"
       ansible.builtin.shell: "pkill -x mariadbd 2>/dev/null; sleep 2; true"
       changed_when: false
+
+    - name: "Waliduj restore_datadir (ochrona przed rm -rf złej ścieżki)"
+      ansible.builtin.assert:
+        that:
+          - restore_datadir == '/var/lib/mysql'
+        fail_msg: "restore_datadir musi być /var/lib/mysql, dostałem {{ restore_datadir }}."
 
     - name: "Wyczyść zawartość datadir (mount point — opróżnij, nie usuwaj)"
       ansible.builtin.shell: "find {{ restore_datadir }} -mindepth 1 -delete"
@@ -174,32 +252,44 @@
         path: /var/lib/mysql/mysql.sock
         timeout: 30
 
-    - name: "ISC-36: CHECK TABLE na odtworzonych tabelach"
+    - name: "ISC-36: sprawdź WSZYSTKIE tabele użytkownika (mariadb-check)"
       ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "CHECK TABLE isa_test.replication_probe, isa_test.isa_failover"
+        set -o pipefail;
+        DBS=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('mysql','sys','performance_schema','information_schema')"
+        | tr '\n' ' ');
+        if [ -z "$(echo $DBS)" ]; then echo "NO_USER_DATABASES"; exit 1; fi;
+        mariadb-check --socket=/var/lib/mysql/mysql.sock --check --databases $DBS
       register: check_table
       changed_when: false
 
-    - name: "ISC-36: integralność — wszystkie CHECK TABLE OK"
+    - name: "ISC-36: integralność — każda tabela OK, zero błędów"
       ansible.builtin.assert:
         that:
-          - "'error' not in check_table.stdout | lower"
-          - "'corrupt' not in check_table.stdout | lower"
-        fail_msg: "CHECK TABLE wykrył problem: {{ check_table.stdout }}"
+          - check_table.rc == 0
+          - "'NO_USER_DATABASES' not in (check_table.stdout | default(''))"
+          - "'Error' not in (check_table.stdout | default(''))"
+          - "'corrupt' not in (check_table.stdout | default('') | lower)"
+        fail_msg: "Integralność odtworzonych tabel naruszona: rc={{ check_table.rc }} out={{ check_table.stdout }}"
+        success_msg: "mariadb-check: wszystkie tabele użytkownika OK"
 
-    - name: "ISC-36: liczba wierszy w odtworzonej tabeli"
+    - name: "ISC-36: liczba wierszy w największej odtworzonej tabeli użytkownika"
       ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SELECT COUNT(*) FROM isa_test.replication_probe"
+        set -o pipefail;
+        TBL=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SELECT CONCAT(TABLE_SCHEMA,'.',TABLE_NAME) FROM information_schema.TABLES WHERE TABLE_TYPE='BASE TABLE' AND TABLE_SCHEMA NOT IN ('mysql','sys','performance_schema','information_schema') ORDER BY TABLE_ROWS DESC LIMIT 1");
+        test -n "$TBL" || { echo "NO_USER_TABLES"; exit 1; };
+        echo -n "$TBL ";
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SELECT COUNT(*) FROM $TBL"
       register: row_count
       changed_when: false
 
     - name: "ISC-36: odtworzone dane niepuste"
       ansible.builtin.assert:
         that:
-          - row_count.stdout | int > 0
-        fail_msg: "Odtworzona tabela jest pusta — restore niekompletny."
+          - (row_count.stdout | default('') | trim).split(' ') | last | int > 0
+        fail_msg: "Odtworzona tabela jest pusta lub brak tabel użytkownika — restore niekompletny: {{ row_count.stdout }}"
+        success_msg: "Odtworzone dane niepuste: {{ row_count.stdout }}"
 
     - name: "Odczytaj metadane backupu do raportu"
       ansible.builtin.slurp:
@@ -210,7 +300,7 @@
     - name: "ISC-37: zapisz stan restore drill"
       ansible.builtin.copy:
         content: |
-          {"last_restore": "{{ ansible_date_time.iso8601 }}", "backup_name": "{{ latest_backup.stdout }}", "rows_verified": {{ row_count.stdout | int }}, "status": "success"}
+          {"last_restore": "{{ ansible_facts['date_time']['iso8601'] }}", "backup_name": "{{ latest_backup.stdout }}", "rows_verified": {{ (row_count.stdout | trim).split(' ') | last | int }}, "status": "success"}
         dest: "{{ state_dir }}/last_restore.json"
         mode: "0640"
 
@@ -230,7 +320,7 @@
       ansible.builtin.debug:
         msg: >-
           Restore drill OK: {{ latest_backup.stdout }} → rnode1 (standalone),
-          {{ row_count.stdout }} wierszy w replication_probe, CHECK TABLE OK,
+          {{ row_count.stdout }} (tabela.wierszy), mariadb-check OK,
           checksum zweryfikowany; metadata seqno={{ (meta_raw.content | b64decode | from_json).wsrep_seqno }}
 
   handlers: []

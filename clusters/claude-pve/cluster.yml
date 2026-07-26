@@ -1,0 +1,107 @@
+---
+# claude-pve — klaster ISA na Proxmoxie (real VM z systemd/SELinux/firewalld).
+# Anaconda: root via cloud-init key. VM z puli 192.168.1.10-16, VIP .20.
+# Infra (.16): PMM + MinIO + maildev (+ Samba — dodatkowy test backupu SMB).
+# Na tym klastrze po raz pierwszy wykonaja sie gałęzie systemd/firewalld/SELinux.
+
+cluster:
+  name: "claude-pve"
+  environment: "laboratory"
+  profile: "laboratory"
+  automation_release: "0.1.0"
+
+platform:
+  virtualization: "proxmox_kvm"
+  rocky_linux_major: 9
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/versions.lock.yml"
+
+galera:
+  cluster_name: "claude_galera"
+  nodes_expected: 3
+
+proxysql:
+  nodes_expected: 2
+  max_writers: 1
+  read_write_split_enabled: false
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.20"   # VIP Keepalived na pnode1/pnode2
+    port: 6033
+
+# TLS disabled na start (skupiamy sie na systemd/SELinux/firewalld/SMB).
+# Tryb full przetestujemy osobno — wymaga wygenerowania certow z SAN=wszystkie IP+VIP.
+tls:
+  mode: "disabled"
+  certificate_source: ""
+  ca_reference: ""
+  certificate_reference: ""
+  private_key_reference: ""
+  require_secure_transport: false
+
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.16/32"]
+
+secrets:
+  backend: "ansible_vault"   # env-only w aktualnej implementacji (patrz schema opis)
+
+storage:
+  data_directory: "/var/lib/mysql"
+  backup_staging_directory: "/var/tmp/mariadb-backup"
+  filesystem: "xfs"
+  expected_database_size_gb: "unknown"
+  expected_growth_gb_per_month: "unknown"
+  available_iops: "unknown"
+
+workload:
+  peak_qps: "unknown"
+  peak_connections: "unknown"
+  read_write_ratio: "unknown"
+  largest_transaction_mb: "unknown"
+  largest_table_gb: "unknown"
+  expected_write_latency_ms: "unknown"
+
+availability:
+  rpo: "0"
+  rto_node_failure: "2m"
+  rto_full_cluster_failure: "30m"
+  maintenance_window: "weekend"
+  allowed_service_interruption: "2m"
+
+backup:
+  enabled: true
+  destination: "s3"          # SMB przetestujemy osobno (wymaga mount + zmian w f10_backup)
+  full_backup_schedule: "0 2 * * *"
+  incremental_backup_schedule: "disabled"
+  retention_days: 14
+  encryption_enabled: true
+  immutable_or_offsite_copy: true
+  restore_test_schedule: "0 4 * * 0"
+  s3:
+    endpoint: "192.168.1.16:9000"   # MinIO na infra VM
+    bucket: "claude-galera-backups"
+    secure: false
+
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.16"   # PMM na infra VM
+    agent_id: "pmm-server"
+    cluster_name: "claude-galera"
+    validate_certs: false
+    credentials_revision: 1
+  system: "pmm"
+  alerts:
+    email: "ops@claude.local"   # maildev na infra VM
+  log_destination: "journald"
+
+mariadb_tuning:
+  innodb_buffer_pool_size: "1G"   # VM ma 4GB — dajemy wiecej niz lab
+  innodb_log_file_size: "256M"
+  max_connections: 100
+  innodb_flush_log_at_trx_commit: 0
+  gcache_size: "256M"

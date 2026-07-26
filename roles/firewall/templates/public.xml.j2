@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<zone target="default">
+  <short>ISA managed ingress</short>
+  <description>Exact role-scoped ingress allowlist managed by Ansible.</description>
+  <service name="dhcpv6-client"/>
+{% for interface in firewall_managed_interfaces | sort %}
+  <interface name="{{ interface }}"/>
+{% endfor %}
+{% for cidr in network.administration_cidrs | unique %}
+  <rule family="ipv4">
+    <source address="{{ cidr }}"/>
+    <port port="22" protocol="tcp"/>
+    <accept/>
+  </rule>
+{% endfor %}
+{% if 'galera' in group_names %}
+{% for rule in firewall_galera_tcp_rules | unique %}
+  <rule family="ipv4">
+    <source address="{{ rule.0 }}"/>
+    <port port="{{ rule.1 }}" protocol="tcp"/>
+    <accept/>
+  </rule>
+{% endfor %}
+{% for cidr in network.database_cluster_cidrs | unique %}
+  <rule family="ipv4">
+    <source address="{{ cidr }}"/>
+    <port port="4567" protocol="udp"/>
+    <accept/>
+  </rule>
+{% endfor %}
+{% for cidr in network.monitoring_cidrs | unique %}
+  <rule family="ipv4">
+    <source address="{{ cidr }}"/>
+    <port port="9100" protocol="tcp"/>
+    <accept/>
+  </rule>
+{% endfor %}
+{% endif %}
+{% if 'proxysql' in group_names %}
+{% for rule in firewall_proxysql_tcp_rules | unique %}
+  <rule family="ipv4">
+    <source address="{{ rule.0 }}"/>
+    <port port="{{ rule.1 }}" protocol="tcp"/>
+    <accept/>
+  </rule>
+{% endfor %}
+{% for cidr in network.database_cluster_cidrs | unique %}
+  <rule family="ipv4">
+    <source address="{{ cidr }}"/>
+    <protocol value="112"/>
+    <accept/>
+  </rule>
+{% endfor %}
+{% endif %}
+{% if 'infra' in group_names %}
+{% for rule in firewall_infra_tcp_rules | unique %}
+  <rule family="ipv4">
+    <source address="{{ rule.0 }}"/>
+    <port port="{{ rule.1 }}" protocol="tcp"/>
+    <accept/>
+  </rule>
+{% endfor %}
+{% endif %}
+</zone>

@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+canonical_chain="ISA-INFRA"
+new_chain="${canonical_chain}-${BASHPID}"
+published_address="{{ ansible_host }}"
+
+cleanup_unactivated_chain() {
+  iptables -w -F "${new_chain}" 2>/dev/null || true
+  iptables -w -X "${new_chain}" 2>/dev/null || true
+}
+
+# Docker creates DOCKER-USER itself, but pre-creating it lets this unit establish
+# the deny path before docker.service restores restart-enabled containers.
+iptables -w -N DOCKER-USER 2>/dev/null || true
+iptables -w -N "${new_chain}"
+trap cleanup_unactivated_chain ERR
+
+{% for rule in infra_firewall_rules | unique %}
+iptables -w -A "${new_chain}" -s "{{ rule.0 }}" -p tcp \
+  -m conntrack --ctorigdstport "{{ rule.1 }}" -j RETURN
+iptables -w -A "${new_chain}" -p tcp \
+  -m conntrack --ctstate ESTABLISHED,RELATED \
+  --ctorigsrc "{{ rule.0 }}" --ctorigdstport "{{ rule.1 }}" -j RETURN
+{% endfor %}
+{% for port in infra_published_ports %}
+iptables -w -A "${new_chain}" -p tcp \
+  -m conntrack --ctorigdstport "{{ port }}" -j DROP
+{% endfor %}
+# Fail closed for any other container port published on the managed address.
+iptables -w -A "${new_chain}" -j DROP
+
+# Activate the complete replacement first. The previous chain remains in place
+# until this head rule succeeds, so convergence never exposes an empty chain.
+iptables -w -I DOCKER-USER 1 -m conntrack \
+  --ctorigdst "${published_address}" -j "${new_chain}"
+trap - ERR
+
+# The new deny path is active at rule 1. Remove every older managed generation,
+# then give the active generation the stable name consumed by probes/runbooks.
+mapfile -t old_chains < <(
+  iptables -w -S |
+    awk -v current="${new_chain}" \
+      '$1 == "-N" && $2 ~ /^ISA-INFRA/ && $2 != current { print $2 }' |
+    sort -u
+)
+for old_chain in "${old_chains[@]}"; do
+  while rule_number="$(
+    iptables -w -L DOCKER-USER --line-numbers -n |
+      awk -v target="${old_chain}" '$1 ~ /^[0-9]+$/ && $2 == target { print $1; exit }'
+  )" && [[ -n "${rule_number}" ]]; do
+    iptables -w -D DOCKER-USER "${rule_number}"
+  done
+  iptables -w -F "${old_chain}"
+  iptables -w -X "${old_chain}"
+done
+
+iptables -w -E "${new_chain}" "${canonical_chain}"
+
+first_target="$(
+  iptables -w -L DOCKER-USER --line-numbers -n |
+    awk '$1 == "1" { print $2; exit }'
+)"
+[[ "${first_target}" == "${canonical_chain}" ]]
+iptables -w -C DOCKER-USER -m conntrack \
+  --ctorigdst "${published_address}" -j "${canonical_chain}"

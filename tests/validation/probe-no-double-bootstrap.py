@@ -2,13 +2,14 @@
 """ISC-65 (Anti): no two nodes are ever bootstrapped as independent Primary Components.
 
 Static guard: any play that performs a Galera bootstrap (`mariadbd ... --wsrep-new-cluster`
-in a shell/command task) MUST be single-host safe, so it can never form two independent
-Primary Components:
-  - the play uses `serial: 1` (or targets a single explicit host like `galera[0]`/`gnode1`),
-  - AND the play requires an explicit `confirm` guard (so bootstrap never runs silently).
+in a shell/command task) MUST be single-host safe and reject a second Primary:
+  - the play uses `serial: 1` (or targets a single explicit host),
+  - the play requires an explicit `confirm` guard,
+  - pre-tasks query `wsrep_cluster_status` on the Galera nodes and assert that no
+    existing node reports `Primary`.
 
-A bootstrap that hits two+ nodes simultaneously (or two concurrent bootstrap plays)
-would create two independent Primary Components → split-brain at cluster formation.
+Bootstrapping two nodes simultaneously or bootstrapping while another Primary exists
+would create independent Primary Components and split-brain.
 
 Only shell/command task *args* are inspected — a task NAME mentioning "--wsrep-new-cluster"
 (e.g. "join, bez --wsrep-new-cluster" = "without") is documentation, not a bootstrap.
@@ -44,6 +45,16 @@ def has_bootstrap_action(play):
             if BOOTSTRAP.search(cmd):
                 return True
     return False
+
+
+def has_existing_primary_guard(play):
+    """True when pre-tasks probe wsrep state and reject an existing Primary."""
+    pre_tasks = yaml.safe_dump(play.get("pre_tasks", []) or [])
+    return (
+        "wsrep_cluster_status" in pre_tasks
+        and "Primary" in pre_tasks
+        and "assert" in pre_tasks
+    )
 
 
 def is_single_host(hosts):
@@ -85,6 +96,11 @@ def main():
                     f"confirm guard (ISC-65) — bootstrap must require -e confirm=yes"
                 )
 
+            if not has_existing_primary_guard(play):
+                violations.append(
+                    f"{pb}: play '{play.get('name', '?')}' has no existing-Primary "
+                    f"runtime guard (ISC-65)"
+                )
     bootstrap_files = {pb for pb, _ in bootstrap_plays}
     if len(bootstrap_files) > 1:
         violations.append(

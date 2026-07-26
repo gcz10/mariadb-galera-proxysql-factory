@@ -1,13 +1,15 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "cluster.yml schema",
-  "description": "Schema konfiguracji klastra. PRZYGOTOWANY — do uzupełnienia w F1. Nie wpisuj danych klastra w rolach.",
+  "description": "Schema konfiguracji klastra. Każda sekcja ma required + additionalProperties:false, żeby puste sekcje (np. proxysql: {}) NIE przechodziły walidacji.",
   "type": "object",
   "required": ["cluster", "platform", "versions", "galera", "proxysql", "tls", "network", "secrets", "storage", "availability", "backup", "monitoring"],
+  "additionalProperties": false,
   "properties": {
     "cluster": {
       "type": "object",
       "required": ["name", "environment", "profile", "automation_release"],
+      "additionalProperties": false,
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "environment": { "type": "string", "enum": ["production", "staging", "laboratory"] },
@@ -17,43 +19,66 @@
     },
     "platform": {
       "type": "object",
+      "required": ["virtualization", "rocky_linux_major"],
+      "additionalProperties": false,
       "properties": {
-        "virtualization": { "type": "string", "enum": ["vmware_esxi", "docker_orbstack"] },
+        "virtualization": { "type": "string", "enum": ["vmware_esxi", "proxmox_kvm", "docker_orbstack"] },
         "rocky_linux_major": { "type": "integer", "const": 9 }
       }
     },
     "versions": {
       "type": "object",
+      "required": ["policy", "lock_file"],
+      "additionalProperties": false,
       "properties": {
         "policy": { "type": "string", "enum": ["locked", "candidate", "research-only"] },
-        "lock_file": { "type": "string" }
+        "lock_file": { "type": "string", "minLength": 1 }
       }
     },
     "galera": {
       "type": "object",
+      "required": ["cluster_name", "nodes_expected"],
+      "additionalProperties": false,
       "properties": {
-        "cluster_name": { "type": "string" },
+        "cluster_name": { "type": "string", "minLength": 1 },
         "nodes_expected": { "type": "integer", "minimum": 1 }
       }
     },
     "proxysql": {
       "type": "object",
+      "required": ["nodes_expected", "max_writers", "read_write_split_enabled", "endpoint"],
+      "additionalProperties": false,
       "properties": {
         "nodes_expected": { "type": "integer", "minimum": 2 },
         "max_writers": { "type": "integer", "const": 1 },
         "read_write_split_enabled": { "type": "boolean", "const": false },
         "endpoint": {
-          "type": "object",
+          "required": ["type", "address", "port"],
+          "additionalProperties": false,
           "properties": {
             "type": { "type": "string", "enum": ["external_load_balancer", "keepalived_vip", "dns"] },
-            "address": { "type": "string" },
+            "address": { "type": "string", "minLength": 1, "not": { "pattern": "PLACEHOLDER" } },
             "port": { "type": "integer", "default": 6033 }
-          }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "type": { "const": "keepalived_vip" } } },
+              "then": {
+                "properties": {
+                  "address": {
+                    "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$"
+                  }
+                }
+              }
+            }
+          ]
         }
       }
     },
     "tls": {
       "type": "object",
+      "required": ["mode"],
+      "additionalProperties": false,
       "properties": {
         "mode": { "type": "string", "enum": ["disabled", "full"] },
         "certificate_source": { "type": "string" },
@@ -65,23 +90,30 @@
     },
     "network": {
       "type": "object",
+      "required": ["application_cidrs", "database_cluster_cidrs", "administration_cidrs", "monitoring_cidrs"],
+      "additionalProperties": false,
       "properties": {
-        "application_cidrs": { "type": "array", "items": { "type": "string" } },
-        "database_cluster_cidrs": { "type": "array", "items": { "type": "string" } },
-        "administration_cidrs": { "type": "array", "items": { "type": "string" } },
-        "monitoring_cidrs": { "type": "array", "items": { "type": "string" } }
+        "application_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "database_cluster_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "administration_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "monitoring_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
       }
     },
     "secrets": {
       "type": "object",
+      "required": ["backend"],
+      "additionalProperties": false,
+      "description": "UWAGA: aktualna implementacja czyta sekrety wyłącznie ze zmiennych środowiskowych (lookup env). backend=ansible_vault jest zadeklarowany do przyszłej integracji; do czasu jej wdrożenia ustawiaj *_PASSWORD / *_KEY w środowisku operatora / BACKUP_SECRETS_FILE.",
       "properties": {
         "backend": { "type": "string", "enum": ["ansible_vault", "hashicorp_vault", "external"] }
       }
     },
     "storage": {
       "type": "object",
+      "required": ["data_directory", "backup_staging_directory", "filesystem", "expected_database_size_gb", "expected_growth_gb_per_month", "available_iops"],
+      "additionalProperties": false,
       "properties": {
-        "data_directory": { "type": "string", "default": "/var/lib/mysql" },
+        "data_directory": { "type": "string" },
         "backup_staging_directory": { "type": "string" },
         "filesystem": { "type": "string", "enum": ["xfs", "ext4"] },
         "expected_database_size_gb": { "type": ["string", "number"] },
@@ -91,6 +123,8 @@
     },
     "availability": {
       "type": "object",
+      "required": ["rpo", "rto_node_failure", "rto_full_cluster_failure", "maintenance_window", "allowed_service_interruption"],
+      "additionalProperties": false,
       "properties": {
         "rpo": { "type": "string" },
         "rto_node_failure": { "type": "string" },
@@ -101,6 +135,8 @@
     },
     "backup": {
       "type": "object",
+      "required": ["enabled", "destination", "full_backup_schedule", "incremental_backup_schedule", "retention_days", "encryption_enabled", "immutable_or_offsite_copy", "restore_test_schedule"],
+      "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
         "destination": { "type": "string", "enum": ["smb", "s3"] },
@@ -112,38 +148,53 @@
         "restore_test_schedule": { "type": "string" },
         "s3": {
           "type": "object",
+          "required": ["endpoint", "bucket"],
+          "additionalProperties": false,
           "properties": {
-            "endpoint": { "type": "string" },
-            "bucket": { "type": "string" },
+            "endpoint": { "type": "string", "minLength": 1 },
+            "bucket": { "type": "string", "minLength": 1 },
             "region": { "type": "string" },
             "secure": { "type": "boolean" }
           }
         }
-      }
+      },
+      "allOf": [
+        { "if": { "properties": { "destination": { "const": "s3" } } }, "then": { "required": ["s3"] } }
+      ]
     },
     "monitoring": {
       "type": "object",
+      "required": ["pmm", "system", "log_destination"],
+      "additionalProperties": false,
       "properties": {
         "pmm": {
           "type": "object",
+          "required": ["server_url", "agent_id", "cluster_name", "validate_certs", "credentials_revision"],
+          "additionalProperties": false,
           "properties": {
             "server_url": { "type": "string", "pattern": "^https://" },
             "agent_id": { "type": "string", "minLength": 1 },
             "cluster_name": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$" },
             "validate_certs": { "type": "boolean" },
             "credentials_revision": { "type": "integer", "minimum": 1 }
-          },
-          "required": ["server_url", "agent_id", "cluster_name", "validate_certs", "credentials_revision"],
-          "additionalProperties": false
+          }
         },
         "system": { "type": "string" },
-        "log_destination": { "type": "string" }
-      },
-      "required": ["pmm", "system", "log_destination"],
-      "additionalProperties": false
+        "log_destination": { "type": "string" },
+        "alerts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "email": { "type": "string" },
+            "folder_uid": { "type": "string" },
+            "datasource_uid": { "type": "string" }
+          }
+        }
+      }
     },
     "workload": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "peak_qps": { "type": ["string", "number"] },
         "peak_connections": { "type": ["string", "number"] },
@@ -151,6 +202,19 @@
         "largest_transaction_mb": { "type": ["string", "number"] },
         "largest_table_gb": { "type": ["string", "number"] },
         "expected_write_latency_ms": { "type": ["string", "number"] }
+      }
+    },
+    "mariadb_tuning": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Opcjonalne. gcache.size ustal z calc-gcache.py (ISC-68); pominięcie => bezpieczne 128M.",
+      "properties": {
+        "innodb_buffer_pool_size": { "type": "string" },
+        "innodb_log_file_size": { "type": "string" },
+        "max_connections": { "type": ["integer", "string"] },
+        "innodb_flush_log_at_trx_commit": { "type": ["integer", "string"] },
+        "gcache_page_size": { "type": "string" },
+        "gcache_size": { "type": "string", "pattern": "^[0-9]+[MG]$" }
       }
     }
   }

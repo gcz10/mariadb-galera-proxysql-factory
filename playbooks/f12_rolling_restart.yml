@@ -17,9 +17,12 @@
   hosts: proxysql[0]
   become: true
   gather_facts: false
+  any_errors_fatal: true
   vars:
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
     writer_hg: "{{ proxysql.writer_hostgroup | default(10) }}"
+  environment:
+    MYSQL_PWD: "{{ proxysql_admin_password }}"
 
   tasks:
     - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
@@ -30,7 +33,7 @@
 
     - name: "Odczytaj aktywnego writera z ProxySQL runtime_mysql_servers"
       ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -p{{ proxysql_admin_password }} -N -B -e
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "SELECT hostname FROM runtime_mysql_servers
          WHERE hostgroup_id={{ writer_hg }} AND status='ONLINE'"
       register: writer_ip_raw
@@ -67,10 +70,13 @@
 - name: "F12 — rolling restart non-writer węzłów Galera (serial:1)"
   hosts: galera
   become: true
-  gather_facts: false
+  gather_facts: true
   serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
   vars:
     expected_size: "{{ galera.nodes_expected | default(3) }}"
+    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   tasks:
     - name: "Pomiń writera (restart na końcu, osobny play)"
@@ -83,18 +89,33 @@
         "SHOW STATUS WHERE Variable_name IN
         ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
       register: wsrep_before
+      until: >-
+        wsrep_before.stdout is search('wsrep_local_state\t4')
+        and wsrep_before.stdout is search('wsrep_cluster_status\tPrimary')
+        and wsrep_before.stdout is search('wsrep_ready\tON')
+        and wsrep_before.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
+      retries: 3
+      delay: 5
       changed_when: false
+
+    - name: "ISC-50: restartuj MariaDB przez systemd"
+      ansible.builtin.systemd_service:
+        name: mariadb
+        state: restarted
+      when: use_systemd
 
     - name: "ISC-50: zatrzymaj mariadbd (lab: brak systemd)"
       ansible.builtin.shell: "pkill -x mariadbd; sleep 3; true"
       changed_when: true
+      when: not use_systemd
 
-    - name: "ISC-50: uruchom mariadbd (join — bez --wsrep-new-cluster)"
+    - name: "ISC-50: uruchom mariadbd (lab join — bez --wsrep-new-cluster)"
       ansible.builtin.shell: >-
         mariadbd --user=mysql --datadir=/var/lib/mysql
         --socket=/var/lib/mysql/mysql.sock > /var/log/mariadb/mariadb.log 2>&1 &
         sleep 8
       changed_when: true
+      when: not use_systemd
 
     - name: "ISC-51: czekaj na socket MariaDB"
       ansible.builtin.wait_for:
@@ -111,7 +132,7 @@
         wsrep_after.stdout is search('wsrep_local_state\t4')
         and wsrep_after.stdout is search('wsrep_cluster_status\tPrimary')
         and wsrep_after.stdout is search('wsrep_ready\tON')
-        and wsrep_after.stdout is search('wsrep_cluster_size\t{{ expected_size | int }}')
+        and wsrep_after.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
       retries: 30
       delay: 5
       changed_when: false
@@ -124,26 +145,52 @@
 - name: "F12 — restart writera Galera (serial:1, ostatni)"
   hosts: galera
   become: true
-  gather_facts: false
+  gather_facts: true
   serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
   vars:
     expected_size: "{{ galera.nodes_expected | default(3) }}"
+    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   tasks:
     - name: "Pomiń non-writery (obsłużone w Play 1)"
       ansible.builtin.meta: end_host
       when: inventory_hostname != hostvars[groups['proxysql'][0]].f12_writer_host
 
-    - name: "ISC-50: zatrzymaj mariadbd writera"
+    - name: "ISC-50: brama zdrowia PRZED restartem writera"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name IN
+        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+      register: wsrep_writer_before
+      until: >-
+        wsrep_writer_before.stdout is search('wsrep_local_state\t4')
+        and wsrep_writer_before.stdout is search('wsrep_cluster_status\tPrimary')
+        and wsrep_writer_before.stdout is search('wsrep_ready\tON')
+        and wsrep_writer_before.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
+      retries: 3
+      delay: 5
+      changed_when: false
+
+    - name: "ISC-50: restartuj MariaDB writera przez systemd"
+      ansible.builtin.systemd_service:
+        name: mariadb
+        state: restarted
+      when: use_systemd
+
+    - name: "ISC-50: zatrzymaj mariadbd writera (lab: brak systemd)"
       ansible.builtin.shell: "pkill -x mariadbd; sleep 3; true"
       changed_when: true
+      when: not use_systemd
 
-    - name: "ISC-50: uruchom mariadbd writera (join)"
+    - name: "ISC-50: uruchom mariadbd writera (lab join)"
       ansible.builtin.shell: >-
         mariadbd --user=mysql --datadir=/var/lib/mysql
         --socket=/var/lib/mysql/mysql.sock > /var/log/mariadb/mariadb.log 2>&1 &
         sleep 8
       changed_when: true
+      when: not use_systemd
 
     - name: "ISC-51: czekaj na socket MariaDB writera"
       ansible.builtin.wait_for:
@@ -160,7 +207,7 @@
         wsrep_writer_after.stdout is search('wsrep_local_state\t4')
         and wsrep_writer_after.stdout is search('wsrep_cluster_status\tPrimary')
         and wsrep_writer_after.stdout is search('wsrep_ready\tON')
-        and wsrep_writer_after.stdout is search('wsrep_cluster_size\t{{ expected_size | int }}')
+        and wsrep_writer_after.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
       retries: 30
       delay: 5
       changed_when: false

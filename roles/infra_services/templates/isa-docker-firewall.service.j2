@@ -1,0 +1,12 @@
+[Unit]
+Description=Restrict Docker-published ISA infra ports by source CIDR
+Before=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/isa-docker-firewall
+ExecReload=/usr/local/sbin/isa-docker-firewall
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

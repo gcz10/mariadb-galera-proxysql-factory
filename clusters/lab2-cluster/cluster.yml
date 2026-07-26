@@ -42,9 +42,9 @@ proxysql:
 tls:
   mode: "full"
   certificate_source: "file"
-  ca_reference: "/Users/gc/Library/CloudStorage/OneDrive-Osobisty/Documents/isa/oc/tests/lab/tls/lab2/ca.pem"
-  certificate_reference: "/Users/gc/Library/CloudStorage/OneDrive-Osobisty/Documents/isa/oc/tests/lab/tls/lab2/server-cert.pem"
-  private_key_reference: "/Users/gc/Library/CloudStorage/OneDrive-Osobisty/Documents/isa/oc/tests/lab/tls/lab2/server-key.pem"
+  ca_reference: "tests/lab/tls/lab2/ca.pem"
+  certificate_reference: "tests/lab/tls/lab2/server-cert.pem"
+  private_key_reference: "tests/lab/tls/lab2/server-key.pem"
 
 network:
   application_cidrs: []

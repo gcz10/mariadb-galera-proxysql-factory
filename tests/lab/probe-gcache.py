@@ -28,6 +28,7 @@ CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
 _inv = yaml.safe_load(open(INVENTORY))
 GALERA_NODE = list(_inv["all"]["children"]["galera"]["hosts"])[0]
+PROXYSQL_NODE = list(_inv["all"]["children"]["proxysql"]["hosts"])[0]
 IST_WINDOW_MIN = int(os.environ.get("ISC68_IST_WINDOW_MIN", "30"))
 WORKLOAD_SECONDS = int(os.environ.get("ISC68_WORKLOAD_SECONDS", "20"))
 
@@ -44,10 +45,13 @@ def body(node, result):
 
 
 def find_writer():
-    pw = os.environ.get("PROXYSQL_ADMIN_PASSWORD", "")
-    r = sh("pnode1", f'mariadb -h127.0.0.1 -P6032 -uadmin -p{pw} -N -B -e '
-             '"SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id=10 AND status=\'ONLINE\'"')
-    ip = body("pnode1", r).strip()
+    r = sh(
+        PROXYSQL_NODE,
+        "mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf "
+        "-h127.0.0.1 -P6032 -uadmin -N -B -e "
+        "\"SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id=10 AND status='ONLINE'\"",
+    )
+    ip = body(PROXYSQL_NODE, r).strip()
     inv = yaml.safe_load(open(INVENTORY))
     galera = inv["all"]["children"]["galera"]["hosts"]
     for host, v in galera.items():

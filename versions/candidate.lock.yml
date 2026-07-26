@@ -45,6 +45,22 @@ pmm:
   support_eol: "not-published-per-point-release"
   source: "https://github.com/percona/pmm/blob/main/documentation/docs/release-notes/3.8.1.md"
 
+docker:
+  engine_version: "3:29.6.2-1.el9"
+  cli_version: "1:29.6.2-1.el9"
+  containerd_version: "2.2.6-1.el9"
+  buildx_version: "0.35.0-1.el9"
+  compose_version: "5.3.1-1.el9"
+  repo_baseurl: "https://download.docker.com/linux/centos/$releasever/$basearch/stable"
+  repo_gpgkey: "https://download.docker.com/linux/centos/gpg"
+
+minio:
+  image: "minio/minio:RELEASE.2025-09-07T16-13-09Z"
+  image_digest: "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+
+maildev:
+  image: "maildev/maildev:2.2.1"
+
 node_exporter:
   version: "1.12.1"
   released: "2026-07-14"

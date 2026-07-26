@@ -15,7 +15,7 @@
     backup_staging: "{{ storage.backup_staging_directory | default('/var/tmp/mariadb-backup') }}"
     backup_enc_key: "{{ lookup('ansible.builtin.env', 'BACKUP_ENCRYPTION_KEY') }}"
     minio_sdk_version: "7.2.7"
-    backup_ts: "{{ ansible_date_time.iso8601_basic_short }}"
+    backup_ts: "{{ ansible_facts['date_time']['iso8601_basic_short'] }}"
     backup_name: "galera-{{ cluster.name }}-{{ backup_ts }}"
     writer_flow_threshold_ns: 1000000000
     state_dir: "/var/lib/mariadb-backup-state"
@@ -44,7 +44,14 @@
           zaimplementuj mount przed backupem; lab OrbStack nie ma modułu jądra cifs.
 
   tasks:
-    - name: "Zainstaluj klienta S3 (minio SDK, przypięty) i openssl"
+    - name: "Zainstaluj zależności klienta S3 i szyfrowania"
+      ansible.builtin.dnf:
+        name:
+          - python3-pip
+          - openssl
+        state: present
+
+    - name: "Zainstaluj przypięty klient S3"
       ansible.builtin.pip:
         name: "minio=={{ minio_sdk_version }}"
         state: present
@@ -65,10 +72,43 @@
       ansible.builtin.command: "python3 /usr/local/bin/s3_object.py ensure-bucket {{ backup.s3.bucket }}"
       changed_when: false
 
-    - name: "ISC-39: baseline flow control writera"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS LIKE 'wsrep_flow_control_paused_ns'" | awk '{print $2}'
+    - name: "Wymagaj zdrowego Primary Component przed backupem"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SHOW STATUS WHERE Variable_name IN ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
+      register: backup_cluster_health
+      changed_when: false
+
+    - name: "Blokuj backup zdegradowanego klastra"
+      ansible.builtin.assert:
+        that:
+          - item.stdout is search('wsrep_local_state\t4')
+          - item.stdout is search('wsrep_cluster_status\tPrimary')
+          - item.stdout is search('wsrep_ready\tON')
+          - item.stdout is search('wsrep_cluster_size\t' ~ (galera.nodes_expected | int | string))
+        fail_msg: "Backup zablokowany: {{ item.item }} nie jest Synced/Primary/Ready w pełnym klastrze."
+      loop: "{{ backup_cluster_health.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "ISC-39: baseline flow control na wszystkich węzłach"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_FLOW_CONTROL_PAUSED_NS';"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
       register: fc_before
       changed_when: false
 
@@ -94,20 +134,31 @@
         mariadb-backup --prepare --target-dir={{ backup_staging }}/raw
       changed_when: true
 
-    - name: "ISC-39: flow control writera po backupie"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS LIKE 'wsrep_flow_control_paused_ns'" | awk '{print $2}'
+    - name: "ISC-39: flow control na wszystkich węzłach po backupie"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_FLOW_CONTROL_PAUSED_NS';"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
       register: fc_after
       changed_when: false
 
-    - name: "ISC-39: backup nie wywołał flow control ponad threshold"
+    - name: "ISC-39: backup nie wywołał flow control ponad threshold na żadnym węźle"
       ansible.builtin.assert:
         that:
-          - (fc_after.stdout | int) - (fc_before.stdout | int) < writer_flow_threshold_ns
+          - (fc_after.results[item].stdout | int) - (fc_before.results[item].stdout | int) < writer_flow_threshold_ns
         fail_msg: >-
-          Backup wywołał flow control {{ (fc_after.stdout | int) - (fc_before.stdout | int) }} ns
-          (> {{ writer_flow_threshold_ns }} ns) — degradacja writera.
+          Backup wywołał flow control
+          {{ (fc_after.results[item].stdout | int) - (fc_before.results[item].stdout | int) }} ns
+          na {{ groups['galera'][item] }} (> {{ writer_flow_threshold_ns }} ns).
+      loop: "{{ range(0, groups['galera'] | length) | list }}"
+      loop_control:
+        label: "{{ groups['galera'][item] }}"
 
     - name: "ISC-35: odczytaj pozycję wsrep z backupu (mariadb_backup_galera_info)"
       ansible.builtin.shell: >-
@@ -116,7 +167,7 @@
       changed_when: false
 
     - name: "ISC-35: odczytaj wersję MariaDB"
-      ansible.builtin.shell: "mariadbd --version | awk '{print $3}'"
+      ansible.builtin.command: mariadbd --version
       register: mariadb_version
       changed_when: false
 
@@ -125,32 +176,45 @@
         tar -czf {{ backup_staging }}/backup.tar -C {{ backup_staging }}/raw .
       changed_when: true
 
+    - name: "ISC-34: policz sha256 PLAINTEXT backupu"
+      ansible.builtin.stat:
+        path: "{{ backup_staging }}/backup.tar"
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: plaintext_artifact
+
     - name: "ISC-33: zaszyfruj backup (openssl aes-256-cbc, pbkdf2)"
-      ansible.builtin.shell: >-
-        openssl enc -aes-256-cbc -pbkdf2 -salt
-        -in {{ backup_staging }}/backup.tar
-        -out {{ backup_staging }}/backup.tar.enc
-        -pass env:BACKUP_ENCRYPTION_KEY
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - enc
+          - -aes-256-cbc
+          - -pbkdf2
+          - -salt
+          - -in
+          - "{{ backup_staging }}/backup.tar"
+          - -out
+          - "{{ backup_staging }}/backup.tar.enc"
+          - -pass
+          - env:BACKUP_ENCRYPTION_KEY
       environment:
         BACKUP_ENCRYPTION_KEY: "{{ backup_enc_key }}"
       changed_when: true
+      no_log: true
 
-    - name: "ISC-34: policz sha256 zaszyfrowanego backupu"
-      ansible.builtin.shell: >-
-        sha256sum {{ backup_staging }}/backup.tar.enc | awk '{print $1}'
-      register: backup_sha
-      changed_when: false
+    - name: "ISC-34: policz sha256 i rozmiar zaszyfrowanego backupu"
+      ansible.builtin.stat:
+        path: "{{ backup_staging }}/backup.tar.enc"
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: enc_stat
 
     - name: "ISC-34: zapisz plik checksum"
       ansible.builtin.copy:
-        content: "{{ backup_sha.stdout }}  backup.tar.enc\n"
+        content: "{{ enc_stat.stat.checksum }}  backup.tar.enc\n"
         dest: "{{ backup_staging }}/backup.sha256"
         mode: "0600"
 
-    - name: "Rozmiar zaszyfrowanego backupu"
-      ansible.builtin.stat:
-        path: "{{ backup_staging }}/backup.tar.enc"
-      register: enc_stat
 
     - name: "ISC-35: zapisz metadata.json"
       ansible.builtin.copy:
@@ -158,13 +222,14 @@
           {
             "backup_name": "{{ backup_name }}",
             "cluster_name": "{{ cluster.name }}",
-            "mariadb_version": "{{ mariadb_version.stdout }}",
-            "created_at": "{{ ansible_date_time.iso8601 }}",
+            "mariadb_version": "{{ mariadb_version.stdout | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+') }}",
+            "created_at": "{{ ansible_facts['date_time']['iso8601'] }}",
             "wsrep_galera_info": "{{ galera_info.stdout }}",
             "wsrep_uuid": "{{ galera_info.stdout.split(':')[0] }}",
             "wsrep_seqno": "{{ galera_info.stdout.split(':')[1] | default('') }}",
-            "sha256": "{{ backup_sha.stdout }}",
+            "sha256": "{{ enc_stat.stat.checksum }}",
             "size_bytes": {{ enc_stat.stat.size }},
+            "sha256_plaintext": "{{ plaintext_artifact.stat.checksum }}",
             "encryption": "aes-256-cbc/pbkdf2",
             "source_host": "{{ inventory_hostname }}"
           }
@@ -196,7 +261,7 @@
     - name: "Zapisz stan ostatniego udanego backupu (ISC-37/38)"
       ansible.builtin.copy:
         content: |
-          {"last_backup": "{{ ansible_date_time.iso8601 }}", "backup_name": "{{ backup_name }}", "status": "success"}
+          {"last_backup": "{{ ansible_facts['date_time']['iso8601'] }}", "backup_name": "{{ backup_name }}", "status": "success"}
         dest: "{{ state_dir }}/last_backup.json"
         mode: "0640"
 
@@ -204,7 +269,9 @@
       ansible.builtin.debug:
         msg: >-
           Backup {{ backup_name }} → s3://{{ backup.s3.bucket }} (szyfr aes-256-cbc,
-          sha256={{ backup_sha.stdout[:16] }}…, seqno={{ galera_info.stdout }},
-          flow_control_delta={{ (fc_after.stdout | int) - (fc_before.stdout | int) }} ns)
+          sha256={{ enc_stat.stat.checksum[:16] }}…, seqno={{ galera_info.stdout }}).
+          Flow control sprawdzony na wszystkich węzłach:
+          before={{ fc_before.results | map(attribute='stdout') | list }},
+          after={{ fc_after.results | map(attribute='stdout') | list }}.
 
   handlers: []

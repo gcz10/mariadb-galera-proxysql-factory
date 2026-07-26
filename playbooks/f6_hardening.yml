@@ -32,10 +32,16 @@
       changed_when: "'DROP USER' in anon_cleanup.stdout | default('')"
 
     - name: "ISC-40: usuń testową bazę danych (jeśli istnieje)"
-      ansible.builtin.shell: >-
-        if mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SHOW DATABASES LIKE 'test'" | grep -q test;
-        then mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "DROP DATABASE test"; echo CHANGED;
-        else echo OK; fi
+      ansible.builtin.shell: |
+        set -o pipefail
+        if mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SHOW DATABASES LIKE 'test'" | grep -q test; then
+          mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "DROP DATABASE test"
+          echo CHANGED
+        else
+          echo OK
+        fi
+      args:
+        executable: /bin/bash
       register: test_db_drop
       changed_when: "'CHANGED' in test_db_drop.stdout"
 
@@ -88,14 +94,22 @@
           - "'LOCK TABLES' in sst_grants.stdout"
         fail_msg: "sst_user brakuje uprawnień SST: {{ sst_grants.stdout }}"
 
-    # ISC-42: least privilege pmm_monitor
+    # ISC-42: least privilege pmm_monitor (konto jest tworzone dopiero w F11)
+    - name: "ISC-42: sprawdź czy konto pmm_monitor istnieje"
+      ansible.builtin.shell: >
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SELECT COUNT(*) FROM mysql.user
+        WHERE User='{{ pmm_monitor_user }}' AND Host='%'"
+      register: pmm_monitor_count
+      changed_when: false
+
     - name: "ISC-42: granty pmm_monitor"
       ansible.builtin.shell: >
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
         "SHOW GRANTS FOR '{{ pmm_monitor_user }}'@'%'"
       register: pmm_grants
       changed_when: false
-      failed_when: false
+      when: pmm_monitor_count.stdout | int > 0
 
     - name: "ISC-42: pmm_monitor ma uprawnienia monitoringu"
       ansible.builtin.assert:
@@ -103,12 +117,18 @@
           - "'PROCESS' in pmm_grants.stdout"
           - "'SELECT' in pmm_grants.stdout"
         fail_msg: "pmm_monitor brakuje uprawnień: {{ pmm_grants.stdout }}"
+      when: pmm_monitor_count.stdout | int > 0
+
+    - name: "ISC-42: odrocz weryfikację pmm_monitor do F11"
+      ansible.builtin.debug:
+        msg: "Konto pmm_monitor jeszcze nie istnieje; F11 utworzy je i ustawi dokładne granty."
+      when: pmm_monitor_count.stdout | int == 0
 
     # ISC-45: ostrzeżenie dla production + tls disabled
     - name: "ISC-45: ostrzeżenie TLS disabled w production"
       ansible.builtin.assert:
         that:
-          - cluster.environment != 'production' or tls.mode != 'disabled'
+          - cluster.environment != 'production' or (tls | default({})).mode | default('disabled') != 'disabled'
         fail_msg: >-
           PRODUKCJA: tls.mode=disabled. Wymagane jawne risk acceptance (ADR-002).
           Ustaw tls.mode=full lub dołącz podpisany ADR.
@@ -118,6 +138,7 @@
       ansible.builtin.debug:
         msg: >-
           Hardening zakończony: anonimowe konta usunięte, test DB usunięta,
-          root localhost-only, least privilege zweryfikowane.
+          root localhost-only, SST least privilege zweryfikowane;
+          PMM least privilege {{ 'zweryfikowane' if pmm_monitor_count.stdout | int > 0 else 'odroczone do F11' }}.
 
   handlers: []

@@ -255,6 +255,6 @@
       ansible.builtin.copy:
         content: "{{ lookup('template', '../roles/discovery/templates/discovery-report.json.j2') }}"
         dest: /var/tmp/f0-discovery-{{ inventory_hostname }}.json
-        mode: "0644"
+        mode: "0640"
 
   handlers: []

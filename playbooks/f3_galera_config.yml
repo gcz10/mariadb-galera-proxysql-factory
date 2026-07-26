@@ -14,8 +14,15 @@
     galera_nodes_csv: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | join(',') }}"
     sst_user: "sst_user"
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
-    gcache_size: "128M"
+    gcache_size: "{{ (mariadb_tuning | default({})).gcache_size | default('128M') }}"
     mariadb_config_dir: /etc/my.cnf.d
+
+  pre_tasks:
+    - name: "Wymagaj SST_PASSWORD"
+      ansible.builtin.assert:
+        that:
+          - sst_password | length > 0
+        fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env)."
 
   tasks:
     - name: "Utworz katalog konfiguracyjny MariaDB"
@@ -24,9 +31,9 @@
         state: directory
         mode: "0755"
 
-    - name: "Utworz katalog /var/run/mysqld"
+    - name: "Utworz pakietowy katalog runtime MariaDB"
       ansible.builtin.file:
-        path: /var/run/mysqld
+        path: /run/mariadb
         state: directory
         owner: mysql
         group: mysql
@@ -45,8 +52,8 @@
         src: ../roles/mariadb_install/templates/server.cnf.j2
         dest: "{{ mariadb_config_dir }}/server.cnf"
         owner: root
-        group: root
-        mode: "0644"
+        group: mysql
+        mode: "0640"
       register: config_result
 
     - name: "Inicjalizuj datadir (mariadb-install-db)"

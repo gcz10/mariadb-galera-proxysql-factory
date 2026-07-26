@@ -11,7 +11,6 @@ import yaml
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-PMM_URL = os.environ.get("PMM_SERVER_URL", "https://127.0.0.1:8443").rstrip("/")
 PMM_USER = os.environ.get("PMM_ADMIN_USER", "admin")
 PMM_PASSWORD = os.environ.get("PMM_ADMIN_PASSWORD")
 CONFIG_PATH = os.environ.get(
@@ -19,25 +18,37 @@ CONFIG_PATH = os.environ.get(
 )
 with open(CONFIG_PATH, encoding="utf-8") as config_file:
     CLUSTER_CONFIG = yaml.safe_load(config_file)
+INVENTORY_PATH = os.environ.get(
+    "CLUSTER_INVENTORY",
+    os.path.join(os.path.dirname(CONFIG_PATH), "inventory.yml"),
+)
+with open(INVENTORY_PATH, encoding="utf-8") as inventory_file:
+    INVENTORY = yaml.safe_load(inventory_file)
 PMM_CONFIG = CLUSTER_CONFIG["monitoring"]["pmm"]
+PMM_URL = os.environ.get("PMM_SERVER_URL", PMM_CONFIG["server_url"]).rstrip("/")
 with open(CLUSTER_CONFIG["versions"]["lock_file"], encoding="utf-8") as lock_file:
     VERSION_LOCK = yaml.safe_load(lock_file)
 
 
 CLUSTER = PMM_CONFIG["cluster_name"]
-EXPECTED_NODES = {
-    f"{CLUSTER}-gnode1": "172.28.0.11",
-    f"{CLUSTER}-gnode2": "172.28.0.12",
-    f"{CLUSTER}-gnode3": "172.28.0.13",
-    f"{CLUSTER}-pnode1": "172.28.0.21",
-    f"{CLUSTER}-pnode2": "172.28.0.22",
-}
+INVENTORY_GROUPS = INVENTORY["all"]["children"]
+GALERA_HOSTS = INVENTORY_GROUPS["galera"]["hosts"]
+PROXYSQL_HOSTS = INVENTORY_GROUPS["proxysql"]["hosts"]
+EXPECTED_NODES = {}
+for host_name, host_vars in {**GALERA_HOSTS, **PROXYSQL_HOSTS}.items():
+    address = host_vars.get(
+        "galera_node_address",
+        host_vars.get("proxysql_node_address", host_vars["ansible_host"]),
+    )
+    EXPECTED_NODES[f"{CLUSTER}-{host_name}"] = address
 EXPECTED_MYSQL = {
-    f"{CLUSTER}-gnode{index}-mysql": f"{CLUSTER}-gnode{index}"
-    for index in range(1, 4)
+    f"{CLUSTER}-{host_name}-mysql": f"{CLUSTER}-{host_name}"
+    for host_name in GALERA_HOSTS
 }
 EXPECTED_NODE_EXPORTERS = {f"{name}-node-exporter" for name in EXPECTED_NODES}
-EXPECTED_PROXYSQL = {f"{name}-proxysql" for name in EXPECTED_NODES if name.endswith("pnode1") or name.endswith("pnode2")}
+EXPECTED_PROXYSQL = {
+    f"{CLUSTER}-{host_name}-proxysql" for host_name in PROXYSQL_HOSTS
+}
 EXPECTED_CREDENTIALS_REVISION = str(PMM_CONFIG["credentials_revision"])
 EXPECTED_NODE_EXPORTER_VERSION = str(VERSION_LOCK["node_exporter"]["version"])
 EXPECTED_PMM_VERSION = str(VERSION_LOCK["pmm"]["version"])
@@ -116,6 +127,10 @@ def main():
     services = get_json("/v1/inventory/services")
     agents = get_json("/v1/inventory/agents")
     alert_rules = get_json("/graph/api/v1/provisioning/alert-rules")
+    alert_contact_points = get_json(
+        "/graph/api/v1/provisioning/contact-points"
+    )
+    alert_policy = get_json("/graph/api/v1/provisioning/policies")
     failures = []
     check(
         version.get("version") == EXPECTED_PMM_VERSION
@@ -123,11 +138,12 @@ def main():
         f"PMM runtime differs from Docker lock {EXPECTED_PMM_VERSION}: {version}",
         failures,
     )
-    # ISC-47: F15 managed alert rules present (quorum/writer/node loss + freshness).
-    # Delivery (contact point) deferred to BLK-5; rules detect the conditions.
-    EXPECTED_ALERT_RULES = {
-        "isa-galera-node-loss", "isa-galera-quorum-loss",
-        "isa-galera-not-synced", "isa-backup-stale",
+    # ISC-47: managed alert rules plus SMTP delivery route.
+    expected_alert_rules = {
+        "isa-galera-node-loss",
+        "isa-galera-quorum-loss",
+        "isa-galera-not-synced",
+        "isa-backup-stale",
     }
     managed_alert_rules = [
         rule
@@ -137,9 +153,37 @@ def main():
     ]
     managed_uids = {rule.get("uid") for rule in managed_alert_rules}
     check(
-        managed_uids == EXPECTED_ALERT_RULES,
+        managed_uids == expected_alert_rules,
         f"ISC-47 managed alert rules differ: got {sorted(managed_uids)}, "
-        f"expected {sorted(EXPECTED_ALERT_RULES)}",
+        f"expected {sorted(expected_alert_rules)}",
+        failures,
+    )
+    check(
+        all(rule.get("noDataState") == "OK" for rule in managed_alert_rules),
+        "ISC-47 healthy empty PromQL results must not fire NoData alerts",
+        failures,
+    )
+    expected_alert_email = CLUSTER_CONFIG["monitoring"]["alerts"]["email"]
+    email_contact = next(
+        (point for point in alert_contact_points if point.get("uid") == "email-isa"),
+        None,
+    )
+    check(
+        email_contact is not None
+        and email_contact.get("type") == "email"
+        and email_contact.get("settings", {}).get("addresses")
+        == expected_alert_email,
+        "ISC-47 email contact point missing or targets the wrong address",
+        failures,
+    )
+    check(
+        any(
+            route.get("receiver") == "ISA Email Alerts"
+            and ["managed_by", "=", "ansible"]
+            in route.get("object_matchers", [])
+            for route in alert_policy.get("routes", [])
+        ),
+        "ISC-47 notification policy does not route managed alerts to email",
         failures,
     )
 
@@ -573,10 +617,11 @@ def main():
         return 1
 
     print(
-        f"PASS: PMM {EXPECTED_PMM_VERSION}, 5 namespaced nodes, "
-        f"5 node exporters {EXPECTED_NODE_EXPORTER_VERSION}, 3 MySQL services, "
-        f"{len(EXPECTED_PROXYSQL)} ProxySQL metric exporters, "
-        "QAN, live Galera/freshness/lifecycle metrics + ISC-47 alert rules verified (delivery pending BLK-5)"
+        f"PASS: PMM {EXPECTED_PMM_VERSION}, {len(EXPECTED_NODES)} namespaced nodes, "
+        f"{len(EXPECTED_NODE_EXPORTERS)} node exporters {EXPECTED_NODE_EXPORTER_VERSION}, "
+        f"{len(EXPECTED_MYSQL)} MySQL services, "
+        f"{len(EXPECTED_PROXYSQL)} ProxySQL metric exporters, QAN, live "
+        "Galera/freshness/lifecycle metrics + ISC-47 rules and email route verified"
     )
 
 
