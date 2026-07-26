@@ -32,43 +32,46 @@
     f15_contact_name: "ISA Email Alerts ({{ cluster_label }})"
 
     writer_hg: "{{ proxysql.writer_hostgroup | default(10) }}"
-    # audit#9: noDataState=Alerting dla reguł krytycznych — utrata eksportera/węzła
-    # usuwa serię; z noDataState=OK dawało to ciche ,OK' zamiast alarmu.
-    # audit#14: UID-y/folder/contact point namespacowane cluster_name, żeby drugi klaster
-    # nie nadpisał reguł/punktów pierwszego we wspólnym PMM.
+    # audit#9: reguły MUSZĄ zawsze zwracać wartość (operator `bool` + `or vector(...)`).
+    # Wyrażenie filtrujące (np. `size < 3`) zwraca PUSTY wektor gdy jest zdrowo — Grafana
+    # interpretuje to jako NoData, więc noDataState=Alerting zapalałoby alarm na zdrowym
+    # klastrze (zweryfikowane na claude-pve: "Alerting (NoData)" przy 3/3 Synced).
+    # Konstrukcja poniżej: zdrowo => 0 (Normal), awaria => 1 (Alerting),
+    # BRAK metryk => `or vector(...)` daje wartość awaryjną => 1 (wykrywa utratę monitoringu).
+    # noDataState=Alerting zostaje jako ostatnia linia obrony (padnięta datasource).
+    # audit#14: UID-y/folder/contact point namespacowane cluster_name.
     f15_rules:
       - uid: "isa-{{ cluster_label }}-node-loss"
         title: "Galera node loss (cluster size < expected)"
-        expr: "mysql_global_status_wsrep_cluster_size{cluster=\"{{ cluster_label }}\"} < {{ galera.nodes_expected }}"
-        summary: "Galera cluster size dropped below {{ galera.nodes_expected }} (node/writer lost)"
+        expr: "(min(mysql_global_status_wsrep_cluster_size{cluster=\"{{ cluster_label }}\"}) or vector(0)) < bool {{ galera.nodes_expected }}"
+        summary: "Galera cluster size dropped below {{ galera.nodes_expected }} (node/writer lost) or metrics missing"
         severity: "critical"
         noDataState: "Alerting"
       - uid: "isa-{{ cluster_label }}-quorum-loss"
         title: "Galera quorum loss (not Primary)"
-        expr: "mysql_global_status_wsrep_cluster_status{cluster=\"{{ cluster_label }}\"} != 1"
-        summary: "Galera node left Primary Component (quorum at risk)"
+        expr: "(max(mysql_global_status_wsrep_cluster_status{cluster=\"{{ cluster_label }}\"}) or vector(0)) != bool 1"
+        summary: "Galera left Primary Component (quorum at risk) or metrics missing"
         severity: "critical"
         noDataState: "Alerting"
       - uid: "isa-{{ cluster_label }}-not-synced"
         title: "Galera node not Synced"
-        expr: "mysql_global_status_wsrep_local_state{cluster=\"{{ cluster_label }}\"} != 4"
+        expr: "(min(mysql_global_status_wsrep_local_state{cluster=\"{{ cluster_label }}\"}) or vector(4)) != bool 4"
         summary: "Galera node not in Synced (local_state != 4)"
         severity: "warning"
         noDataState: "OK"
-      # audit#9: brak writera w ProxySQL przy zdrowej Galerze (cluster_size nie wyłapie).
-      # Metric proxysql_mysql_servers_status to standard percona exporter; parameterized
-      # (proxysql_writer_metric) — potwierdź nazwę na-site. ,or vector(0)' zapobiega pustemu
-      # wektorowi gdy hostgroup pusty = alert (fail-closed).
+      # Metryka ZWERYFIKOWANA na claude-pve: proxysql_mysql_servers_status NIE ISTNIEJE w PMM 3.
+      # Właściwa: proxysql_connpool_conns_status (cluster, hostgroup, endpoint, service_name;
+      # 1=ONLINE, 2=SHUNNED, 4=OFFLINE_HARD). Zdrowo: >=1 seria ONLINE w writer hostgroup.
       - uid: "isa-{{ cluster_label }}-no-writer"
         title: "ProxySQL no ONLINE writer (writer hostgroup empty)"
-        expr: "(count({{ proxysql_writer_metric | default('proxysql_mysql_servers_status') }}{cluster=\"{{ cluster_label }}\",hostgroup=\"{{ writer_hg }}\",status=\"ONLINE\"}) or on() vector(0)) < 1"
-        summary: "No ONLINE server in ProxySQL writer hostgroup {{ writer_hg }} — writes will fail"
+        expr: "(count(proxysql_connpool_conns_status{cluster=\"{{ cluster_label }}\",hostgroup=\"{{ writer_hg }}\"} == 1) or vector(0)) < bool 1"
+        summary: "No ONLINE backend in ProxySQL writer hostgroup {{ writer_hg }} — writes will fail"
         severity: "critical"
         noDataState: "Alerting"
       - uid: "isa-{{ cluster_label }}-backup-stale"
         title: "Backup freshness stale"
-        expr: "(time() - isa_backup_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) > {{ backup_retention_days }} * 86400"
-        summary: "Last successful backup older than {{ backup_retention_days }} days"
+        expr: "(time() - (max(isa_backup_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool ({{ backup_retention_days }} * 86400)"
+        summary: "Last successful backup older than {{ backup_retention_days }} days (or freshness metric missing)"
         severity: "critical"
         noDataState: "Alerting"
 
@@ -159,7 +162,7 @@
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
         validate_certs: "{{ pmm_validate_certs }}"
-        status_code: [200, 404]
+        status_code: [200, 202, 204, 404]   # Grafana provisioning DELETE zwraca 204
       loop:
         - "isa-galera-node-loss"
         - "isa-galera-quorum-loss"
@@ -205,7 +208,7 @@
             cluster: "{{ cluster_label }}"
             severity: "{{ item.severity }}"
             isc: "ISC-47"
-        status_code: [200, 201]
+        status_code: [200, 201, 202]
       loop: "{{ f15_rules }}"
       no_log: true
 
@@ -286,13 +289,16 @@
         f15_unmanaged_policy_routes: >-
           {{
             (f15_unmanaged_policy_routes | default([]))
-            + [item]
+            + [ item | dict2items | rejectattr('key', 'equalto', 'provenance') | items2dict ]
           }}
       loop: "{{ f15_current_policy.json.routes | default([]) }}"
       when: >-
         not (
           (['managed_by', '=', 'ansible'] in (item.object_matchers | default([])))
-          and (['cluster', '=', cluster_label] in (item.object_matchers | default([])))
+          and (
+            (['cluster', '=', cluster_label] in (item.object_matchers | default([])))
+            or ((item.object_matchers | default([]) | map('first') | select('equalto', 'cluster') | list | length) == 0)
+          )
         )
       no_log: true
 
@@ -308,7 +314,7 @@
             )
             | combine({
                 'routes': (f15_unmanaged_policy_routes | default([])) + [{
-                  'receiver': "{{ f15_contact_name }}",
+                  'receiver': f15_contact_name,
                   'object_matchers': [['managed_by', '=', 'ansible'], ['cluster', '=', cluster_label]]
                 }]
               })

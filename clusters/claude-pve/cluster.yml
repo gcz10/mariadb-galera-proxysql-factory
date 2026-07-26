@@ -93,7 +93,7 @@ monitoring:
     agent_id: "pmm-server"
     cluster_name: "claude-galera"
     validate_certs: false
-    credentials_revision: 1
+    credentials_revision: 2
   system: "pmm"
   alerts:
     email: "ops@claude.local"   # maildev na infra VM
