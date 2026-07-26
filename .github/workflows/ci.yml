@@ -44,6 +44,21 @@ jobs:
           done
           exit $rc
 
+      - name: Inventory invariants (all clusters)
+        run: |
+          set -e
+          rc=0
+          for inv in clusters/*/inventory.yml; do
+            [ -f "$inv" ] || continue
+            cdir=$(dirname "$inv")
+            if python3 tests/validation/validate-inventory.py "$inv" "$cdir/cluster.yml"; then
+              echo "OK: $inv"
+            else
+              echo "FAIL: $inv"; rc=1
+            fi
+          done
+          exit $rc
+
       - name: ansible syntax-check (playbooks only; skip include-only files)
         run: |
           set -e

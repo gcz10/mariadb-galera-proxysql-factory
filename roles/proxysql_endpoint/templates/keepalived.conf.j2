@@ -11,7 +11,8 @@ global_defs {
 vrrp_script chk_proxysql {
     script "/usr/local/bin/check_proxysql.sh"
     interval 2
-    weight -60
+    weight 0  # audit#15: weight 0 → niezdrowy ProxySQL wprowadza instancję w FAULT (wycofuje VIP).
+               # Wcześniej weight -60: przy awarii OBU ProxySQL MASTER (150-60=90) i tak trzymał VIP.
     fall 2
     rise 2
     timeout 3

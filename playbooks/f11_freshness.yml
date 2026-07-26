@@ -68,9 +68,11 @@
     - name: "Odczytaj unixtime wygaśnięcia certyfikatu TLS (0 gdy disabled)"
       ansible.builtin.shell: >-
         set -o pipefail;
-        {% if tls.mode == 'full' and tls.certificate_reference is defined and tls.certificate_reference | length > 0 %}
-        if [ -f "{{ tls.certificate_reference }}" ]; then
-          openssl x509 -in "{{ tls.certificate_reference }}" -noout -enddate 2>/dev/null \
+        {% if (tls | default({})).mode | default('disabled') == 'full' %}
+        # audit#20: czytaj WDROŻONY cert na zdalnym hoście (/etc/mysql/tls/server-cert.pem),
+        # nie tls.certificate_reference (ścieżka na kontrolerze) — metryka była stale 0.
+        if [ -f "{{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }}" ]; then
+          openssl x509 -in "{{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }}" -noout -enddate 2>/dev/null \
             | cut -d= -f2 | xargs -I{} date -d {} +%s || echo 0;
         else echo 0; fi
         {% else %}

@@ -90,6 +90,38 @@
           Adres inventory {{ ansible_host }} nie należy do aktywnego interfejsu IPv4;
           nie można bezpiecznie przypisać polityki ingress.
 
+    - name: "audit#16: źródło sesji SSH w administration_cidrs (ochrona przed odcięciem)"
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import os, ipaddress
+        sc = os.environ.get('SSH_CONNECTION', '')
+        client = sc.split()[0] if sc.split() else ''
+        cids = os.environ.get('FW_ADMIN_CIDS', '').split()
+        if not client:
+            print('NO_SSH_CLIENT'); raise SystemExit(0)
+        try:
+            c = ipaddress.ip_address(client)
+        except ValueError:
+            print('INVALID_CLIENT'); raise SystemExit(0)
+        print('OK' if any(c in ipaddress.ip_network(n, strict=False) for n in cids) else 'DENY')
+        PY
+      args:
+        executable: /bin/bash
+      environment:
+        FW_ADMIN_CIDS: "{{ network.administration_cidrs | join(' ') }}"
+      register: firewall_session_check
+      changed_when: false
+
+    - name: "audit#16: brama — sesja SSH w administration_cidrs przed przeładowaniem firewall"
+      ansible.builtin.assert:
+        that:
+          - "'DENY' not in (firewall_session_check.stdout | default(''))"
+        fail_msg: >-
+          Sesja SSH nie jest w network.administration_cidrs ({{ network.administration_cidrs }}).
+          Przeładowanie firewall odcięłoby tę sesję. Dodaj swój adres do administration_cidrs
+          albo łącz się z dozwolonej sieci.
+        success_msg: "Sesja SSH w administration_cidrs — bezpiecznie przeładować firewall."
+
     - name: "Utwórz katalog stref firewalld"
       ansible.builtin.file:
         path: /etc/firewalld/zones

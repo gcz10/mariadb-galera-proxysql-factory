@@ -38,8 +38,9 @@ lab-start-services:  ## Lab-only: (re)start ProxySQL po restarcie kontenera (bra
 cluster-discover:  ## F0 Discovery — zbierz fakty z hostów (read-only)
 	ansible-playbook playbooks/f0_discovery.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
-cluster-validate:  ## Waliduj konfigurację klastra (schema + preflight)
-	python3 tests/validation/validate-cluster-schema.py clusters/$(CLUSTER)/cluster.yml
+cluster-validate:  ## Waliduj konfigurację klastra (schema + invariants inventory + preflight)
+	python3 tests/validation/validate-cluster-schema.py clusters/$(CLUSTER)/cluster.yml clusters/schema/cluster.schema.json
+	python3 tests/validation/validate-inventory.py clusters/$(CLUSTER)/inventory.yml clusters/$(CLUSTER)/cluster.yml
 	ansible-playbook playbooks/f2_preflight.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 cluster-deploy:  ## F2+F3 — instaluj pakiety + konfiguruj (idempotentny converge)

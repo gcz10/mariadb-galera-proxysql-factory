@@ -117,11 +117,12 @@
         query: |
           SELECT t.TABLE_SCHEMA, t.TABLE_NAME
           FROM information_schema.TABLES t
-          LEFT JOIN information_schema.STATISTICS s
-            ON t.TABLE_SCHEMA=s.TABLE_SCHEMA AND t.TABLE_NAME=s.TABLE_NAME AND s.NON_UNIQUE=0
+          LEFT JOIN information_schema.TABLE_CONSTRAINTS c
+            ON t.TABLE_SCHEMA=c.TABLE_SCHEMA AND t.TABLE_NAME=c.TABLE_NAME
+            AND c.CONSTRAINT_TYPE='PRIMARY KEY'
           WHERE t.TABLE_TYPE='BASE TABLE'
             AND t.TABLE_SCHEMA NOT IN ('mysql','sys','performance_schema','information_schema')
-            AND s.TABLE_NAME IS NULL
+            AND c.CONSTRAINT_NAME IS NULL
         login_unix_socket: /var/lib/mysql/mysql.sock
       become: true
       become_user: mysql
