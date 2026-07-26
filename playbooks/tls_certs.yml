@@ -22,6 +22,7 @@
     owner: "{{ tls_file_owner | default('mysql') }}"
     group: "{{ tls_file_owner | default('mysql') }}"
     mode: "0644"
+  register: tls_ca_copy
 
 - name: "TLS: skopiuj certyfikat serwera"
   ansible.builtin.copy:
@@ -30,6 +31,7 @@
     owner: "{{ tls_file_owner | default('mysql') }}"
     group: "{{ tls_file_owner | default('mysql') }}"
     mode: "0644"
+  register: tls_cert_copy
 
 - name: "TLS: skopiuj klucz prywatny (0600, tylko gdy potrzebny na węźle)"
   ansible.builtin.copy:
@@ -39,3 +41,16 @@
     group: "{{ tls_file_owner | default('mysql') }}"
     mode: "0600"
   when: tls_deploy_key | default(true)
+  register: tls_key_copy
+
+# audit#8: include_tasks nie agreguje ,changed' dzieci — tls_deploy_result.changed
+# zawsze False, więc sama rotacja PEM (bez zmiany server.cnf) nie restartowała MariaDB.
+# set_fact jest widoczne w play-rodzicu po include → site.yml restartuje przy zmianie pliku.
+- name: "TLS: zapamiętaj czy pliki uległy zmianie"
+  ansible.builtin.set_fact:
+    tls_files_changed: >-
+      {{
+        (tls_ca_copy.changed | default(false))
+        or (tls_cert_copy.changed | default(false))
+        or (tls_key_copy.changed | default(false))
+      }}

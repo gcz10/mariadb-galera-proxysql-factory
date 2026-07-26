@@ -86,7 +86,15 @@
         "certificate_reference": { "type": "string" },
         "private_key_reference": { "type": "string" },
         "require_secure_transport": { "type": "boolean" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "full" } }, "required": ["mode"] },
+          "then": {
+            "required": ["certificate_source", "ca_reference", "certificate_reference", "private_key_reference"]
+          }
+        }
+      ]
     },
     "network": {
       "type": "object",

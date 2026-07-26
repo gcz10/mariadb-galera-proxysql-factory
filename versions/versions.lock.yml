@@ -18,6 +18,7 @@ mariadb:
   rpm_release: "to-confirm-F0"  # dnf info na hostach
   repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
   repo_setup_args: "--mariadb-server-version=11.4"
+  repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"  # audit#6: integralność skryptu (v2026-06-30, 44184B)
   galera_provider: "galera-4"
   galera_provider_wsrep_api: 26
   mariadb_backup_package: "mariadb-backup"
@@ -31,6 +32,10 @@ proxysql:
   rpm_release: "to-confirm-F0"
   repo_baseurl: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/"
   repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+  # audit#6: klucz repo_pub_key.gpg jest binarny (nie ASCII-armored) → rpm --import odrzuca.
+  # Kontrolą integralności jest przypięty sha256 RPM-u (weryfikowany przez get_url).
+  rpm_sha256:
+    x86_64: "ca209152e5162aa73474b999e4ab289e89e6dcc2762f12c3018d33a11af1b6da"  # proxysql-3.0.9-1-centos9.x86_64.rpm, 40352686B
   cves_patched:
     - "CVE-2026-48772"
     - "CVE-2026-48773"

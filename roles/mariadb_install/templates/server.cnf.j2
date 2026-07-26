@@ -60,6 +60,9 @@ socket = /var/lib/mysql/mysql.sock
 [sst]
 streamfmt = mbstream
 {% if (tls | default({})).mode | default('disabled') == 'full' %}
+# audit#7: encrypt=3 WŁĄCZA szyfrowanie strumienia SST (domyślnie 0=plaintext).
+# Samo tca/tcert/tkey bez encrypt= zostaje zignorowane — SST leciało czystym tekstem.
+encrypt=3
 tca = {{ tls_ca_path | default('/etc/mysql/tls/ca.pem') }}
 tcert = {{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }}
 tkey = {{ tls_key_path | default('/etc/mysql/tls/server-key.pem') }}

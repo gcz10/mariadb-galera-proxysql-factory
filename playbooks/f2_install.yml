@@ -21,11 +21,12 @@
         name: lock
 
     # === Galera nodes: MariaDB repo + pakiety ===
-    - name: "MariaDB repo - pobierz mariadb_repo_setup"
+    - name: "MariaDB repo - pobierz mariadb_repo_setup (audit#6: weryfikacja sha256)"
       ansible.builtin.get_url:
         url: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
         dest: /usr/local/bin/mariadb_repo_setup
         mode: "0755"
+        checksum: "sha256:{{ lock.mariadb.repo_setup_sha256 }}"
       when: "'galera' in group_names"
 
 
@@ -163,17 +164,25 @@
         - "'galera' in group_names"
         - ansible_facts['service_mgr'] == 'systemd'
 
-    # === ProxySQL nodes: ProxySQL repo + pakiet ===
-    - name: "ProxySQL - pobierz GPG key"
-      ansible.builtin.get_url:
-        url: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
-        dest: /etc/pki/rpm-gpg/RPM-GPG-KEY-proxysql
-        mode: "0644"
+    # === ProxySQL nodes: RPM zweryfikowany sha256 (audit#6) ===
+    # Klucz repo_pub_key.gpg jest binarny → rpm --import odrzuca ("not an armored public key").
+    # Kontrolą integralności jest przypięty sha256 RPM-u w versions.lock.yml (get_url weryfikuje).
+    - name: "ProxySQL - wymagaj sha256 RPM dla aktualnej arch w lockfile"
+      ansible.builtin.assert:
+        that:
+          - (lock.proxysql.rpm_sha256 | default({})).get(ansible_architecture) is defined
+        fail_msg: >-
+          Brak sha256 dla ProxySQL {{ lock.proxysql.version }} arch {{ ansible_architecture }}
+          w versions.lock.yml (proxysql.rpm_sha256). Dodaj przed instalacją (audit#6).
       when: "'proxysql' in group_names"
 
-    - name: "ProxySQL - importuj GPG key (lab: skip, key format issue)"
-      ansible.builtin.debug:
-        msg: "Lab: GPG key format issue, disabling gpgcheck for lab install"
+    - name: "ProxySQL - pobierz RPM z weryfikacją sha256 (audit#6)"
+      ansible.builtin.get_url:
+        url: "{{ proxysql_rpm_url | default('https://repo.proxysql.com/ProxySQL/proxysql-' ~ (lock.proxysql.series | default('3.0')) ~ '.x/centos/9/proxysql-' ~ (lock.proxysql.version | default('3.0.9')) ~ '-1-centos9.' ~ ansible_architecture ~ '.rpm') }}"
+        dest: "/var/tmp/proxysql-{{ lock.proxysql.version | default('3.0.9') }}-1.{{ ansible_architecture }}.rpm"
+        checksum: "sha256:{{ (lock.proxysql.rpm_sha256 | default({})).get(ansible_architecture) }}"
+        mode: "0644"
+      register: proxysql_rpm_dl
       when: "'proxysql' in group_names"
 
     - name: "ProxySQL - usun stary repo file (jesli istnieje)"
@@ -181,11 +190,11 @@
         path: /etc/yum.repos.d/proxysql.repo
         state: absent
       when: "'proxysql' in group_names"
-    - name: "ProxySQL - instaluj z bezposredniego RPM (wersja z lockfile, arch auto)"
+    - name: "ProxySQL - instaluj zweryfikowany RPM (sha256 = kontrola integralności)"
       ansible.builtin.dnf:
-        name: "{{ proxysql_rpm_url | default('https://repo.proxysql.com/ProxySQL/proxysql-' ~ (lock.proxysql.series | default('3.0')) ~ '.x/centos/9/proxysql-' ~ (lock.proxysql.version | default('3.0.9')) ~ '-1-centos9.' ~ ansible_architecture ~ '.rpm') }}"
+        name: "{{ proxysql_rpm_dl.dest }}"
         state: present
-        disable_gpg_check: "{{ proxysql_disable_gpg_check | default(true) }}"
+        disable_gpg_check: true  # klucz binarny nieimportowalny; sha256 zweryfikowane przez get_url
       when: "'proxysql' in group_names"
     - name: "ProxySQL - instaluj klienta mariadb (wymagany do admin port 6032)"
       ansible.builtin.dnf:

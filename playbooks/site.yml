@@ -118,7 +118,7 @@
     - name: "Zaplanuj bezpieczny restart po rotacji certyfikatu TLS"
       ansible.builtin.debug:
         msg: "Pliki TLS zmienione; restart MariaDB zostanie wykonany po bramie zdrowia."
-      changed_when: (tls_deploy_result | default({})).changed | default(false)
+      changed_when: (tls_files_changed | default(false)) | bool
       notify:
         - "Restart MariaDB (systemd, on config change)"
         - "Verify MariaDB health after config restart"
