@@ -59,6 +59,20 @@ jobs:
           done
           exit $rc
 
+      - name: Lockfile validation (all platforms — dual-platform parity)
+        run: |
+          set -e
+          rc=0
+          for lf in versions/*.lock.yml; do
+            [ -f "$lf" ] || continue
+            if python3 tests/validation/validate-lockfile.py "$lf"; then
+              echo "OK: $lf"
+            else
+              echo "FAIL: $lf"; rc=1
+            fi
+          done
+          exit $rc
+
       - name: ansible syntax-check (playbooks only; skip include-only files)
         run: |
           set -e

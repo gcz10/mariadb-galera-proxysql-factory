@@ -23,7 +23,7 @@
       "additionalProperties": false,
       "properties": {
         "virtualization": { "type": "string", "enum": ["vmware_esxi", "proxmox_kvm", "docker_orbstack"] },
-        "rocky_linux_major": { "type": "integer", "const": 9 }
+        "rocky_linux_major": { "type": "integer", "enum": [9, 10] }
       }
     },
     "versions": {
