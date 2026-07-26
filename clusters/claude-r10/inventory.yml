@@ -16,9 +16,9 @@ all:
         galera_role: "galera"
       hosts:
         gnode1:
-          ansible_host: "192.168.1.30"
+          ansible_host: "192.168.1.37"
           galera_node_idx: 1
-          galera_node_address: "192.168.1.30"
+          galera_node_address: "192.168.1.37"
         gnode2:
           ansible_host: "192.168.1.31"
           galera_node_idx: 2

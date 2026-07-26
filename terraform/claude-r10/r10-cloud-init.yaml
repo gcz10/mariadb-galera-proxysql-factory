@@ -1,0 +1,20 @@
+#cloud-config
+# Rocky 10 GenericCloud domyślnie blokuje root login (disable_root: true) —
+# ten snippet wymusza klucz operatora i konfigurację sshd zgodną z resztą fabryki
+# (logowanie roota po kluczu, bez haseł). Idempotentny.
+disable_root: false
+ssh_pwauth: false
+users:
+  - name: root
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab
+runcmd:
+  - mkdir -p /root/.ssh && chmod 700 /root/.ssh
+  - echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab' > /root/.ssh/authorized_keys
+  - chmod 600 /root/.ssh/authorized_keys
+  - sed -i 's/^#*\s*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+  - grep -q '^PermitRootLogin' /etc/ssh/sshd_config || echo 'PermitRootLogin prohibit-password' >> /etc/ssh/sshd_config
+  - sed -i 's/^#*\s*PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+  - grep -q '^PubkeyAuthentication' /etc/ssh/sshd_config || echo 'PubkeyAuthentication yes' >> /etc/ssh/sshd_config
+  - grep -q '^PasswordAuthentication no' /etc/ssh/sshd_config || echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config
+  - systemctl restart sshd

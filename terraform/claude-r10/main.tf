@@ -23,7 +23,7 @@ locals {
   # Rocky-10-GenericCloud-Base-10.2 — jedyny obraz GenericCloud opublikowany dla 10
   # (zweryfikowane 2026-07-26: download.rockylinux.org/pub/rocky/10/images/x86_64/).
   # Obraz musi byc wczesniej zaimportowany na PVE do `local:import/`.
-  source_img = "local:import/Rocky-10-GenericCloud-Base-10.2.qcow2"
+  source_img = "local:import/Rocky-10.2-GenericCloud.qcow2"   # nazwa pliku na PVE (zweryfikowane 2026-07-27)
 
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
@@ -32,7 +32,7 @@ locals {
   # bylo oczywiste. Blok zweryfikowany jako wolny (zajete .25-.28); .37-.39 zostaja
   # jako zapas na czwarty wezel Galera albo arbitra garbd.
   vms = {
-    gnode1 = { id = 9110, ip = 30, role = "galera", cpu = 2, ram = 4096, disk = 40 }
+    gnode1 = { id = 9110, ip = 37, role = "galera", cpu = 2, ram = 4096, disk = 40 }   # .30 konflikt z lab-rke2-ha-server-01 (vmid 9221) -> .37
     gnode2 = { id = 9111, ip = 31, role = "galera", cpu = 2, ram = 4096, disk = 40 }
     gnode3 = { id = 9112, ip = 32, role = "galera", cpu = 2, ram = 4096, disk = 40 }
     pnode1 = { id = 9113, ip = 33, role = "proxysql", cpu = 1, ram = 2560, disk = 40 }
@@ -81,6 +81,10 @@ resource "proxmox_virtual_environment_vm" "node" {
   initialization {
     interface    = "scsi1"
     datastore_id = local.storage
+    # Rocky 10 GenericCloud ma disable_root: true w domyslnym cloud.cfg — klucz
+    # z user_account nie trafia do /root/.ssh/authorized_keys. Snippet wymusza klucz
+    # operatora i konfiguracje sshd (PermitRootLogin prohibit-password, PubkeyAuth yes).
+    user_data_file_id = "local:snippets/r10-cloud-init.yaml"
     # Klucz ed25519 idzie do roota — logowanie SSH bezposrednio jako root.
     # Omija problem snippetu (wymagajacego SSH do noda); become:true dla roota
     # to no-op, wiec nic w playbookach repo nie trzeba zmieniac.
