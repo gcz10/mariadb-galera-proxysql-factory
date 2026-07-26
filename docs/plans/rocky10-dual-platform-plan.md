@@ -1,6 +1,6 @@
 # Plan: Rocky Linux 10 obok Rocky Linux 9 (dual-platform)
 
-**Status:** PLAN — nie rozpoczęto implementacji.
+**Status:** R1+R0+R2+R6 ZROBIONE i zweryfikowane (2026-07-27). Teardown + apply BLOKOWANE na sekrety Proxmoxa. Szczegoly na końcu pliku (§8).
 **Data ustaleń:** 2026-07-26. Wszystkie wersje/URL/sumy **zweryfikowane realnym zapytaniem do repozytoriów**, nie z pamięci.
 **Zasada nadrzędna:** kod jest **uniwersalny** — zero wersji i zero platformy w playbookach.
 Wszystko platformowe/wersyjne pochodzi z **lockfile wskazanego per klaster** (`versions.lock_file` w `cluster.yml`; schema tego wymaga).
@@ -211,3 +211,48 @@ R1 i R0 są tanie i potrzebne niezależnie. **R3 jest bramką** — dopiero jego
 2. **Czy nowy klaster współdzieli PMM** z ewentualnym przyszłym EL9? Jeśli tak — namespacing alertów (`#14`) już to obsługuje; jeśli nie — osobny `infranode`.
 3. **Adresacja IP** — czy nowe VM przejmują pulę `192.168.1.10-16`, czy dostają własną (ma znaczenie dla `network.*_cidrs` i VIP).
 4. **Czy `#10` (backup SMB)** ma być rozstrzygnięty przy okazji nowej instalacji, czy zostaje S3/MinIO.
+
+---
+
+## 8. Status realizacji (2026-07-27)
+
+| faza | status | commit | dowód |
+|---|---|---|---|
+| R1 odhardcodowanie | ✅ ZROBIONE | `4d3ee6d` | 8 miejsc + 2 błędy (C1/C2) + 3 kolejne znalezione przy audycie (D); bramka grep czysta |
+| R1 weryfikacja na żywo | ✅ ZROBIONE | — | `f2_install`/`site`/`firewall` changed=0 na 7/7 EL9; restore-drill PASS; 3 nowe asercje na wszystkich 7 hostach |
+| R0 lockfile EL10 | ✅ ZROBIONE | `0be87dc` | `versions/versions-el10.lock.yml`; wszystkie sumy pobrane i policzone; URL z tego lockfile daje HTTP 200 z rozmiarem zgodnym z sha256 |
+| R2 terraform + klaster | ✅ ZROBIONE | `0446ecf` | `terraform/claude-r10/` (fmt+init+validate PASS); `clusters/claude-r10/` (schema+inventory PASS) |
+| R6 CI macierz | ✅ ZROBIONE | `0446ecf` | `tests/validation/validate-lockfile.py` + step w CI; iteracja `clusters/*/` obejmuje claude-r10 |
+| **Teardown EL9** | ⛔ BLOKOWANE | — | `terraform destroy` wymaga `PROXMOX_VE_ENDPOINT` + `PROXMOX_VE_API_TOKEN`; nie są nigdzie zapisane, API nie odpowiada w 192.168.1.0/24:8006 |
+| **R2 apply** | ⛔ BLOKOWANE | — | j.w. + wymaga obrazu `Rocky-10-GenericCloud-Base-10.2.qcow2` zaimportowanego na PVE do `local:import/` |
+| R3 spike SELinux/SST | ⏳ czeka na VM | — | bramka decyzyjna; bez niej reszta planu bezwartościowa |
+| R4 deploy + R5 backup/chaos | ⏳ czeka na R3 | — | — |
+
+### Co jest potrzebne od operatora, żeby iść dalej
+
+1. **Sekrety Proxmoxa** (endpoint + API token) — przekazane w środowisku:
+   ```bash
+   export PROXMOX_VE_ENDPOINT='https://<host-lub-ip>:8006'
+   export PROXMOX_VE_API_TOKEN='<token-id>=<secret>'
+   export PROXMOX_VE_INSECURE=true   # jesli cert self-signed
+   ```
+2. **Obraz Rocky 10 na PVE** — `Rocky-10-GenericCloud-Base-10.2.qcow2` w `local:import/`
+   (np. przez `wget` na PVE + `qm import` lub GUI upload do storage `local`).
+
+### Co wtedy uruchamiam
+
+```bash
+# 1. Zburzenie EL9 (po potwierdzeniu — destruktywne)
+( cd terraform/claude-pve && terraform destroy -auto-approve )
+# 2. Stawienie EL10
+( cd terraform/claude-r10 && terraform apply -auto-approve )
+# 3. SPIKE R3: SELinux/SST na jednej VM (bramka decyzyjna)
+make cluster-deploy CLUSTER=claude-r10   # dojdzie do joinu — tam weryfikujemy SST
+```
+
+### Co już teraz ma wartość bez VM
+
+- Kod playbooków jest **uniwersalny** — dodanie trzeciej platformy (np. EL11) to nowy lockfile + katalog klastra, zero zmian w playbookach.
+- 5 martwych zmiennych i 2 dziury supply-chain zostało usuniętych (R1).
+- CI łapie teraz brak klucza w lockfile i niezgodność `repo_setup_args` z `mariadb.version`.
+- `compatibility-report.md` przestał kłamać (kontrola minora, którą deklarował, teraz realnie istnieje).
