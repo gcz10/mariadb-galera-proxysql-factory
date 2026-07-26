@@ -12,6 +12,7 @@ import json
 import yaml
 from pathlib import Path
 from jsonschema import validate, ValidationError
+from ipaddress import ip_network
 
 
 def main():
@@ -48,6 +49,25 @@ def main():
 
     # Additional semantic checks beyond JSON Schema
     errors = []
+
+    # Firewalld rules emitted by this repository use family="ipv4".
+    for field in (
+        "application_cidrs",
+        "database_cluster_cidrs",
+        "administration_cidrs",
+        "monitoring_cidrs",
+    ):
+        for cidr in cluster.get("network", {}).get(field, []):
+            try:
+                network = ip_network(cidr, strict=False)
+            except ValueError as exc:
+                errors.append(f"network.{field} contains invalid CIDR '{cidr}': {exc}")
+                continue
+            if network.version != 4:
+                errors.append(
+                    f"network.{field} contains unsupported IPv6 CIDR '{cidr}'; "
+                    "current firewalld policy is IPv4-only"
+                )
 
     # Check: versions.policy must be locked for production
     env = cluster.get("cluster", {}).get("environment", "")

@@ -1,9 +1,8 @@
 ---
 # F15 — Reguły alertów ISC-47 (quorum/writer/node loss + freshness).
 #
-# Decyzja principal: reguły BEZ delivery (contact point odłożony do BLK-5).
-# Reguły są zarządzane przez Ansible w PMM/Grafana — wykrywają warunki alertu.
-# Weryfikacja: symulacja utraty węzła → reguła przechodzi w FIRING.
+# Reguły, email contact point i notification policy są zarządzane przez Ansible.
+# Weryfikacja delivery: kontrolowany alert musi trafić do skonfigurowanego SMTP.
 #
 # ISC-47: Alert powstaje po utracie quorum, utracie writera lub utracie węzła.
 # - node loss / writer loss: wsrep_cluster_size < expected (writer jest węzłem)
@@ -11,7 +10,7 @@
 # - node not Synced: wsrep_local_state != 4
 # - backup stale: ostatni backup > retention_days
 #
-# Kontakt/delivery: BLK-5 (nieuzgodniony target) — reguły bez contact point.
+# Delivery: email przez SMTP; laboratorium używa Maildev.
 
 - name: "F15 — reguły alertów ISC-47 w PMM/Grafana"
   hosts: localhost
@@ -19,7 +18,7 @@
   gather_facts: false
   vars:
     ansible_become: false
-    pmm_api_url: "{{ monitoring.pmm.server_url }}"
+    pmm_api_url: "{{ lookup('ansible.builtin.env', 'PMM_SERVER_URL') | default(monitoring.pmm.server_url, true) | regex_replace('/$', '') }}"
     pmm_admin_user: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_USER') | default('admin', true) }}"
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     pmm_validate_certs: "{{ monitoring.get('pmm', {}).get('validate_certs', true) | bool }}"
@@ -27,6 +26,7 @@
     folder_uid: "{{ (monitoring.alerts | default({})).folder_uid | default('isa-alerts') }}"
     ds_uid: "{{ (monitoring.alerts | default({})).datasource_uid | default('') }}"
     backup_retention_days: "{{ backup.retention_days | default(14) }}"
+    f15_email: "{{ (monitoring.alerts | default({})).email | default('') }}"
 
     f15_rules:
       - uid: "isa-galera-node-loss"
@@ -51,10 +51,13 @@
         severity: "critical"
 
   pre_tasks:
-    - name: "Wymagaj PMM_ADMIN_PASSWORD"
+    - name: "Wymagaj PMM_ADMIN_PASSWORD i adresu alertów"
       ansible.builtin.assert:
-        that: [pmm_admin_password | length > 0]
-        fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium."
+        that:
+          - pmm_admin_password | length > 0
+          - f15_email | length > 3
+          - "'@' in f15_email"
+        fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium i monitoring.alerts.email w cluster.yml."
 
   tasks:
     # === Zapewnij folder ISA Alerts ===
@@ -146,7 +149,7 @@
           title: "{{ item.title }}"
           condition: "A"
           for: "2m"
-          noDataState: "Alerting"
+          noDataState: "OK"
           execErrState: "Error"
           isPaused: false
           data:
@@ -165,7 +168,7 @@
             cluster: "{{ cluster_label }}"
             severity: "{{ item.severity }}"
             isc: "ISC-47"
-        status_code: 200
+        status_code: [200, 201]
       loop: "{{ f15_rules }}"
       no_log: true
 
@@ -196,11 +199,80 @@
           uid: "email-isa"
           name: "ISA Email Alerts"
           type: "email"
-          settings: {addresses: "{{ (monitoring.alerts | default({})).email | default('alerts@CHANGE_ME.invalid') }}", singleEmail: false}
+          settings: {addresses: "{{ f15_email }}", singleEmail: false}
           disableResolveMessage: false
         status_code: [200, 202]
       no_log: true
       when: "'email-isa' not in (f15_contacts.json | map(attribute='uid') | list)"
+
+    - name: "Aktualizuj email contact point po zmianie adresu"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/contact-points/email-isa"
+        method: PUT
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        body_format: json
+        body:
+          uid: "email-isa"
+          name: "ISA Email Alerts"
+          type: "email"
+          settings: {addresses: "{{ f15_email }}", singleEmail: false}
+          disableResolveMessage: false
+        status_code: [200, 202]
+      no_log: true
+      when:
+        - "'email-isa' in (f15_contacts.json | map(attribute='uid') | list)"
+        - >-
+          (f15_contacts.json
+           | selectattr('uid', 'equalto', 'email-isa')
+           | map(attribute='settings.addresses')
+           | first
+           | default('')) != f15_email
+
+    - name: "Pobierz bieżącą notification policy"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/policies"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        return_content: true
+        status_code: 200
+      register: f15_current_policy
+      no_log: true
+
+    - name: "Zachowaj trasy notification policy niezarządzane przez ten playbook"
+      ansible.builtin.set_fact:
+        f15_unmanaged_policy_routes: >-
+          {{
+            (f15_unmanaged_policy_routes | default([]))
+            + [item]
+          }}
+      loop: "{{ f15_current_policy.json.routes | default([]) }}"
+      when: "['managed_by', '=', 'ansible'] not in (item.object_matchers | default([]))"
+      no_log: true
+
+    - name: "Zbuduj notification policy bez nadpisywania cudzych tras"
+      ansible.builtin.set_fact:
+        f15_desired_policy: >-
+          {{
+            (
+              f15_current_policy.json
+              | dict2items
+              | rejectattr('key', 'equalto', 'provenance')
+              | items2dict
+            )
+            | combine({
+                'routes': (f15_unmanaged_policy_routes | default([])) + [{
+                  'receiver': 'ISA Email Alerts',
+                  'object_matchers': [['managed_by', '=', 'ansible']]
+                }]
+              })
+          }}
+      no_log: true
 
     - name: "Ustaw notification policy (ISA alerts → ISA Email)"
       ansible.builtin.uri:
@@ -211,20 +283,21 @@
         force_basic_auth: true
         validate_certs: "{{ pmm_validate_certs }}"
         body_format: json
-        body:
-          receiver: "ISA Email Alerts"
-          routes:
-            - receiver: "ISA Email Alerts"
-              object_matchers: [["managed_by", "=", "ansible"]]
-              continue: false
-              groupBy: ["alertname", "cluster"]
+        body: "{{ f15_desired_policy }}"
         status_code: [200, 202]
       no_log: true
-      changed_when: false
+      when: >-
+        (
+          f15_current_policy.json
+          | dict2items
+          | rejectattr('key', 'equalto', 'provenance')
+          | items2dict
+        ) != f15_desired_policy
 
     - name: "Raport alertów ISC-47 (reguły + email delivery)"
       ansible.builtin.debug:
         msg: >-
           ISC-47: {{ f15_rules | length }} reguł alertów + email contact point (ISA Email Alerts)
-          + notification policy (managed_by=ansible → email). Delivery zweryfikowane: node-loss → email.
+          + notification policy (managed_by=ansible → email). Delivery skonfigurowane;
+          test dostarczenia wykonuje kontrolowana symulacja alertu.
           Cluster={{ cluster_label }}.

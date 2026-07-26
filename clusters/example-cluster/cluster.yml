@@ -99,5 +99,9 @@ monitoring:
     cluster_name: "example-cluster"
     validate_certs: true
     credentials_revision: 1
+  alerts:
+    email: "alerts@example.invalid"
+    folder_uid: "isa-alerts"
+    datasource_uid: ""
   system: "pmm"
   log_destination: "unknown"

@@ -26,6 +26,7 @@
         that:
           - backup_enc_key | length > 0
           - lookup('ansible.builtin.env', 'MINIO_ROOT_USER') | length > 0
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') | length > 0
           - backup.destination == 's3'
         fail_msg: "Ustaw BACKUP_ENCRYPTION_KEY/MINIO creds; restore w labie wymaga destination=s3."
 
@@ -50,6 +51,8 @@
           - MariaDB-client
           - MariaDB-backup
           - socat
+          - python3-pip
+          - openssl
         state: present
 
     - name: "Zainstaluj klienta S3 (minio SDK, przypięty)"
@@ -74,9 +77,12 @@
 
     # === Wybierz najnowszy backup ===
     - name: "Znajdź najnowszy backup w S3"
-      ansible.builtin.shell: >-
+      ansible.builtin.shell: |
+        set -o pipefail
         python3 /usr/local/bin/s3_object.py list {{ backup.s3.bucket }} |
-        grep '/metadata.json$' | sort | tail -1 | sed 's#/metadata.json##'
+          grep '/metadata.json$' | sort | tail -1 | sed 's#/metadata.json##'
+      args:
+        executable: /bin/bash
       register: latest_backup
       changed_when: false
 
@@ -98,31 +104,46 @@
 
     # === ISC-34: weryfikuj checksum PRZED odtworzeniem ===
     - name: "ISC-34: policz sha256 pobranego backupu"
-      ansible.builtin.shell: "sha256sum {{ restore_work }}/backup.tar.enc | awk '{print $1}'"
+      ansible.builtin.stat:
+        path: "{{ restore_work }}/backup.tar.enc"
+        get_checksum: true
+        checksum_algorithm: sha256
       register: computed_sha
-      changed_when: false
 
     - name: "ISC-34: odczytaj zapisany checksum"
-      ansible.builtin.shell: "awk '{print $1}' {{ restore_work }}/backup.sha256"
+      ansible.builtin.command:
+        argv:
+          - awk
+          - "{print $1}"
+          - "{{ restore_work }}/backup.sha256"
       register: stored_sha
       changed_when: false
 
     - name: "ISC-34: checksum musi się zgadzać"
       ansible.builtin.assert:
         that:
-          - computed_sha.stdout == stored_sha.stdout
+          - computed_sha.stat.checksum == stored_sha.stdout
         fail_msg: "Checksum backupu niezgodny — uszkodzony transfer/tampering."
 
     # === ISC-33: odszyfruj ===
     - name: "ISC-33: odszyfruj backup"
-      ansible.builtin.shell: >-
-        openssl enc -d -aes-256-cbc -pbkdf2
-        -in {{ restore_work }}/backup.tar.enc
-        -out {{ restore_work }}/backup.tar
-        -pass env:BACKUP_ENCRYPTION_KEY
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - enc
+          - -d
+          - -aes-256-cbc
+          - -pbkdf2
+          - -in
+          - "{{ restore_work }}/backup.tar.enc"
+          - -out
+          - "{{ restore_work }}/backup.tar"
+          - -pass
+          - env:BACKUP_ENCRYPTION_KEY
       environment:
         BACKUP_ENCRYPTION_KEY: "{{ backup_enc_key }}"
       changed_when: true
+      no_log: true
 
     - name: "ISC-34: odczytaj zapisany sha256 PLAINTEXT (jeśli w metadanych)"
       ansible.builtin.shell: >-
@@ -130,15 +151,17 @@
       register: stored_plaintext_sha
       changed_when: false
 
-    - name: "ISC-34: policz sha256 odszyfrowanego backupu (end-to-end integralność)"
-      ansible.builtin.shell: "sha256sum {{ restore_work }}/backup.tar | awk '{print $1}'"
+    - name: "ISC-34: policz sha256 odszyfrowanego backupu"
+      ansible.builtin.stat:
+        path: "{{ restore_work }}/backup.tar"
+        get_checksum: true
+        checksum_algorithm: sha256
       register: computed_plaintext_sha
-      changed_when: false
 
     - name: "ISC-34: plaintext checksum musi się zgadzać (gdy zapisany)"
       ansible.builtin.assert:
         that:
-          - stored_plaintext_sha.stdout | length == 0 or computed_plaintext_sha.stdout == stored_plaintext_sha.stdout
+          - stored_plaintext_sha.stdout | length == 0 or computed_plaintext_sha.stat.checksum == stored_plaintext_sha.stdout
         fail_msg: "Checksum PLAINTEXT niezgodny — backup uszkodzony pomimo poprawnego szyfrowania."
 
     # Pliki danych dotknięte wyższą wersją major są forward-incompatible
@@ -152,7 +175,11 @@
       changed_when: false
 
     - name: "ISC-36: odczytaj wersję MariaDB na hoście restore"
-      ansible.builtin.shell: "mariadbd --version | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"
+      ansible.builtin.shell: |
+        set -o pipefail
+        mariadbd --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+      args:
+        executable: /bin/bash
       register: restore_host_version
       changed_when: false
 
@@ -273,7 +300,7 @@
     - name: "ISC-37: zapisz stan restore drill"
       ansible.builtin.copy:
         content: |
-          {"last_restore": "{{ ansible_date_time.iso8601 }}", "backup_name": "{{ latest_backup.stdout }}", "rows_verified": {{ (row_count.stdout | trim).split(' ') | last | int }}, "status": "success"}
+          {"last_restore": "{{ ansible_facts['date_time']['iso8601'] }}", "backup_name": "{{ latest_backup.stdout }}", "rows_verified": {{ (row_count.stdout | trim).split(' ') | last | int }}, "status": "success"}
         dest: "{{ state_dir }}/last_restore.json"
         mode: "0640"
 

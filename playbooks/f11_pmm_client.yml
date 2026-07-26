@@ -79,7 +79,7 @@
 
   tasks:
     - name: "Utwórz replikowane konto PMM na pierwszym węźle Galera"
-      community.mysql.mysql_user:
+      ansible.mysql.mysql_user:
         name: "{{ pmm_monitor_user }}"
         password: "{{ pmm_monitor_password }}"
         host: "%"
@@ -631,7 +631,7 @@
 
   tasks:
     - name: "Usuń legacy replikowane konto eksportera"
-      community.mysql.mysql_user:
+      ansible.mysql.mysql_user:
         name: pmm
         host: "%"
         state: absent
@@ -641,7 +641,7 @@
       no_log: true
 
     - name: "Usuń znane legacy lokalne konta eksporterów"
-      community.mysql.mysql_user:
+      ansible.mysql.mysql_user:
         name: "{{ item }}"
         host: localhost
         state: absent

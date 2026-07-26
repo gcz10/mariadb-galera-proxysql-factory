@@ -26,7 +26,7 @@
         group: "{{ 'mysql' if 'mysql' in item or 'log' in item else 'root' }}"
         mode: "0755"
       loop:
-        - /var/run/mysqld
+        - /run/mariadb
         - /var/log/mariadb
         - "{{ mariadb_config_dir }}"
 
@@ -63,7 +63,7 @@
       failed_when: false
 
     - name: "Utwórz konto SST (jeśli brak)"
-      community.mysql.mysql_user:
+      ansible.mysql.mysql_user:
         name: "{{ sst_user }}"
         password: "{{ sst_password }}"
         priv: "*.*:RELOAD,PROCESS,LOCK TABLES,BINLOG ADMIN,REPLICATION CLIENT"
@@ -80,7 +80,7 @@
   max_fail_percentage: 0
   vars:
     expected_cluster_size: 3
-    use_systemd: "{{ ansible_service_mgr == 'systemd' }}"
+    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   tasks:
     - name: "Pomiń węzeł Primary (gnode1)"

@@ -7,7 +7,7 @@ Runs a numbered workload through the ProxySQL VIP, kills the active writer
   - ISC-28: every transaction the client saw committed survives the failover.
   - ISC-64: refuses to run on the production profile (destruction guard).
 
-Requires APP_DB_PASSWORD and PROXYSQL_ADMIN_PASSWORD in the environment.
+Requires APP_DB_PASSWORD in the environment and F7's private ProxySQL client profile.
 """
 
 import os
@@ -22,7 +22,6 @@ CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml
 INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
 APP_PW = os.environ.get("APP_DB_PASSWORD", "")
-ADMIN_PW = os.environ.get("PROXYSQL_ADMIN_PASSWORD", "")
 
 RTO_SECONDS = 120
 WORKLOAD_LOCAL = "tests/lab/workload-numbered.sh"
@@ -71,7 +70,7 @@ def galera_ip_to_host():
 def active_writer_ip():
     q = ("SELECT hostname FROM runtime_mysql_servers "
          "WHERE hostgroup_id=10 AND status='ONLINE'")
-    r = sh(PROXYSQL_NODE, f'mariadb -h127.0.0.1 -P6032 -uadmin -p{ADMIN_PW} -N -B -e "{q}"')
+    r = sh(PROXYSQL_NODE, f'mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf -h127.0.0.1 -P6032 -uadmin -N -B -e "{q}"')
     return body(PROXYSQL_NODE, r).strip()
 
 
@@ -116,8 +115,8 @@ def main():
     if ENVIRONMENT == "production":
         print("REFUSED: chaos-failover is destructive and must not run on production (ISC-64)")
         return 1
-    if not APP_PW or not ADMIN_PW:
-        print("FAIL: APP_DB_PASSWORD and PROXYSQL_ADMIN_PASSWORD must be set")
+    if not APP_PW:
+        print("FAIL: APP_DB_PASSWORD must be set")
         return 1
 
     ip2host = galera_ip_to_host()

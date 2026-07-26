@@ -4,7 +4,7 @@
 ISC-53: the upgrade plan is READ-ONLY — it generates a plan without modifying
         cluster hosts (Galera host tasks report changed=0).
 ISC-54: the upgrade path comes from official MariaDB/Galera documentation
-        (11.4 LTS → 11.8 LTS, in-place, mariadb-upgrade --skip-write-binlog).
+        and targets the supported LTS selected by the plan generator.
 ISC-56: ANTI — a major rollback must NOT downgrade an existing datadir; the plan
         generator refuses to plan a downgrade (guard fires).
 
@@ -30,7 +30,7 @@ PLAYBOOK = "playbooks/f12_upgrade_plan.yml"
 PLAN_DOC = "docs/plans/major-upgrade-plan.md"
 
 OFFICIAL_MARKERS = [
-    "11.8 LTS",
+    "LTS",
     "mariadb-upgrade --skip-write-binlog",
     "upgrading-galera-cluster",
     "forward-incompatible",
@@ -83,13 +83,19 @@ def main():
         for marker in OFFICIAL_MARKERS:
             if marker not in doc:
                 failures.append(f"ISC-54 — plan doc missing official marker: {marker!r}")
+        if not re.search(
+            r"^# Plan major upgrade: MariaDB \d+\.\d+(?:\.\d+)? → \d+\.\d+ LTS$",
+            doc,
+            re.MULTILINE,
+        ):
+            failures.append("ISC-54 — plan doc does not identify current and target LTS versions")
 
     if failures:
         for f in failures:
             print(f"FAIL: {f}")
         return 1
 
-    print("PASS: ISC-53/54/56 — read-only plan generator, official 11.4→11.8 LTS path, "
+    print("PASS: ISC-53/54/56 — read-only plan generator, official supported-LTS path, "
           "anti-downgrade guard verified")
     return 0
 

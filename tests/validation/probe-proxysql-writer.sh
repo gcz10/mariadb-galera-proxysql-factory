@@ -6,12 +6,16 @@ set -euo pipefail
 
 PORT="${1:-6032}"
 ADMIN_USER="${PROXYSQL_ADMIN_USER:-admin}"
-ADMIN_PASS="${PROXYSQL_ADMIN_PASS:-admin}"
+ADMIN_CNF="${PROXYSQL_ADMIN_CNF:-/etc/proxysql/admin-check.cnf}"
+if [ ! -r "$ADMIN_CNF" ]; then
+  echo "FAIL: private ProxySQL client profile not readable: $ADMIN_CNF"
+  exit 1
+fi
 
 # ISC-18: dokładnie jeden aktywny writer
-WRITERS=$(mysql -h 127.0.0.1 -P "$PORT" -u"$ADMIN_USER" -p"$ADMIN_PASS" -N -B -e "
-  SELECT COUNT(*) FROM mysql_servers
-  WHERE hostgroup_id IN (SELECT writer_hostgroup FROM mysql_galera_hostgroups)
+WRITERS=$(mysql --defaults-extra-file="$ADMIN_CNF" -h 127.0.0.1 -P "$PORT" -u"$ADMIN_USER" -N -B -e "
+  SELECT COUNT(*) FROM runtime_mysql_servers
+  WHERE hostgroup_id IN (SELECT writer_hostgroup FROM runtime_mysql_galera_hostgroups)
   AND status='ONLINE';
 " 2>/dev/null || echo "-1")
 
@@ -23,7 +27,7 @@ else
 fi
 
 # ISC-23: read/write split OFF
-RWS=$(mysql -h 127.0.0.1 -P "$PORT" -u"$ADMIN_USER" -p"$ADMIN_PASS" -N -B -e "
+RWS=$(mysql --defaults-extra-file="$ADMIN_CNF" -h 127.0.0.1 -P "$PORT" -u"$ADMIN_USER" -N -B -e "
   SELECT active_reads FROM mysql_galera_hostgroups LIMIT 1;
 " 2>/dev/null || echo "-1")
 

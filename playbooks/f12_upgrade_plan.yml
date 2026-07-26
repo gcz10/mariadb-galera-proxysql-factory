@@ -5,7 +5,7 @@
 #         Wszystkie taski na hostach są changed_when:false (odczyt). Po uruchomieniu
 #         (--check lub nie) changed=0 na hostach Galera.
 # ISC-54: ścieżka major upgrade pochodzi z oficjalnej dokumentacji MariaDB/Galera
-#         (mariadb.com/kb/en/upgrading-galera-cluster): 11.4 LTS → 11.8 LTS, in-place,
+#         i prowadzi do nowszego LTS bez skracania wsparcia; in-place,
 #         mariadb-upgrade --skip-write-binlog, Galera 4 (wsrep API 26) wspiera rolling.
 # ISC-56: anti — major rollback NIE wykonuje downgrade istniejącego datadir
 #         (mariadb.com/kb/en/downgrading-between-major-mariadb-versions: "data files
@@ -27,32 +27,46 @@
 
   tasks:
     - name: "Odczytaj wersję MariaDB"
-      ansible.builtin.shell: "mariadbd --version | awk '{print $3}'"
+      ansible.builtin.shell: |
+        set -o pipefail
+        mariadbd --version | awk '{print $3}'
+      args:
+        executable: /bin/bash
       register: f12_mariadb_version
       changed_when: false
 
     - name: "Odczytaj gcache.size (IST wymaga wystarczającego okna)"
-      ansible.builtin.shell: >-
-        grep -ioE 'gcache.size\s*=\s*[0-9]+[MG]' {{ mariadb_config_dir | default('/etc/mysql') }}/server.cnf
-        | awk -F= '{print $2}' | tr -d ' '
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -ioE 'gcache.size\s*=\s*[0-9]+[MG]' {{ mariadb_config_dir | default('/etc/my.cnf.d') }}/server.cnf |
+          awk -F= '{print $2}' | tr -d ' '
+      args:
+        executable: /bin/bash
       register: f12_gcache_size
       changed_when: false
       failed_when: false
 
     - name: "ISC-56: odczytaj wersję zapisaną w grastate.dat (detekcja downgrade)"
-      ansible.builtin.shell: >-
-        grep -i '^SAFE_TO_BOOTSTRAP\|^seqno' /var/lib/mysql/grastate.dat 2>/dev/null || echo "brak grastate.dat"
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -i
+          - "^SAFE_TO_BOOTSTRAP\\|^seqno"
+          - /var/lib/mysql/grastate.dat
       register: f12_grastate
       changed_when: false
       failed_when: false
 
     - name: "Odczytaj rozmiar datadir (kontekst planu)"
-      ansible.builtin.shell: "du -sh /var/lib/mysql 2>/dev/null | awk '{print $1}'"
+      ansible.builtin.shell: |
+        set -o pipefail
+        du -sh /var/lib/mysql 2>/dev/null | awk '{print $1}'
+      args:
+        executable: /bin/bash
       register: f12_datadir_size
       changed_when: false
       failed_when: false
 
-# === Play 2: wygeneruj plan + strażnik anti-downgrade (localhost) ===
 - name: "F12 — wygeneruj plan major upgrade (read-only, ISC-53/54/56)"
   hosts: localhost
   connection: local

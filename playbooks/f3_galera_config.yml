@@ -31,9 +31,9 @@
         state: directory
         mode: "0755"
 
-    - name: "Utworz katalog /var/run/mysqld"
+    - name: "Utworz pakietowy katalog runtime MariaDB"
       ansible.builtin.file:
-        path: /var/run/mysqld
+        path: /run/mariadb
         state: directory
         owner: mysql
         group: mysql

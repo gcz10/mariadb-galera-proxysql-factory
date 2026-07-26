@@ -1,0 +1,82 @@
+---
+name: isa-infra
+
+services:
+  pmm-server:
+    image: "{{ lock.pmm.image }}@{{ lock.pmm.image_digest }}"
+    container_name: pmm-server
+    hostname: pmm-server
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: {{ pmm_admin_password | to_json }}
+      PMM_ENABLE_UPDATES: "0"
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: "maildev:1025"
+      GF_SMTP_FROM: "pmm-alerts@{{ cluster.name }}.local"
+      GF_SMTP_SKIP_VERIFY: "true"
+    depends_on:
+      - maildev
+    ports:
+      - "{{ ansible_host }}:80:8080"
+      - "{{ ansible_host }}:443:8443"
+    volumes:
+      - pmm-data:/srv
+    restart: unless-stopped
+    mem_limit: 4g
+    ulimits:
+      nofile:
+        soft: 1000000
+        hard: 1000000
+    networks:
+      - infra
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  minio:
+    image: "{{ lock.minio.image }}@{{ lock.minio.image_digest }}"
+    container_name: minio
+    hostname: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: {{ minio_root_user | to_json }}
+      MINIO_ROOT_PASSWORD: {{ minio_root_password | to_json }}
+    ports:
+      - "{{ ansible_host }}:9000:9000"
+      - "{{ ansible_host }}:9001:9001"
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+    networks:
+      - infra
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  maildev:
+    image: "{{ lock.maildev.image }}"
+    container_name: maildev
+    hostname: maildev
+    ports:
+      - "{{ ansible_host }}:8025:1080"
+    restart: unless-stopped
+    networks:
+      - infra
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  infra:
+    name: isa-infra
+
+volumes:
+  pmm-data:
+    name: isa-pmm-data
+  minio-data:
+    name: isa-minio-data

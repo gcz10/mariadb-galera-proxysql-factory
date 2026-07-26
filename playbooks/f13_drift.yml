@@ -63,21 +63,34 @@
 
   tasks:
     - name: "Drift Galera — wsrep_cluster_state_uuid (spójność między węzłami)"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name='wsrep_cluster_state_uuid'" | awk '{print $2}'
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_CLUSTER_STATE_UUID';"
       register: f13_wsrep_uuid
       changed_when: false
 
     - name: "Drift Galera — wsrep_sst_method w server.cnf"
-      ansible.builtin.shell: >-
-        grep -i 'wsrep_sst_method' {{ mariadb_config_dir | default('/etc/mysql') }}/server.cnf | awk -F= '{print $2}' | tr -d ' '
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -i 'wsrep_sst_method' {{ mariadb_config_dir | default('/etc/my.cnf.d') }}/server.cnf |
+          awk -F= '{print $2}' | tr -d ' '
+      args:
+        executable: /bin/bash
       register: f13_sst_method
       changed_when: false
       failed_when: false
 
     - name: "Drift Galera — wersja binaria vs zadeklarowana"
-      ansible.builtin.shell: "mariadbd --version | awk '{print $3}'"
+      ansible.builtin.shell: |
+        set -o pipefail
+        mariadbd --version | awk '{print $3}'
+      args:
+        executable: /bin/bash
       register: f13_mariadb_binver
       changed_when: false
 

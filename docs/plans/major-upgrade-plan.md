@@ -1,10 +1,10 @@
-# Plan major upgrade: MariaDB 11.8.8 → 12.3 LTS
+# Plan major upgrade: MariaDB 11.4.12 → 12.3 LTS
 
 _Wygenerowany przez `f12_upgrade_plan.yml` (ISC-53/54/56). Read-only — ten plik
 jest planem, nie wykonaniem. Źródło: oficjalna dokumentacja MariaDB/Galera._
 
 ## Ścieżka (ISC-54 — oficjalna dokumentacja)
-- **Obecna wersja:** MariaDB 11.8.8 (Galera 4, wsrep API 26)
+- **Obecna wersja:** MariaDB 11.4.12 (Galera 4, wsrep API 26)
 - **Cel:** MariaDB 12.3 LTS (EOL 2029-06-30)
 - **Metoda:** rolling in-place upgrade (Galera 4 wspiera 10.11/11.4/11.8, brak dump/restore)
 - **Źródła:**

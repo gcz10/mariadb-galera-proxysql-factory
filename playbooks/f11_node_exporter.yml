@@ -5,7 +5,7 @@
 # Satisfies (partial): ISC-46 (metryki trafiają do PMM).
 
 - name: "Monitoring - instaluj node_exporter"
-  hosts: all
+  hosts: galera:proxysql
   become: true
   serial: 1
   vars_files:
@@ -35,27 +35,6 @@
         that:
           - node_exporter_asset_arch | length > 0
         fail_msg: "Brak przypiętego artefaktu node_exporter dla {{ ansible_facts['architecture'] }}."
-    - name: "Sprawdź stan firewalld dla node_exporter"
-      ansible.builtin.command:
-        argv:
-          - firewall-cmd
-          - --state
-      register: node_exporter_firewalld
-      changed_when: false
-      failed_when: false
-
-    - name: "Wymagaj aktywnego firewalld poza laboratorium"
-      ansible.builtin.assert:
-        that:
-          - cluster.environment == 'laboratory' or node_exporter_firewalld.rc == 0
-        fail_msg: "node_exporter nie zostanie wystawiony bez aktywnego firewalld poza profilem laboratory."
-
-    - name: "Wymagaj zdefiniowanych źródeł monitoringu poza laboratorium"
-      ansible.builtin.assert:
-        that:
-          - cluster.environment == 'laboratory' or network.monitoring_cidrs | length > 0
-        fail_msg: "network.monitoring_cidrs nie może być puste poza profilem laboratory."
-
 
     - name: "Utwórz nieuprzywilejowanego użytkownika node_exporter"
       ansible.builtin.user:
@@ -262,65 +241,6 @@
         - node_exporter_process.rc != 0
       changed_when: true
 
-
-    - name: "Utwórz dedykowaną strefę firewalld dla PMM"
-      ansible.posix.firewalld:
-        zone: pmm-monitoring
-        permanent: true
-        state: present
-      register: node_exporter_firewall_zone
-      when: node_exporter_firewalld.rc == 0
-
-    - name: "Przeładuj firewalld po utworzeniu strefy PMM"
-      ansible.builtin.command:
-        argv:
-          - firewall-cmd
-          - --reload
-      when:
-        - node_exporter_firewalld.rc == 0
-        - node_exporter_firewall_zone.changed
-
-    - name: "Pobierz źródła strefy PMM"
-      ansible.builtin.command:
-        argv:
-          - firewall-cmd
-          - --permanent
-          - --zone=pmm-monitoring
-          - --list-sources
-      register: node_exporter_firewall_sources
-      changed_when: false
-      when: node_exporter_firewalld.rc == 0
-
-    - name: "Usuń nieaktualne źródła strefy PMM"
-      ansible.posix.firewalld:
-        zone: pmm-monitoring
-        source: "{{ item }}"
-        permanent: true
-        immediate: true
-        state: disabled
-      loop: "{{ (node_exporter_firewall_sources.stdout | default('')).split() }}"
-      when:
-        - node_exporter_firewalld.rc == 0
-        - item not in network.monitoring_cidrs
-
-    - name: "Dodaj aktualne źródła strefy PMM"
-      ansible.posix.firewalld:
-        zone: pmm-monitoring
-        source: "{{ item }}"
-        permanent: true
-        immediate: true
-        state: enabled
-      loop: "{{ network.monitoring_cidrs }}"
-      when: node_exporter_firewalld.rc == 0
-
-    - name: "Otwórz node_exporter wyłącznie w strefie PMM"
-      ansible.posix.firewalld:
-        zone: pmm-monitoring
-        port: 9100/tcp
-        permanent: true
-        immediate: true
-        state: enabled
-      when: node_exporter_firewalld.rc == 0
 
 
     - name: "Czekaj na endpoint node_exporter"

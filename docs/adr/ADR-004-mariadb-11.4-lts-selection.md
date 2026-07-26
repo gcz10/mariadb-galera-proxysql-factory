@@ -34,7 +34,7 @@ MASTER_PROMPT §4 wymaga wyboru wersji na podstawie wsparcia, zgodności, pakiet
 
 ## Odrzucone warianty
 
-- **12.3:** nowszy LTS, ale krotszy support window i mniejsza dojrzałość
+- **12.3:** nowszy LTS z nieznacznie dłuższym EOL, ale mniejsza dojrzałość jako bieżący baseline
 - **11.8:** krotszy EOL (2028-06) niż 11.4 (2029-05)
 - **10.11:** starsza seria, krótszy EOL (2028-02)
 - **10.6:** EOL 2026-07-06 — brak security updates

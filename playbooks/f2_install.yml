@@ -45,8 +45,115 @@
           - socat
           - rsync
           - lsof
+          - python3-PyMySQL
+          - policycoreutils-python-utils
+          - checkpolicy
         state: present
       when: "'galera' in group_names"
+
+    # Oficjalny pakiet MariaDB dostarcza źródło polityki Galera, ale nie ładuje
+    # skompilowanego modułu. Bez niego SST mariabackup jest blokowany m.in. na setpgid.
+    - name: "SELinux - przygotuj katalog budowy polityki MariaDB Galera"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      loop:
+        - /var/cache/isa-selinux
+        - /var/cache/isa-selinux/active
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - skompiluj pakietową politykę MariaDB Galera"
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/checkmodule
+          - -M
+          - -m
+          - -o
+          - /var/cache/isa-selinux/mariadb-server.mod
+          - /usr/share/mariadb/policy/selinux/mariadb-server.te
+      changed_when: false
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - zbuduj moduł MariaDB Galera"
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/semodule_package
+          - -o
+          - /var/cache/isa-selinux/mariadb-server.pp
+          - -m
+          - /var/cache/isa-selinux/mariadb-server.mod
+      changed_when: false
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - usuń poprzednią kopię aktywnego modułu"
+      ansible.builtin.file:
+        path: /var/cache/isa-selinux/active/mariadb-server.pp
+        state: absent
+      changed_when: false
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - pobierz aktywny moduł MariaDB Galera"
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/semodule
+          - -X
+          - "400"
+          - -E
+          - mariadb-server
+      args:
+        chdir: /var/cache/isa-selinux/active
+      register: mariadb_galera_policy_extract
+      changed_when: false
+      failed_when: false
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - oblicz checksumę zbudowanego modułu"
+      ansible.builtin.stat:
+        path: /var/cache/isa-selinux/mariadb-server.pp
+        checksum_algorithm: sha256
+      register: mariadb_galera_policy_candidate
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - oblicz checksumę aktywnego modułu"
+      ansible.builtin.stat:
+        path: /var/cache/isa-selinux/active/mariadb-server.pp
+        checksum_algorithm: sha256
+      register: mariadb_galera_policy_active
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - załaduj politykę MariaDB Galera gdy zmieniona"
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/semodule
+          - -X
+          - "400"
+          - -i
+          - /var/cache/isa-selinux/mariadb-server.pp
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+        - >-
+          not mariadb_galera_policy_active.stat.exists or
+          mariadb_galera_policy_candidate.stat.checksum !=
+          (mariadb_galera_policy_active.stat.checksum | default(''))
+
 
     - name: "Włącz mariadb.service na starcie (produkcja: boot persistence; start przez bootstrap/join)"
       ansible.builtin.systemd:
@@ -54,7 +161,7 @@
         enabled: true
       when:
         - "'galera' in group_names"
-        - ansible_service_mgr == 'systemd'
+        - ansible_facts['service_mgr'] == 'systemd'
 
     # === ProxySQL nodes: ProxySQL repo + pakiet ===
     - name: "ProxySQL - pobierz GPG key"
@@ -97,7 +204,21 @@
         name: chronyd
         state: started
         enabled: true
-      when: ansible_service_mgr == 'systemd'
+      when: ansible_facts['service_mgr'] == 'systemd'
+
+    - name: "Zainstaluj qemu-guest-agent (Proxmox widzi IP VM + graceful shutdown)"
+      ansible.builtin.dnf:
+        name: qemu-guest-agent
+        state: present
+
+    - name: "Wlacz qemu-guest-agent (gdy systemd; nieblokujace — wymaga kanalu virtio-serial)"
+      ansible.builtin.systemd:
+        name: qemu-guest-agent
+        state: started
+        enabled: true
+      when: ansible_facts['service_mgr'] == 'systemd'
+      failed_when: false
+      changed_when: false
 
     - name: "ISC-3: asercja zainstalowanej wersji MariaDB zgodnej z lockfile"
       ansible.builtin.shell: "mariadbd --version | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"

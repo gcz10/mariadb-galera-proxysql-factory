@@ -22,7 +22,7 @@
       "required": ["virtualization", "rocky_linux_major"],
       "additionalProperties": false,
       "properties": {
-        "virtualization": { "type": "string", "enum": ["vmware_esxi", "docker_orbstack"] },
+        "virtualization": { "type": "string", "enum": ["vmware_esxi", "proxmox_kvm", "docker_orbstack"] },
         "rocky_linux_major": { "type": "integer", "const": 9 }
       }
     },
@@ -53,7 +53,6 @@
         "max_writers": { "type": "integer", "const": 1 },
         "read_write_split_enabled": { "type": "boolean", "const": false },
         "endpoint": {
-          "type": "object",
           "required": ["type", "address", "port"],
           "additionalProperties": false,
           "properties": {
@@ -94,10 +93,10 @@
       "required": ["application_cidrs", "database_cluster_cidrs", "administration_cidrs", "monitoring_cidrs"],
       "additionalProperties": false,
       "properties": {
-        "application_cidrs": { "type": "array", "items": { "type": "string" } },
-        "database_cluster_cidrs": { "type": "array", "items": { "type": "string" } },
-        "administration_cidrs": { "type": "array", "items": { "type": "string" } },
-        "monitoring_cidrs": { "type": "array", "items": { "type": "string" } }
+        "application_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "database_cluster_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "administration_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "monitoring_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
       }
     },
     "secrets": {

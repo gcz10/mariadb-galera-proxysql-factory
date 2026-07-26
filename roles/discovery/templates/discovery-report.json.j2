@@ -1,6 +1,6 @@
 {
   "host": "{{ inventory_hostname }}",
-  "collected_at": "{{ ansible_date_time.iso8601 }}",
+  "collected_at": "{{ ansible_facts['date_time']['iso8601'] }}",
   "ansible_managed": "F0 Discovery — read-only",
   "os": {
     "rocky_release": "{{ rocky_release.stdout | default('') }}",

@@ -8,6 +8,7 @@
   become: true
   serial: 1
   max_fail_percentage: 0
+  any_errors_fatal: true
   vars:
     galera_cluster_name: "{{ galera.cluster_name }}"
     galera_nodes_csv: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | join(',') }}"
@@ -15,7 +16,7 @@
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
     gcache_size: "{{ (mariadb_tuning | default({})).gcache_size | default('128M') }}"
     mariadb_config_dir: /etc/my.cnf.d
-    use_systemd: "{{ ansible_service_mgr == 'systemd' }}"
+    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   pre_tasks:
     - name: "Wymagaj SST_PASSWORD (zapobiega pustemu wsrep_sst_auth)"
@@ -46,7 +47,7 @@
         group: "{{ item.group }}"
         mode: "{{ item.mode }}"
       loop:
-        - { path: /var/run/mysqld, owner: mysql, group: mysql, mode: "0755" }
+        - { path: /run/mariadb, owner: mysql, group: mysql, mode: "0755" }
         - { path: /var/log/mariadb, owner: mysql, group: mysql, mode: "0755" }
         - { path: "{{ mariadb_config_dir }}", owner: root, group: root, mode: "0755" }
 
@@ -57,6 +58,44 @@
         owner: mysql
         group: mysql
         mode: "0640"
+        access_time: preserve
+        modification_time: preserve
+
+    - name: "SELinux — oznacz porty TCP Galery jako mysqld_port_t"
+      community.general.seport:
+        ports:
+          - 4444
+          - 4567
+          - 4568
+        proto: tcp
+        setype: mysqld_port_t
+        state: present
+        local: true
+        reload: true
+      when: ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+      tags: [selinux]
+
+    - name: "SELinux — oznacz port UDP Galery jako mysqld_port_t"
+      community.general.seport:
+        ports: 4567
+        proto: udp
+        setype: mysqld_port_t
+        state: present
+        local: true
+        reload: true
+      when: ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+      tags: [selinux]
+
+    - name: "SELinux — przywroc kontekst logow MariaDB"
+      ansible.builtin.command:
+        argv:
+          - restorecon
+          - -RFv
+          - /var/log/mariadb
+      register: mariadb_log_restorecon
+      changed_when: mariadb_log_restorecon.stdout | length > 0
+      when: ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+      tags: [selinux]
 
   tasks:
     - name: "Konfiguruj Galera server.cnf"
@@ -67,10 +106,22 @@
         group: mysql
         mode: "0640"
       register: config_result
-      notify: "Restart MariaDB (systemd, on config change)"
+      notify:
+        - "Restart MariaDB (systemd, on config change)"
+        - "Verify MariaDB health after config restart"
 
     - name: "Dystrybuuj certyfikaty TLS (gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
+      register: tls_deploy_result
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
+    - name: "Zaplanuj bezpieczny restart po rotacji certyfikatu TLS"
+      ansible.builtin.debug:
+        msg: "Pliki TLS zmienione; restart MariaDB zostanie wykonany po bramie zdrowia."
+      changed_when: (tls_deploy_result | default({})).changed | default(false)
+      notify:
+        - "Restart MariaDB (systemd, on config change)"
+        - "Verify MariaDB health after config restart"
       when: (tls | default({})).mode | default('disabled') == 'full'
 
     - name: "Inicjalizuj datadir (jeśli pusty)"
@@ -99,6 +150,27 @@
       changed_when: false
       failed_when: false
       when: use_systemd
+    - name: "Brama zdrowia przed zaplanowanym restartem konfiguracji"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name IN
+        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+      register: mariadb_health_before_config_restart
+      until: >-
+        mariadb_health_before_config_restart.stdout is search('wsrep_local_state\t4')
+        and mariadb_health_before_config_restart.stdout is search('wsrep_cluster_status\tPrimary')
+        and mariadb_health_before_config_restart.stdout is search('wsrep_ready\tON')
+        and mariadb_health_before_config_restart.stdout is search(
+          'wsrep_cluster_size\t' ~ (galera.nodes_expected | int | string)
+        )
+      retries: 3
+      delay: 5
+      changed_when: false
+      when:
+        - use_systemd
+        - config_result.changed or ((tls_deploy_result | default({})).changed | default(false))
+        - (mariadb_active | default({})).rc | default(1) == 0
+
 
     - name: "Czekaj na gotowość MariaDB"
       ansible.builtin.wait_for:
@@ -108,7 +180,7 @@
       register: mariadb_ready
 
     - name: "Utworz SST user (tylko na pierwszym węźle, jeśli nie istnieje)"
-      community.mysql.mysql_user:
+      ansible.mysql.mysql_user:
         name: "{{ sst_user }}"
         password: "{{ sst_password }}"
         priv: "*.*:RELOAD,PROCESS,LOCK TABLES,BINLOG ADMIN,REPLICATION CLIENT"
@@ -123,6 +195,26 @@
       ansible.builtin.systemd:
         name: mariadb
         state: restarted
+      when:
+        - use_systemd
+        - (mariadb_active | default({})).rc | default(1) == 0
+
+    - name: "Verify MariaDB health after config restart"
+      ansible.builtin.shell: >-
+        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+        "SHOW STATUS WHERE Variable_name IN
+        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+      register: mariadb_health_after_config_restart
+      until: >-
+        mariadb_health_after_config_restart.stdout is search('wsrep_local_state\t4')
+        and mariadb_health_after_config_restart.stdout is search('wsrep_cluster_status\tPrimary')
+        and mariadb_health_after_config_restart.stdout is search('wsrep_ready\tON')
+        and mariadb_health_after_config_restart.stdout is search(
+          'wsrep_cluster_size\t' ~ (galera.nodes_expected | int | string)
+        )
+      retries: 30
+      delay: 5
+      changed_when: false
       when:
         - use_systemd
         - (mariadb_active | default({})).rc | default(1) == 0

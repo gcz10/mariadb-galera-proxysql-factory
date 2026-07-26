@@ -6,7 +6,7 @@
 # === Podstawowe ===
 datadir = /var/lib/mysql
 socket = /var/lib/mysql/mysql.sock
-pid-file = /var/run/mysqld/mysqld.pid
+pid-file = /run/mariadb/mariadb.pid
 user = mysql
 
 # === Galera ===
@@ -23,7 +23,7 @@ wsrep_cluster_address = gcomm://{{ galera_nodes_csv }}
 wsrep_node_name = {{ inventory_hostname }}
 wsrep_node_address = {{ galera_node_address }}
 wsrep_sst_method = mariabackup
-wsrep_sst_auth = "{{ sst_user }}:{{ sst_password }}"
+wsrep_sst_auth = {{ (sst_user ~ ':' ~ sst_password) | to_json }}
 
 # === Bind ===
 bind-address = 0.0.0.0

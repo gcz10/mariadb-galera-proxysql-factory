@@ -1,0 +1,58 @@
+---
+# claude-pve — klaster ISA na Proxmoxie (real VM, systemd, SELinux, firewalld).
+# Anaconda loguje sie jako root (klucz cloud-init), become:true jest no-opem.
+# VM stworzone przez terraform/claude-pve/, IP z puli 192.168.1.10-16, VIP .20.
+
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: tests/lab/ssh_key
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        gnode1:
+          ansible_host: "192.168.1.10"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.10"
+        gnode2:
+          ansible_host: "192.168.1.11"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.11"
+        gnode3:
+          ansible_host: "192.168.1.12"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.12"
+
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        pnode1:
+          ansible_host: "192.168.1.13"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.13"
+        pnode2:
+          ansible_host: "192.168.1.14"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.14"
+
+    restore:
+      vars:
+        restore_role: "restore"
+      hosts:
+        rnode1:
+          ansible_host: "192.168.1.15"
+          restore_node_address: "192.168.1.15"
+
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        infranode:
+          ansible_host: "192.168.1.16"
+          infra_node_address: "192.168.1.16"
