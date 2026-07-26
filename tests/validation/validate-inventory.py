@@ -92,11 +92,31 @@ def main():
 
     # 5) unikalność adresów w obrębie i między grupami (ansible_host + *_node_address)
     addr_owner = {}
+    # 5a) tożsamość POŁĄCZENIA = ansible_host + ansible_port.
+    # Lab Docker legalnie współdzieli 127.0.0.1 i różni się portem — sam host nie wystarczy.
+    conn_owner = {}
     for gname, hosts in groups.items():
         if gname == "_root":
             continue
         for h, hv in hosts.items():
-            for key in ("ansible_host", "galera_node_address", "proxysql_node_address",
+            ah = (hv or {}).get("ansible_host")
+            if not ah:
+                continue
+            conn = "{}:{}".format(ah, (hv or {}).get("ansible_port", 22))
+            if conn in conn_owner and conn_owner[conn] != (gname, h):
+                errors.append(
+                    f"połączenie {conn} współdzielone przez '{h}' [{gname}]"
+                    f" i '{conn_owner[conn][1]}' [{conn_owner[conn][0]}]"
+                )
+            else:
+                conn_owner[conn] = (gname, h)
+
+    # 5b) adresy KLASTROWE (*_node_address) muszą być globalnie unikalne
+    for gname, hosts in groups.items():
+        if gname == "_root":
+            continue
+        for h, hv in hosts.items():
+            for key in ("galera_node_address", "proxysql_node_address",
                         "restore_node_address", "infra_node_address"):
                 a = (hv or {}).get(key)
                 if not a:

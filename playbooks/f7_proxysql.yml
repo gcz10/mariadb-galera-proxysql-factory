@@ -282,6 +282,28 @@
       changed_when: false
       no_log: true
 
+    # audit#13: porównanie username/hostgroup/active NIE wykrywa rotacji samego hasła —
+    # backend przyjmował nowe APP_DB_PASSWORD, a ProxySQL trzymał stare (aplikacja odcięta).
+    # Zamiast zgadywać hash (ProxySQL hashuje przy LOAD TO RUNTIME) sprawdzamy zachowanie:
+    # czy app_user faktycznie loguje się przez ProxySQL bieżącym hasłem.
+    - name: "audit#13: probe logowania app_user przez ProxySQL (wykrycie rotacji hasła)"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - -h127.0.0.1
+          - -P6033
+          - "-u{{ app_user }}"
+          - -N
+          - -B
+          - -e
+          - "SELECT 1"
+      environment:
+        MYSQL_PWD: "{{ app_password }}"
+      register: app_login_probe
+      changed_when: false
+      failed_when: false
+      no_log: true
+
     - name: "Zarejestruj app_user w ProxySQL (jeśli brak/różny)"
       ansible.builtin.command:
         argv: "{{ proxysql_admin_cli }}"
@@ -291,9 +313,37 @@
           VALUES ('{{ app_user }}', '{{ app_password_sql }}', {{ galera_writer_hg }}, 1);
           LOAD MYSQL USERS TO RUNTIME;
           SAVE MYSQL USERS TO DISK;
-      when: current_app_user.stdout | trim != ([app_user, galera_writer_hg, 1] | join(','))
+      when: >-
+        current_app_user.stdout | trim != ([app_user, galera_writer_hg, 1] | join(','))
+        or app_login_probe.rc != 0
       changed_when: true
       no_log: true
+
+    - name: "audit#13: potwierdź logowanie app_user przez ProxySQL po synchronizacji"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - -h127.0.0.1
+          - -P6033
+          - "-u{{ app_user }}"
+          - -N
+          - -B
+          - -e
+          - "SELECT 1"
+      environment:
+        MYSQL_PWD: "{{ app_password }}"
+      register: app_login_verify
+      until: app_login_verify.rc == 0
+      retries: 6
+      delay: 5
+      changed_when: false
+      no_log: true
+
+    - name: "audit#13: raport synchronizacji hasła app_user"
+      ansible.builtin.debug:
+        msg: >-
+          app_user loguje się przez ProxySQL (6033) — hasło zsynchronizowane backend↔ProxySQL.
+          Rotacja APP_DB_PASSWORD nie rozłącza już aplikacji.
 
     - name: "ISC-23: sprawdź reguły read/write split"
       ansible.builtin.command:
