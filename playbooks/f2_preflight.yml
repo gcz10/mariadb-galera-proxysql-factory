@@ -38,16 +38,36 @@
         fail_msg: "Minimum 5GB free space required, got {{ disk_free.stdout }} bytes"
       when: "'galera' in group_names"
 
-    - name: "Preflight - brak istniejacego MariaDB (czysty host)"
-      ansible.builtin.shell: rpm -q mariadb-server >/dev/null 2>&1 && echo "INSTALLED" || echo "CLEAN"
+    - name: "Preflight — wykryj istniejące pakiety MariaDB/Galera (audit#3)"
+      ansible.builtin.shell: rpm -qa | grep -iE '^(mariadb|galera)' | sort -u || true
+      args:
+        executable: /bin/bash
       changed_when: false
-      register: mariadb_check
+      register: mariadb_pkgs
 
-    - name: "Preflight - MariaDB nie moze byc juz zainstalowana (lab: czyste hosty)"
+    - name: "Preflight — wykryj istniejący datadir MariaDB"
+      ansible.builtin.stat:
+        path: "{{ mariadb_data_dir | default('/var/lib/mysql') }}"
+      register: mariadb_datadir
+
+    - name: "Preflight — wykryj działający proces mariadbd"
+      ansible.builtin.shell: pgrep -x mariadbd >/dev/null 2>&1 && echo RUNNING || echo STOPPED
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: mariadb_proc
+
+    - name: "Preflight — host czysty (brak MariaDB); ISC-6/audit#3"
       ansible.builtin.assert:
         that:
-          - mariadb_check.stdout == "CLEAN"
-        fail_msg: "MariaDB already installed — F2 expects clean hosts"
+          - mariadb_pkgs.stdout | trim | length == 0
+          - not mariadb_datadir.stat.exists
+          - mariadb_proc.stdout == "STOPPED"
+        fail_msg: >-
+          Host nie jest czysty: pakiety=[{{ mariadb_pkgs.stdout | trim }}],
+          datadir istnieje={{ mariadb_datadir.stat.exists }}, proces={{ mariadb_proc.stdout }}.
+          F2 oczekuje czystych hostów. Jeśli klaster jest już wdrożony — to oczekiwane:
+          użyj ,make cluster-health' zamiast ,cluster-validate' na wdrożonym klastrze.
       when: "'galera' in group_names"
 
   handlers: []

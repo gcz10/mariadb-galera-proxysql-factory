@@ -18,6 +18,7 @@
   hosts: proxysql
   become: true
   gather_facts: false
+  any_errors_fatal: true
   vars:
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
     # tabele ProxySQL z cyklem LOAD/SAVE — sprawdzamy MAIN (memory) vs DISK.
@@ -39,13 +40,24 @@
         fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
 
     - name: "Drift ProxySQL — runtime vs disk per tabela (checksum)"
-      ansible.builtin.shell: >-
-        set -o pipefail;
-        rt=$(mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
-        "SELECT {{ item.norm }} FROM {{ item.rt }} ORDER BY 1,2" | sort | md5sum | awk '{print $1}');
-        dk=$(mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
-        "SELECT {{ item.norm }} FROM {{ item.disk }} ORDER BY 1,2" | sort | md5sum | awk '{print $1}');
+      ansible.builtin.shell: |
+        set -o pipefail
+        # ISC-21/audit#1: fail-closed. Każde zapytanie musi się udać (rc==0);
+        # błędne hasło admina daje rc!=0 i pusty wynik -> wcześniej fałszywy PASS.
+        # Dodatkowo: identyczny pusty hash po obu stronach = podejrzany (auth/zakres).
+        empty=d41d8cd98f00b204e9800998ecf8427e
+        rt_out=$(mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e "SELECT {{ item.norm }} FROM {{ item.rt }} ORDER BY 1,2") \
+          || { echo "{{ item.rt }}=ERROR runtime query failed (rc=$?)"; exit 2; }
+        dk_out=$(mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e "SELECT {{ item.norm }} FROM {{ item.disk }} ORDER BY 1,2") \
+          || { echo "{{ item.rt }}=ERROR disk query failed (rc=$?)"; exit 2; }
+        rt=$(printf '%s' "$rt_out" | sort | md5sum | awk '{print $1}')
+        dk=$(printf '%s' "$dk_out" | sort | md5sum | awk '{print $1}')
+        if [ "$rt" = "$empty" ] && [ "$dk" = "$empty" ]; then
+          echo "{{ item.rt }}=ERROR both empty (auth/scope?)"; exit 2;
+        fi
         if [ "$rt" = "$dk" ]; then echo "{{ item.rt }}=CLEAN"; else echo "{{ item.rt }}=DRIFT rt=$rt disk=$dk"; fi
+      args:
+        executable: /bin/bash
       loop: "{{ f13_proxysql_tables }}"
       register: f13_proxysql_drift
       changed_when: false
@@ -133,6 +145,7 @@
       ansible.builtin.assert:
         that:
           - "'DRIFT' not in f13_proxysql_summary"
+          - "'ERROR' not in f13_proxysql_summary"
         fail_msg: "DRIFT ProxySQL: {{ f13_proxysql_summary }}"
         success_msg: "ProxySQL runtime==disk ({{ f13_proxysql_summary }})"
 
