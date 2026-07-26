@@ -8,10 +8,11 @@
   become: true
   serial: 1
   max_fail_percentage: 0
-  vars:
-    mariadb_version: "11.4"
-    proxysql_repo_baseurl: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/"
-    proxysql_repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+  # R1: usunieto martwe zmienne tego play'a (zero uzyc, a niosly hardcode):
+  #  - mariadb_version ("11.4")  -> repo konfiguruje lock.mariadb.repo_setup_args
+  #  - proxysql_repo_baseurl     -> wskazywalo na 404 (sciezka `rocky/9` nie istnieje)
+  #  - proxysql_repo_gpgkey      -> ProxySQL idzie bezposrednim RPM-em z sha256,
+  #    a /etc/yum.repos.d/proxysql.repo jest celowo usuwany nizej.
 
   tasks:
     # Załaduj lockfile do namespace `lock` (nie kolizjonuje z proxysql/mariadb z cluster.yml).
@@ -31,7 +32,7 @@
 
 
     - name: "MariaDB repo - konfiguruj wersje z lockfile"
-      ansible.builtin.command: "/usr/local/bin/mariadb_repo_setup {{ lock.mariadb.repo_setup_args | default('--mariadb-server-version=11.4') }} --skip-check-installed"
+      ansible.builtin.command: "/usr/local/bin/mariadb_repo_setup {{ lock.mariadb.repo_setup_args }} --skip-check-installed"
       args:
         creates: /etc/yum.repos.d/mariadb.repo
       when: "'galera' in group_names"
@@ -180,8 +181,8 @@
 
     - name: "ProxySQL - pobierz RPM z weryfikacją sha256 (audit#6)"
       ansible.builtin.get_url:
-        url: "{{ proxysql_rpm_url | default('https://repo.proxysql.com/ProxySQL/proxysql-' ~ (lock.proxysql.series | default('3.0')) ~ '.x/centos/9/proxysql-' ~ (lock.proxysql.version | default('3.0.9')) ~ '-1-centos9.' ~ ansible_architecture ~ '.rpm') }}"
-        dest: "/var/tmp/proxysql-{{ lock.proxysql.version | default('3.0.9') }}-1.{{ ansible_architecture }}.rpm"
+        url: "{{ proxysql_rpm_url | default('https://repo.proxysql.com/ProxySQL/proxysql-' ~ lock.proxysql.series ~ '.x/centos/' ~ lock.rocky_linux.major ~ '/proxysql-' ~ lock.proxysql.version ~ '-' ~ lock.proxysql.rpm_release ~ '-centos' ~ lock.rocky_linux.major ~ '.' ~ ansible_architecture ~ '.rpm') }}"
+        dest: "/var/tmp/proxysql-{{ lock.proxysql.version }}-{{ lock.proxysql.rpm_release }}.{{ ansible_architecture }}.rpm"
         checksum: "sha256:{{ (lock.proxysql.rpm_sha256 | default({})).get(ansible_architecture) }}"
         mode: "0644"
       register: proxysql_rpm_dl

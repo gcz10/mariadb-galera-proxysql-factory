@@ -35,7 +35,9 @@ proxysql:
   tier: "Stable"
   released: "2026-06-05"
   rpm_release: "1"              # audit#12: potwierdzone na hostach (proxysql-3.0.9-1.x86_64)
-  repo_baseurl: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/"
+  # R1: usunieto repo_baseurl - wskazywalo na 404 (sciezka `rocky/9` nie istnieje;
+  # oficjalna jest `centos/<major>`) i nie bylo przez nic konsumowane.
+  # URL RPM-u sklada f2_install z: series + rocky_linux.major + version + architektura.
   repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
   # audit#6: klucz repo_pub_key.gpg jest binarny (nie ASCII-armored) → rpm --import odrzuca.
   # Kontrolą integralności jest przypięty sha256 RPM-u (weryfikowany przez get_url).
@@ -68,6 +70,9 @@ docker:
 minio:
   image: "minio/minio:RELEASE.2025-09-07T16-13-09Z"
   image_digest: "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+  # R1/B3: klient S3 uzywany przez f10_backup / f10_restore (pip). Wczesniej "7.2.7"
+  # bylo wpisane na sztywno w obu playbookach - wersja poza kontrola lockfile.
+  sdk_version: "7.2.7"
 
 maildev:
   image: "maildev/maildev:2.2.1"

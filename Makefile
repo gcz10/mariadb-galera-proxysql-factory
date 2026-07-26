@@ -123,11 +123,12 @@ cluster-backup:  ## F10 — backup → off-cluster S3 (szyfr, checksum, metadata
 	@: "$${BACKUP_ENCRYPTION_KEY:?Ustaw BACKUP_ENCRYPTION_KEY poza repozytorium}"
 	CLUSTER=$(CLUSTER) tests/lab/backup-run.sh backup
 
-cluster-restore-drill:  ## F10 — restore drill na czysty host + integralność (ISC-36/37)
+cluster-restore-drill:  ## F10 — restore drill na czysty host + integralność (wymaga CONFIRM=yes)
 	$(cluster_guard)
 	@: "$${MINIO_ROOT_USER:?Ustaw MINIO_ROOT_USER poza repozytorium}"
 	@: "$${BACKUP_ENCRYPTION_KEY:?Ustaw BACKUP_ENCRYPTION_KEY poza repozytorium}"
-	CLUSTER=$(CLUSTER) tests/lab/backup-run.sh restore
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (drill kasuje datadir hosta grupy 'restore')"; exit 1)
+	CLUSTER=$(CLUSTER) RESTORE_CONFIRM=yes tests/lab/backup-run.sh restore
 
 lab-backup-verify:  ## F10 — zweryfikuj backup w S3 (ISC-32/33/34/35)
 	$(TARGET_ENV) tests/lab/probe-backup.py

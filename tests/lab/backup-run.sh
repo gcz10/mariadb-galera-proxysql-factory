@@ -22,13 +22,25 @@ CFG="clusters/${CLUSTER}/cluster.yml"
 PLAYBOOK="playbooks/f10_${MODE}.yml"
 TS="$(date -u +%FT%TZ)"
 
+EXTRA=()
 case "$MODE" in
   backup)  ALERT_GROUP="galera" ;;
-  restore) ALERT_GROUP="restore" ;;
+  restore)
+    ALERT_GROUP="restore"
+    # audit#5: f10_restore czysci datadir hosta docelowego i wymaga -e restore_confirm=yes.
+    # Nie potwierdzamy tego automatycznie - intencja musi byc jawna na kazdym wejsciu:
+    #   operator -> `make cluster-restore-drill CONFIRM=yes`
+    #   cron/timer -> RESTORE_CONFIRM=yes w BACKUP_SECRETS_FILE albo w srodowisku unitu.
+    if [ "${RESTORE_CONFIRM:-no}" != "yes" ]; then
+      echo "backup-run: restore wymaga RESTORE_CONFIRM=yes (drill kasuje datadir na hoscie grupy 'restore')." >&2
+      exit 2
+    fi
+    EXTRA=(-e restore_confirm=yes)
+    ;;
   *) echo "Nieznany tryb: $MODE (backup|restore)"; exit 2 ;;
 esac
 
-ansible-playbook "$PLAYBOOK" -i "$INV" -e "@$CFG"
+ansible-playbook "$PLAYBOOK" -i "$INV" -e "@$CFG" "${EXTRA[@]}"
 RC=$?
 if [ "$RC" -eq 0 ]; then
   echo "backup-run: ${MODE} OK (${TS})"

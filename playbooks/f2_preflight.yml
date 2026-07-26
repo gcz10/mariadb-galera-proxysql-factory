@@ -9,16 +9,45 @@
   gather_facts: true
   serial: 1
   max_fail_percentage: 0
-  vars:
-    lockfile: "{{ lookup('file', 'versions/versions.lock.yml') | from_yaml }}"
-
   tasks:
-    - name: "Preflight - Rocky Linux 9 required"
+    # R1/A1: lockfile wskazywany per klaster (versions.lock_file z cluster.yml),
+    # nie ścieżka wpisana na sztywno. Ten sam wzorzec co f2_install — jedna konwencja w repo.
+    - name: "Załaduj lockfile platformy (reprodukowalne wersje)"
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
+    - name: "Preflight - wymagany Rocky Linux {{ lock.rocky_linux.major }} (wg lockfile)"
       ansible.builtin.assert:
         that:
           - ansible_distribution == "Rocky"
-          - ansible_distribution_major_version == "9"
-        fail_msg: "Host must be Rocky Linux 9, got {{ ansible_distribution }} {{ ansible_distribution_major_version }}"
+          - ansible_distribution_major_version | int == lock.rocky_linux.major | int
+        fail_msg: >-
+          Host musi byc Rocky Linux {{ lock.rocky_linux.major }} (wg lockfile),
+          jest {{ ansible_distribution }} {{ ansible_distribution_major_version }}
+
+    # R1/D: allowed_minors bylo martwa dana. compatibility-report.md deklarowal
+    # kontrole minora "w F2 preflight", ktorej nie bylo w kodzie. Teraz jest.
+    - name: "Preflight - minor OS dopuszczony przez lockfile"
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution_version in lock.rocky_linux.allowed_minors
+        fail_msg: >-
+          Minor {{ ansible_distribution_version }} nie jest w allowed_minors
+          {{ lock.rocky_linux.allowed_minors }} - zaktualizuj hosty albo lockfile
+
+    # R1: spojnosc wewnetrzna lockfile. `repo_setup_args` i `version` to dwa niezalezne
+    # pola opisujace te sama serie MariaDB - rozjechanie sie ich instaluje inna wersje,
+    # niz deklaruje lockfile, a wykryto by to dopiero po mutacji hosta.
+    - name: "Preflight - lockfile spojny (repo_setup_args zgodne z mariadb.version)"
+      ansible.builtin.assert:
+        that:
+          - lock.mariadb.repo_setup_args is search(lock.mariadb.version.split('.')[:2] | join('.'))
+        fail_msg: >-
+          Lockfile niespojny: repo_setup_args "{{ lock.mariadb.repo_setup_args }}"
+          nie pasuje do serii {{ lock.mariadb.version.split('.')[:2] | join('.') }}
+          wynikajacej z mariadb.version {{ lock.mariadb.version }}
+      run_once: true
 
     - name: "Preflight - minimal RAM 2GB"
       ansible.builtin.assert:

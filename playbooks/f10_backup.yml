@@ -71,7 +71,7 @@
   vars:
     backup_staging: "{{ storage.backup_staging_directory | default('/var/tmp/mariadb-backup') }}"
     backup_enc_key: "{{ lookup('ansible.builtin.env', 'BACKUP_ENCRYPTION_KEY') }}"
-    minio_sdk_version: "7.2.7"
+    minio_sdk_version: "{{ lock.minio.sdk_version }}"
     backup_ts: "{{ ansible_facts['date_time']['iso8601_basic_short'] }}"
     backup_name: "galera-{{ cluster.name }}-{{ backup_ts }}"
     writer_flow_threshold_ns: 1000000000
@@ -83,6 +83,13 @@
     S3_SECURE: "{{ backup.s3.secure | default(false) | string | lower }}"
 
   pre_tasks:
+    # R1/C2: ten playbook nie ladowal lockfile w ogole - wersje mial na sztywno.
+    # backup-run.sh przekazuje -e @clusters/<c>/cluster.yml, wiec versions.lock_file jest dostepne.
+    - name: "Zaladuj lockfile platformy (reprodukowalne wersje)"
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
     - name: "Wymagaj włączonego backupu i sekretów"
       ansible.builtin.assert:
         that:

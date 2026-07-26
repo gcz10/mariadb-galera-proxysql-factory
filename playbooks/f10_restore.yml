@@ -11,14 +11,22 @@
   become: true
   gather_facts: true
   vars:
-    mariadb_version: "11.4"
+    mariadb_version: "{{ lock.mariadb.version.split('.')[:2] | join('.') }}"
     restore_work: "/var/tmp/mariadb-restore"
     restore_datadir: "/var/lib/mysql"
     backup_enc_key: "{{ lookup('ansible.builtin.env', 'BACKUP_ENCRYPTION_KEY') }}"
-    minio_sdk_version: "7.2.7"
+    minio_sdk_version: "{{ lock.minio.sdk_version }}"
     state_dir: "/var/lib/mariadb-backup-state"
 
   pre_tasks:
+    # R1/C2: ten playbook nie ladowal lockfile - instalowal MariaDB po samej nazwie,
+    # czyli NAJNOWSZA z serii zamiast przypietej (ta sama klasa bledu co audit#12).
+    # Skutek: restore drill mogl odtwarzac na innej wersji niz klaster.
+    - name: "Zaladuj lockfile platformy (reprodukowalne wersje)"
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
     - name: "audit#5: restore wymaga -e restore_confirm=yes"
       ansible.builtin.assert:
         that:
@@ -46,24 +54,29 @@
 
   tasks:
     # === Przygotuj czysty host: MariaDB + narzędzia ===
-    - name: "MariaDB repo — pobierz setup"
+    # R1/C1: brakowalo weryfikacji sha256 - ta sama dziura supply-chain co audit#6,
+    # naprawiona w f2_install, a przeoczona tutaj. Skrypt jest OS-agnostyczny,
+    # wiec suma z lockfile jest wspolna dla EL9 i EL10.
+    - name: "MariaDB repo - pobierz setup (audit#6: weryfikacja sha256)"
       ansible.builtin.get_url:
-        url: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
+        url: "{{ lock.mariadb.repo_setup_script }}"
         dest: /usr/local/bin/mariadb_repo_setup
         mode: "0755"
+        checksum: "sha256:{{ lock.mariadb.repo_setup_sha256 }}"
 
-    - name: "MariaDB repo — konfiguruj {{ mariadb_version }}"
-      ansible.builtin.command: >-
-        /usr/local/bin/mariadb_repo_setup --mariadb-server-version={{ mariadb_version }} --skip-check-installed
+    - name: "MariaDB repo - konfiguruj wersje z lockfile ({{ mariadb_version }})"
+      ansible.builtin.command: "/usr/local/bin/mariadb_repo_setup {{ lock.mariadb.repo_setup_args }} --skip-check-installed"
       args:
         creates: /etc/yum.repos.d/mariadb.repo
 
-    - name: "Instaluj MariaDB-server + backup + klienta"
+    # R1/B5: NEVRA z lockfile zamiast samych nazw. Bez tego host restore dostawal
+    # najnowsza wersje z serii, a guard zgodnosci nizej wykrywal to dopiero PO instalacji.
+    - name: "Instaluj MariaDB server/backup/klienta (wersje PRZYPIETE z lockfile; audit#12)"
       ansible.builtin.dnf:
         name:
-          - MariaDB-server
-          - MariaDB-client
-          - MariaDB-backup
+          - "{{ lock.mariadb.server_package }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+          - "{{ lock.mariadb.client_package }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+          - "{{ lock.mariadb.mariadb_backup_package }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
           - socat
           - python3-pip
           - openssl
@@ -269,17 +282,39 @@
             recurse: true
 
         # === Uruchom standalone i sprawdź integralność ===
-        - name: "Uruchom mariadbd standalone (bez wsrep)"
-          ansible.builtin.shell: >-
-            mariadbd --user=mysql --datadir={{ restore_datadir }}
-            --socket=/var/lib/mysql/mysql.sock --skip-networking=0
-            --wsrep-provider=none >/var/log/mariadb-restore.log 2>&1 &
+        # Samo `... &` w module shell ginie na SIGHUP, gdy Ansible zamyka sesje SSH -
+        # proces przepadal, zanim zdazyl zapisac cokolwiek do logu, a drill konczyl sie
+        # bezuzytecznym "timeout na sockecie". setsid odpina od terminala sterujacego.
+        - name: "Uruchom mariadbd standalone (bez wsrep, odpiety od sesji SSH)"
+          ansible.builtin.shell: |
+            setsid mariadbd --user=mysql --datadir={{ restore_datadir }} \
+              --socket=/var/lib/mysql/mysql.sock --skip-networking=0 \
+              --wsrep-provider=none </dev/null >/var/log/mariadb-restore.log 2>&1 &
+            echo "pid=$!"
+          args:
+            executable: /bin/bash
           changed_when: true
 
         - name: "Czekaj na socket"
           ansible.builtin.wait_for:
             path: /var/lib/mysql/mysql.sock
-            timeout: 30
+            timeout: 60
+          register: restore_socket_wait
+          ignore_errors: true
+
+        # Bez tego operator dostaje samo "timeout" i musi recznie szukac przyczyny na hoscie.
+        - name: "Diagnostyka: log standalone mariadbd (gdy socket nie powstal)"
+          ansible.builtin.shell: "tail -30 /var/log/mariadb-restore.log 2>/dev/null || echo '(log pusty - proces nie wystartowal)'"
+          register: restore_mariadbd_log
+          changed_when: false
+          when: restore_socket_wait is failed
+
+        - name: "Zatrzymaj drill, gdy standalone mariadbd nie wstal"
+          ansible.builtin.fail:
+            msg: >-
+              Standalone mariadbd nie utworzyl socketu w 60s. Log:
+              {{ (restore_mariadbd_log.stdout | default('(brak)')) }}
+          when: restore_socket_wait is failed
 
         - name: "ISC-36: sprawdź WSZYSTKIE tabele użytkownika (mariadb-check)"
           ansible.builtin.shell: >-
