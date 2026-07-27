@@ -166,7 +166,13 @@ def main() -> int:
         body = policies.get(host, "")
         actual_rules = set(re.findall(r'^\s*(rule family="ipv4".*)$', body, re.MULTILINE))
         expected = expected_rules(host)
-        check("public (active)" in body, f"{host}: public zone is not active", failures)
+        # Naglowek to "public (active)" albo "public (default, active)" — zaleznie od tego,
+        # czy public jest takze strefa domyslna. Sprawdzamy sam fakt aktywnosci.
+        check(
+            re.search(r"^public \([^)]*active[^)]*\)", body, re.MULTILINE) is not None,
+            f"{host}: public zone is not active",
+            failures,
+        )
         check(enabled.get(host, "").strip() == "enabled", f"{host}: firewalld not enabled", failures)
         check(field(body, "target") == "default", f"{host}: public zone target is not default", failures)
         check(field(body, "ports") == "", f"{host}: unconditional ports remain: {field(body, 'ports')}", failures)
@@ -195,6 +201,31 @@ def main() -> int:
     if not in_cidrs(controller_ip, NETWORK["monitoring_cidrs"]):
         check(not reachable(first_galera, 9100), "node_exporter reachable outside monitoring CIDRs", failures)
         check(not reachable(first_proxy, 6070), "ProxySQL metrics reachable outside monitoring CIDRs", failures)
+
+    # Filtr ingress Dockera opiera sie na module xt_conntrack (match --ctorigdst).
+    # Kernele bez modulow xtables (np. Rocky 10 / 6.12) nie moga go zrealizowac —
+    # wtedy zamiast lawiny krypticznych bledow iptables raportujemy jedna,
+    # jednoznaczna porazke z konsekwencja bezpieczenstwa.
+    xtables_probe = run_command(
+        "infra", "find /lib/modules -name xt_conntrack.ko* -print -quit"
+    )
+    xtables_missing = [
+        host for host in hosts("infra") if not xtables_probe.get(host, "").strip()
+    ]
+    for host in xtables_missing:
+        check(
+            False,
+            f"{host}: ISC-5 NIESPELNIONE — kernel bez modulow xtables (xt_conntrack), "
+            "wiec filtr ingress Dockera (ISA-INFRA) nie moze powstac. Porty publikowane "
+            "przez Dockera NIE sa ograniczone do skonfigurowanych CIDR: strefa 'docker' "
+            "ma target=ACCEPT i omija rich rules strefy 'public'. "
+            "Wymaga implementacji filtra natywnie w nftables.",
+            failures,
+        )
+    # Zapytania o chain padaja na hostach bez xtables (chain nie istnieje), wiec
+    # odpytujemy wylacznie hosty, na ktorych filtr moze w ogole dzialac.
+    if xtables_missing:
+        return failures
 
     docker_chain = run_command("infra", "iptables -S ISA-INFRA")
     docker_hook = run_command("infra", "iptables -S DOCKER-USER")

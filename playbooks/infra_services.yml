@@ -93,6 +93,39 @@
         state: present
 
 
+    # Filtr ingress Dockera (DOCKER-USER + ISA-INFRA) opiera sie na module xt_conntrack.
+    # Po instalacji pakietow dnf potrafi wciagnac NOWSZY kernel; dopoki host go nie zaladuje,
+    # /lib/modules zawiera moduly TYLKO dla nowego kernela, a modprobe dla dzialajacego
+    # zwraca "Module not found" -> iptables failuje na kazdym matchu -> filtr nie powstaje,
+    # a Docker (Requires=isa-docker-firewall) nie startuje. Nie obchodzimy tego cicho:
+    # brak dzialajacego filtra to luka (strefa 'docker' ma target=ACCEPT i omija rich rules).
+    - name: "Wykryj kernel zainstalowany, ale niezaladowany"
+      ansible.builtin.shell: |
+        set -o pipefail
+        running=$(uname -r)
+        newest=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core | sort -V | tail -1)
+        [ "$running" = "$newest" ] && echo MATCH || echo "STALE running=$running newest=$newest"
+      args:
+        executable: /bin/bash
+      register: infra_kernel_state
+      changed_when: false
+
+    - name: "Wymagaj restartu do zainstalowanego kernela (albo -e allow_kernel_reboot=yes)"
+      ansible.builtin.assert:
+        that:
+          - infra_kernel_state.stdout is search('MATCH')
+        fail_msg: >-
+          {{ infra_kernel_state.stdout }} — host dziala na starszym kernelu niz zainstalowany,
+          wiec brakuje modulow xtables i filtr ingress Dockera nie powstanie.
+          Zrestartuj hosta albo uruchom z -e allow_kernel_reboot=yes.
+      when: not (allow_kernel_reboot | default(false) | bool)
+
+    - name: "Restart do zainstalowanego kernela (gdy operator na to pozwolil)"
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+      when:
+        - allow_kernel_reboot | default(false) | bool
+        - infra_kernel_state.stdout is not search('MATCH')
     - name: "Wdróż filtr DOCKER-USER dla opublikowanych portów"
       ansible.builtin.template:
         src: ../roles/infra_services/templates/docker-user-firewall.sh.j2
@@ -136,17 +169,6 @@
         enabled: true
         state: "{{ 'restarted' if infra_docker_firewall_script.changed or infra_docker_firewall_unit.changed else 'started' }}"
 
-    # Rocky 10 kernel 6.12 nie laduje modulow xtables rev 0 (xt_conntrack/xt_tcpudp/xt_addrtype),
-    # a Docker domyslnie uzywa iptables do NAT -> "RULE_APPEND failed". firewall-backend=nftables
-    # (GA od Docker 29) omija xtables w ogole. ip_forward=0 na Rocky 10 blokuje bridge network.
-    - name: "Docker - nftables backend (Rocky 10: kernel bez xtables rev 0)"
-      ansible.builtin.copy:
-        content: '{"firewall-backend": "nftables"}'
-        dest: /etc/docker/daemon.json
-        owner: root
-        group: root
-        mode: "0644"
-      register: infra_docker_daemon_json
 
     - name: "Docker - wlacz ip_forward (Rocky 10 domyslnie 0; wymagane przez bridge network)"
       ansible.builtin.copy:
@@ -172,11 +194,11 @@
         state: started
       register: infra_docker_start
 
-    - name: "Restart Docker gdy zmienily sie daemon.json/sysctl"
+    - name: "Restart Docker gdy zmienil sie sysctl ip_forward"
       ansible.builtin.systemd:
         name: docker
         state: restarted
-      when: infra_docker_daemon_json.changed or infra_docker_ipforward.changed
+      when: infra_docker_ipforward.changed
 
     - name: "Utwórz prywatny katalog konfiguracji infra"
       ansible.builtin.file:

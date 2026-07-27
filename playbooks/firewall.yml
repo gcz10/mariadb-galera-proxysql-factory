@@ -211,7 +211,7 @@
     - name: "Blokuj źródłowe strefy, które mogłyby ominąć allowlistę"
       ansible.builtin.assert:
         that:
-          - firewall_active_zones.stdout is not search('(?m)^\\s*sources:\\s+\\S')
+          - firewall_active_zones.stdout is not search('(?m)^\s*sources:\s+\S')
         fail_msg: >-
           Wykryto aktywną strefę z przypisaniem source, która ma pierwszeństwo przed
           public zone i mogłaby ominąć zarządzaną allowlistę:

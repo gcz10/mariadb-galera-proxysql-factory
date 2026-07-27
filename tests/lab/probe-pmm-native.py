@@ -139,11 +139,15 @@ def main():
         failures,
     )
     # ISC-47: managed alert rules plus SMTP delivery route.
+    # UID-y sa namespace'owane etykieta klastra (f15_alerts.yml), inaczej drugi klaster
+    # nadpisalby reguly pierwszego we wspolnym PMM.
+    _cl = CLUSTER_CONFIG["monitoring"]["pmm"]["cluster_name"]
     expected_alert_rules = {
-        "isa-galera-node-loss",
-        "isa-galera-quorum-loss",
-        "isa-galera-not-synced",
-        "isa-backup-stale",
+        f"isa-{_cl}-node-loss",
+        f"isa-{_cl}-quorum-loss",
+        f"isa-{_cl}-not-synced",
+        f"isa-{_cl}-no-writer",
+        f"isa-{_cl}-backup-stale",
     }
     managed_alert_rules = [
         rule
@@ -158,14 +162,39 @@ def main():
         f"expected {sorted(expected_alert_rules)}",
         failures,
     )
+    # Reguly zwracaja 0 przy zdrowym klastrze (nie pusty wektor), wiec NoData oznacza
+    # realna utrate zbierania metryk. Reguly KRYTYCZNE musza wtedy alarmowac (fail-closed).
+    # Jedyny wyjatek to warning-level "not Synced": jego fallback (`or vector(4)`) celowo
+    # zwraca wartosc zdrowa, bo utrata metryk jest juz pokryta przez dwie reguly krytyczne
+    # i trzeci alarm o tej samej przyczynie bylby szumem.
+    critical_rules = [
+        rule
+        for rule in managed_alert_rules
+        if rule.get("labels", {}).get("severity") == "critical"
+    ]
+    bad_nodata = sorted(
+        rule.get("uid")
+        for rule in critical_rules
+        if rule.get("noDataState") != "Alerting"
+    )
     check(
-        all(rule.get("noDataState") == "OK" for rule in managed_alert_rules),
-        "ISC-47 healthy empty PromQL results must not fire NoData alerts",
+        critical_rules and not bad_nodata,
+        "ISC-47 critical alert rules must fail closed on NoData "
+        f"(noDataState=Alerting); naruszaja: {bad_nodata}",
         failures,
     )
     expected_alert_email = CLUSTER_CONFIG["monitoring"]["alerts"]["email"]
+    # UID i nazwa contact pointu sa namespace'owane etykieta klastra (tak samo jak
+    # w f15_alerts.yml), zeby drugi klaster nie nadpisal punktu pierwszego.
+    cluster_label = CLUSTER_CONFIG["monitoring"]["pmm"]["cluster_name"]
+    expected_contact_uid = f"email-isa-{cluster_label}"
+    expected_contact_name = f"ISA Email Alerts ({cluster_label})"
     email_contact = next(
-        (point for point in alert_contact_points if point.get("uid") == "email-isa"),
+        (
+            point
+            for point in alert_contact_points
+            if point.get("uid") == expected_contact_uid
+        ),
         None,
     )
     check(
@@ -173,20 +202,21 @@ def main():
         and email_contact.get("type") == "email"
         and email_contact.get("settings", {}).get("addresses")
         == expected_alert_email,
-        "ISC-47 email contact point missing or targets the wrong address",
+        f"ISC-47 email contact point '{expected_contact_uid}' missing or wrong address",
         failures,
     )
     check(
         any(
-            route.get("receiver") == "ISA Email Alerts"
+            route.get("receiver") == expected_contact_name
             and ["managed_by", "=", "ansible"]
+            in route.get("object_matchers", [])
+            and ["cluster", "=", cluster_label]
             in route.get("object_matchers", [])
             for route in alert_policy.get("routes", [])
         ),
         "ISC-47 notification policy does not route managed alerts to email",
         failures,
     )
-
 
     managed_nodes = [
         node

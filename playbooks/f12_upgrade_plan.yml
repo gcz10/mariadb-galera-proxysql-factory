@@ -102,7 +102,7 @@
           Major downgrade istniejącego datadir jest NIEWSPARTY (mariadb.com/kb/en/downgrading-between-major-mariadb-versions:
           "data files modified by a higher major version are forward-incompatible").
           Rollback wymaga odtworzenia datadir z backupu (mariadb-backup), NIE downgrade pakietów.
-      when: f12_current_version != 'unknown' and f12_current_major_minor is match('\\d+\\.\\d+')
+      when: f12_current_version != 'unknown' and f12_current_major_minor is match('\d+\.\d+')
 
     - name: "Strażnik regresji wsparcia — odmów celu, który SKRACA okno EOL"
       ansible.builtin.assert:

@@ -96,7 +96,7 @@
         that:
           - >-
             (bootstrap_grastate.content is not defined)
-            or ((bootstrap_grastate.content | b64decode) is search('(?m)^safe_to_bootstrap:\\s*1'))
+            or ((bootstrap_grastate.content | b64decode) is search('(?m)^safe_to_bootstrap:\s*1'))
         fail_msg: >-
           grastate.dat na {{ inventory_hostname }} nie ma safe_to_bootstrap:1.
           Klaster nie został czysto zatrzymany LUB to nie ten węzeł ma najwyższy seqno.

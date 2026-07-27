@@ -302,7 +302,7 @@
           {
             "backup_name": "{{ backup_name }}",
             "cluster_name": "{{ cluster.name }}",
-            "mariadb_version": "{{ mariadb_version.stdout | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+') }}",
+            "mariadb_version": "{{ mariadb_version.stdout | regex_search('[0-9]+\.[0-9]+\.[0-9]+') }}",
             "created_at": "{{ ansible_facts['date_time']['iso8601'] }}",
             "wsrep_galera_info": "{{ galera_info.stdout }}",
             "wsrep_uuid": "{{ galera_info.stdout.split(':')[0] }}",

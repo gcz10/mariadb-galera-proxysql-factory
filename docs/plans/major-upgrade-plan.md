@@ -14,7 +14,7 @@ jest planem, nie wykonaniem. Źródło: oficjalna dokumentacja MariaDB/Galera._
 
 ## Warunki wstępne
 1. **Pełny backup** mariadb-backup PRZED upgrade (ISC-32 — off-cluster, szyfrowany).
-2. **gcache.size** wystarczające dla IST (obecnie: ); zalecane >=2G na czas upgrade,
+2. **gcache.size** wystarczające dla IST (obecnie: 256M); zalecane >=2G na czas upgrade,
    aby węzły powracały przez IST, nie pełne SST.
 3. **Brak DDL** w klastrze podczas rolling upgrade.
 4. Wersja Galera 4 zgodna między węzłami (wsrep API 26).
