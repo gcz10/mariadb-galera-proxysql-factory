@@ -136,12 +136,47 @@
         enabled: true
         state: "{{ 'restarted' if infra_docker_firewall_script.changed or infra_docker_firewall_unit.changed else 'started' }}"
 
+    # Rocky 10 kernel 6.12 nie laduje modulow xtables rev 0 (xt_conntrack/xt_tcpudp/xt_addrtype),
+    # a Docker domyslnie uzywa iptables do NAT -> "RULE_APPEND failed". firewall-backend=nftables
+    # (GA od Docker 29) omija xtables w ogole. ip_forward=0 na Rocky 10 blokuje bridge network.
+    - name: "Docker - nftables backend (Rocky 10: kernel bez xtables rev 0)"
+      ansible.builtin.copy:
+        content: '{"firewall-backend": "nftables"}'
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: "0644"
+      register: infra_docker_daemon_json
+
+    - name: "Docker - wlacz ip_forward (Rocky 10 domyslnie 0; wymagane przez bridge network)"
+      ansible.builtin.copy:
+        content: "net.ipv4.ip_forward = 1"
+        dest: /etc/sysctl.d/98-docker-ipforward.conf
+        owner: root
+        group: root
+        mode: "0644"
+      register: infra_docker_ipforward
+
+    - name: "Docker - zastosuj sysctl ip_forward"
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        state: present
+        reload: false
+
     - name: "Włącz Docker dopiero po aktywacji filtra ingress"
       ansible.builtin.systemd:
         name: docker
         daemon_reload: true
         enabled: true
         state: started
+      register: infra_docker_start
+
+    - name: "Restart Docker gdy zmienily sie daemon.json/sysctl"
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+      when: infra_docker_daemon_json.changed or infra_docker_ipforward.changed
 
     - name: "Utwórz prywatny katalog konfiguracji infra"
       ansible.builtin.file:
@@ -240,3 +275,33 @@
           - infra_running_services.stdout_lines | sort == ['maildev', 'minio', 'pmm-server']
         fail_msg: "Nie wszystkie usługi infra są uruchomione: {{ infra_running_services.stdout_lines }}"
         success_msg: "PMM, MinIO i Maildev działają na {{ inventory_hostname }}."
+
+    # PMM 3.8.1 nie stosuje GF_SECURITY_ADMIN_PASSWORD przy pierwszym starcie kontenera —
+    # Grafana zwraca 401 na haslo z compose. change-admin-password wymusza je idempotentnie.
+    - name: "PMM — sprawdz czy haslo admina z compose dziala"
+      ansible.builtin.command:
+        argv:
+          - curl
+          - -sSk
+          - -o
+          - /dev/null
+          - -w
+          - "%{http_code}"
+          - -u
+          - "{{ pmm_admin_user | default('admin') }}:{{ pmm_admin_password }}"
+          - "https://{{ ansible_host }}:443/graph/api/user"
+      register: pmm_admin_auth
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: "PMM — wymus haslo admina (gdy compose go nie zastosowal)"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - pmm-server
+          - change-admin-password
+          - "{{ pmm_admin_password }}"
+      when: pmm_admin_auth.stdout | default('') != '200'
+      no_log: true

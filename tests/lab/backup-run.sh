@@ -40,7 +40,8 @@ case "$MODE" in
   *) echo "Nieznany tryb: $MODE (backup|restore)"; exit 2 ;;
 esac
 
-ansible-playbook "$PLAYBOOK" -i "$INV" -e "@$CFG" "${EXTRA[@]}"
+# ${EXTRA[@]+...} - bash 3.2 (macOS) z set -u wywala sie na rozwinieciu pustej tablicy.
+ansible-playbook "$PLAYBOOK" -i "$INV" -e "@$CFG" ${EXTRA[@]+"${EXTRA[@]}"}
 RC=$?
 if [ "$RC" -eq 0 ]; then
   echo "backup-run: ${MODE} OK (${TS})"

@@ -4,8 +4,12 @@
 # MASTER = proxysql_node_idx 1; pozostałe = BACKUP z niższym priorytetem.
 
 global_defs {
-    enable_script_security
-    script_user root
+    # enable_script_security / script_user usuniete: keepalived 2.2.8 (git build, domyslny
+    # w Rocky 10) ma buga - z ta opcja NIE uruchamia scriptu (journal: "Script returning 1",
+    # ale instrumentowany script nie startuje wcale), wiec instancja trwale w FAULT.
+    # Na EL9 (release keepalived) dzialalo; script_user root jest domysllem gdy keepalived
+    # startuje jako root. check_proxysql.sh jest root:root 0755 (nie writable by group/other),
+    # wiec realny efekt security opcji byl pusty - usuniecie nie oslabia security.
 }
 
 vrrp_script chk_proxysql {

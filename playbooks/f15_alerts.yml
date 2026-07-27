@@ -105,8 +105,13 @@
         method: POST
         url_username: "{{ pmm_admin_user }}"
         url_password: "{{ pmm_admin_password }}"
+        # Bez force_basic_auth Ansible czeka na challenge 401, ktorego Grafana API nie wysyla
+        # -> auth nigdy nie dochodzi. body_format json: bez tego leci form-encoded (400).
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        body_format: json
         body: {uid: "{{ folder_uid }}", title: "{{ f15_folder_title }}"}
-        status_code: 200
+        status_code: [200, 201]   # Grafana 12 zwraca 201 Created
       register: f15_folder_create
       no_log: true
       when: "f15_folder_title not in (f15_folders.json | map(attribute='title') | list)"

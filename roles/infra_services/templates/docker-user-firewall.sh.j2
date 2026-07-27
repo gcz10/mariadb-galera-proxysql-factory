@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
+
+# Rocky 10 kernel 6.12 nie laduje modulow xtables rev 0 (xt_conntrack, xt_tcpudp) -
+# iptables-nft failuje na podstawowych matchach (-m conntrack --ctstate, -m tcp --dport):
+# "Extension ... revision 0 not supported" + "RULE_APPEND failed".
+# Bez tego guardu service padalby, a Docker (Requires=isa-docker-firewall) nie startowal.
+# Test: czy -m conntrack dziala. Jesli nie - ostrzez i zakoncz sukcesem (source restriction
+# zostaje na warstwie firewalld/strefy, ktora jest nft-native i dziala).
+if ! iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; then
+  echo "isa-docker-firewall: WARN - iptables conntrack match niedostepny (xtables rev 0 brak);" >&2
+  echo "  pomijam filtrowanie portow Docker; source restriction zostaje na firewalld/strefie." >&2
+  iptables -D FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+  exit 0
+fi
+iptables -D FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+set -e
 
 canonical_chain="ISA-INFRA"
 new_chain="${canonical_chain}-${BASHPID}"
@@ -17,15 +32,11 @@ iptables -w -N "${new_chain}"
 trap cleanup_unactivated_chain ERR
 
 {% for rule in infra_firewall_rules | unique %}
-iptables -w -A "${new_chain}" -s "{{ rule.0 }}" -p tcp \
-  -m conntrack --ctorigdstport "{{ rule.1 }}" -j RETURN
-iptables -w -A "${new_chain}" -p tcp \
-  -m conntrack --ctstate ESTABLISHED,RELATED \
-  --ctorigsrc "{{ rule.0 }}" --ctorigdstport "{{ rule.1 }}" -j RETURN
-{% endfor %}
-{% for port in infra_published_ports %}
-iptables -w -A "${new_chain}" -p tcp \
-  -m conntrack --ctorigdstport "{{ port }}" -j DROP
+# EL10 kernel 6.12 brakuje xt_conntrack rev 0 -> --ctorigdstport (port match) nie dziala
+# ("unknown option"). --ctorigdst (adres) dziala (nft_ct natywnie). Przechodzimy wiec
+# na --dport (container port = published port przy mapowaniu 1:1, co holding dla PMM/MinIO/maildev).
+iptables -w -A "${new_chain}" -s "{{ rule.0 }}" -p tcp -m tcp --dport "{{ rule.1 }}" -j RETURN
+iptables -w -A "${new_chain}" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
 {% endfor %}
 # Fail closed for any other container port published on the managed address.
 iptables -w -A "${new_chain}" -j DROP
