@@ -10,8 +10,11 @@
 
 # === Play 0: walidacja wejścia + quorum guard ===
 - name: "F13 — walidacja + strażnik quorum"
+  # BEZ `connection: local`: przy nim zadania z `delegate_to` wykonywaly sie NA KONTROLERZE
+  # (potwierdzone: `hostname -f` zwracalo maszyne operatora), wiec odczyt stanu klastra
+  # przez `mariadb --socket=...` padal rc=2 i cala sciezka remove-node byla nieuzywalna.
+  # Niejawny localhost i tak laczy sie lokalnie, a delegacja dostaje polaczenie wezla.
   hosts: localhost
-  connection: local
   gather_facts: false
   any_errors_fatal: true
   vars:
