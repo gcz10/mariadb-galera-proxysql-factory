@@ -1,6 +1,6 @@
 # Plan: Rocky Linux 10 obok Rocky Linux 9 (dual-platform)
 
-**Status:** R1+R0+R2+R6 ZROBIONE i zweryfikowane (2026-07-27). Teardown + apply BLOKOWANE na sekrety Proxmoxa. Szczegoly na końcu pliku (§8).
+**Status:** ✅ **ZAKOŃCZONE** (2026-07-27). Wszystkie fazy R0-R6 wykonane i zweryfikowane na żywym klastrze Rocky 10.2. Podsumowanie w §8.
 **Data ustaleń:** 2026-07-26. Wszystkie wersje/URL/sumy **zweryfikowane realnym zapytaniem do repozytoriów**, nie z pamięci.
 **Zasada nadrzędna:** kod jest **uniwersalny** — zero wersji i zero platformy w playbookach.
 Wszystko platformowe/wersyjne pochodzi z **lockfile wskazanego per klaster** (`versions.lock_file` w `cluster.yml`; schema tego wymaga).
@@ -256,3 +256,64 @@ make cluster-deploy CLUSTER=claude-r10   # dojdzie do joinu — tam weryfikujemy
 - 5 martwych zmiennych i 2 dziury supply-chain zostało usuniętych (R1).
 - CI łapie teraz brak klucza w lockfile i niezgodność `repo_setup_args` z `mariadb.version`.
 - `compatibility-report.md` przestał kłamać (kontrola minora, którą deklarował, teraz realnie istnieje).
+
+---
+
+## 9. Wynik końcowy (2026-07-27)
+
+**Klaster `claude-r10` działa produkcyjnie na Rocky Linux 10.2** (kernel 6.12, SELinux enforcing),
+postawiony tym samym kodem co EL9 — różnicę niesie wyłącznie `versions.lock_file`.
+
+### Bramka R3 (największa niewiadoma planu) — ZALICZONA
+SST `mariabackup` działa pod SELinux **enforcing**. Moduł polityki `mariadb-server` skompilował się
+pod `checkpolicy 3.10` bez żadnych zmian. Obawa o konieczność pisania własnego modułu nie zmaterializowała się.
+
+### Dowody z żywego klastra
+
+| obszar | wynik |
+|---|---|
+| preflight | 7/7 hostów PASS (major=10, `allowed_minors=[10.2]` z lockfile EL10) |
+| Galera | 3/3 `Primary`, `local_state=4` (Synced), `wsrep_ready=ON` |
+| replikacja | 500 wierszy zapisanych na gnode1 → widoczne na gnode2/gnode3 |
+| ProxySQL | routing OK, jeden writer ONLINE |
+| Keepalived | VIP `.40` na pnode1, pnode2 BACKUP (brak split-brain) |
+| monitoring | `mysql_up=9`, `wsrep_cluster_size=3`, `node_exporter=6`, `proxysql=10` serii w PMM |
+| alerty | 5 reguł ISC-47 aktywnych |
+| backup | aes-256-cbc → S3, seqno=23, flow control 0 przed i po |
+| restore drill | 500 wierszy, `mariadb-check` OK, checksum zweryfikowany |
+| chaos split-brain | majority Primary/writable, minority non-Primary/read-only, heal do 3 |
+| chaos failover | writer SIGKILL → gap **6.1s** (RTO 120s), **0 utraconych transakcji** |
+| idempotencja | drugi `cluster-deploy`: `changed=0` na 7/7 |
+
+### Łącznie 12 różnic EL9/EL10 wykrytych i naprawionych
+
+Wszystkie znalezione przez **realne uruchomienie**, nie analizę statyczną:
+
+**Faza R1 (odhardcodowanie, jeszcze na EL9):**
+1. `f2_preflight` — ścieżka lockfile na sztywno; `major_version == "9"`
+2. `f2_install` — `rocky/9` (404) i `centos9` w URL RPM
+3. `mariadb_version "11.4"` w `f2_install`/`f10_restore` (martwe/duplikat)
+4. `minio_sdk_version "7.2.7"` w `f10_backup`/`f10_restore`
+5. `f10_restore` — pakiety MariaDB bez NEVRA; brak sha256 na `mariadb_repo_setup`
+6. `f10_backup`/`f10_restore` nie ładowały lockfile w ogóle
+7. `allowed_minors` — dana martwa, kontrola deklarowana w dokumentacji nie istniała
+8. `cluster.schema.json` — `rocky_linux_major: const 9`
+
+**Faza R3-R5 (dopiero na żywym Rocky 10):**
+9. `bootstrap.yml` — precedens Jinja + `failed_when:false` maskujący brak `grastate.dat`
+10. `f5_join.yml` — heurystyka `'mysql' in item` tworzyła `/run/mariadb` jako `root`
+    (na EL9 maskował to `RuntimeDirectory` w unicie, którego build EL10 nie ma)
+11. `keepalived.conf.j2` — `enable_script_security` w keepalived 2.2.8 blokuje `vrrp_script`
+12. Docker/iptables — kernel 6.12 bez modułów xtables: `firewall-backend: nftables`,
+    `ip_forward=1`, guard w `docker-user-firewall.sh.j2`
+
+**Przy okazji, niezależne od platformy:**
+- `f15_alerts.yml` — POST `/api/folders` bez `force_basic_auth`/`body_format`/`201` (bug też na EL9)
+- PMM 3.8.1 nie stosuje `GF_SECURITY_ADMIN_PASSWORD` przy pierwszym starcie
+- `backup-run.sh` — `${EXTRA[@]}` z `set -u` łamie bash 3.2 (regresja z fixu `restore_confirm`)
+- `make cluster-restore-drill` był martwy odkąd dodano strażnika `audit#5`
+
+### Konsekwencja do zaakceptowania
+VM Rocky 9 zostały skasowane — **EL9 nie ma już żywej regresji**. Kod EL9 zostaje i jest
+weryfikowany statycznie przez CI (schema + inventory + lockfile + syntax na obu platformach).
+Pierwszy realny test EL9 nastąpi dopiero przy odtworzeniu tamtego klastra.
