@@ -22,8 +22,12 @@
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
-        owner: "{{ 'mysql' if 'mysql' in item or 'log' in item else 'root' }}"
-        group: "{{ 'mysql' if 'mysql' in item or 'log' in item else 'root' }}"
+        # owner: katalogi zapisywane przez mariadbd (User=mysql) musza byc mysql-owned.
+        # Poprzedni heuryst 'mysql in item' nie lapol /run/mariadb (nie zawiera slowa
+        # "mysql") -> tworzyl go jako root -> na EL10 (brak RuntimeDirectory w unicie)
+        # ExecStartPre nie mogl zapisac wsrep-start-position. Tylko config_dir jest root.
+        owner: "{{ 'root' if item == mariadb_config_dir else 'mysql' }}"
+        group: "{{ 'root' if item == mariadb_config_dir else 'mysql' }}"
         mode: "0755"
       loop:
         - /run/mariadb
