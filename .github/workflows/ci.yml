@@ -59,17 +59,32 @@ jobs:
           done
           exit $rc
 
-      - name: Lockfile validation (all platforms — dual-platform parity)
+      # Walidujemy lockfile'e faktycznie UZYWANE przez klastry (versions.lock_file),
+      # nie kazdy plik w versions/. candidate.lock.yml jest z zalozenia niedokonczony
+      # (placeholdery to-confirm-F0 czekajace na F0) i nie jest przez nikogo wskazywany.
+      # Efekt uboczny: wykrywa tez klaster wskazujacy na nieistniejacy lockfile.
+      - name: Lockfile validation (lockfiles referenced by clusters)
         run: |
           set -e
           rc=0
-          for lf in versions/*.lock.yml; do
-            [ -f "$lf" ] || continue
-            if python3 tests/validation/validate-lockfile.py "$lf"; then
-              echo "OK: $lf"
-            else
-              echo "FAIL: $lf"; rc=1
+          used=$(python3 - <<'PY'
+          import glob, yaml
+          out = set()
+          for path in sorted(glob.glob("clusters/*/cluster.yml")):
+              with open(path, encoding="utf-8") as fh:
+                  cfg = yaml.safe_load(fh) or {}
+              lock = (cfg.get("versions") or {}).get("lock_file")
+              if lock:
+                  out.add(lock)
+          print("\n".join(sorted(out)))
+          PY
+          )
+          [ -n "$used" ] || { echo "FAIL: zaden klaster nie wskazuje lockfile"; exit 1; }
+          for lf in $used; do
+            if [ ! -f "$lf" ]; then
+              echo "FAIL: $lf wskazany przez cluster.yml, ale nie istnieje"; rc=1; continue
             fi
+            python3 tests/validation/validate-lockfile.py "$lf" || rc=1
           done
           exit $rc
 

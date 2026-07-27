@@ -13,6 +13,7 @@ Kod wyjscia != 0, gdy ktorykolwiek lockfile nie przeszedl.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -59,24 +60,34 @@ def validate(path: Path) -> list[str]:
     if not isinstance(data, dict):
         return [f"{path}: korzen nie jest slownikiem"]
 
-    # 2. Placeholdery (ISC-63)
-    lower = text.lower()
-    for marker in PLACEHOLDER_MARKERS:
-        if marker in lower:
-            errors.append(f"{path}: placeholder '{marker}' (ISC-63)")
+    # Rygor zalezy od dojrzalosci lockfile'a, ktora deklaruje on sam w stopce
+    # "# Status: LOCKED" / "# Status: candidate". Kandydat jest Z DEFINICJI niekompletny
+    # (placeholdery to-confirm-F0 czekaja na discovery), wiec egzekwowanie na nim bramki
+    # ISC-63 i kompletu kluczy byloby falszywym alarmem. Sprawdzamy go tylko strukturalnie.
+    is_locked = re.search(r"^#\s*Status:\s*LOCKED", text, re.MULTILINE | re.IGNORECASE)
 
-    # 3. Wymagane klucze
+    # 2. Placeholdery (ISC-63) — tylko dla LOCKED
+    if is_locked:
+        lower = text.lower()
+        for marker in PLACEHOLDER_MARKERS:
+            if marker in lower:
+                errors.append(f"{path}: placeholder '{marker}' (ISC-63)")
+
+    # 3. Wymagane klucze — komplet wymagany tylko od LOCKED; u kandydata sprawdzamy
+    #    wylacznie poprawnosc typow sekcji, ktore juz istnieja.
     for section, keys in REQUIRED.items():
         if section not in data:
-            errors.append(f"{path}: brak sekcji '{section}'")
+            if is_locked:
+                errors.append(f"{path}: brak sekcji '{section}'")
             continue
         if not isinstance(data[section], dict):
             errors.append(f"{path}: sekcja '{section}' nie jest slownikiem")
             continue
-        for key in keys:
-            if key not in data[section]:
-                errors.append(f"{path}: brak klucza '{section}.{key}'")
-        # rpm_sha256 musi miec przynajmniej jedna arch
+        if is_locked:
+            for key in keys:
+                if key not in data[section]:
+                    errors.append(f"{path}: brak klucza '{section}.{key}'")
+        # rpm_sha256 musi miec przynajmniej jedna arch (gdy w ogole jest)
         if section == "proxysql" and isinstance(data[section].get("rpm_sha256"), dict):
             if not data[section]["rpm_sha256"]:
                 errors.append(f"{path}: proxysql.rpm_sha256 pusty (brak arch)")
