@@ -91,7 +91,7 @@
       failed_when: false
       changed_when: false
 
-    - name: "ISC-65: recovery — safe_to_bootstrap=1 na węźle bootstrap"
+    - name: "ISC-65: recovery — safe_to_bootstrap=1 na węźle bootstrap (chyba że bootstrap_force=yes)"
       ansible.builtin.assert:
         that:
           - >-
@@ -103,7 +103,10 @@
           Recovery: znajdź węzeł z safe_to_bootstrap:1 (lub max seqno w grastate.dat/
           wsrep_local_causes_uuid) i bootstrappuj go przez -e bootstrap_node=<ten_węzeł>.
           Bootstrappowanie dowolnego węzła = ryzyko utraty zatwierdzonych transakcji.
-      when: not bootstrap_grastate.failed
+          Pierwszy bootstrap na pustym datadir: użyj -e bootstrap_force=yes.
+      when:
+        - not bootstrap_grastate.failed
+        - not (bootstrap_force | default(false)) | bool
 
     - name: "Zabij stary proces MariaDB (tylko lab: brak systemd)"
       ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null || true"

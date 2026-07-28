@@ -192,10 +192,13 @@
         host: localhost
         state: present
         login_unix_socket: /var/lib/mysql/mysql.sock
-      # `.failed` nie istnieje gdy wait_for zostal pominiety -> default(true) pomija tez to.
+      # Warunek musi sprawdzac czy MariaDB FAKTYCZNIE dziala (mariadb_active),
+      # nie tylko czy wait_for sie powiodl. Gdy wait_for jest pominiety (brak mariadbd),
+      # mariadb_ready jest defined z failed=False, wiec stary warunek przepuszczal
+      # i mysql_user padal na braku socketu.
       when:
         - galera_node_idx | default(1) == 1
-        - (mariadb_ready.failed | default(true)) == false
+        - (mariadb_active | default({})).rc | default(1) == 0
       no_log: true
 
   handlers:

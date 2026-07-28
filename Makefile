@@ -10,7 +10,8 @@
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify \
-        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode
+        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode \
+        infra-teardown infra-provision
 
 CLUSTER ?= example-cluster
 ANSIBLE_OPTS ?=
@@ -18,6 +19,22 @@ TARGET_ENV = CLUSTER=$(CLUSTER) CLUSTER_CONFIG=clusters/$(CLUSTER)/cluster.yml C
 
 # Cel mutujący wymaga jawnego CLUSTER= (command line/env), nie domyślnego example-cluster.
 cluster_guard = @case "$(origin CLUSTER)" in file|default|undefined) echo "ERROR: ten cel jest mutujący — podaj CLUSTER=... (domyślny example-cluster niedozwolony)" >&2; exit 1;; esac
+
+# TF_DIR domyślnie wyprowadzany z nazwy klastra; nadpisywalny dla nietypowych układów.
+TF_DIR ?= terraform/$(CLUSTER)
+
+infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM=yes)
+	$(cluster_guard)
+	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
+	@: "$${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_PASSWORD}"
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje WSZYSTKIE VM klastra $(CLUSTER))"; exit 1)
+	terraform/pve-teardown.sh $(TF_DIR)
+
+infra-provision:  ## Utwórz VM klastra (parallelism=1 — równoległość wywala locki ZFS na PVE)
+	$(cluster_guard)
+	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
+	@: "$${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_PASSWORD}"
+	cd $(TF_DIR) && terraform init -input=false >/dev/null && terraform apply -auto-approve -parallelism=1
 
 help:  ## Pokaż dostępne komendy
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-28s %s\n", $$1, $$2}'
