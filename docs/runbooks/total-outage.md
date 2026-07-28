@@ -24,11 +24,36 @@ mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SHOW STATUS LIKE 'wsrep_clu
 
 ## Scenariusz B: Wszystkie węzły down
 
-1. Zbierz `grastate.dat`, `safe_to_bootstrap`, `--wsrep-recover` z każdego węzła
-2. Wybierz węzeł z najnowszym seqno
-3. Pokaż plan i wymagaj potwierdzenia
-4. Bootstrap na wybranym węźle
-5. Dołącz pozostałe
+**Zweryfikowane w praktyce na Rocky 10 (2026-07-28)** po restarcie całego labu.
+Objaw: `mariadb.service` jest `enabled`, próbuje wstać i pada po ~35 s;
+`grastate.dat` na KAŻDYM węźle ma `seqno: -1` i `safe_to_bootstrap: 0`.
+To poprawne zachowanie — Galera odmawia zgadywania, który węzeł ma najświeższy stan.
+
+1. **Odczytaj odzyskane pozycje.** `mariadbd --wsrep-recover` uruchomione ręcznie
+   NIE wypisuje pozycji (kończy się po jednej linii `[Note]`). Pozycję wylicza
+   `ExecStartPre` unitu i loguje ją do journala — dlatego czytamy stamtąd:
+   ```bash
+   ansible galera -i clusters/<name>/inventory.yml -b -m shell \
+     -a "systemctl start mariadb >/dev/null 2>&1; journalctl -u mariadb --no-pager \
+         | grep 'Recovered position' | tail -1"
+   ```
+   (start i tak padnie — chodzi wyłącznie o wpis `WSREP: Recovered position <uuid>:<seqno>`.)
+2. **Wybierz węzeł z najwyższym seqno.** Gdy wszystkie są równe (klaster zatrzymał się
+   zsynchronizowany), nie ma ryzyka utraty danych — wybierz `galera_node_idx: 1`.
+   Gdy się różnią, MUSISZ wziąć najwyższy: bootstrap niższego = cicha utrata transakcji.
+3. **Pokaż plan i potwierdź** (jaki węzeł, jakie seqno, czy równe).
+4. **Odblokuj bootstrap na wybranym węźle** — `bootstrap.yml` celowo odmawia przy
+   `safe_to_bootstrap: 0` (ISC-65), więc flagę ustawia świadomie operator:
+   ```bash
+   ansible <node> -i clusters/<name>/inventory.yml -b -m shell \
+     -a "sed -i 's/^safe_to_bootstrap: 0/safe_to_bootstrap: 1/' /var/lib/mysql/grastate.dat"
+   ansible-playbook playbooks/bootstrap.yml -i clusters/<name>/inventory.yml \
+     -e @clusters/<name>/cluster.yml -e bootstrap_node=<node> -e confirm=yes
+   ```
+5. **Dołącz pozostałe:** `make cluster-join CLUSTER=<name>`.
+6. **Odtwórz warstwy zależne.** `cluster-join` przywraca węzły do Galery, ale NIE do
+   ProxySQL ani PMM. Po recovery uruchom `make cluster-proxysql` i `make cluster-monitoring`,
+   inaczej `lab-proxysql-verify` zgłosi za mało backendów, a metryki wsrep nie wrócą.
 
 ## Anti-criteria
 
