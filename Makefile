@@ -11,7 +11,7 @@
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode \
-        infra-teardown infra-provision
+        infra-teardown infra-provision cluster-trust-hosts
 
 CLUSTER ?= example-cluster
 ANSIBLE_OPTS ?=
@@ -35,6 +35,19 @@ infra-provision:  ## Utwórz VM klastra (parallelism=1 — równoległość wywa
 	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
 	@: "$${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_PASSWORD}"
 	cd $(TF_DIR) && terraform init -input=false >/dev/null && terraform apply -auto-approve -parallelism=1
+
+# known_hosts jest git-ignorowany, a inventory wymusza StrictHostKeyChecking=yes.
+# Po kazdym re-provision klucze hosta sie zmieniaja — bez tego kroku KAZDY
+# ansible/ssh pada z "Host key verification failed". Wymagane po infra-provision.
+cluster-trust-hosts:  ## Re-skanuj klucze hostow do known_hosts (po re-provision)
+	$(cluster_guard)
+	@mkdir -p clusters/$(CLUSTER)
+	@for ip in $$(grep -oE 'ansible_host:[[:space:]]+"?[0-9.]+"?' clusters/$(CLUSTER)/inventory.yml | grep -oE '[0-9.]+' | sort -u); do \
+		ssh-keygen -R $$ip -f clusters/$(CLUSTER)/known_hosts >/dev/null 2>&1 || true; \
+		ssh-keyscan -H $$ip >> clusters/$(CLUSTER)/known_hosts 2>/dev/null || true; \
+	done
+	@test -s clusters/$(CLUSTER)/known_hosts && sort -u clusters/$(CLUSTER)/known_hosts -o clusters/$(CLUSTER)/known_hosts
+	@echo "known_hosts odswiezony: $$(wc -l < clusters/$(CLUSTER)/known_hosts) wpisow"
 
 help:  ## Pokaż dostępne komendy
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-28s %s\n", $$1, $$2}'
