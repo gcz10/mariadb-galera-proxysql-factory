@@ -172,12 +172,17 @@
         - (mariadb_active | default({})).rc | default(1) == 0
 
 
+    # Czekamy TYLKO gdy mariadbd faktycznie dziala. Na swiezym klastrze (przed bootstrapem)
+    # port 3306 nigdy nie wstanie - nie ma Primary Component do dolaczenia - a bezwarunkowe
+    # wait_for marnowalo 120 s NA KAZDYM wezle Galera, czyli 6 minut na kazdym deployu
+    # od zera. Ta sama bramka co w handlerach nizej.
     - name: "Czekaj na gotowość MariaDB"
       ansible.builtin.wait_for:
         port: 3306
-        timeout: 120
+        timeout: 60
       ignore_errors: true
       register: mariadb_ready
+      when: (mariadb_active | default({})).rc | default(1) == 0
 
     - name: "Utworz SST user (tylko na pierwszym węźle, jeśli nie istnieje)"
       ansible.mysql.mysql_user:
@@ -187,7 +192,10 @@
         host: localhost
         state: present
         login_unix_socket: /var/lib/mysql/mysql.sock
-      when: galera_node_idx | default(1) == 1 and mariadb_ready.failed == false
+      # `.failed` nie istnieje gdy wait_for zostal pominiety -> default(true) pomija tez to.
+      when:
+        - galera_node_idx | default(1) == 1
+        - (mariadb_ready.failed | default(true)) == false
       no_log: true
 
   handlers:

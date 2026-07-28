@@ -39,6 +39,19 @@
         name: keepalived
         state: present
 
+    # SELinux blokuje domenie keepalived_t polaczenia na porty bez dedykowanej etykiety
+    # (ProxySQL 6033 = unreserved_port_t). Bez tego vrrp_script chk_proxysql konczy sie
+    # na pierwszym checku ("avc: denied { name_connect } dest=6033"), instancja wpada
+    # w FAULT i VIP nigdy nie wstaje - przy czym ten sam skrypt uruchomiony recznie
+    # z sesji SSH dziala, bo dziala w innej domenie. Dedykowany boolean zamiast
+    # wlasnego modulu polityki.
+    - name: "SELinux - pozwol keepalived laczyc sie z portem ProxySQL (health-check)"
+      ansible.posix.seboolean:
+        name: keepalived_connect_any
+        state: true
+        persistent: true
+      when: ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
     - name: "Wdróż skrypt health-check ProxySQL"
       ansible.builtin.copy:
         src: ../roles/proxysql_endpoint/files/check_proxysql.sh
