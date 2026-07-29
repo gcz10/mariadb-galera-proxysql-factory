@@ -27,3 +27,6 @@ terraform/**/*.tfplan
 # SSH known_hosts - artefakt klienta
 clusters/**/known_hosts
 clusters/*/known_hosts.old
+
+# Isolated execution worktrees
+.worktrees/
