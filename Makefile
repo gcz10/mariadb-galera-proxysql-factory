@@ -23,6 +23,20 @@ cluster_guard = @case "$(origin CLUSTER)" in file|default|undefined) echo "ERROR
 # TF_DIR domyślnie wyprowadzany z nazwy klastra; nadpisywalny dla nietypowych układów.
 TF_DIR ?= terraform/$(CLUSTER)
 
+# Wezly przebudowywane przy iteracji na samej Galerze. infranode (PMM/MinIO/Maildev,
+# stan monitoringu) i pnode* (ProxySQL) zostaja NIETKNIETE — stawianie ich od nowa
+# przy kazdej zmianie w Galerze to 11+ min zmarnowane (Docker CE + pull PMM +
+# zimny start PMM + reinstalacja ProxySQL).
+GALERA_VMS ?= gnode1 gnode2 gnode3 rnode1
+
+galera-rebuild:  ## Przebuduj TYLKO wezly Galera+restore (zachowuje PMM i ProxySQL); CONFIRM=yes
+	$(cluster_guard)
+	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
+	@: "$${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_PASSWORD}"
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje $(GALERA_VMS) w $(CLUSTER))"; exit 1)
+	terraform/pve-teardown.sh $(TF_DIR) $(GALERA_VMS)
+	cd $(TF_DIR) && terraform apply -auto-approve -parallelism=1
+
 infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM=yes)
 	$(cluster_guard)
 	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
@@ -39,15 +53,29 @@ infra-provision:  ## Utwórz VM klastra (parallelism=1 — równoległość wywa
 # known_hosts jest git-ignorowany, a inventory wymusza StrictHostKeyChecking=yes.
 # Po kazdym re-provision klucze hosta sie zmieniaja — bez tego kroku KAZDY
 # ansible/ssh pada z "Host key verification failed". Wymagane po infra-provision.
+#
+# Petla per-host, bo ssh-keyscan potrafi zlapac host ZANIM cloud-init wystartuje
+# sshd z ostatecznymi kluczami (wyscig — zlapalem to raz na .33). Wtedy scan zapisuje
+# klucz tymczasowy i polaczenie pada. Dlatego: scan -> probka polaczenia -> retry.
 cluster-trust-hosts:  ## Re-skanuj klucze hostow do known_hosts (po re-provision)
 	$(cluster_guard)
 	@mkdir -p clusters/$(CLUSTER)
-	@for ip in $$(grep -oE 'ansible_host:[[:space:]]+"?[0-9.]+"?' clusters/$(CLUSTER)/inventory.yml | grep -oE '[0-9.]+' | sort -u); do \
-		ssh-keygen -R $$ip -f clusters/$(CLUSTER)/known_hosts >/dev/null 2>&1 || true; \
-		ssh-keyscan -H $$ip >> clusters/$(CLUSTER)/known_hosts 2>/dev/null || true; \
-	done
-	@test -s clusters/$(CLUSTER)/known_hosts && sort -u clusters/$(CLUSTER)/known_hosts -o clusters/$(CLUSTER)/known_hosts
-	@echo "known_hosts odswiezony: $$(wc -l < clusters/$(CLUSTER)/known_hosts) wpisow"
+	@ok=0; total=0; \
+	for ip in $$(grep -oE 'ansible_host:[[:space:]]+"?[0-9.]+"?' clusters/$(CLUSTER)/inventory.yml | grep -oE '[0-9.]+' | sort -u); do \
+		total=$$((total+1)); good=0; \
+		for try in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+			ssh-keygen -R $$ip -f clusters/$(CLUSTER)/known_hosts >/dev/null 2>&1 || true; \
+			ssh-keyscan -H $$ip >> clusters/$(CLUSTER)/known_hosts 2>/dev/null || true; \
+			sort -u clusters/$(CLUSTER)/known_hosts -o clusters/$(CLUSTER)/known_hosts 2>/dev/null || true; \
+			if ssh -i tests/lab/ssh_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=clusters/$(CLUSTER)/known_hosts -o ConnectTimeout=5 -o ConnectionAttempts=1 -o BatchMode=yes -o PasswordAuthentication=no root@$$ip true 2>/dev/null; then \
+				good=1; break; \
+			fi; \
+			sleep 5; \
+		done; \
+		[ "$$good" = "1" ] && ok=$$((ok+1)) || echo "UWAGA: $$ip nie odpowiada po 12 probach"; \
+	done; \
+	echo "known_hosts: $$ok/$$total hostow zwerifikowanych (ssh OK)"; \
+	[ "$$ok" = "$$total" ] || exit 1
 
 help:  ## Pokaż dostępne komendy
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-28s %s\n", $$1, $$2}'

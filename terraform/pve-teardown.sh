@@ -23,21 +23,46 @@ TF_DIR="${1:?Uzycie: pve-teardown.sh <katalog-terraform>}"
 PVE_NODE="${PVE_NODE:-pve}"
 PVE_STORAGE="${PVE_STORAGE:-local-zfs}"
 
+# Opcjonalne argumenty po katalogu = nazwy wezlow do zniszczenia (np. gnode1 rnode1).
+# Bez nich kasujemy CALY klaster.
+shift || true
+NODES=("$@")
+
 # VMID-y bierzemy PRZED destroy — po nim stan terraform jest juz pusty.
 # (while-read zamiast mapfile — macOS ma bash 3.2)
+NODE_FILTER=""
+if [ "${#NODES[@]}" -gt 0 ]; then
+  NODE_FILTER=$(printf '%s,' "${NODES[@]}")
+fi
 VMIDS=()
 while IFS= read -r line; do
   [ -n "$line" ] && VMIDS+=("$line")
 done < <(
   cd "$TF_DIR" && terraform output -json vms 2>/dev/null |
-    python3 -c 'import sys,json; d=json.load(sys.stdin); print("\n".join(str(v["vmid"]) for v in d.values()))' 2>/dev/null
+    NODE_FILTER="$NODE_FILTER" python3 -c '
+import sys, json, os
+want = [n for n in os.environ.get("NODE_FILTER", "").split(",") if n]
+data = json.load(sys.stdin)
+for name, v in data.items():
+    if not want or name in want:
+        print(v["vmid"])
+' 2>/dev/null
 )
 if [ "${#VMIDS[@]}" -eq 0 ]; then
   echo "UWAGA: nie odczytano VMID z terraform output — sprzatanie sierot pominiete." >&2
 fi
 
-echo "=== terraform destroy ($TF_DIR) ==="
-( cd "$TF_DIR" && terraform destroy -auto-approve )
+if [ "${#NODES[@]}" -gt 0 ]; then
+  echo "=== terraform destroy — TYLKO: ${NODES[*]} ==="
+  TARGETS=()
+  for n in "${NODES[@]}"; do
+    TARGETS+=(-target="proxmox_virtual_environment_vm.node[\"$n\"]")
+  done
+  ( cd "$TF_DIR" && terraform destroy -auto-approve "${TARGETS[@]}" )
+else
+  echo "=== terraform destroy — CALY klaster ($TF_DIR) ==="
+  ( cd "$TF_DIR" && terraform destroy -auto-approve )
+fi
 
 [ "${#VMIDS[@]}" -eq 0 ] && exit 0
 
