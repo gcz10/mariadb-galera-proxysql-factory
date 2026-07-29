@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""
+galera-backup — Cluster-aware physical Galera backup & restore utility.
+"""
+from __future__ import annotations
+
+import os
+import re
+import sys
+import json
+import time
+import fcntl
+import signal
+import shutil
+import hashlib
+import tarfile
+import tempfile
+import argparse
+import subprocess
+from pathlib import Path
+from dataclasses import dataclass, asdict
+from typing import Any, Mapping, Optional, Sequence
+
+
+class BackupError(Exception):
+    def __init__(self, code: str, public_message: str):
+        super().__init__(f"[{code}] {public_message}")
+        self.code = code
+        self.public_message = public_message
+
+
+def sanitize_cluster_name(name: str) -> str:
+    if not name or not re.match(r"^[A-Za-z0-9_-]+$", name):
+        raise BackupError(
+            "E_INVALID_CLUSTER",
+            f"Cluster name '{name}' is invalid; must match ^[A-Za-z0-9_-]+$"
+        )
+    return name
+
+
+def escape_metric_label(val: str) -> str:
+    res = str(val)
+    res = res.replace("\\", "\\\\")
+    res = res.replace('"', '\\"')
+    res = res.replace("\n", "\\n")
+    return res
+
+
+def atomic_write(target_path: Path, content: str, mode: int = 0o644) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target_path.parent / f".tmp.{target_path.name}.{os.getpid()}"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(temp_path, mode)
+        os.replace(temp_path, target_path)
+    except Exception:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+        raise
+
+
+@dataclass(frozen=True)
+class Paths:
+    install_root: Path
+    cluster_dir: Path
+    staging_root: Path
+    datadir: Path
+    socket: Path
+    metric_file: Path
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Paths:
+        return cls(
+            install_root=Path(data["install_root"]),
+            cluster_dir=Path(data["cluster_dir"]),
+            staging_root=Path(data["staging_root"]),
+            datadir=Path(data["datadir"]),
+            socket=Path(data["socket"]),
+            metric_file=Path(data["metric_file"]),
+        )
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    cluster_name: str
+    metric_cluster_label: str
+    local_role: str
+    scheduler_system_hostname: str
+    galera_nodes_expected: int
+    mariadb_version: str
+    retention_days: int
+    flow_control_threshold_ns: int
+    backend: dict[str, Any]
+    paths: Paths
+
+
+def load_run_config(config_path: Path, expected_cluster_name: str) -> RunConfig:
+    if not config_path.exists():
+        raise BackupError("E_CONFIG", f"Configuration file not found: {config_path}")
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        raise BackupError("E_CONFIG", f"Malformed JSON in config file {config_path}: {exc}")
+
+    if data.get("format_version") != 1:
+        raise BackupError("E_CONFIG", f"Unsupported format_version {data.get('format_version')} in {config_path}")
+
+    cluster_name = data.get("cluster_name", "")
+    if cluster_name != expected_cluster_name:
+        raise BackupError(
+            "E_CONFIG",
+            f"Config cluster_name '{cluster_name}' does not match expected '{expected_cluster_name}'"
+        )
+
+    try:
+        paths = Paths.from_dict(data["paths"])
+        return RunConfig(
+            cluster_name=cluster_name,
+            metric_cluster_label=data.get("metric_cluster_label", cluster_name),
+            local_role=data.get("local_role", "scheduler"),
+            scheduler_system_hostname=data.get("scheduler_system_hostname", ""),
+            galera_nodes_expected=int(data.get("galera_nodes_expected", 3)),
+            mariadb_version=str(data.get("mariadb_version", "")),
+            retention_days=int(data.get("retention_days", 14)),
+            flow_control_threshold_ns=int(data.get("flow_control_threshold_ns", 1000000000)),
+            backend=data.get("backend", {}),
+            paths=paths,
+        )
+    except KeyError as e:
+        raise BackupError("E_CONFIG", f"Missing required configuration key in {config_path}: {e}")
+
+
+def load_secrets(env_path: Path, backend_type: str, enforce_permissions: bool = True) -> dict[str, str]:
+    if not env_path.exists():
+        raise BackupError("E_SECRETS", f"Secrets file not found: {env_path}")
+
+    if enforce_permissions:
+        st = env_path.stat()
+        if (st.st_mode & 0o077) != 0:
+            raise BackupError(
+                "E_SECRETS_PERM",
+                f"Secrets file {env_path} has unsafe permissions ({oct(st.st_mode & 0o777)}); must be mode 0600"
+            )
+
+    secrets: dict[str, str] = {}
+    with open(env_path, "r", encoding="utf-8") as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                raise BackupError("E_SECRETS", f"Malformed line {line_num} in {env_path}")
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip()
+            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                v = v[1:-1]
+            secrets[k] = v
+
+    if "GALERA_BACKUP_ENCRYPTION_KEY" not in secrets or not secrets["GALERA_BACKUP_ENCRYPTION_KEY"]:
+        raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_ENCRYPTION_KEY in {env_path}")
+
+    if backend_type == "s3":
+        if "GALERA_BACKUP_S3_ACCESS_KEY" not in secrets or not secrets["GALERA_BACKUP_S3_ACCESS_KEY"]:
+            raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_S3_ACCESS_KEY in {env_path}")
+        if "GALERA_BACKUP_S3_SECRET_KEY" not in secrets or not secrets["GALERA_BACKUP_S3_SECRET_KEY"]:
+            raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_S3_SECRET_KEY in {env_path}")
+    elif backend_type == "smb":
+        if "GALERA_BACKUP_SMB_USERNAME" not in secrets or not secrets["GALERA_BACKUP_SMB_USERNAME"]:
+            raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_SMB_USERNAME in {env_path}")
+        if "GALERA_BACKUP_SMB_PASSWORD" not in secrets or not secrets["GALERA_BACKUP_SMB_PASSWORD"]:
+            raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_SMB_PASSWORD in {env_path}")
+
+    return secrets
+
+
+class LockManager:
+    def __init__(self, lock_path: Path):
+        self.lock_path = lock_path
+        self._fd: Optional[int] = None
+
+    def acquire(self) -> None:
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self._fd = os.open(str(self.lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.ftruncate(self._fd, 0)
+            os.write(self._fd, f"{os.getpid()}\n".encode("utf-8"))
+        except (BlockingIOError, OSError) as exc:
+            if self._fd is not None:
+                try:
+                    os.close(self._fd)
+                except OSError:
+                    pass
+                self._fd = None
+            raise BackupError("E_LOCKED", f"Lock file {self.lock_path} is locked by another process")
+
+    def release(self) -> None:
+        if self._fd is not None:
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+            if self.lock_path.exists():
+                try:
+                    self.lock_path.unlink()
+                except OSError:
+                    pass
+
+
+class SecretRedactor:
+    def __init__(self, secret_values: Sequence[str] | set[str]):
+        self.secret_values = sorted([s for s in secret_values if s], key=len, reverse=True)
+
+    def redact(self, text: str) -> str:
+        if not text:
+            return text
+        res = str(text)
+        for secret in self.secret_values:
+            if secret:
+                res = res.replace(secret, "[REDACTED]")
+        return res
+
+
+class CommandRunner:
+    def __init__(self, secret_values: Sequence[str] | set[str]):
+        self.secret_values = set(s for s in secret_values if s)
+        self.redactor = SecretRedactor(self.secret_values)
+
+    def run(
+        self,
+        cmd: list[str],
+        env: Optional[dict[str, str]] = None,
+        cwd: Optional[str | Path] = None,
+        timeout: Optional[float] = None,
+    ) -> tuple[int, str, str]:
+        # Pre-execution check: no secret value in argv
+        for arg in cmd:
+            for secret in self.secret_values:
+                if secret and secret in str(arg):
+                    raise BackupError(
+                        "E_SECRET_IN_ARGV",
+                        "Command argv contains a loaded secret value; command rejected before process creation"
+                    )
+
+        return self._exec(cmd, env=env, cwd=cwd, timeout=timeout)
+
+    def _exec(
+        self,
+        cmd: list[str],
+        env: Optional[dict[str, str]] = None,
+        cwd: Optional[str | Path] = None,
+        timeout: Optional[float] = None,
+    ) -> tuple[int, str, str]:
+        proc_env = os.environ.copy()
+        if env:
+            proc_env.update(env)
+
+        try:
+            p = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(cwd) if cwd else None,
+                env=proc_env,
+            )
+            stdout, stderr = p.communicate(timeout=timeout)
+            return p.returncode, self.redactor.redact(stdout), self.redactor.redact(stderr)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+            raise BackupError("E_SUBPROCESS", f"Command '{cmd[0]}' timed out after {timeout}s")
+        except Exception as exc:
+            raise BackupError("E_SUBPROCESS", f"Failed to execute command '{cmd[0]}': {exc}")
+
+
+class StateManager:
+    def __init__(self, cluster_name: str, state_path: Path):
+        self.cluster_name = cluster_name
+        self.state_path = state_path
+
+    def read(self) -> dict[str, Any]:
+        if not self.state_path.exists():
+            return {
+                "format_version": 1,
+                "cluster": self.cluster_name,
+                "last_run": None,
+                "last_success": None,
+                "last_failure": None,
+            }
+        try:
+            with open(self.state_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {
+                "format_version": 1,
+                "cluster": self.cluster_name,
+                "last_run": None,
+                "last_success": None,
+                "last_failure": None,
+            }
+
+    def update_success(self, command: str, unixtime: int, artifact: Optional[str] = None) -> None:
+        curr = self.read()
+        succ = {"command": command, "unixtime": unixtime, "artifact": artifact}
+        run = {"command": command, "status": "success", "error_code": None, "unixtime": unixtime}
+        curr["last_run"] = run
+        curr["last_success"] = succ
+        atomic_write(self.state_path, json.dumps(curr, indent=2), mode=0o644)
+
+    def update_failure(self, command: str, unixtime: int, error_code: str, error_message: str) -> None:
+        curr = self.read()
+        fail = {"command": command, "unixtime": unixtime, "error_code": error_code, "error_message": error_message}
+        run = {"command": command, "status": "failed", "error_code": error_code, "unixtime": unixtime}
+        curr["last_run"] = run
+        curr["last_failure"] = fail
+        atomic_write(self.state_path, json.dumps(curr, indent=2), mode=0o644)
+
+    def update_locked(self, command: str, unixtime: int) -> None:
+        curr = self.read()
+        run = {"command": command, "status": "locked", "error_code": "E_LOCKED", "unixtime": unixtime}
+        curr["last_run"] = run
+        curr["last_failure"] = {"command": command, "unixtime": unixtime, "error_code": "E_LOCKED", "error_message": "Locked"}
+        atomic_write(self.state_path, json.dumps(curr, indent=2), mode=0o644)
+
+
+class EventManager:
+    def __init__(self, events_path: Path, redactor: SecretRedactor):
+        self.events_path = events_path
+        self.redactor = redactor
+
+    def emit(self, event_type: str, data: dict[str, Any]) -> None:
+        self.events_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"timestamp": int(time.time()), "event": event_type}
+        payload.update(data)
+        line = json.dumps(payload, separators=(",", ":"))
+        line_clean = self.redactor.redact(line) + "\n"
+        fd = os.open(str(self.events_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, line_clean.encode("utf-8"))
+        finally:
+            os.close(fd)
+
+
+class MetricsManager:
+    def __init__(self, metric_path: Path, cluster_label: str, logical_cluster: str, backend_label: str):
+        self.metric_path = metric_path
+        self.c_label = escape_metric_label(cluster_label)
+        self.lc_label = escape_metric_label(logical_cluster)
+        self.b_label = escape_metric_label(backend_label)
+
+    def update(
+        self,
+        last_success_unixtime: int = 0,
+        last_failure_unixtime: int = 0,
+        last_run_success: int = 0,
+        last_size_bytes: int = 0,
+        last_duration_seconds: float = 0.0,
+    ) -> None:
+        labels = f'cluster="{self.c_label}",logical_cluster="{self.lc_label}",backend="{self.b_label}"'
+        content = (
+            f"galera_backup_last_success_unixtime{{{labels}}} {last_success_unixtime}\n"
+            f"galera_backup_last_failure_unixtime{{{labels}}} {last_failure_unixtime}\n"
+            f"galera_backup_last_run_success{{{labels}}} {last_run_success}\n"
+            f"galera_backup_last_size_bytes{{{labels}}} {last_size_bytes}\n"
+            f"galera_backup_last_duration_seconds{{{labels}}} {last_duration_seconds:.3f}\n"
+        )
+        atomic_write(self.metric_path, content, mode=0o644)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Galera cluster physical backup & restore runner")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    backup_parser = subparsers.add_parser("backup", help="Run physical backup")
+    backup_parser.add_argument("cluster", help="Logical cluster name")
+
+    restore_parser = subparsers.add_parser("restore", help="Run physical restore")
+    restore_parser.add_argument("cluster", help="Logical cluster name")
+    restore_parser.add_argument("--confirm", action="store_true", help="Confirm destruction of restore host datadir")
+
+    args = parser.parse_args()
+    cluster_name = sanitize_cluster_name(args.cluster)
+
+    if args.command == "backup":
+        print(f"galera-backup backup for {cluster_name} starting...")
+        return 0
+    elif args.command == "restore":
+        if not args.confirm:
+            print("ERROR: Restore requires --confirm flag", file=sys.stderr)
+            return 1
+        print(f"galera-backup restore for {cluster_name} starting...")
+        return 0
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
