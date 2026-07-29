@@ -41,22 +41,58 @@
       changed_when: false
       no_log: true
 
-    - name: Remove any existing access key for this cluster to ensure clean key pair
-      ansible.builtin.command:
-        argv:
-          - docker
-          - exec
-          - -e
-          - "MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}:{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}@localhost:9000"
-          - minio
-          - mc
-          - admin
-          - accesskey
-          - rm
-          - myminio
-          - "galera-backup-{{ cluster.name }}"
-      failed_when: false
+    - name: Revoke all existing MinIO service accounts for this cluster
+      ansible.builtin.shell:
+        cmd: |
+          python3 -c '
+          import json, subprocess, os
+          root_u = os.environ.get("MINIO_ROOT_USER", "")
+          root_p = os.environ.get("MINIO_ROOT_PASSWORD", "")
+          mc_env = f"MC_HOST_myminio=http://{root_u}:{root_p}@localhost:9000"
+          target_name = "galera-backup-{{ cluster.name }}"
+
+          list_res = subprocess.run(
+              ["docker", "exec", "-e", mc_env, "minio", "mc", "admin", "accesskey", "list", "myminio", "--all", "--json"],
+              capture_output=True, text=True
+          )
+          if list_res.returncode != 0:
+              exit(0)
+
+          to_remove = []
+          for line in list_res.stdout.splitlines():
+              if not line.strip(): continue
+              try:
+                  record = json.loads(line)
+              except Exception:
+                  continue
+              for sa in record.get("svcaccs") or []:
+                  ak = sa.get("accessKey")
+                  if not ak: continue
+                  sa_name = sa.get("name")
+                  if not sa_name:
+                      info_res = subprocess.run(
+                          ["docker", "exec", "-e", mc_env, "minio", "mc", "admin", "accesskey", "info", "myminio", ak, "--json"],
+                          capture_output=True, text=True
+                      )
+                      if info_res.returncode == 0:
+                          try:
+                              sa_name = json.loads(info_res.stdout).get("name")
+                          except Exception:
+                              pass
+                  if sa_name == target_name:
+                      to_remove.append(ak)
+
+          for ak in to_remove:
+              subprocess.run(
+                  ["docker", "exec", "-e", mc_env, "minio", "mc", "admin", "accesskey", "rm", "myminio", ak],
+                  capture_output=True, text=True
+              )
+          '
+      environment:
+        MINIO_ROOT_USER: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
+        MINIO_ROOT_PASSWORD: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
       changed_when: false
+      failed_when: false
       no_log: true
 
     - name: Create new scoped access key pair

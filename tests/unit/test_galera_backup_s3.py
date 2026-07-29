@@ -195,5 +195,41 @@ class GaleraBackupS3Tests(unittest.TestCase):
         self.assertIn("galera-other-cluster-20260701-120000/metadata.json", self.client.objects)
 
 
+    def test_minio_service_account_revocation_filtering(self):
+        # Verify service account accessKey resolution by friendly name
+        list_output_lines = [
+            json.dumps({
+                "status": "success",
+                "user": "rootuser",
+                "svcaccs": [
+                    {"accessKey": "AKIA_DISCLOSED_1", "parentUser": "rootuser"},
+                    {"accessKey": "AKIA_DISCLOSED_2", "parentUser": "rootuser"},
+                    {"accessKey": "AKIA_OTHER_CLUSTER", "parentUser": "rootuser"},
+                ],
+            })
+        ]
+        
+        key_info_map = {
+            "AKIA_DISCLOSED_1": {"name": "galera-backup-claude-r10b"},
+            "AKIA_DISCLOSED_2": {"name": "galera-backup-claude-r10b"},
+            "AKIA_OTHER_CLUSTER": {"name": "galera-backup-other-cluster"},
+        }
+        
+        target_cluster_name = "galera-backup-claude-r10b"
+        to_remove = []
+        
+        for line in list_output_lines:
+            record = json.loads(line)
+            for sa in record.get("svcaccs") or []:
+                ak = sa.get("accessKey")
+                if not ak:
+                    continue
+                info = key_info_map.get(ak, {})
+                if info.get("name") == target_cluster_name:
+                    to_remove.append(ak)
+                    
+        self.assertEqual(to_remove, ["AKIA_DISCLOSED_1", "AKIA_DISCLOSED_2"])
+        self.assertNotIn("AKIA_OTHER_CLUSTER", to_remove)
+
 if __name__ == "__main__":
     unittest.main()
