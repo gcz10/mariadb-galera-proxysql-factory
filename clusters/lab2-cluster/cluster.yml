@@ -87,6 +87,10 @@ backup:
   encryption_enabled: true
   immutable_or_offsite_copy: true
   restore_test_schedule: "0 4 * * 0"
+  scheduler:
+    mode: "manual"
+    host: "gnode1b"
+    timezone: "UTC"
   s3:
     endpoint: "172.29.0.60:9000"
     bucket: "lab2-galera-backups"

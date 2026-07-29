@@ -59,6 +59,9 @@ jobs:
           done
           exit $rc
 
+      - name: Backup configuration semantics and ownership
+        run: python3 tests/validation/validate-backup-config.py clusters
+
       # Walidujemy lockfile'e faktycznie UZYWANE przez klastry (versions.lock_file),
       # nie kazdy plik w versions/. candidate.lock.yml jest z zalozenia niedokonczony
       # (placeholdery to-confirm-F0 czekajace na F0) i nie jest przez nikogo wskazywany.

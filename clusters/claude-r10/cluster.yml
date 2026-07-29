@@ -89,11 +89,14 @@ backup:
   encryption_enabled: true
   immutable_or_offsite_copy: true
   restore_test_schedule: "0 4 * * 0"
+  scheduler:
+    mode: "manual"
+    host: "gnode1"
+    timezone: "UTC"
   s3:
     endpoint: "192.168.1.36:9000"   # MinIO na infra VM
     bucket: "r10-galera-backups"    # rozlaczny z bucketem EL9
     secure: false
-
 monitoring:
   pmm:
     server_url: "https://192.168.1.36"

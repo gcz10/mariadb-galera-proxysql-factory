@@ -143,17 +143,27 @@
     },
     "backup": {
       "type": "object",
-      "required": ["enabled", "destination", "full_backup_schedule", "incremental_backup_schedule", "retention_days", "encryption_enabled", "immutable_or_offsite_copy", "restore_test_schedule"],
+      "required": ["enabled", "destination", "full_backup_schedule", "incremental_backup_schedule", "retention_days", "encryption_enabled", "immutable_or_offsite_copy", "restore_test_schedule", "scheduler"],
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
-        "destination": { "type": "string", "enum": ["smb", "s3"] },
+        "destination": { "type": "string", "enum": ["s3", "smb", "filesystem"] },
         "full_backup_schedule": { "type": "string" },
         "incremental_backup_schedule": { "type": "string" },
         "retention_days": { "type": ["integer", "string"] },
         "encryption_enabled": { "type": "boolean" },
         "immutable_or_offsite_copy": { "type": "boolean" },
         "restore_test_schedule": { "type": "string" },
+        "scheduler": {
+          "type": "object",
+          "required": ["mode", "host", "timezone"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "type": "string", "enum": ["cron", "manual"] },
+            "host": { "type": "string", "minLength": 1 },
+            "timezone": { "type": "string", "const": "UTC" }
+          }
+        },
         "s3": {
           "type": "object",
           "required": ["endpoint", "bucket"],
@@ -164,10 +174,52 @@
             "region": { "type": "string" },
             "secure": { "type": "boolean" }
           }
+        },
+        "smb": {
+          "type": "object",
+          "required": ["source", "mount_point", "options"],
+          "additionalProperties": false,
+          "properties": {
+            "source": { "type": "string", "pattern": "^//" },
+            "mount_point": { "type": "string", "pattern": "^/" },
+            "options": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "filesystem": {
+          "type": "object",
+          "required": ["mount_point", "expected_fstype"],
+          "additionalProperties": false,
+          "properties": {
+            "mount_point": { "type": "string", "pattern": "^/" },
+            "expected_fstype": { "type": "string", "minLength": 1 }
+          }
         }
       },
       "allOf": [
-        { "if": { "properties": { "destination": { "const": "s3" } } }, "then": { "required": ["s3"] } }
+        {
+          "if": { "properties": { "destination": { "const": "s3" } } },
+          "then": {
+            "required": ["s3"],
+            "not": { "anyOf": [{ "required": ["smb"] }, { "required": ["filesystem"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "destination": { "const": "smb" } } },
+          "then": {
+            "required": ["smb"],
+            "not": { "anyOf": [{ "required": ["s3"] }, { "required": ["filesystem"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "destination": { "const": "filesystem" } } },
+          "then": {
+            "required": ["filesystem"],
+            "not": { "anyOf": [{ "required": ["s3"] }, { "required": ["smb"] }] }
+          }
+        }
       ]
     },
     "monitoring": {

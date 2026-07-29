@@ -91,6 +91,19 @@ backup:
   encryption_enabled: true
   immutable_or_offsite_copy: true
   restore_test_schedule: "0 4 * * 0"
+  scheduler:
+    mode: "manual"
+    host: "gnode1"
+    timezone: "UTC"
+  smb:
+    source: "//nas01.example.invalid/backups"
+    mount_point: "/mnt/galera-backup"
+    options:
+      - "vers=3.1.1"
+      - "seal"
+      - "nosuid"
+      - "nodev"
+      - "noexec"
 
 monitoring:
   pmm:
