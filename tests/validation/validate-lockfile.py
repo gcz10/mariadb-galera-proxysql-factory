@@ -38,7 +38,11 @@ REQUIRED = {
         "engine_version", "cli_version", "containerd_version",
         "buildx_version", "compose_version", "repo_baseurl", "repo_gpgkey",
     ],
-    "minio": ["image", "image_digest", "sdk_version"],
+    "minio": ["image", "image_digest", "sdk_version", "mc_image", "mc_image_digest"],
+    "backup_tools": [
+        "python_pip_package", "encryption_package", "archive_package",
+        "cron_package", "cifs_userspace_package",
+    ],
     "pmm": ["version", "image", "image_digest"],
     "maildev": ["image"],
     "node_exporter": ["version", "linux_sha256"],
@@ -91,6 +95,10 @@ def validate(path: Path) -> list[str]:
         if section == "proxysql" and isinstance(data[section].get("rpm_sha256"), dict):
             if not data[section]["rpm_sha256"]:
                 errors.append(f"{path}: proxysql.rpm_sha256 pusty (brak arch)")
+        if section == "minio" and "mc_image_digest" in data[section]:
+            digest = str(data[section]["mc_image_digest"])
+            if not re.match(r"^sha256:[a-f0-9]{64}$", digest):
+                errors.append(f"{path}: minio.mc_image_digest '{digest}' ma niepoprawny format sha256")
 
     # 4. Spoijnosc: repo_setup_args ~ seria z mariadb.version
     mb = data.get("mariadb", {})

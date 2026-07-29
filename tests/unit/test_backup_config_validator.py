@@ -283,5 +283,47 @@ class BackupConfigValidatorTests(unittest.TestCase):
         self.assertNotEqual(res.returncode, 0)
 
 
+class BackupLockfileTests(unittest.TestCase):
+    def test_lockfile_validation_missing_backup_keys(self):
+        validate_script = WORKSPACE_ROOT / "tests" / "validation" / "validate-lockfile.py"
+        lock_path = WORKSPACE_ROOT / "versions" / "versions.lock.yml"
+
+        # First run validate-lockfile on versions.lock.yml
+        res = subprocess.run([sys.executable, str(validate_script), str(lock_path)], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"Baseline lockfile failed: {res.stderr}")
+
+        # Check required missing keys fail
+        keys_to_test = [
+            ("backup_tools", "python_pip_package"),
+            ("backup_tools", "encryption_package"),
+            ("backup_tools", "archive_package"),
+            ("backup_tools", "cron_package"),
+            ("backup_tools", "cifs_userspace_package"),
+            ("minio", "mc_image"),
+            ("minio", "mc_image_digest"),
+        ]
+
+        with open(lock_path) as f:
+            base_data = yaml.safe_load(f)
+
+        for sec, key in keys_to_test:
+            data = yaml.safe_load(yaml.dump(base_data))
+            if sec in data and isinstance(data[sec], dict) and key in data[sec]:
+                del data[sec][key]
+            elif sec in data and key not in data[sec]:
+                pass  # Already missing, will fail
+            with tempfile.NamedTemporaryFile("w", suffix=".lock.yml", delete=False) as tf:
+                tf.write("# Status: LOCKED\n")
+                yaml.dump(data, tf)
+                tf_path = tf.name
+
+            try:
+                sub_res = subprocess.run([sys.executable, str(validate_script), tf_path], capture_output=True, text=True)
+                output = sub_res.stdout + "\n" + sub_res.stderr
+                self.assertNotEqual(sub_res.returncode, 0, f"Expected failure for missing {sec}.{key}")
+                self.assertIn(f"{sec}.{key}", output)
+            finally:
+                if os.path.exists(tf_path):
+                    os.unlink(tf_path)
 if __name__ == "__main__":
     unittest.main()
