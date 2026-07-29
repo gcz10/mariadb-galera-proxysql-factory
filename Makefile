@@ -3,7 +3,7 @@
 
 .PHONY: help lab-up lab-start-services cluster-discover cluster-validate cluster-deploy \
         cluster-bootstrap cluster-health cluster-join cluster-proxysql cluster-endpoint \
-        cluster-infra cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup \
+        cluster-infra cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan \
         cluster-drift cluster-remove-node-plan cluster-remove-node cluster-alerts \
         lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test \
@@ -176,19 +176,18 @@ verify-no-double-bootstrap:  ## F13 — statyczny guard: brak dwóch niezależny
 verify-zero-hardcode:  ## F14 — statyczny guard: brak hardkodowanych danych klastra (ISC-58/59)
 	python3 tests/validation/probe-zero-hardcode.py
 
-cluster-backup:  ## F10 — backup → off-cluster S3 (szyfr, checksum, metadata); alert przy porażce
+cluster-backup-configure:  ## F10 — skonfiguruj runner, minio identity i cron dla klastra
 	$(cluster_guard)
-	@: "$${MINIO_ROOT_USER:?Ustaw MINIO_ROOT_USER poza repozytorium}"
-	@: "$${MINIO_ROOT_PASSWORD:?Ustaw MINIO_ROOT_PASSWORD poza repozytorium}"
-	@: "$${BACKUP_ENCRYPTION_KEY:?Ustaw BACKUP_ENCRYPTION_KEY poza repozytorium}"
-	CLUSTER=$(CLUSTER) tests/lab/backup-run.sh backup
+	ansible-playbook playbooks/f10_backup.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e galera_backup_action=configure $(ANSIBLE_OPTS)
+
+cluster-backup:  ## F10 — backup → destination storage via galera-backup runner
+	$(cluster_guard)
+	ansible-playbook playbooks/f10_backup.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e galera_backup_action=run $(ANSIBLE_OPTS)
 
 cluster-restore-drill:  ## F10 — restore drill na czysty host + integralność (wymaga CONFIRM=yes)
 	$(cluster_guard)
-	@: "$${MINIO_ROOT_USER:?Ustaw MINIO_ROOT_USER poza repozytorium}"
-	@: "$${BACKUP_ENCRYPTION_KEY:?Ustaw BACKUP_ENCRYPTION_KEY poza repozytorium}"
-	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (drill kasuje datadir hosta grupy 'restore')"; exit 1)
-	CLUSTER=$(CLUSTER) RESTORE_CONFIRM=yes tests/lab/backup-run.sh restore
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (drill kasuje datadir hosta grupy restore)"; exit 1)
+	ansible-playbook playbooks/f10_restore.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e restore_confirm=yes $(ANSIBLE_OPTS)
 
 lab-backup-verify:  ## F10 — zweryfikuj backup w S3 (ISC-32/33/34/35)
 	$(TARGET_ENV) tests/lab/probe-backup.py
