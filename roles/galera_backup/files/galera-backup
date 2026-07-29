@@ -378,6 +378,260 @@ class MetricsManager:
         atomic_write(self.metric_path, content, mode=0o644)
 
 
+@dataclass
+class ArtifactSet:
+    backup_name: str
+    payload_path: Path
+    checksum_path: Path
+    metadata_path: Path
+
+
+@dataclass
+class PublishedArtifact:
+    backup_name: str
+    prefix: str
+    encrypted_sha256: str
+    encrypted_size: int
+    unixtime: int
+
+
+class S3Backend:
+    def __init__(
+        self,
+        endpoint: str,
+        bucket: str,
+        secure: bool,
+        access_key: str,
+        secret_key: str,
+        cluster_name: str,
+        client: Optional[Any] = None,
+    ):
+        self.endpoint = endpoint
+        self.bucket = bucket
+        self.secure = secure
+        self.access_key = access_key
+        self.secret_key = secret_key
+        self.cluster_name = cluster_name
+        self._client = client
+
+    @property
+    def client(self) -> Any:
+        if self._client is None:
+            try:
+                import minio
+            except ImportError:
+                raise BackupError("E_STORAGE", "MinIO Python SDK ('minio') is not installed")
+            try:
+                self._client = minio.Minio(
+                    endpoint=self.endpoint,
+                    access_key=self.access_key,
+                    secret_key=self.secret_key,
+                    secure=self.secure,
+                )
+            except Exception as exc:
+                raise BackupError("E_STORAGE_AUTH", f"Failed to initialize MinIO client: {exc}")
+        return self._client
+
+    def preflight(self) -> None:
+        try:
+            if not self.client.bucket_exists(self.bucket):
+                raise BackupError("E_STORAGE", f"S3 bucket '{self.bucket}' does not exist")
+        except BackupError:
+            raise
+        except Exception as exc:
+            raise BackupError("E_STORAGE_AUTH", f"S3 bucket preflight error on '{self.bucket}': {exc}")
+
+        owner_key = "galera-backup-owner.json"
+        owner_content = json.dumps({"format_version": 1, "cluster_name": self.cluster_name}).encode("utf-8")
+
+        try:
+            objs = list(self.client.list_objects(self.bucket, prefix=owner_key, recursive=False))
+            owner_objs = [o for o in objs if getattr(o, "object_name", "") == owner_key]
+        except Exception as exc:
+            raise BackupError("E_STORAGE_AUTH", f"Failed to list S3 objects in bucket '{self.bucket}': {exc}")
+
+        if owner_objs:
+            try:
+                resp = self.client.get_object(self.bucket, owner_key)
+                data = json.loads(resp.read().decode("utf-8"))
+                if data.get("cluster_name") != self.cluster_name or data.get("format_version") != 1:
+                    raise BackupError(
+                        "E_OWNER_CONFLICT",
+                        f"S3 bucket '{self.bucket}' is owned by another cluster '{data.get('cluster_name')}'"
+                    )
+            except BackupError:
+                raise
+            except Exception as exc:
+                raise BackupError("E_OWNER_CONFLICT", f"Failed to read owner marker from bucket '{self.bucket}': {exc}")
+        else:
+            all_objs = list(self.client.list_objects(self.bucket, recursive=True))
+            if all_objs:
+                cluster_prefix = f"galera-{self.cluster_name}-"
+                for o in all_objs:
+                    obj_name = getattr(o, "object_name", "")
+                    if not obj_name.startswith(cluster_prefix):
+                        raise BackupError(
+                            "E_OWNER_CONFLICT",
+                            f"S3 bucket '{self.bucket}' contains foreign key '{obj_name}'; claim rejected"
+                        )
+            try:
+                import io
+                buf = io.BytesIO(owner_content)
+                self.client.put_object(
+                    self.bucket,
+                    owner_key,
+                    buf,
+                    length=len(owner_content),
+                    content_type="application/json",
+                )
+            except Exception as exc:
+                raise BackupError("E_STORAGE", f"Failed to write owner marker to S3 bucket '{self.bucket}': {exc}")
+
+    def publish(self, artifact: ArtifactSet) -> PublishedArtifact:
+        prefix = f"{artifact.backup_name}/"
+
+        payload_key = f"{prefix}backup.tar.enc"
+        try:
+            self.client.fput_object(self.bucket, payload_key, str(artifact.payload_path))
+        except Exception as exc:
+            raise BackupError("E_STORAGE", f"Failed to upload payload object '{payload_key}': {exc}")
+
+        checksum_key = f"{prefix}backup.sha256"
+        try:
+            self.client.fput_object(self.bucket, checksum_key, str(artifact.checksum_path))
+        except Exception as exc:
+            raise BackupError("E_STORAGE", f"Failed to upload checksum object '{checksum_key}': {exc}")
+
+        metadata_key = f"{prefix}metadata.json"
+        try:
+            self.client.fput_object(self.bucket, metadata_key, str(artifact.metadata_path))
+        except Exception as exc:
+            raise BackupError("E_STORAGE", f"Failed to upload metadata object '{metadata_key}': {exc}")
+
+        with open(artifact.metadata_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        expected_size = meta["encrypted_size_bytes"]
+        expected_sha = meta["encrypted_sha256"]
+        unixtime = meta.get("created_unixtime", int(time.time()))
+
+        try:
+            with tempfile.NamedTemporaryFile("wb", delete=False) as tf:
+                tf_path = Path(tf.name)
+            self.client.fget_object(self.bucket, payload_key, str(tf_path))
+            got_data = tf_path.read_bytes()
+            tf_path.unlink()
+
+            if len(got_data) != expected_size:
+                raise BackupError(
+                    "E_INTEGRITY",
+                    f"Read-back size mismatch for '{payload_key}': expected {expected_size}, got {len(got_data)}"
+                )
+            got_sha = hashlib.sha256(got_data).hexdigest()
+            if got_sha != expected_sha:
+                raise BackupError(
+                    "E_INTEGRITY",
+                    f"Read-back SHA-256 mismatch for '{payload_key}': expected {expected_sha}, got {got_sha}"
+                )
+        except BackupError:
+            raise
+        except Exception as exc:
+            raise BackupError("E_INTEGRITY", f"Failed read-back verification of '{payload_key}': {exc}")
+
+        return PublishedArtifact(
+            backup_name=artifact.backup_name,
+            prefix=prefix,
+            encrypted_sha256=expected_sha,
+            encrypted_size=expected_size,
+            unixtime=unixtime,
+        )
+
+    def fetch_latest(self, work_dir: Path) -> ArtifactSet:
+        cluster_prefix = f"galera-{self.cluster_name}-"
+        all_objs = list(self.client.list_objects(self.bucket, prefix=cluster_prefix, recursive=True))
+
+        prefixes: dict[str, dict[str, Any]] = {}
+        for o in all_objs:
+            obj_name = getattr(o, "object_name", "")
+            parts = obj_name.split("/")
+            if len(parts) >= 2:
+                b_prefix = parts[0]
+                fname = parts[1]
+                prefixes.setdefault(b_prefix, {})[fname] = o
+
+        candidates = []
+        for b_prefix, files in prefixes.items():
+            if "backup.tar.enc" in files and "backup.sha256" in files and "metadata.json" in files:
+                meta_key = f"{b_prefix}/metadata.json"
+                try:
+                    resp = self.client.get_object(self.bucket, meta_key)
+                    meta = json.loads(resp.read().decode("utf-8"))
+                    if meta.get("cluster_name") == self.cluster_name and meta.get("format_version") == 1:
+                        candidates.append((meta.get("created_unixtime", 0), b_prefix, meta))
+                except Exception:
+                    continue
+
+        if not candidates:
+            raise BackupError("E_STORAGE", f"No complete backups found in S3 bucket '{self.bucket}' for cluster '{self.cluster_name}'")
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best_ts, best_prefix, best_meta = candidates[0]
+
+        work_dir.mkdir(parents=True, exist_ok=True)
+        payload_path = work_dir / "backup.tar.enc"
+        checksum_path = work_dir / "backup.sha256"
+        metadata_path = work_dir / "metadata.json"
+
+        self.client.fget_object(self.bucket, f"{best_prefix}/backup.tar.enc", str(payload_path))
+        self.client.fget_object(self.bucket, f"{best_prefix}/backup.sha256", str(checksum_path))
+        self.client.fget_object(self.bucket, f"{best_prefix}/metadata.json", str(metadata_path))
+
+        return ArtifactSet(
+            backup_name=best_prefix,
+            payload_path=payload_path,
+            checksum_path=checksum_path,
+            metadata_path=metadata_path,
+        )
+
+    def prune(self, now: datetime, retention_days: int) -> int:
+        from datetime import timedelta
+        cluster_prefix = f"galera-{self.cluster_name}-"
+        all_objs = list(self.client.list_objects(self.bucket, prefix=cluster_prefix, recursive=True))
+
+        prefixes: dict[str, list[Any]] = {}
+        for o in all_objs:
+            obj_name = getattr(o, "object_name", "")
+            parts = obj_name.split("/")
+            if len(parts) >= 2:
+                b_prefix = parts[0]
+                prefixes.setdefault(b_prefix, []).append(o)
+
+        cutoff_ts = (now - timedelta(days=retention_days)).timestamp()
+        deleted_count = 0
+
+        for b_prefix, obj_list in prefixes.items():
+            meta_key = f"{b_prefix}/metadata.json"
+            meta_objs = [o for o in obj_list if getattr(o, "object_name", "") == meta_key]
+            if not meta_objs:
+                continue
+            try:
+                resp = self.client.get_object(self.bucket, meta_key)
+                meta = json.loads(resp.read().decode("utf-8"))
+            except Exception as exc:
+                raise BackupError("E_STORAGE", f"Malformed metadata in '{meta_key}' during retention: {exc}")
+
+            created_ts = meta.get("created_unixtime", 0)
+            if created_ts < cutoff_ts:
+                del_list = [getattr(o, "object_name", "") for o in obj_list]
+                for item_name in del_list:
+                    if item_name:
+                        self.client.remove_object(self.bucket, item_name)
+                deleted_count += 1
+
+        return deleted_count
+
+    def close(self) -> None:
+        pass
 def main() -> int:
     parser = argparse.ArgumentParser(description="Galera cluster physical backup & restore runner")
     subparsers = parser.add_subparsers(dest="command", required=True)
