@@ -632,6 +632,246 @@ class S3Backend:
 
     def close(self) -> None:
         pass
+class FilesystemBackend:
+    def __init__(self, mount_point: Path | str, expected_fstype: str, cluster_name: str):
+        self.mount_point = Path(mount_point).resolve()
+        self.expected_fstype = expected_fstype.strip().lower() if expected_fstype else ""
+        self.cluster_name = cluster_name
+        self._initial_mount_info: Optional[dict[str, str]] = None
+
+    def _get_mount_info(self) -> dict[str, str]:
+        # Try findmnt CLI first
+        target_str = str(self.mount_point)
+        try:
+            p = subprocess.run(
+                ["findmnt", "--json", "--target", target_str, "--output", "TARGET,SOURCE,FSTYPE,OPTIONS,MAJ:MIN,FSROOT"],
+                capture_output=True,
+                text=True,
+            )
+            if p.returncode == 0 and p.stdout:
+                data = json.loads(p.stdout)
+                filesystems = data.get("filesystems", [])
+                if filesystems:
+                    fs = filesystems[0]
+                    target = fs.get("target", "")
+                    if target and Path(target).resolve() == self.mount_point:
+                        return {
+                            "target": target,
+                            "source": fs.get("source", ""),
+                            "fstype": fs.get("fstype", "").lower(),
+                            "options": fs.get("options", ""),
+                            "majmin": fs.get("maj:min", fs.get("majmin", "")),
+                            "fsroot": fs.get("fsroot", ""),
+                        }
+        except Exception:
+            pass
+
+        # Fallback to /proc/mounts if findmnt failed or returned different target
+        if Path("/proc/mounts").exists():
+            try:
+                with open("/proc/mounts", "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 4:
+                            src, tgt, fst, opts = parts[0], parts[1], parts[2], parts[3]
+                            if Path(tgt).resolve() == self.mount_point:
+                                return {
+                                    "target": tgt,
+                                    "source": src,
+                                    "fstype": fst.lower(),
+                                    "options": opts,
+                                    "majmin": "",
+                                    "fsroot": "/",
+                                }
+            except Exception:
+                pass
+
+        raise BackupError("E_STORAGE", f"Path '{self.mount_point}' is not an active mount point")
+
+    def preflight(self) -> None:
+        info = self._get_mount_info()
+        self._initial_mount_info = info
+
+        target = info.get("target", "")
+        if target == "/" or self.mount_point == Path("/"):
+            raise BackupError("E_STORAGE", "Backup mount point cannot be root filesystem '/'")
+
+        fstype = info.get("fstype", "").lower()
+        if self.expected_fstype and fstype != self.expected_fstype:
+            raise BackupError(
+                "E_STORAGE",
+                f"Mount fstype '{fstype}' does not match expected '{self.expected_fstype}'"
+            )
+
+        cluster_dir = self.mount_point / self.cluster_name
+        cluster_dir.mkdir(parents=True, exist_ok=True)
+
+        owner_file = cluster_dir / "galera-backup-owner.json"
+        owner_content = json.dumps({"format_version": 1, "cluster_name": self.cluster_name})
+
+        if owner_file.exists():
+            try:
+                data = json.loads(owner_file.read_text(encoding="utf-8"))
+                if data.get("cluster_name") != self.cluster_name or data.get("format_version") != 1:
+                    raise BackupError(
+                        "E_OWNER_CONFLICT",
+                        f"Filesystem storage '{cluster_dir}' is owned by another cluster '{data.get('cluster_name')}'"
+                    )
+            except BackupError:
+                raise
+            except Exception as exc:
+                raise BackupError("E_OWNER_CONFLICT", f"Failed to read owner marker from '{owner_file}': {exc}")
+        else:
+            try:
+                fd = os.open(str(owner_file), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(owner_content)
+            except FileExistsError:
+                pass
+            except Exception as exc:
+                raise BackupError("E_STORAGE", f"Failed to write owner marker to '{owner_file}': {exc}")
+
+    def _verify_mount_identity(self) -> None:
+        if self._initial_mount_info is None:
+            return
+        curr = self._get_mount_info()
+        for field in ("target", "source", "fstype"):
+            if curr.get(field) != self._initial_mount_info.get(field):
+                raise BackupError("E_STORAGE", f"Mount identity changed during execution (field {field} mismatch)")
+
+    def publish(self, artifact: ArtifactSet) -> PublishedArtifact:
+        self._verify_mount_identity()
+
+        cluster_dir = self.mount_point / self.cluster_name
+        partial_dir = cluster_dir / f".partial-{artifact.backup_name}"
+        final_dir = cluster_dir / artifact.backup_name
+
+        if partial_dir.exists():
+            shutil.rmtree(partial_dir, ignore_errors=True)
+        partial_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            dest_payload = partial_dir / "backup.tar.enc"
+            dest_checksum = partial_dir / "backup.sha256"
+            dest_metadata = partial_dir / "metadata.json"
+
+            shutil.copy2(artifact.payload_path, dest_payload)
+            shutil.copy2(artifact.checksum_path, dest_checksum)
+            shutil.copy2(artifact.metadata_path, dest_metadata)
+
+            with open(artifact.metadata_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+
+            expected_size = meta["encrypted_size_bytes"]
+            expected_sha = meta["encrypted_sha256"]
+            unixtime = meta.get("created_unixtime", int(time.time()))
+
+            copied_bytes = dest_payload.read_bytes()
+            if len(copied_bytes) != expected_size:
+                raise BackupError(
+                    "E_INTEGRITY",
+                    f"Copied payload size mismatch: expected {expected_size}, got {len(copied_bytes)}"
+                )
+            copied_sha = hashlib.sha256(copied_bytes).hexdigest()
+            if copied_sha != expected_sha:
+                raise BackupError(
+                    "E_INTEGRITY",
+                    f"Copied payload SHA-256 mismatch: expected {expected_sha}, got {copied_sha}"
+                )
+
+            self._verify_mount_identity()
+
+            if final_dir.exists():
+                shutil.rmtree(final_dir, ignore_errors=True)
+            os.replace(partial_dir, final_dir)
+
+            self._verify_mount_identity()
+
+            return PublishedArtifact(
+                backup_name=artifact.backup_name,
+                prefix=str(final_dir),
+                encrypted_sha256=expected_sha,
+                encrypted_size=expected_size,
+                unixtime=unixtime,
+            )
+        except Exception:
+            if partial_dir.exists():
+                shutil.rmtree(partial_dir, ignore_errors=True)
+            raise
+
+    def fetch_latest(self, work_dir: Path) -> ArtifactSet:
+        self._verify_mount_identity()
+
+        cluster_dir = self.mount_point / self.cluster_name
+        if not cluster_dir.exists():
+            raise BackupError("E_STORAGE", f"Cluster directory '{cluster_dir}' does not exist")
+
+        candidates = []
+        for child in cluster_dir.iterdir():
+            if child.is_dir() and child.name.startswith(f"galera-{self.cluster_name}-") and not child.name.startswith(".partial-"):
+                payload = child / "backup.tar.enc"
+                checksum = child / "backup.sha256"
+                metadata = child / "metadata.json"
+                if payload.exists() and checksum.exists() and metadata.exists():
+                    try:
+                        meta = json.loads(metadata.read_text(encoding="utf-8"))
+                        if meta.get("cluster_name") == self.cluster_name and meta.get("format_version") == 1:
+                            candidates.append((meta.get("created_unixtime", 0), child, meta))
+                    except Exception:
+                        continue
+
+        if not candidates:
+            raise BackupError("E_STORAGE", f"No complete backups found in filesystem mount '{self.mount_point}' for cluster '{self.cluster_name}'")
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best_ts, best_dir, best_meta = candidates[0]
+
+        work_dir.mkdir(parents=True, exist_ok=True)
+        dest_payload = work_dir / "backup.tar.enc"
+        dest_checksum = work_dir / "backup.sha256"
+        dest_metadata = work_dir / "metadata.json"
+
+        shutil.copy2(best_dir / "backup.tar.enc", dest_payload)
+        shutil.copy2(best_dir / "backup.sha256", dest_checksum)
+        shutil.copy2(best_dir / "metadata.json", dest_metadata)
+
+        return ArtifactSet(
+            backup_name=best_dir.name,
+            payload_path=dest_payload,
+            checksum_path=dest_checksum,
+            metadata_path=dest_metadata,
+        )
+
+    def prune(self, now: datetime, retention_days: int) -> int:
+        from datetime import timedelta
+        self._verify_mount_identity()
+
+        cluster_dir = self.mount_point / self.cluster_name
+        if not cluster_dir.exists():
+            return 0
+
+        cutoff_ts = (now - timedelta(days=retention_days)).timestamp()
+        deleted_count = 0
+
+        for child in cluster_dir.iterdir():
+            if child.is_dir() and child.name.startswith(f"galera-{self.cluster_name}-") and not child.name.startswith(".partial-"):
+                metadata = child / "metadata.json"
+                if not metadata.exists():
+                    continue
+                try:
+                    meta = json.loads(metadata.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    raise BackupError("E_STORAGE", f"Malformed metadata in '{metadata}' during retention: {exc}")
+
+                created_ts = meta.get("created_unixtime", 0)
+                if created_ts < cutoff_ts:
+                    shutil.rmtree(child, ignore_errors=True)
+                    deleted_count += 1
+
+        return deleted_count
+
+    def close(self) -> None:
+        pass
 def main() -> int:
     parser = argparse.ArgumentParser(description="Galera cluster physical backup & restore runner")
     subparsers = parser.add_subparsers(dest="command", required=True)
