@@ -1,0 +1,110 @@
+---
+- name: Provision scoped MinIO credentials on infra host
+  block:
+    - name: Create temporary directory for MinIO provisioning
+      ansible.builtin.file:
+        path: /run/galera-backup-minio-tmp
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Render policy to temporary file
+      ansible.builtin.template:
+        src: minio-policy.json.j2
+        dest: /run/galera-backup-minio-tmp/policy.json
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Copy policy into minio container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - cp
+          - /run/galera-backup-minio-tmp/policy.json
+          - "minio:/tmp/policy.json"
+      changed_when: false
+
+    - name: Ensure bucket exists
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - -e
+          - "MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}:{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}@localhost:9000"
+          - minio
+          - mc
+          - mb
+          - --ignore-existing
+          - "myminio/{{ backup.s3.bucket }}"
+      changed_when: false
+      no_log: true
+
+    - name: Remove any existing access key for this cluster to ensure clean key pair
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - -e
+          - "MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}:{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}@localhost:9000"
+          - minio
+          - mc
+          - admin
+          - accesskey
+          - rm
+          - myminio
+          - "galera-backup-{{ cluster.name }}"
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: Create new scoped access key pair
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - -e
+          - "MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}:{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}@localhost:9000"
+          - minio
+          - mc
+          - admin
+          - accesskey
+          - create
+          - myminio/
+          - --json
+          - --name
+          - "galera-backup-{{ cluster.name }}"
+          - --policy
+          - /tmp/policy.json
+      register: mc_create_result
+      no_log: true
+
+    - name: Extract generated scoped credentials
+      ansible.builtin.set_fact:
+        galera_backup_s3_access_key: "{{ (mc_create_result.stdout | from_json).accessKey }}"
+        galera_backup_s3_secret_key: "{{ (mc_create_result.stdout | from_json).secretKey }}"
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop:
+        - "{{ backup.scheduler.host }}"
+        - "{{ inventory_hostname }}"
+      no_log: true
+
+  always:
+    - name: Clean up temporary files on minio container and infra host
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - minio
+          - rm
+          - -f
+          - /tmp/policy.json
+      failed_when: false
+      changed_when: false
+
+    - name: Clean up temporary directory on infra host
+      ansible.builtin.file:
+        path: /run/galera-backup-minio-tmp
+        state: absent

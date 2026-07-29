@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "cluster_name": "{{ cluster.name }}",
-  "metric_cluster_label": "{{ cluster.monitoring.pmm.cluster_name }}",
+  "metric_cluster_label": "{{ (cluster.monitoring.pmm.cluster_name) if (cluster.monitoring is defined) else monitoring.pmm.cluster_name }}",
   "local_role": "{{ galera_backup_local_role | default('scheduler') }}",
   "scheduler_system_hostname": "{{ backup.scheduler.host }}",
   "galera_nodes_expected": {{ galera.nodes_expected | default(3) }},

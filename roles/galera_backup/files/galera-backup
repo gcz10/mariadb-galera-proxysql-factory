@@ -1305,20 +1305,26 @@ def run_backup(
 
         checksum_file.write_text(f"{enc_sha}  backup.tar.enc\n", encoding="utf-8")
 
+        created_iso = datetime.now(timezone.utc).isoformat()
         meta = {
             "format_version": 1,
             "cluster_name": cluster_name,
             "backup_name": backup_name,
             "source_host": curr_host,
-            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "created_at": created_iso,
+            "created_at_utc": created_iso,
             "created_unixtime": int(time.time()),
             "mariadb_version": cfg.mariadb_version,
             "wsrep_uuid": wsrep_uuid,
             "wsrep_seqno": wsrep_seqno,
+            "sha256_plaintext": plaintext_sha,
             "plaintext_sha256": plaintext_sha,
+            "sha256_encrypted": enc_sha,
             "encrypted_sha256": enc_sha,
+            "size_bytes": enc_size,
             "encrypted_size_bytes": enc_size,
             "encryption_method": "aes-256-cbc-pbkdf2-iter200k-sha256",
+            "backend": b_type,
             "backend_type": b_type,
         }
         metadata_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -1583,6 +1589,12 @@ def run_restore(
         standalone_log = work_dir / "standalone.log"
         standalone_pid_file = work_dir / "standalone.pid"
 
+        if os.geteuid() == 0:
+            try:
+                import shutil
+                shutil.chown(work_dir, user="mysql", group="mysql")
+            except Exception:
+                pass
         server_bin = "mariadbd"
         if not shutil.which("mariadbd") and shutil.which("mysqld"):
             server_bin = "mysqld"
@@ -1593,7 +1605,7 @@ def run_restore(
             f"--socket={cfg.paths.socket}",
             f"--pid-file={standalone_pid_file}",
             f"--log-error={standalone_log}",
-            "--skip-wsrep",
+            "--wsrep-provider=none",
             "--skip-networking",
         ]
         if os.geteuid() == 0:
@@ -1660,7 +1672,7 @@ def run_restore(
                     except subprocess.TimeoutExpired:
                         server_proc.kill()
 
-        state_mgr.update_success("restore", int(time.time()), artifact=art_set.backup_name)
+        state_mgr.update_success("restore", int(time.time()), artifact={"backup_name": art_set.backup_name, "rows_verified": total_rows})
         event_mgr.emit("state.restore_success", {"backup_name": art_set.backup_name, "total_rows": total_rows})
         print(f"galera-backup restore for {cluster_name} completed successfully ({art_set.backup_name}, {total_rows} rows checked)")
 

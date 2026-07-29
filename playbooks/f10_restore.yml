@@ -9,6 +9,12 @@
   gather_facts: true
   vars:
     mariadb_version: "{{ lock.mariadb.version.split('.')[:2] | join('.') }}"
+    galera_backup_encryption_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_ENCRYPTION_KEY') | default(lookup('ansible.builtin.env', 'BACKUP_ENCRYPTION_KEY'), true) }}"
+    galera_backup_s3_access_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_ACCESS_KEY') | default(lookup('ansible.builtin.env', 'MINIO_ROOT_USER'), true) }}"
+    galera_backup_s3_secret_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_SECRET_KEY') | default(lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD'), true) }}"
+    galera_backup_smb_username: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_USERNAME') | default('', true) }}"
+    galera_backup_smb_password: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_PASSWORD') | default('', true) }}"
+    galera_backup_smb_domain: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_DOMAIN') | default('', true) }}"
 
   pre_tasks:
     - name: "Zaladuj lockfile platformy (reprodukowalne wersje)"

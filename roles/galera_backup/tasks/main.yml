@@ -57,6 +57,18 @@
     group: root
     mode: "0644"
 
+- name: Provision scoped MinIO credentials if S3 destination
+  ansible.builtin.include_tasks:
+    file: provision_minio.yml
+    apply:
+      delegate_to: "{{ groups['infra'][0] }}"
+  when:
+    - backup.enabled
+    - backup.destination == 's3'
+    - (galera_backup_provision_s3 | default(true))
+    - groups['infra'] is defined
+    - (groups['infra'] | length) > 0
+    - inventory_hostname == backup.scheduler.host
 - name: Deploy cluster secrets.env
   ansible.builtin.template:
     src: secrets.env.j2
