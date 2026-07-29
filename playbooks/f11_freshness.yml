@@ -1,82 +1,34 @@
 ---
-# F11 — kolektor świeżości: publikuj realne unixtimes backup/restore/TLS.
-# Satisfies: ISC-49 (backup/restore/cert freshness do PMM textfile collector).
+# F11 — kolektor świeżości: publikuj realne unixtimes restore/TLS.
+# Satisfies: ISC-49 (restore/cert freshness do PMM textfile collector).
+# Note: Backup metrics are published directly by galera-backup runner into
+# /var/lib/node_exporter/textfile_collector/galera_backup-<cluster>.prom.
 #
-# Źródła dowodów (zapisywane przez F10):
-#   /var/lib/mariadb-backup-state/last_backup.json  → galera[1]  (ostatni udany backup)
-#   /var/lib/mariadb-backup-state/last_restore.json → restore[0] (ostatni udany restore drill)
+# Źródła dowodów:
+#   /opt/galera-backup/clusters/<cluster>/state.json → restore[0] (ostatni udany restore drill)
 #
 # Cel: node_exporter textfile collector na galera[0] → isa_monitoring_state.prom.
-# Format dopasowany do baseline'u z f11_node_exporter.yml (ten sam plik, ten sam HELP/TYPE).
-# Plik jest własnością tego playbooka — f11_node_exporter tworzy baseline tylko gdy
-# nie istnieje (force: false), więc reconverge nie resetuje realnych wartości do 0.
-# Ansible copy jest atomowe (zapis do tempfile + rename), więc brak dodatkowego handlera.
 
-- name: "F11 — zbierz stany backup/restore i opublikuj świeżość na galera[0]"
+- name: "F11 — zbierz stany restore/TLS i opublikuj świeżość na galera[0]"
   hosts: galera[0]
   become: true
   gather_facts: false
   vars:
-    state_dir: "/var/lib/mariadb-backup-state"
     textfile_dir: "/var/lib/node_exporter/textfile_collector"
     state_file: "{{ textfile_dir }}/isa_monitoring_state.prom"
     cluster_label: "{{ monitoring.pmm.cluster_name }}"
-    # NIE zakladamy galera[1]: f10_backup wybiera zrodlo dynamicznie (zdrowy non-writer),
-    # wiec last_backup.json lada na TYM wezle, ktory wykonal backup. Przy innym ukladzie
-    # writera niz w claude-r10 (tam trafialo na galera[1] przez przypadek) plik jest gdzie
-    # indziej i metryka swiezosci zostawala 0 → falszywy alarm "backup stale".
-    # Dlatego odpytujemy wszystkie wezly Galera i bierzemy najswiezszy znacznik.
     restore_host: "{{ groups['restore'][0] }}"
 
   tasks:
-    # === Zbierz realne unixtimes z węzłów źródłowych ===
-    - name: "Odczytaj unixtime ostatniego udanego backupu (wszystkie wezly Galera)"
-      ansible.builtin.shell: >-
-        set -o pipefail;
-        f={{ state_dir }}/last_backup.json;
-        if [ -f "$f" ]; then
-          python3 -c "import json,sys; d=json.load(open('$f')); print(d.get('last_backup',''))";
-        else echo ""; fi
-      register: backup_iso_all
-      delegate_to: "{{ item }}"
-      loop: "{{ groups['galera'] }}"
-      changed_when: false
-
-    - name: "Wybierz najswiezszy znacznik backupu z wezlow Galera"
-      ansible.builtin.set_fact:
-        backup_iso:
-          stdout: >-
-            {{ backup_iso_all.results
-               | map(attribute='stdout')
-               | map('trim')
-               | select('match', '^[0-9]{4}-')
-               | list | sort | last | default('', true) }}
-
     - name: "Odczytaj unixtime ostatniego udanego restore drill (restore[0])"
       ansible.builtin.shell: >-
         set -o pipefail;
-        f={{ state_dir }}/last_restore.json;
+        f=/opt/galera-backup/clusters/{{ cluster.name }}/state.json;
         if [ -f "$f" ]; then
-          python3 -c "import json,sys; d=json.load(open('$f')); print(d.get('last_restore',''))";
-        else echo ""; fi
-      register: restore_iso
-      delegate_to: "{{ restore_host }}"
-      changed_when: false
-
-    - name: "Oblicz unixtime backupu (0 jeśli brak dowodu)"
-      ansible.builtin.shell: >-
-        set -o pipefail;
-        v="{{ backup_iso.stdout | trim }}";
-        if [ -n "$v" ]; then date -d "$v" +%s; else echo 0; fi
-      register: backup_epoch
-      changed_when: false
-
-    - name: "Oblicz unixtime restore (0 jeśli brak dowodu)"
-      ansible.builtin.shell: >-
-        set -o pipefail;
-        v="{{ restore_iso.stdout | trim }}";
-        if [ -n "$v" ]; then date -d "$v" +%s; else echo 0; fi
+          python3 -c "import json,sys; d=json.load(open('$f')); ls=d.get('last_success',{}); print(ls.get('unixtime', 0) if ls.get('command') == 'restore' else 0)";
+        else echo 0; fi
       register: restore_epoch
+      delegate_to: "{{ restore_host }}"
       changed_when: false
 
     # === Wygaśnięcie certyfikatu TLS (0 gdy tls.mode != full) ===
@@ -84,8 +36,6 @@
       ansible.builtin.shell: >-
         set -o pipefail;
         {% if (tls | default({})).mode | default('disabled') == 'full' %}
-        # audit#20: czytaj WDROŻONY cert na zdalnym hoście (/etc/mysql/tls/server-cert.pem),
-        # nie tls.certificate_reference (ścieżka na kontrolerze) — metryka była stale 0.
         if [ -f "{{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }}" ]; then
           openssl x509 -in "{{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }}" -noout -enddate 2>/dev/null \
             | cut -d= -f2 | xargs -I{} date -d {} +%s || echo 0;
@@ -111,15 +61,12 @@
         content: |
           # Aktualizowany atomowo przez f11_freshness.yml (ISC-49).
           # Wartość 0 oznacza brak potwierdzonego sukcesu.
-          # HELP isa_backup_last_success_unixtime Unix time of the last verified off-cluster backup.
-          # TYPE isa_backup_last_success_unixtime gauge
-          isa_backup_last_success_unixtime{cluster="{{ cluster_label }}"} {{ backup_epoch.stdout | int }}
           # HELP isa_restore_test_last_success_unixtime Unix time of the last successful restore drill.
           # TYPE isa_restore_test_last_success_unixtime gauge
-          isa_restore_test_last_success_unixtime{cluster="{{ cluster_label }}"} {{ restore_epoch.stdout | int }}
+          isa_restore_test_last_success_unixtime{cluster="{{ cluster_label }}"} {{ restore_epoch.stdout | trim | int }}
           # HELP isa_tls_cert_expiry_unixtime Unix time when the monitored certificate expires.
           # TYPE isa_tls_cert_expiry_unixtime gauge
-          isa_tls_cert_expiry_unixtime{cluster="{{ cluster_label }}"} {{ tls_expiry_epoch.stdout | int }}
+          isa_tls_cert_expiry_unixtime{cluster="{{ cluster_label }}"} {{ tls_expiry_epoch.stdout | trim | int }}
         owner: root
         group: node_exporter
         mode: "0640"

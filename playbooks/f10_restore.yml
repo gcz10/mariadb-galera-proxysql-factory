@@ -2,9 +2,6 @@
 # F10: Restore drill — odtwórz backup na CZYSTY IZOLOWANY host (rnode1) i sprawdź integralność.
 # Satisfies: ISC-34 (weryfikacja checksum), ISC-36 (restore + integrity), ISC-37 (drill + stan).
 # rnode1 NIE jest częścią klastra Galera — standalone MariaDB (dowód, że backup jest samodzielnie odtwarzalny).
-#
-# audit#5: wymaga -e restore_confirm=yes; host restore nie może należeć do galera/proxysql;
-# sekcja destruktywna w block/rescue/always — plaintext + standalone mariadbd sprzątane ZAWSZE.
 
 - name: "F10 — restore drill na rnode1 (czysty izolowany host)"
   hosts: restore
@@ -12,16 +9,8 @@
   gather_facts: true
   vars:
     mariadb_version: "{{ lock.mariadb.version.split('.')[:2] | join('.') }}"
-    restore_work: "/var/tmp/mariadb-restore"
-    restore_datadir: "/var/lib/mysql"
-    backup_enc_key: "{{ lookup('ansible.builtin.env', 'BACKUP_ENCRYPTION_KEY') }}"
-    minio_sdk_version: "{{ lock.minio.sdk_version }}"
-    state_dir: "/var/lib/mariadb-backup-state"
 
   pre_tasks:
-    # R1/C2: ten playbook nie ladowal lockfile - instalowal MariaDB po samej nazwie,
-    # czyli NAJNOWSZA z serii zamiast przypietej (ta sama klasa bledu co audit#12).
-    # Skutek: restore drill mogl odtwarzac na innej wersji niz klaster.
     - name: "Zaladuj lockfile platformy (reprodukowalne wersje)"
       ansible.builtin.include_vars:
         file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
@@ -43,20 +32,13 @@
           Host restore ({{ inventory_hostname }}) jest też w grupie galera/proxysql.
           Restore wyczyści datadir i zniszczy żywy klaster. Użyj osobnego hosta (grupa restore).
 
-    - name: "Wymagaj sekretów i destination=s3"
-      ansible.builtin.assert:
-        that:
-          - backup_enc_key | length > 0
-          - lookup('ansible.builtin.env', 'MINIO_ROOT_USER') | length > 0
-          - lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') | length > 0
-          - backup.destination == 's3'
-        fail_msg: "Ustaw BACKUP_ENCRYPTION_KEY/MINIO creds; restore w labie wymaga destination=s3."
+  roles:
+    - role: galera_backup
+      vars:
+        galera_backup_local_role: restore
+        galera_backup_install_cron: false
 
   tasks:
-    # === Przygotuj czysty host: MariaDB + narzędzia ===
-    # R1/C1: brakowalo weryfikacji sha256 - ta sama dziura supply-chain co audit#6,
-    # naprawiona w f2_install, a przeoczona tutaj. Skrypt jest OS-agnostyczny,
-    # wiec suma z lockfile jest wspolna dla EL9 i EL10.
     - name: "MariaDB repo - pobierz setup (audit#6: weryfikacja sha256)"
       ansible.builtin.get_url:
         url: "{{ lock.mariadb.repo_setup_script }}"
@@ -69,8 +51,6 @@
       args:
         creates: /etc/yum.repos.d/mariadb.repo
 
-    # R1/B5: NEVRA z lockfile zamiast samych nazw. Bez tego host restore dostawal
-    # najnowsza wersje z serii, a guard zgodnosci nizej wykrywal to dopiero PO instalacji.
     - name: "Instaluj MariaDB server/backup/klienta (wersje PRZYPIETE z lockfile; audit#12)"
       ansible.builtin.dnf:
         name:
@@ -82,327 +62,10 @@
           - openssl
         state: present
 
-    - name: "Zainstaluj klienta S3 (minio SDK, przypięty)"
-      ansible.builtin.pip:
-        name: "minio=={{ minio_sdk_version }}"
-        state: present
-
-    - name: "Wdróż helper S3"
-      ansible.builtin.copy:
-        src: ../roles/backup/files/s3_object.py
-        dest: /usr/local/bin/s3_object.py
-        mode: "0755"
-
-    - name: "Utwórz katalog stanu i roboczy"
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: directory
-        mode: "0750"
-      loop:
-        - "{{ state_dir }}"
-        - "{{ restore_work }}"
-
-    # === audit#5: sekcja od pobrania backupu w block/rescue/always ===
-    # Plaintext backupu i standalone mariadbd muszą być sprzątane ZAWSZE (nawet przy błędzie).
-    # Sekrety S3 są task-scoped (nie dziedziczone przez uruchomiony mariadbd).
-    - name: "Restore drill — pobranie, weryfikacja, odtworzenie, integralność"
-      block:
-        # === Wybierz najnowszy backup ===
-        - name: "Znajdź najnowszy backup w S3"
-          ansible.builtin.shell: |
-            set -o pipefail
-            python3 /usr/local/bin/s3_object.py list {{ backup.s3.bucket }} |
-              grep '/metadata.json$' | sort | tail -1 | sed 's#/metadata.json##'
-          args:
-            executable: /bin/bash
-          environment:
-            S3_ENDPOINT: "{{ backup.s3.endpoint }}"
-            S3_ACCESS_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
-            S3_SECRET_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
-            S3_SECURE: "{{ backup.s3.secure | default(false) | string | lower }}"
-          register: latest_backup
-          changed_when: false
-
-        - name: "Wymagaj istnienia backupu"
-          ansible.builtin.assert:
-            that:
-              - latest_backup.stdout | length > 0
-            fail_msg: "Brak backupów w s3://{{ backup.s3.bucket }}."
-
-        - name: "Pobierz artefakty backupu"
-          ansible.builtin.command: >-
-            python3 /usr/local/bin/s3_object.py get {{ backup.s3.bucket }}
-            {{ latest_backup.stdout }}/{{ item }} {{ restore_work }}/{{ item }}
-          environment:
-            S3_ENDPOINT: "{{ backup.s3.endpoint }}"
-            S3_ACCESS_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
-            S3_SECRET_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
-            S3_SECURE: "{{ backup.s3.secure | default(false) | string | lower }}"
-          loop:
-            - metadata.json
-            - backup.sha256
-            - backup.tar.enc
-          changed_when: true
-
-        # === ISC-34: weryfikuj checksum PRZED odtworzeniem ===
-        - name: "ISC-34: policz sha256 pobranego backupu"
-          ansible.builtin.stat:
-            path: "{{ restore_work }}/backup.tar.enc"
-            get_checksum: true
-            checksum_algorithm: sha256
-          register: computed_sha
-
-        - name: "ISC-34: odczytaj zapisany checksum"
-          ansible.builtin.command:
-            argv:
-              - awk
-              - "{print $1}"
-              - "{{ restore_work }}/backup.sha256"
-          register: stored_sha
-          changed_when: false
-
-        - name: "ISC-34: checksum musi się zgadzać"
-          ansible.builtin.assert:
-            that:
-              - computed_sha.stat.checksum == stored_sha.stdout
-            fail_msg: "Checksum backupu niezgodny — uszkodzony transfer/tampering."
-
-        # === ISC-33: odszyfruj ===
-        - name: "ISC-33: odszyfruj backup"
-          ansible.builtin.command:
-            argv:
-              - openssl
-              - enc
-              - -d
-              - -aes-256-cbc
-              - -pbkdf2
-              - -in
-              - "{{ restore_work }}/backup.tar.enc"
-              - -out
-              - "{{ restore_work }}/backup.tar"
-              - -pass
-              - env:BACKUP_ENCRYPTION_KEY
-          environment:
-            BACKUP_ENCRYPTION_KEY: "{{ backup_enc_key }}"
-          changed_when: true
-          no_log: true
-
-        - name: "ISC-34: odczytaj zapisany sha256 PLAINTEXT (jeśli w metadanych)"
-          ansible.builtin.shell: >-
-            python3 -c "import json;d=json.load(open('{{ restore_work }}/metadata.json'));print(d.get('sha256_plaintext',''))"
-          register: stored_plaintext_sha
-          changed_when: false
-
-        - name: "ISC-34: policz sha256 odszyfrowanego backupu"
-          ansible.builtin.stat:
-            path: "{{ restore_work }}/backup.tar"
-            get_checksum: true
-            checksum_algorithm: sha256
-          register: computed_plaintext_sha
-
-        - name: "ISC-34: plaintext checksum musi się zgadzać (gdy zapisany)"
-          ansible.builtin.assert:
-            that:
-              - stored_plaintext_sha.stdout | length == 0 or computed_plaintext_sha.stat.checksum == stored_plaintext_sha.stdout
-            fail_msg: "Checksum PLAINTEXT niezgodny — backup uszkodzony pomimo poprawnego szyfrowania."
-
-        # Pliki danych dotknięte wyższą wersją major są forward-incompatible
-        # (mariadb.com/kb/en/downgrading-between-major-mariadb-versions). Bez tego guardu
-        # drill potrafi "zaliczyć" odtworzenie backupu 11.8 na serwerze 11.4 i dać
-        # fałszywe zapewnienie o zdatności ścieżki DR.
-        - name: "ISC-36: odczytaj wersję MariaDB, którą wykonano backup"
-          ansible.builtin.shell: >-
-            python3 -c "import json;d=json.load(open('{{ restore_work }}/metadata.json'));print(d.get('mariadb_version',''))"
-          register: backup_mariadb_version
-          changed_when: false
-
-        - name: "ISC-36: odczytaj wersję MariaDB na hoście restore"
-          ansible.builtin.shell: |
-            set -o pipefail
-            mariadbd --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
-          args:
-            executable: /bin/bash
-          register: restore_host_version
-          changed_when: false
-
-        - name: "ISC-36: host restore nie może być STARSZY (major.minor) niż wersja backupu"
-          ansible.builtin.assert:
-            that:
-              - backup_mariadb_version.stdout | length == 0
-                or (restore_host_version.stdout.split('.')[0:2] | join('.'))
-                   is version(backup_mariadb_version.stdout.split('.')[0:2] | join('.'), '>=')
-            fail_msg: >-
-              Backup wykonano na MariaDB {{ backup_mariadb_version.stdout }}, a host restore ma
-              {{ restore_host_version.stdout }}. Odtwarzanie na STARSZĄ wersję major jest niewspierane
-              (forward-incompatible) — drill dałby fałszywe zapewnienie. Podnieś mariadb_version
-              na hoście restore do serii backupu.
-            success_msg: "Wersje zgodne: backup {{ backup_mariadb_version.stdout }} -> host restore {{ restore_host_version.stdout }}."
-
-        # === Przygotuj czysty datadir i odtwórz ===
-        - name: "Zatrzymaj ewentualny mariadbd na rnode1"
-          ansible.builtin.shell: "pkill -x mariadbd 2>/dev/null; sleep 2; true"
-          changed_when: false
-
-        - name: "Waliduj restore_datadir (ochrona przed rm -rf złej ścieżki)"
-          ansible.builtin.assert:
-            that:
-              - restore_datadir == '/var/lib/mysql'
-            fail_msg: "restore_datadir musi być /var/lib/mysql, dostałem {{ restore_datadir }}."
-
-        - name: "Wyczyść zawartość datadir (mount point — opróżnij, nie usuwaj)"
-          ansible.builtin.shell: "find {{ restore_datadir }} -mindepth 1 -delete"
-          changed_when: true
-
-        - name: "Ustaw właściciela pustego datadir"
-          ansible.builtin.file:
-            path: "{{ restore_datadir }}"
-            state: directory
-            owner: mysql
-            group: mysql
-            mode: "0750"
-
-        - name: "Rozpakuj backup"
-          ansible.builtin.shell: >-
-            mkdir -p {{ restore_work }}/extracted &&
-            tar -xzf {{ restore_work }}/backup.tar -C {{ restore_work }}/extracted
-          changed_when: true
-
-        - name: "mariadb-backup --copy-back do datadir"
-          ansible.builtin.command: >-
-            mariadb-backup --copy-back
-            --target-dir={{ restore_work }}/extracted
-            --datadir={{ restore_datadir }}
-          changed_when: true
-
-        - name: "Ustaw właściciela datadir"
-          ansible.builtin.file:
-            path: "{{ restore_datadir }}"
-            owner: mysql
-            group: mysql
-            recurse: true
-
-        # === Uruchom standalone i sprawdź integralność ===
-        # Samo `... &` w module shell ginie na SIGHUP, gdy Ansible zamyka sesje SSH -
-        # proces przepadal, zanim zdazyl zapisac cokolwiek do logu, a drill konczyl sie
-        # bezuzytecznym "timeout na sockecie". setsid odpina od terminala sterujacego.
-        - name: "Uruchom mariadbd standalone (bez wsrep, odpiety od sesji SSH)"
-          ansible.builtin.shell: |
-            setsid mariadbd --user=mysql --datadir={{ restore_datadir }} \
-              --socket=/var/lib/mysql/mysql.sock --skip-networking=0 \
-              --wsrep-provider=none </dev/null >/var/log/mariadb-restore.log 2>&1 &
-            echo "pid=$!"
-          args:
-            executable: /bin/bash
-          changed_when: true
-
-        - name: "Czekaj na socket"
-          ansible.builtin.wait_for:
-            path: /var/lib/mysql/mysql.sock
-            timeout: 60
-          register: restore_socket_wait
-          ignore_errors: true
-
-        # Bez tego operator dostaje samo "timeout" i musi recznie szukac przyczyny na hoscie.
-        - name: "Diagnostyka: log standalone mariadbd (gdy socket nie powstal)"
-          ansible.builtin.shell: "tail -30 /var/log/mariadb-restore.log 2>/dev/null || echo '(log pusty - proces nie wystartowal)'"
-          register: restore_mariadbd_log
-          changed_when: false
-          when: restore_socket_wait is failed
-
-        - name: "Zatrzymaj drill, gdy standalone mariadbd nie wstal"
-          ansible.builtin.fail:
-            msg: >-
-              Standalone mariadbd nie utworzyl socketu w 60s. Log:
-              {{ (restore_mariadbd_log.stdout | default('(brak)')) }}
-          when: restore_socket_wait is failed
-
-        - name: "ISC-36: sprawdź WSZYSTKIE tabele użytkownika (mariadb-check)"
-          ansible.builtin.shell: >-
-            set -o pipefail;
-            DBS=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-            "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('mysql','sys','performance_schema','information_schema')"
-            | tr '\n' ' ');
-            if [ -z "$(echo $DBS)" ]; then echo "NO_USER_DATABASES"; exit 1; fi;
-            mariadb-check --socket=/var/lib/mysql/mysql.sock --check --databases $DBS
-          register: check_table
-          changed_when: false
-
-        - name: "ISC-36: integralność — każda tabela OK, zero błędów"
-          ansible.builtin.assert:
-            that:
-              - check_table.rc == 0
-              - "'NO_USER_DATABASES' not in (check_table.stdout | default(''))"
-              - "'Error' not in (check_table.stdout | default(''))"
-              - "'corrupt' not in (check_table.stdout | default('') | lower)"
-            fail_msg: "Integralność odtworzonych tabel naruszona: rc={{ check_table.rc }} out={{ check_table.stdout }}"
-            success_msg: "mariadb-check: wszystkie tabele użytkownika OK"
-
-        - name: "ISC-36: liczba wierszy w największej odtworzonej tabeli użytkownika"
-          ansible.builtin.shell: >-
-            set -o pipefail;
-            TBL=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-            "SELECT CONCAT(TABLE_SCHEMA,'.',TABLE_NAME) FROM information_schema.TABLES WHERE TABLE_TYPE='BASE TABLE' AND TABLE_SCHEMA NOT IN ('mysql','sys','performance_schema','information_schema') ORDER BY TABLE_ROWS DESC LIMIT 1");
-            test -n "$TBL" || { echo "NO_USER_TABLES"; exit 1; };
-            echo -n "$TBL ";
-            mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SELECT COUNT(*) FROM $TBL"
-          register: row_count
-          changed_when: false
-
-        - name: "ISC-36: odtworzone dane niepuste"
-          ansible.builtin.assert:
-            that:
-              - (row_count.stdout | default('') | trim).split(' ') | last | int > 0
-            fail_msg: "Odtworzona tabela jest pusta lub brak tabel użytkownika — restore niekompletny: {{ row_count.stdout }}"
-            success_msg: "Odtworzone dane niepuste: {{ row_count.stdout }}"
-
-        - name: "Odczytaj metadane backupu do raportu"
-          ansible.builtin.slurp:
-            src: "{{ restore_work }}/metadata.json"
-          register: meta_raw
-
-        # === ISC-37: zapisz stan udanego restore drill (tylko na sukces) ===
-        - name: "ISC-37: zapisz stan restore drill"
-          ansible.builtin.copy:
-            content: |
-              {"last_restore": "{{ ansible_facts['date_time']['iso8601'] }}", "backup_name": "{{ latest_backup.stdout }}", "rows_verified": {{ (row_count.stdout | trim).split(' ') | last | int }}, "status": "success"}
-            dest: "{{ state_dir }}/last_restore.json"
-            mode: "0640"
-
-        - name: "Raport restore drill"
-          ansible.builtin.debug:
-            msg: >-
-              Restore drill OK: {{ latest_backup.stdout }} → rnode1 (standalone),
-              {{ row_count.stdout }} (tabela.wierszy), mariadb-check OK,
-              checksum zweryfikowany; metadata seqno={{ (meta_raw.content | b64decode | from_json).wsrep_seqno }}
-
-      rescue:
-        - name: "audit#5: restore nie powiódł się — sprzątanie wykona always"
-          ansible.builtin.debug:
-            msg: "FAIL zadania '{{ ansible_failed_task.name }}': {{ ansible_failed_result.msg | default(ansible_failed_result) }}"
-
-        - name: "audit#5: re-raise (nie połykamy błędu; always posprząta)"
-          ansible.builtin.fail:
-            msg: >-
-              Restore drill nie powiódł się (zadanie: {{ ansible_failed_task.name }}).
-              Sekretne artefakty i standalone mariadbd zostaną sprzątnięte w always.
-
-      always:
-        # Zawsze zatrzymaj standalone mariadbd i usuń plaintext backupu + katalog roboczy
-        # (ochrona przed wyciekiem plaintextu i wiszącym procesem po błędzie).
-        - name: "audit#5: zatrzymaj standalone mariadbd (zawsze)"
-          ansible.builtin.shell: >-
-            mariadb-admin --socket=/var/lib/mysql/mysql.sock shutdown 2>/dev/null;
-            sleep 2; pkill -x mariadbd 2>/dev/null; true
-          changed_when: false
-
-        - name: "audit#5: usuń plaintext backupu (zawsze)"
-          ansible.builtin.file:
-            path: "{{ restore_work }}/backup.tar"
-            state: absent
-
-        - name: "audit#5: usuń katalog roboczy restore (zawsze; backup pozostaje w S3)"
-          ansible.builtin.file:
-            path: "{{ restore_work }}"
-            state: absent
-
-  handlers: []
+    - name: "Odtwórz i zweryfikuj backup za pomocą galera-backup runnera"
+      ansible.builtin.command:
+        argv:
+          - /opt/galera-backup/galera-backup
+          - restore
+          - "{{ cluster.name }}"
+          - --confirm

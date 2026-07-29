@@ -57,7 +57,6 @@ EXPECTED_NODE_EXPORTER_VERSION = str(VERSION_LOCK["node_exporter"]["version"])
 EXPECTED_PMM_VERSION = str(VERSION_LOCK["pmm"]["version"])
 # Lifecycle config gauges — exact value match expected (baseline from F11).
 EXPECTED_CONFIG_METRICS = {
-    "isa_backup_monitoring_enabled": 1,
     "isa_restore_test_monitoring_enabled": 1,
     "isa_tls_monitoring_enabled": 0,
 }
@@ -65,15 +64,22 @@ EXPECTED_CONFIG_METRICS = {
 BACKUP_RETENTION_DAYS = int(CLUSTER_CONFIG.get("backup", {}).get("retention_days", 14))
 EXPECTED_FRESHNESS_METRICS = {
     # metric name → max acceptable age in days
-    "isa_backup_last_success_unixtime": BACKUP_RETENTION_DAYS,
     "isa_restore_test_last_success_unixtime": 8,  # weekly restore_test_schedule + 1d grace
 }
+EXPECTED_GALERA_BACKUP_METRICS = [
+    "galera_backup_last_success_unixtime",
+    "galera_backup_last_failure_unixtime",
+    "galera_backup_last_run_success",
+    "galera_backup_last_size_bytes",
+    "galera_backup_last_duration_seconds",
+]
 # TLS cert expiry: 0 when tls.mode != full; future epoch when full.
 TLS_MODE = CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled")
 TLS_EXPIRY_DISABLED_EXPECTED = TLS_MODE != "full"
 ALL_STATE_METRICS = (
     set(EXPECTED_CONFIG_METRICS)
     | set(EXPECTED_FRESHNESS_METRICS)
+    | set(EXPECTED_GALERA_BACKUP_METRICS)
     | {"isa_tls_cert_expiry_unixtime"}
 )
 

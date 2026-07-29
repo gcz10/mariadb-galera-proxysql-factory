@@ -1,11 +1,13 @@
 import os
+import json
+import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from tests.unit.galera_backup_testlib import load_galera_backup_module
+from tests.unit.galera_backup_testlib import load_galera_backup_module, WORKSPACE_ROOT
 
 
 class GaleraBackupCoreTests(unittest.TestCase):
@@ -259,5 +261,59 @@ class TemplateContractTests(unittest.TestCase):
         for res in resources:
             self.assertNotIn("*/*", res)
             self.assertNotIn("arn:aws:s3:::second-bucket", res)
+class CutoverContractTests(unittest.TestCase):
+    def test_restore_playbook_invokes_galera_backup_runner(self):
+        restore_playbook = (WORKSPACE_ROOT / "playbooks" / "f10_restore.yml").read_text()
+        self.assertIn("/opt/galera-backup/galera-backup", restore_playbook)
+        self.assertIn("restore", restore_playbook)
+        self.assertIn("--confirm", restore_playbook)
+        self.assertNotIn("s3_object.py", restore_playbook)
+        self.assertNotIn("openssl enc", restore_playbook)
+        self.assertNotIn("mariadb-backup --copy-back", restore_playbook)
+
+    def test_no_legacy_backup_references_in_repo(self):
+        legacy_terms = [
+            "backup-run.sh",
+            "s3_object.py",
+            "/var/lib/mariadb-backup-state",
+            "isa_backup_last_success_unixtime",
+        ]
+        files_to_check = []
+        for path in WORKSPACE_ROOT.rglob("*"):
+            if path.is_file() and not any(part.startswith(".") for part in path.parts):
+                if "tests/unit" in str(path):
+                    continue
+                files_to_check.append(path)
+
+        for term in legacy_terms:
+            matches = []
+            for path in files_to_check:
+                try:
+                    content = path.read_text()
+                    if term in content:
+                        matches.append(str(path.relative_to(WORKSPACE_ROOT)))
+                except Exception:
+                    pass
+            self.assertEqual(matches, [], f"Legacy term '{term}' still referenced in files: {matches}")
+
+    def test_pmm_probe_expects_galera_backup_metrics(self):
+        pmm_probe = (WORKSPACE_ROOT / "tests" / "lab" / "probe-pmm-native.py").read_text()
+        for metric in [
+            "galera_backup_last_success_unixtime",
+            "galera_backup_last_failure_unixtime",
+            "galera_backup_last_run_success",
+            "galera_backup_last_size_bytes",
+            "galera_backup_last_duration_seconds",
+        ]:
+            self.assertIn(metric, pmm_probe)
+        self.assertNotIn("isa_backup_last_success_unixtime", pmm_probe)
+
+    def test_alerts_playbook_includes_galera_backup_rules(self):
+        alerts_playbook = (WORKSPACE_ROOT / "playbooks" / "f15_alerts.yml").read_text()
+        self.assertIn("galera_backup_last_success_unixtime", alerts_playbook)
+        self.assertIn("galera_backup_last_run_success", alerts_playbook)
+        self.assertIn("Backup run failed", alerts_playbook)
+        self.assertIn("Backup freshness stale", alerts_playbook)
+        self.assertNotIn("isa_backup_last_success_unixtime", alerts_playbook)
 if __name__ == "__main__":
     unittest.main()

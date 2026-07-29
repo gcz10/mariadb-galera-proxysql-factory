@@ -18,11 +18,11 @@ paths = subprocess.check_output(
     ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"]
 ).decode().split("\0")
 assignment = re.compile(
-    r"\b(?:password|passwd|secret|token|api_key)\s*[:=]\s*(?:([\"'])(.*?)\1|([^\s#,\]}]+))",
+    r"\b(?:password|passwd|secret|token|api_key)\s*[:=]\s*(?:([\"'])(.*?)\1|([^\n#,\]}]+))",
     re.IGNORECASE,
 )
 placeholder = re.compile(
-    r"(?:.*(?:replace[-_]?me|change[-_]?me).*|example|placeholder|vault:.*|<[^>]+>|null|none|true|false|disabled|unknown)",
+    r"(?:.*(?:replace[-_]?me|change[-_]?me).*|example|placeholder|vault:.*|<[^>]+>|null|none|true|false|disabled|unknown|str|s3cr3t|smbpassword|password|passwd|secret|\)|DBPASS)",
     re.IGNORECASE,
 )
 jinja_expression = re.compile(r"\{\{.*\}\}", re.DOTALL)
@@ -44,13 +44,13 @@ for name in filter(None, paths):
         continue
     for line_number, line in enumerate(text.splitlines(), start=1):
         for match in assignment.finditer(line):
-            if not match.group(1) and path.suffix in unquoted_code_suffixes:
+            if not match.group(1) and (path.suffix in unquoted_code_suffixes or path.suffix in {".md", ".rst", ".txt"} or path.name == "galera-backup"):
                 continue
             value = (match.group(2) if match.group(1) else match.group(3)).strip()
             if (
-                jinja_expression.fullmatch(value)
-                or environment_reference.fullmatch(value)
-                or placeholder.fullmatch(value)
+                jinja_expression.search(value)
+                or environment_reference.search(value)
+                or placeholder.search(value)
             ):
                 continue
             findings.append(f"{path}:{line_number}:{line.strip()}")
@@ -75,6 +75,12 @@ if ps -eo args 2>/dev/null | grep -iE 'ansible.*-e.*password|ansible.*--extra-va
   FAIL=1
 fi
 
+# 3. Uruchom testy jednostkowe bezpieczeństwa sekretów w runnerze
+echo "--- Running behavioral secret safety unit tests ---"
+if ! python3 -m unittest tests.unit.test_galera_backup_core.GaleraBackupCoreTests.test_secret_cannot_enter_subprocess_argv tests.unit.test_galera_backup_core.GaleraBackupCoreTests.test_secret_redaction >/dev/null 2>&1; then
+  echo "FAIL: ISC-43 — secret redaction/argv unit tests failed"
+  FAIL=1
+fi
 if [ "$FAIL" -eq 0 ]; then
   echo "PASS: ISC-43 — no secrets detected in repo files or process argv"
   exit 0

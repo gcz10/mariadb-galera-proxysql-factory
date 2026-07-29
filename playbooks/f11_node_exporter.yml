@@ -138,11 +138,8 @@
       ansible.builtin.copy:
         dest: "{{ node_exporter_textfile_dir }}/isa_monitoring_state.prom"
         content: |
-          # Ten plik aktualizują atomowo feature backup/restore/TLS.
+          # Ten plik aktualizują atomowo feature restore/TLS.
           # Wartość 0 oznacza brak potwierdzonego sukcesu.
-          # HELP isa_backup_last_success_unixtime Unix time of the last verified off-cluster backup.
-          # TYPE isa_backup_last_success_unixtime gauge
-          isa_backup_last_success_unixtime{cluster="{{ monitoring.pmm.cluster_name }}"} 0
           # HELP isa_restore_test_last_success_unixtime Unix time of the last successful restore drill.
           # TYPE isa_restore_test_last_success_unixtime gauge
           isa_restore_test_last_success_unixtime{cluster="{{ monitoring.pmm.cluster_name }}"} 0
