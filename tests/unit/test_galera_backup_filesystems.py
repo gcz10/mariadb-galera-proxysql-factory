@@ -191,5 +191,111 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
                 self.assertTrue(new_dir.exists())
 
 
+class ManagedSMBTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.mod = load_galera_backup_module()
+        except Exception:
+            cls.mod = None
+
+    def setUp(self):
+        if self.mod is None:
+            self.skipTest("galera-backup executable not implemented yet")
+
+    def test_missing_cifs_module_diagnostic_without_mount(self):
+        smb = self.mod.SMBBackend(
+            source="//nas/backups",
+            mount_point="/mnt/smb",
+            options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
+            username="smbuser",
+            password="smbpassword",
+            domain="DOMAIN",
+            cluster_name="claude-r10b",
+        )
+
+        with patch.object(smb, "_check_cifs_available", return_value=(False, "6.12.0-211.16.1.el10_2", "6.12.0-211.39.1.el10_2")):
+            with patch.object(smb, "_exec_mount") as mock_mount:
+                with self.assertRaises(self.mod.BackupError) as ctx:
+                    smb.preflight()
+                self.assertEqual(ctx.exception.code, "E_CIFS_MODULE")
+                self.assertIn("6.12.0-211.16.1.el10_2", ctx.exception.public_message)
+                self.assertIn("6.12.0-211.39.1.el10_2", ctx.exception.public_message)
+                self.assertEqual(mock_mount.call_count, 0)
+
+    def test_credentials_file_and_mount_argv_safety(self):
+        with tempfile.TemporaryDirectory() as td:
+            mount_path = Path(td)
+            smb = self.mod.SMBBackend(
+                source="//nas/backups",
+                mount_point=mount_path,
+                options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
+                username="smbuser",
+                password="smbpassword",
+                domain="MYDOMAIN",
+                cluster_name="claude-r10b",
+            )
+
+            mounted_cmds = []
+
+            def fake_exec_mount(cmd, cred_path, cred_content):
+                mounted_cmds.append(cmd)
+                self.assertIn("username=smbuser\n", cred_content)
+                self.assertIn("password=smbpassword\n", cred_content)
+                self.assertIn("domain=MYDOMAIN\n", cred_content)
+                st = os.stat(cred_path)
+                self.assertEqual(st.st_mode & 0o777, 0o600)
+                return (0, "", "")
+
+            fake_mount_info = {
+                "target": str(mount_path),
+                "source": "//nas/backups",
+                "fstype": "cifs",
+                "options": "rw,vers=3.1.1,seal,nosuid,nodev,noexec",
+                "majmin": "0:42",
+                "fsroot": "/",
+            }
+
+            with patch.object(smb, "_check_cifs_available", return_value=(True, "6.12", "6.12")):
+                with patch.object(smb, "_check_target_not_mounted"):
+                    with patch.object(smb, "_exec_mount", side_effect=fake_exec_mount):
+                        with patch.object(smb.fs_backend, "_get_mount_info", return_value=fake_mount_info):
+                            with patch.object(smb, "_exec_umount", return_value=(0, "", "")):
+                                with smb:
+                                    smb.preflight()
+
+            self.assertEqual(len(mounted_cmds), 1)
+            cmd_str = " ".join(mounted_cmds[0])
+            self.assertNotIn("smbpassword", cmd_str)
+            self.assertIn("credentials=", cmd_str)
+    def test_cleanup_credentials_and_umount_on_failure(self):
+        smb = self.mod.SMBBackend(
+            source="//nas/backups",
+            mount_point="/mnt/smb",
+            options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
+            username="smbuser",
+            password="smbpassword",
+            domain=None,
+            cluster_name="claude-r10b",
+        )
+
+        cred_file_created = []
+        cred_file_removed = []
+
+        def fake_exec_mount(cmd, cred_path, cred_content):
+            cred_file_created.append(cred_path)
+            return (1, "", "Mount failed")
+
+        with patch.object(smb, "_check_cifs_available", return_value=(True, "6.12", "6.12")):
+            with patch.object(smb, "_check_target_not_mounted"):
+                with patch.object(smb, "_exec_mount", side_effect=fake_exec_mount):
+                    with self.assertRaises(self.mod.BackupError) as ctx:
+                        with smb:
+                            smb.preflight()
+                    self.assertEqual(ctx.exception.code, "E_STORAGE")
+
+        # Credential file should be cleaned up
+        for cp in cred_file_created:
+            self.assertFalse(os.path.exists(cp))
 if __name__ == "__main__":
     unittest.main()

@@ -44,6 +44,33 @@ def escape_metric_label(val: str) -> str:
     res = res.replace('"', '\\"')
     res = res.replace("\n", "\\n")
     return res
+def validate_smb_options(options: list[str]) -> list[str]:
+    errors = []
+    opt_set = set(options)
+
+    for opt in options:
+        opt_lower = opt.lower()
+        if opt_lower.startswith("username=") or opt_lower == "username":
+            errors.append("Unsafe SMB option 'username=' specified (credentials must be stored in root-only secrets)")
+        if opt_lower.startswith("password=") or opt_lower == "password":
+            errors.append("Unsafe SMB option 'password=' specified (credentials must be stored in root-only secrets)")
+        if opt_lower.startswith("credentials=") or opt_lower == "credentials":
+            errors.append("Unsafe SMB option 'credentials=' specified")
+        if opt_lower == "noseal":
+            errors.append("Unsafe SMB option 'noseal' specified")
+        if opt_lower.startswith("vers=1") or opt_lower.startswith("vers=2"):
+            errors.append(f"Unsafe SMB dialect specified: '{opt}' (SMB 3.x required)")
+
+    required_opts = ["seal", "nosuid", "nodev", "noexec"]
+    for req in required_opts:
+        if req not in opt_set:
+            errors.append(f"Missing required SMB option: '{req}'")
+
+    has_vers_3 = any(opt.lower().startswith("vers=3") for opt in options)
+    if not has_vers_3:
+        errors.append("Missing required SMB 3.x version option (e.g. 'vers=3.1.1')")
+
+    return errors
 
 
 def atomic_write(target_path: Path, content: str, mode: int = 0o644) -> None:
@@ -872,6 +899,182 @@ class FilesystemBackend:
 
     def close(self) -> None:
         pass
+class SMBBackend:
+    def __init__(
+        self,
+        source: str,
+        mount_point: Path | str,
+        options: list[str],
+        username: str,
+        password: str,
+        domain: Optional[str],
+        cluster_name: str,
+    ):
+        self.source = source
+        self.mount_point = Path(mount_point).resolve()
+        self.options = list(options)
+        self.username = username
+        self.password = password
+        self.domain = domain
+        self.cluster_name = cluster_name
+        self.fs_backend = FilesystemBackend(self.mount_point, expected_fstype="cifs", cluster_name=self.cluster_name)
+        self._credentials_file: Optional[Path] = None
+        self._is_mounted = False
+
+    def _check_cifs_available(self) -> tuple[bool, str, str]:
+        running_k = ""
+        installed_k = ""
+        try:
+            running_k = subprocess.run(["uname", "-r"], capture_output=True, text=True).stdout.strip()
+        except Exception:
+            pass
+
+        try:
+            p = subprocess.run(["modprobe", "-n", "-v", "cifs"], capture_output=True, text=True)
+            if p.returncode == 0:
+                return True, running_k, running_k
+        except Exception:
+            pass
+
+        try:
+            modules_dir = Path("/lib/modules")
+            if modules_dir.exists():
+                for kdir in modules_dir.iterdir():
+                    if kdir.is_dir():
+                        cifs_ko = list(kdir.glob("**/cifs.ko*"))
+                        if cifs_ko:
+                            installed_k = kdir.name
+                            break
+        except Exception:
+            pass
+
+        return False, running_k, installed_k
+
+    def _check_target_not_mounted(self) -> None:
+        try:
+            self.fs_backend._get_mount_info()
+            raise BackupError("E_STORAGE", f"Target mount_point '{self.mount_point}' is already mounted")
+        except BackupError as e:
+            if e.code == "E_STORAGE" and "not an active mount point" in e.public_message:
+                return
+            raise
+
+    def _create_credentials_file(self) -> Path:
+        run_dir = Path("/run/galera-backup")
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(run_dir, 0o700)
+        except OSError:
+            run_dir = Path(tempfile.gettempdir()) / "galera-backup"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(run_dir, 0o700)
+
+        cred_path = run_dir / f"smb-credentials-{self.cluster_name}-{os.getpid()}.key"
+        lines = [f"username={self.username}\n", f"password={self.password}\n"]
+        if self.domain:
+            lines.append(f"domain={self.domain}\n")
+
+        content = "".join(lines)
+        fd = os.open(str(cred_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        return cred_path
+
+    def _exec_mount(self, cmd: list[str], cred_path: Path, cred_content: str) -> tuple[int, str, str]:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def _exec_umount(self) -> tuple[int, str, str]:
+        proc = subprocess.run(["umount", str(self.mount_point)], capture_output=True, text=True)
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+
+    def cleanup(self) -> None:
+        if self._is_mounted:
+            try:
+                code, out, err = self._exec_umount()
+                if code != 0:
+                    pass
+            except Exception:
+                pass
+            finally:
+                self._is_mounted = False
+
+        if self._credentials_file and self._credentials_file.exists():
+            try:
+                self._credentials_file.unlink()
+            except OSError:
+                pass
+            finally:
+                self._credentials_file = None
+
+    def preflight(self) -> None:
+        cifs_ok, running_k, installed_k = self._check_cifs_available()
+        if not cifs_ok:
+            raise BackupError(
+                "E_CIFS_MODULE",
+                f"CIFS kernel module ('cifs.ko') is unavailable for running kernel {running_k}. "
+                f"Installed kernel with CIFS: {installed_k or 'none'}. Database host reboot required to boot matching kernel."
+            )
+
+        self._check_target_not_mounted()
+
+        opt_errs = validate_smb_options(self.options)
+        if opt_errs:
+            raise BackupError("E_STORAGE", f"SMB options validation failed: {'; '.join(opt_errs)}")
+
+        self._credentials_file = self._create_credentials_file()
+        cred_content = self._credentials_file.read_text(encoding="utf-8")
+
+        opts_with_cred = self.options + [f"credentials={self._credentials_file}"]
+        cmd = ["mount", "-t", "cifs", self.source, str(self.mount_point), "-o", ",".join(opts_with_cred)]
+
+        try:
+            code, out, err = self._exec_mount(cmd, self._credentials_file, cred_content)
+            if code != 0:
+                raise BackupError("E_STORAGE", f"SMB mount command failed: {err or out}")
+            self._is_mounted = True
+        except Exception as exc:
+            self.cleanup()
+            if isinstance(exc, BackupError):
+                raise
+            raise BackupError("E_STORAGE", f"SMB mount failed: {exc}")
+
+        try:
+            self.fs_backend.preflight()
+        except Exception:
+            self.cleanup()
+            raise
+
+    def publish(self, artifact: ArtifactSet) -> PublishedArtifact:
+        try:
+            return self.fs_backend.publish(artifact)
+        except Exception:
+            self.cleanup()
+            raise
+
+    def fetch_latest(self, work_dir: Path) -> ArtifactSet:
+        try:
+            return self.fs_backend.fetch_latest(work_dir)
+        except Exception:
+            self.cleanup()
+            raise
+
+    def prune(self, now: datetime, retention_days: int) -> int:
+        try:
+            return self.fs_backend.prune(now, retention_days)
+        except Exception:
+            self.cleanup()
+            raise
+
+    def close(self) -> None:
+        self.cleanup()
 def main() -> int:
     parser = argparse.ArgumentParser(description="Galera cluster physical backup & restore runner")
     subparsers = parser.add_subparsers(dest="command", required=True)
