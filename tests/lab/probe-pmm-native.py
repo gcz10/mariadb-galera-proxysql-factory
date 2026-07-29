@@ -156,6 +156,7 @@ def main():
         f"isa-{_cl}-quorum-loss",
         f"isa-{_cl}-not-synced",
         f"isa-{_cl}-no-writer",
+        f"isa-{_cl}-backup-failed",
         f"isa-{_cl}-backup-stale",
     }
     managed_alert_rules = [
