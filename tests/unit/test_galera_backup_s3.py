@@ -1,3 +1,4 @@
+import importlib.util
 import io
 import json
 import unittest
@@ -195,41 +196,88 @@ class GaleraBackupS3Tests(unittest.TestCase):
         self.assertIn("galera-other-cluster-20260701-120000/metadata.json", self.client.objects)
 
 
-    def test_minio_service_account_revocation_filtering(self):
-        # Verify service account accessKey resolution by friendly name
-        list_output_lines = [
-            json.dumps({
+    def load_minio_access_key_filters(self):
+        plugin_path = (
+            Path(__file__).resolve().parents[2]
+            / "roles"
+            / "galera_backup"
+            / "filter_plugins"
+            / "minio_access_keys.py"
+        )
+        self.assertTrue(plugin_path.is_file(), "MinIO access-key filter plugin is missing")
+        spec = importlib.util.spec_from_file_location("minio_access_keys", plugin_path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.minio_service_account_keys, module.minio_access_keys_named
+
+    def test_minio_service_account_list_extracts_actual_keys(self):
+        list_keys, _ = self.load_minio_access_key_filters()
+        output = json.dumps(
+            {
                 "status": "success",
                 "user": "rootuser",
                 "svcaccs": [
-                    {"accessKey": "AKIA_DISCLOSED_1", "parentUser": "rootuser"},
-                    {"accessKey": "AKIA_DISCLOSED_2", "parentUser": "rootuser"},
-                    {"accessKey": "AKIA_OTHER_CLUSTER", "parentUser": "rootuser"},
+                    {"accessKey": "matching-key-1", "parentUser": "rootuser"},
+                    {"accessKey": "other-key", "parentUser": "rootuser"},
+                    {"accessKey": "matching-key-1", "parentUser": "rootuser"},
                 ],
-            })
+            }
+        )
+
+        self.assertEqual(list_keys(output), ["matching-key-1", "other-key"])
+
+    def test_minio_service_account_info_selects_keys_by_exact_name(self):
+        _, select_keys = self.load_minio_access_key_filters()
+        info_outputs = [
+            json.dumps(
+                {
+                    "status": "success",
+                    "accessKey": "matching-key-1",
+                    "name": "galera-backup-claude-r10b",
+                }
+            ),
+            json.dumps(
+                {
+                    "status": "success",
+                    "accessKey": "other-key",
+                    "name": "galera-backup-other",
+                }
+            ),
+            json.dumps(
+                {
+                    "status": "success",
+                    "accessKey": "matching-key-2",
+                    "name": "galera-backup-claude-r10b",
+                }
+            ),
         ]
-        
-        key_info_map = {
-            "AKIA_DISCLOSED_1": {"name": "galera-backup-claude-r10b"},
-            "AKIA_DISCLOSED_2": {"name": "galera-backup-claude-r10b"},
-            "AKIA_OTHER_CLUSTER": {"name": "galera-backup-other-cluster"},
-        }
-        
-        target_cluster_name = "galera-backup-claude-r10b"
-        to_remove = []
-        
-        for line in list_output_lines:
-            record = json.loads(line)
-            for sa in record.get("svcaccs") or []:
-                ak = sa.get("accessKey")
-                if not ak:
-                    continue
-                info = key_info_map.get(ak, {})
-                if info.get("name") == target_cluster_name:
-                    to_remove.append(ak)
-                    
-        self.assertEqual(to_remove, ["AKIA_DISCLOSED_1", "AKIA_DISCLOSED_2"])
-        self.assertNotIn("AKIA_OTHER_CLUSTER", to_remove)
+
+        self.assertEqual(
+            select_keys(info_outputs, "galera-backup-claude-r10b"),
+            ["matching-key-1", "matching-key-2"],
+        )
+
+    def test_minio_service_account_filter_rejects_malformed_list_output(self):
+        list_keys, _ = self.load_minio_access_key_filters()
+
+        with self.assertRaisesRegex(ValueError, "line 1 is not valid JSON"):
+            list_keys("not-json")
+
+    def test_minio_service_account_filter_rejects_matching_info_without_key(self):
+        _, select_keys = self.load_minio_access_key_filters()
+        info_outputs = [
+            json.dumps(
+                {
+                    "status": "success",
+                    "name": "galera-backup-claude-r10b",
+                }
+            )
+        ]
+
+        with self.assertRaisesRegex(ValueError, "matching service account has no accessKey"):
+            select_keys(info_outputs, "galera-backup-claude-r10b")
 
 if __name__ == "__main__":
     unittest.main()
