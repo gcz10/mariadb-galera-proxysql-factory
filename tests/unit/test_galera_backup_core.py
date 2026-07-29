@@ -181,5 +181,83 @@ class GaleraBackupCoreTests(unittest.TestCase):
         self.assertEqual(escaped, 'cluster \\"name\\"\\nwith\\\\slash')
 
 
+class TemplateContractTests(unittest.TestCase):
+    def setUp(self):
+        try:
+            import jinja2
+            self.jinja2 = jinja2
+        except ImportError:
+            self.skipTest("jinja2 not installed")
+
+        self.templates_dir = WORKSPACE_ROOT / "roles" / "galera_backup" / "templates"
+        self.env = self.jinja2.Environment(
+            loader=self.jinja2.FileSystemLoader(str(self.templates_dir)),
+            trim_blocks=True,
+            lstrip_blocks=True,
+        )
+        self.env.filters["to_json"] = lambda v: json.dumps(v)
+        self.env.filters["regex_replace"] = lambda s, p, r: re.sub(p, r, str(s))
+
+    def test_templates_rendered_contract(self):
+        ctx = {
+            "cluster": {
+                "name": "claude-r10b",
+                "monitoring": {"pmm": {"cluster_name": "r10b-galera"}},
+            },
+            "backup": {
+                "destination": "s3",
+                "full_backup_schedule": "0 2 * * *",
+                "retention_days": 14,
+                "flow_control_threshold_ns": 1000000000,
+                "scheduler": {"host": "gnode4", "timezone": "UTC"},
+                "s3": {"endpoint": "192.168.1.47:9000", "bucket": "r10b-galera-backups", "secure": False},
+            },
+            "galera": {"nodes_expected": 3},
+            "lock": {"mariadb": {"version": "11.4.12"}},
+            "galera_backup_local_role": "scheduler",
+            "galera_backup_encryption_key": "enc_pass_123",
+            "galera_backup_s3_access_key": "access_key_456",
+            "galera_backup_s3_secret_key": "secret_key_789",
+        }
+
+        # 1. config.json.j2
+        tmpl_config = self.env.get_template("config.json.j2")
+        rendered_config = tmpl_config.render(ctx)
+        self.assertNotIn("enc_pass_123", rendered_config)
+        self.assertNotIn("secret_key_789", rendered_config)
+        cfg_dict = json.loads(rendered_config)
+        self.assertEqual(cfg_dict["cluster_name"], "claude-r10b")
+
+        # 2. secrets.env.j2
+        tmpl_secrets = self.env.get_template("secrets.env.j2")
+        rendered_secrets = tmpl_secrets.render(ctx)
+        self.assertIn('GALERA_BACKUP_ENCRYPTION_KEY="enc_pass_123"', rendered_secrets)
+        self.assertIn('GALERA_BACKUP_S3_ACCESS_KEY="access_key_456"', rendered_secrets)
+        self.assertIn('GALERA_BACKUP_S3_SECRET_KEY="secret_key_789"', rendered_secrets)
+
+        # 3. cron.j2
+        tmpl_cron = self.env.get_template("cron.j2")
+        rendered_cron = tmpl_cron.render(ctx)
+        self.assertIn("CRON_TZ=UTC", rendered_cron)
+        self.assertIn("PATH=", rendered_cron)
+        self.assertIn("root", rendered_cron)
+        self.assertIn("systemd-cat", rendered_cron)
+        self.assertIn("/opt/galera-backup/galera-backup backup claude-r10b", rendered_cron)
+        self.assertNotIn("enc_pass_123", rendered_cron)
+
+        # 4. minio-policy.json.j2
+        tmpl_policy = self.env.get_template("minio-policy.json.j2")
+        rendered_policy = tmpl_policy.render(ctx)
+        policy_dict = json.loads(rendered_policy)
+        self.assertEqual(policy_dict["Version"], "2012-10-17")
+        resources = []
+        for stmt in policy_dict["Statement"]:
+            resources.extend(stmt["Resource"])
+        self.assertIn("arn:aws:s3:::r10b-galera-backups", resources)
+        self.assertIn("arn:aws:s3:::r10b-galera-backups/galera-claude-r10b-*", resources)
+        self.assertIn("arn:aws:s3:::r10b-galera-backups/galera-backup-owner.json", resources)
+        for res in resources:
+            self.assertNotIn("*/*", res)
+            self.assertNotIn("arn:aws:s3:::second-bucket", res)
 if __name__ == "__main__":
     unittest.main()

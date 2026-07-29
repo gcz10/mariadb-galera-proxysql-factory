@@ -61,6 +61,11 @@ jobs:
 
       - name: Backup configuration semantics and ownership
         run: python3 tests/validation/validate-backup-config.py clusters
+      - name: Galera backup unit tests
+        run: python3 -m unittest discover -s tests/unit -p 'test_*.py' -v
+
+      - name: Galera backup executable compile
+        run: python3 -m py_compile roles/galera_backup/files/galera-backup
 
       # Walidujemy lockfile'e faktycznie UZYWANE przez klastry (versions.lock_file),
       # nie kazdy plik w versions/. candidate.lock.yml jest z zalozenia niedokonczony

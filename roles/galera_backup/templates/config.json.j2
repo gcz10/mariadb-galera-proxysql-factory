@@ -1,0 +1,34 @@
+{
+  "format_version": 1,
+  "cluster_name": "{{ cluster.name }}",
+  "metric_cluster_label": "{{ cluster.monitoring.pmm.cluster_name }}",
+  "local_role": "{{ galera_backup_local_role | default('scheduler') }}",
+  "scheduler_system_hostname": "{{ backup.scheduler.host }}",
+  "galera_nodes_expected": {{ galera.nodes_expected | default(3) }},
+  "mariadb_version": "{{ lock.mariadb.version | default('') }}",
+  "retention_days": {{ backup.retention_days | default(14) }},
+  "flow_control_threshold_ns": {{ backup.flow_control_threshold_ns | default(1000000000) }},
+  "backend": {
+    "type": "{{ backup.destination }}",
+{% if backup.destination == 's3' %}
+    "endpoint": "{{ backup.s3.endpoint }}",
+    "bucket": "{{ backup.s3.bucket }}",
+    "secure": {{ backup.s3.secure | default(false) | to_json }}
+{% elif backup.destination == 'smb' %}
+    "source": "{{ backup.smb.source }}",
+    "mount_point": "{{ backup.smb.mount_point }}",
+    "options": {{ backup.smb.options | to_json }}
+{% elif backup.destination == 'filesystem' %}
+    "mount_point": "{{ backup.filesystem.mount_point }}",
+    "expected_fstype": "{{ backup.filesystem.expected_fstype }}"
+{% endif %}
+  },
+  "paths": {
+    "install_root": "/opt/galera-backup",
+    "cluster_dir": "/opt/galera-backup/clusters/{{ cluster.name }}",
+    "staging_root": "/var/tmp/galera-backup/{{ cluster.name }}",
+    "datadir": "/var/lib/mysql",
+    "socket": "/var/lib/mysql/mysql.sock",
+    "metric_file": "/var/lib/node_exporter/textfile_collector/galera_backup-{{ cluster.name | regex_replace('[^A-Za-z0-9_-]', '_') }}.prom"
+  }
+}

@@ -1,0 +1,88 @@
+---
+# main.yml for galera_backup role
+
+- name: Install common packages required by backup runner
+  ansible.builtin.package:
+    name:
+      - "{{ lock.backup_tools.python_pip_package }}"
+      - "{{ lock.backup_tools.encryption_package }}"
+      - "{{ lock.backup_tools.archive_package }}"
+    state: present
+
+- name: Install cron package if scheduled cron mode enabled
+  ansible.builtin.package:
+    name: "{{ lock.backup_tools.cron_package }}"
+    state: present
+  when:
+    - backup.enabled
+    - backup.scheduler.mode == 'cron'
+
+- name: Install CIFS userspace package if managed SMB enabled
+  ansible.builtin.package:
+    name: "{{ lock.backup_tools.cifs_userspace_package }}"
+    state: present
+  when:
+    - backup.enabled
+    - backup.destination == 'smb'
+
+- name: Ensure MinIO Python SDK is installed
+  ansible.builtin.pip:
+    name: "minio=={{ lock.minio.sdk_version }}"
+    state: present
+
+- name: Ensure directory structure under /opt/galera-backup
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /opt/galera-backup
+    - "/opt/galera-backup/clusters/{{ cluster.name }}"
+
+- name: Deploy galera-backup executable
+  ansible.builtin.copy:
+    src: galera-backup
+    dest: /opt/galera-backup/galera-backup
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy cluster config.json
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "/opt/galera-backup/clusters/{{ cluster.name }}/config.json"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Deploy cluster secrets.env
+  ansible.builtin.template:
+    src: secrets.env.j2
+    dest: "/opt/galera-backup/clusters/{{ cluster.name }}/secrets.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Manage per-cluster cron job
+  ansible.builtin.template:
+    src: cron.j2
+    dest: "/etc/cron.d/galera-backup-{{ cluster.name }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - (galera_backup_install_cron | default(true))
+    - backup.enabled
+    - backup.scheduler.mode == 'cron'
+    - inventory_hostname == backup.scheduler.host
+
+- name: Remove cron file on non-scheduler hosts or manual mode
+  ansible.builtin.file:
+    path: "/etc/cron.d/galera-backup-{{ cluster.name }}"
+    state: absent
+  when: >
+    not (backup.enabled and backup.scheduler.mode == 'cron' and inventory_hostname == backup.scheduler.host) or
+    not (galera_backup_install_cron | default(true))
