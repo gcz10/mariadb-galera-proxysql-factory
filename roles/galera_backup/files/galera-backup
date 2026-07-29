@@ -17,6 +17,8 @@ import tarfile
 import tempfile
 import argparse
 import subprocess
+import socket
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Any, Mapping, Optional, Sequence
@@ -1075,6 +1077,321 @@ class SMBBackend:
 
     def close(self) -> None:
         self.cleanup()
+def query_galera_vars(socket_path: Path, runner: CommandRunner) -> dict[str, str]:
+    cmd = ["mariadb", f"--socket={socket_path}", "-u", "root", "-e", "SHOW GLOBAL STATUS LIKE 'wsrep_%';"]
+    code, out, err = runner.run(cmd)
+    if code != 0:
+        raise BackupError("E_GALERA", f"Failed to query Galera status via socket '{socket_path}': {err or out}")
+
+    vars_dict: dict[str, str] = {}
+    for line in out.splitlines():
+        parts = line.strip().split("\t")
+        if len(parts) >= 2:
+            vars_dict[parts[0].lower()] = parts[1]
+        else:
+            parts_space = line.strip().split(maxsplit=1)
+            if len(parts_space) == 2:
+                vars_dict[parts_space[0].lower()] = parts_space[1]
+
+    return vars_dict
+
+
+def get_storage_backend(cfg: RunConfig, secrets: dict[str, str]) -> Any:
+    b_type = str(cfg.backend.get("type", cfg.backend.get("destination", ""))).lower()
+    if b_type == "s3":
+        return S3Backend(
+            endpoint=cfg.backend["endpoint"],
+            bucket=cfg.backend["bucket"],
+            secure=cfg.backend.get("secure", False),
+            access_key=secrets["GALERA_BACKUP_S3_ACCESS_KEY"],
+            secret_key=secrets["GALERA_BACKUP_S3_SECRET_KEY"],
+            cluster_name=cfg.cluster_name,
+        )
+    elif b_type == "smb":
+        return SMBBackend(
+            source=cfg.backend["source"],
+            mount_point=cfg.backend["mount_point"],
+            options=cfg.backend.get("options", []),
+            username=secrets["GALERA_BACKUP_SMB_USERNAME"],
+            password=secrets["GALERA_BACKUP_SMB_PASSWORD"],
+            domain=secrets.get("GALERA_BACKUP_SMB_DOMAIN"),
+            cluster_name=cfg.cluster_name,
+        )
+    elif b_type == "filesystem":
+        return FilesystemBackend(
+            mount_point=cfg.backend["mount_point"],
+            expected_fstype=cfg.backend.get("expected_fstype", ""),
+            cluster_name=cfg.cluster_name,
+        )
+    else:
+        raise BackupError("E_CONFIG", f"Unknown backend type '{b_type}'")
+
+
+def perform_physical_backup(work_dir: Path, datadir: Path, socket: Path, runner: CommandRunner) -> tuple[str, str]:
+    raw_dir = work_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. mariadb-backup --backup --galera-info
+    cmd_backup = [
+        "mariadb-backup",
+        "--backup",
+        "--galera-info",
+        f"--target-dir={raw_dir}",
+        f"--socket={socket}",
+        "--user=root",
+    ]
+    code, out, err = runner.run(cmd_backup)
+    if code != 0:
+        raise BackupError("E_GALERA", f"mariadb-backup --backup failed: {err or out}")
+
+    # 2. mariadb-backup --prepare
+    cmd_prepare = ["mariadb-backup", "--prepare", f"--target-dir={raw_dir}"]
+    code, out, err = runner.run(cmd_prepare)
+    if code != 0:
+        raise BackupError("E_GALERA", f"mariadb-backup --prepare failed: {err or out}")
+
+    # 3. Read wsrep UUID & seqno
+    info_file = raw_dir / "mariadb_backup_galera_info"
+    if not info_file.exists():
+        raise BackupError("E_GALERA", f"mariadb_backup_galera_info file missing at '{info_file}' after backup")
+
+    info_content = info_file.read_text(encoding="utf-8").strip()
+    parts = info_content.split()
+    if len(parts) < 2:
+        raise BackupError("E_GALERA", f"Malformed mariadb_backup_galera_info content: '{info_content}'")
+
+    wsrep_uuid, wsrep_seqno = parts[0], parts[1]
+    return wsrep_uuid, wsrep_seqno
+
+
+def run_backup(
+    config_path: Optional[Path] = None,
+    secrets_path: Optional[Path] = None,
+    cluster_name: str = "",
+) -> None:
+    cluster_name = sanitize_cluster_name(cluster_name)
+
+    if config_path is None:
+        config_path = Path("/opt/galera-backup/clusters") / cluster_name / "config.json"
+    if secrets_path is None:
+        secrets_path = Path("/opt/galera-backup/clusters") / cluster_name / "secrets.env"
+
+    cfg = load_run_config(config_path, cluster_name)
+    b_type = str(cfg.backend.get("type", cfg.backend.get("destination", ""))).lower()
+    secrets = load_secrets(secrets_path, backend_type=b_type, enforce_permissions=False)
+
+    secret_values = set(secrets.values())
+    redactor = SecretRedactor(secret_values)
+    runner = CommandRunner(secret_values)
+
+    state_mgr = StateManager(cluster_name, cfg.paths.cluster_dir / "state.json")
+    event_mgr = EventManager(cfg.paths.cluster_dir / "events.jsonl", redactor)
+    metrics_mgr = MetricsManager(cfg.paths.metric_file, cfg.metric_cluster_label, cluster_name, b_type)
+
+    lock_path = Path("/run/lock") / f"galera-backup-{cluster_name}.lock"
+    if not os.access("/run/lock", os.W_OK) and not os.path.exists("/run/lock"):
+        lock_path = cfg.paths.cluster_dir / f"galera-backup-{cluster_name}.lock"
+
+    lock_mgr = LockManager(lock_path)
+    now_ts = int(time.time())
+
+    try:
+        lock_mgr.acquire()
+    except BackupError as exc:
+        state_mgr.update_locked("backup", now_ts)
+        event_mgr.emit("locked", {"error_code": exc.code, "message": exc.public_message})
+        metrics_mgr.update(last_failure_unixtime=now_ts, last_run_success=0)
+        raise
+
+    start_time = time.time()
+    work_dir: Optional[Path] = None
+    backend = None
+
+    try:
+        # Check hostname
+        curr_host = socket.gethostname().split(".")[0]
+        sched_host = cfg.scheduler_system_hostname.split(".")[0] if cfg.scheduler_system_hostname else ""
+        if sched_host and curr_host != sched_host:
+            raise BackupError(
+                "E_GALERA",
+                f"Current hostname '{curr_host}' does not match configured scheduler hostname '{sched_host}'"
+            )
+
+        backend = get_storage_backend(cfg, secrets)
+        event_mgr.emit("backend.preflight", {"backend": b_type})
+        backend.preflight()
+
+        # Check Galera status
+        gal_vars = query_galera_vars(cfg.paths.socket, runner)
+        state_comment = gal_vars.get("wsrep_local_state_comment", "")
+        cluster_status = gal_vars.get("wsrep_cluster_status", "")
+        ready = gal_vars.get("wsrep_ready", "")
+        connected = gal_vars.get("wsrep_connected", "")
+        cluster_size = int(gal_vars.get("wsrep_cluster_size", "0"))
+
+        if (
+            state_comment != "Synced"
+            or cluster_status != "Primary"
+            or ready != "ON"
+            or connected != "ON"
+            or cluster_size != cfg.galera_nodes_expected
+        ):
+            raise BackupError(
+                "E_GALERA",
+                f"Galera is not fully healthy for backup: Synced={state_comment}, Primary={cluster_status}, "
+                f"ready={ready}, connected={connected}, size={cluster_size}/{cfg.galera_nodes_expected}"
+            )
+
+        fc_initial = int(gal_vars.get("wsrep_flow_control_paused_ns", "0"))
+
+        # Free space check
+        cfg.paths.staging_root.mkdir(parents=True, exist_ok=True)
+        usage = shutil.disk_usage(cfg.paths.staging_root)
+        if usage.free < 500 * 1024 * 1024:
+            raise BackupError("E_STORAGE", f"Insufficient free disk space on staging root {cfg.paths.staging_root}")
+
+        backup_name = f"galera-{cluster_name}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        work_dir = Path(tempfile.mkdtemp(prefix=f"{backup_name}-", dir=str(cfg.paths.staging_root)))
+        os.chmod(work_dir, 0o700)
+
+        event_mgr.emit("mariadb-backup.backup", {"backup_name": backup_name})
+        wsrep_uuid, wsrep_seqno = perform_physical_backup(work_dir, cfg.paths.datadir, cfg.paths.socket, runner)
+
+        raw_dir = work_dir / "raw"
+        tar_file = work_dir / "backup.tar"
+        payload_file = work_dir / "backup.tar.enc"
+        checksum_file = work_dir / "backup.sha256"
+        metadata_file = work_dir / "metadata.json"
+
+        # Create tar and compute plaintext sha
+        tar_proc = subprocess.Popen(
+            ["tar", "-cf", "-", "-C", str(raw_dir), "."],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        hasher = hashlib.sha256()
+        with open(tar_file, "wb") as f_tar:
+            while True:
+                chunk = tar_proc.stdout.read(65536)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+                f_tar.write(chunk)
+        tar_proc.wait()
+        if tar_proc.returncode != 0:
+            raise BackupError("E_STORAGE", "tar compression failed")
+
+        plaintext_sha = hasher.hexdigest()
+
+        # Encrypt with OpenSSL
+        cmd_enc = [
+            "openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
+            "-md", "sha256", "-salt",
+            "-in", str(tar_file),
+            "-out", str(payload_file),
+            "-pass", "env:GALERA_BACKUP_ENCRYPTION_KEY",
+        ]
+        code, out, err = runner.run(cmd_enc, env={"GALERA_BACKUP_ENCRYPTION_KEY": secrets["GALERA_BACKUP_ENCRYPTION_KEY"]})
+        if code != 0:
+            raise BackupError("E_STORAGE", f"OpenSSL encryption failed: {err or out}")
+
+        # Remove unencrypted tar
+        if tar_file.exists():
+            tar_file.unlink()
+
+        enc_bytes = payload_file.read_bytes()
+        enc_sha = hashlib.sha256(enc_bytes).hexdigest()
+        enc_size = len(enc_bytes)
+
+        checksum_file.write_text(f"{enc_sha}  backup.tar.enc\n", encoding="utf-8")
+
+        meta = {
+            "format_version": 1,
+            "cluster_name": cluster_name,
+            "backup_name": backup_name,
+            "source_host": curr_host,
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "created_unixtime": int(time.time()),
+            "mariadb_version": cfg.mariadb_version,
+            "wsrep_uuid": wsrep_uuid,
+            "wsrep_seqno": wsrep_seqno,
+            "plaintext_sha256": plaintext_sha,
+            "encrypted_sha256": enc_sha,
+            "encrypted_size_bytes": enc_size,
+            "encryption_method": "aes-256-cbc-pbkdf2-iter200k-sha256",
+            "backend_type": b_type,
+        }
+        metadata_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+        # Check flow control delta
+        gal_vars_final = query_galera_vars(cfg.paths.socket, runner)
+        fc_final = int(gal_vars_final.get("wsrep_flow_control_paused_ns", "0"))
+        fc_delta = fc_final - fc_initial
+
+        if fc_delta > cfg.flow_control_threshold_ns:
+            raise BackupError(
+                "E_FLOW_CONTROL",
+                f"Excessive flow control pause delta ({fc_delta} ns > threshold {cfg.flow_control_threshold_ns} ns); backup aborted before publication"
+            )
+
+        # Publish
+        art_set = ArtifactSet(
+            backup_name=backup_name,
+            payload_path=payload_file,
+            checksum_path=checksum_file,
+            metadata_path=metadata_file,
+        )
+        event_mgr.emit("backend.publish", {"backup_name": backup_name})
+        pub_art = backend.publish(art_set)
+        event_mgr.emit("backend.verify", {"backup_name": backup_name})
+
+        # Prune
+        backend.prune(datetime.now(timezone.utc), cfg.retention_days)
+
+        duration = time.time() - start_time
+        state_mgr.update_success("backup", int(time.time()), artifact=backup_name)
+        event_mgr.emit("state.success", {"backup_name": backup_name, "duration_seconds": duration, "size_bytes": enc_size})
+        metrics_mgr.update(
+            last_success_unixtime=int(time.time()),
+            last_failure_unixtime=state_mgr.read().get("last_failure", {}).get("unixtime", 0) if state_mgr.read().get("last_failure") else 0,
+            last_run_success=1,
+            last_size_bytes=enc_size,
+            last_duration_seconds=duration,
+        )
+        print(f"galera-backup backup for {cluster_name} completed successfully ({backup_name}, {enc_size} bytes)")
+    except Exception as exc:
+        duration = time.time() - start_time
+        err_code = exc.code if isinstance(exc, BackupError) else "E_STORAGE"
+        err_msg = exc.public_message if isinstance(exc, BackupError) else str(exc)
+
+        state_mgr.update_failure("backup", int(time.time()), err_code, redactor.redact(err_msg))
+        event_mgr.emit("state.failure", {"error_code": err_code, "error_message": redactor.redact(err_msg)})
+
+        last_succ = state_mgr.read().get("last_success", {})
+        last_succ_time = last_succ.get("unixtime", 0) if last_succ else 0
+
+        metrics_mgr.update(
+            last_success_unixtime=last_succ_time,
+            last_failure_unixtime=int(time.time()),
+            last_run_success=0,
+            last_size_bytes=0,
+            last_duration_seconds=duration,
+        )
+        if backend:
+            try:
+                backend.close()
+            except Exception:
+                pass
+        raise
+    finally:
+        if work_dir and work_dir.exists():
+            shutil.rmtree(work_dir, ignore_errors=True)
+        if backend:
+            try:
+                backend.close()
+            except Exception:
+                pass
+        lock_mgr.release()
 def main() -> int:
     parser = argparse.ArgumentParser(description="Galera cluster physical backup & restore runner")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1090,8 +1407,15 @@ def main() -> int:
     cluster_name = sanitize_cluster_name(args.cluster)
 
     if args.command == "backup":
-        print(f"galera-backup backup for {cluster_name} starting...")
-        return 0
+        try:
+            run_backup(cluster_name=cluster_name)
+            return 0
+        except BackupError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            print(f"ERROR: Unexpected error: {exc}", file=sys.stderr)
+            return 1
     elif args.command == "restore":
         if not args.confirm:
             print("ERROR: Restore requires --confirm flag", file=sys.stderr)
