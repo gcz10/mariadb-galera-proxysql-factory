@@ -1392,6 +1392,297 @@ def run_backup(
             except Exception:
                 pass
         lock_mgr.release()
+def is_mariadb_version_compatible(backup_ver: str, target_ver: str) -> bool:
+    def parse_ver(v_str: str) -> tuple[int, int]:
+        parts = v_str.strip().split(".")
+        try:
+            return int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+        except ValueError:
+            return (0, 0)
+
+    b_majmin = parse_ver(backup_ver)
+    t_majmin = parse_ver(target_ver)
+    return b_majmin <= t_majmin
+
+
+def is_safe_tar_member(member: Any) -> bool:
+    name = getattr(member, "name", "")
+    if not name or name.startswith("/"):
+        return False
+
+    parts = Path(name).parts
+    if ".." in parts:
+        return False
+
+    is_sym = bool(getattr(member, "issym", lambda: False)()) or bool(getattr(member, "islnk", lambda: False)())
+    is_fifo = bool(getattr(member, "isfifo", lambda: False)())
+    is_chr = bool(getattr(member, "ischr", lambda: False)())
+    is_blk = bool(getattr(member, "isblk", lambda: False)())
+
+    if is_sym or is_fifo or is_chr or is_blk:
+        return False
+
+    is_reg = bool(getattr(member, "isreg", lambda: False)()) or bool(getattr(member, "isfile", lambda: False)())
+    is_dir = bool(getattr(member, "isdir", lambda: False)())
+
+    return is_reg or is_dir
+
+
+def clear_datadir(datadir: Path) -> None:
+    resolved = datadir.resolve()
+    protected_roots = {
+        Path("/"), Path("/bin"), Path("/boot"), Path("/dev"), Path("/etc"),
+        Path("/home"), Path("/lib"), Path("/lib64"), Path("/media"), Path("/mnt"),
+        Path("/opt"), Path("/proc"), Path("/root"), Path("/run"), Path("/sbin"),
+        Path("/srv"), Path("/sys"), Path("/tmp"), Path("/usr"), Path("/var")
+    }
+
+    if resolved in protected_roots or not resolved.is_absolute():
+        raise BackupError("E_INTEGRITY", f"Datadir '{resolved}' is a protected system directory; clearing rejected")
+
+    if resolved.exists():
+        for child in resolved.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                try:
+                    child.unlink()
+                except OSError:
+                    pass
+    else:
+        resolved.mkdir(parents=True, exist_ok=True)
+
+
+def run_restore(
+    config_path: Optional[Path] = None,
+    secrets_path: Optional[Path] = None,
+    cluster_name: str = "",
+    confirm: bool = False,
+) -> None:
+    if not confirm:
+        raise BackupError("E_RESTORE_CONFIRM", "Restore operation requires --confirm flag")
+
+    cluster_name = sanitize_cluster_name(cluster_name)
+
+    if config_path is None:
+        config_path = Path("/opt/galera-backup/clusters") / cluster_name / "config.json"
+    if secrets_path is None:
+        secrets_path = Path("/opt/galera-backup/clusters") / cluster_name / "secrets.env"
+
+    cfg = load_run_config(config_path, cluster_name)
+
+    # Validate local_role and hostname disjointness
+    if cfg.local_role != "restore":
+        raise BackupError("E_RESTORE_CONFIRM", f"Restore host local_role must be 'restore', got '{cfg.local_role}'")
+
+    curr_host = socket.gethostname().split(".")[0]
+    sched_host = cfg.scheduler_system_hostname.split(".")[0] if cfg.scheduler_system_hostname else ""
+    if sched_host and curr_host == sched_host:
+        raise BackupError("E_RESTORE_CONFIRM", f"Restore cannot run on configured scheduler host '{curr_host}'")
+
+    b_type = str(cfg.backend.get("type", cfg.backend.get("destination", ""))).lower()
+    secrets = load_secrets(secrets_path, backend_type=b_type, enforce_permissions=False)
+
+    secret_values = set(secrets.values())
+    redactor = SecretRedactor(secret_values)
+    runner = CommandRunner(secret_values)
+
+    state_mgr = StateManager(cluster_name, cfg.paths.cluster_dir / "state.json")
+    event_mgr = EventManager(cfg.paths.cluster_dir / "events.jsonl", redactor)
+
+    backend = get_storage_backend(cfg, secrets)
+    event_mgr.emit("restore.preflight", {"backend": b_type})
+    backend.preflight()
+
+    cfg.paths.staging_root.mkdir(parents=True, exist_ok=True)
+    work_dir = Path(tempfile.mkdtemp(prefix=f"restore-{cluster_name}-", dir=str(cfg.paths.staging_root)))
+    os.chmod(work_dir, 0o700)
+
+    try:
+        event_mgr.emit("restore.fetch_latest", {})
+        art_set = backend.fetch_latest(work_dir)
+
+        # 1. Check metadata
+        meta = json.loads(art_set.metadata_path.read_text(encoding="utf-8"))
+        if meta.get("format_version") != 1 or meta.get("cluster_name") != cluster_name:
+            raise BackupError("E_INTEGRITY", "Metadata format or cluster mismatch in fetched backup")
+
+        b_ver = meta.get("mariadb_version", "")
+        if b_ver and cfg.mariadb_version:
+            if not is_mariadb_version_compatible(b_ver, cfg.mariadb_version):
+                raise BackupError(
+                    "E_INTEGRITY",
+                    f"Backup MariaDB version '{b_ver}' is newer than restore host '{cfg.mariadb_version}'"
+                )
+
+        # 2. Check encrypted SHA-256
+        payload_bytes = art_set.payload_path.read_bytes()
+        enc_sha = hashlib.sha256(payload_bytes).hexdigest()
+        expected_enc_sha = meta.get("encrypted_sha256", "")
+        if enc_sha != expected_enc_sha:
+            raise BackupError(
+                "E_INTEGRITY",
+                f"Encrypted payload SHA-256 mismatch: expected {expected_enc_sha}, got {enc_sha}"
+            )
+
+        # 3. Decrypt payload
+        tar_path = work_dir / "backup.tar"
+        cmd_dec = [
+            "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
+            "-md", "sha256",
+            "-in", str(art_set.payload_path),
+            "-out", str(tar_path),
+            "-pass", "env:GALERA_BACKUP_ENCRYPTION_KEY",
+        ]
+        code, out, err = runner.run(cmd_dec, env={"GALERA_BACKUP_ENCRYPTION_KEY": secrets["GALERA_BACKUP_ENCRYPTION_KEY"]})
+        if code != 0:
+            raise BackupError("E_INTEGRITY", f"Decryption failed: {err or out}")
+
+        # 4. Check plaintext SHA-256
+        tar_bytes = tar_path.read_bytes()
+        plain_sha = hashlib.sha256(tar_bytes).hexdigest()
+        expected_plain_sha = meta.get("plaintext_sha256", "")
+        if plain_sha != expected_plain_sha:
+            raise BackupError(
+                "E_INTEGRITY",
+                f"Plaintext SHA-256 mismatch: expected {expected_plain_sha}, got {plain_sha}"
+            )
+
+        # 5. Inspect tar safety and extract
+        extracted_dir = work_dir / "extracted"
+        extracted_dir.mkdir(parents=True, exist_ok=True)
+
+        with tarfile.open(tar_path) as tf:
+            for member in tf.getmembers():
+                if not is_safe_tar_member(member):
+                    raise BackupError("E_INTEGRITY", f"Unsafe tar member '{member.name}' rejected")
+            tf.extractall(extracted_dir)
+
+        # 6. Clear datadir & copy-back
+        clear_datadir(cfg.paths.datadir)
+
+        cmd_cb = ["mariadb-backup", "--copy-back", f"--target-dir={extracted_dir}", f"--datadir={cfg.paths.datadir}"]
+        code, out, err = runner.run(cmd_cb)
+        if code != 0:
+            raise BackupError("E_INTEGRITY", f"mariadb-backup --copy-back failed: {err or out}")
+
+        # Try changing ownership to mysql if root
+        if os.geteuid() == 0:
+            try:
+                import shutil
+                shutil.chown(cfg.paths.datadir, user="mysql", group="mysql")
+                for root, dirs, files in os.walk(cfg.paths.datadir):
+                    for d in dirs:
+                        shutil.chown(Path(root) / d, user="mysql", group="mysql")
+                    for f in files:
+                        shutil.chown(Path(root) / f, user="mysql", group="mysql")
+            except Exception:
+                pass
+
+        # 7. Start standalone MariaDB
+        standalone_log = work_dir / "standalone.log"
+        standalone_pid_file = work_dir / "standalone.pid"
+
+        server_bin = "mariadbd"
+        if not shutil.which("mariadbd") and shutil.which("mysqld"):
+            server_bin = "mysqld"
+
+        cmd_server = [
+            server_bin,
+            f"--datadir={cfg.paths.datadir}",
+            f"--socket={cfg.paths.socket}",
+            f"--pid-file={standalone_pid_file}",
+            f"--log-error={standalone_log}",
+            "--skip-wsrep",
+            "--skip-networking",
+        ]
+        if os.geteuid() == 0:
+            cmd_server.append("--user=mysql")
+
+        server_proc = None
+        total_rows = 0
+        try:
+            server_proc = subprocess.Popen(cmd_server, start_new_session=True)
+            # Wait for socket
+            start_wait = time.time()
+            connected = False
+            while time.time() - start_wait < 30:
+                if cfg.paths.socket.exists():
+                    # Test connection with mariadb CLI
+                    c_code, c_out, _ = runner.run(["mariadb", f"--socket={cfg.paths.socket}", "-u", "root", "-e", "SELECT 1;"])
+                    if c_code == 0:
+                        connected = True
+                        break
+                time.sleep(0.5)
+
+            if not connected:
+                log_tail = standalone_log.read_text() if standalone_log.exists() else ""
+                raise BackupError("E_INTEGRITY", f"Standalone MariaDB failed to produce socket within 30s. Log: {log_tail[-500:]}")
+
+            # 8. mariadb-check & table row verification
+            c_code, db_out, _ = runner.run(["mariadb", f"--socket={cfg.paths.socket}", "-u", "root", "-B", "-N", "-e", "SHOW DATABASES;"])
+            if c_code != 0:
+                raise BackupError("E_INTEGRITY", "Failed to list databases from restored standalone MariaDB")
+
+            sys_dbs = {"mysql", "information_schema", "performance_schema", "sys"}
+            user_dbs = [d.strip() for d in db_out.splitlines() if d.strip() and d.strip() not in sys_dbs]
+
+            if not user_dbs:
+                raise BackupError("E_INTEGRITY", "Restored database contains zero user databases")
+
+            total_rows = 0
+            for udb in user_dbs:
+                chk_code, chk_out, chk_err = runner.run(["mariadb-check", f"--socket={cfg.paths.socket}", "-u", "root", udb])
+                if chk_code != 0:
+                    raise BackupError("E_INTEGRITY", f"mariadb-check failed for database '{udb}': {chk_err or chk_out}")
+
+                t_code, t_out, _ = runner.run(["mariadb", f"--socket={cfg.paths.socket}", "-u", "root", "-B", "-N", "-e", f"SHOW TABLES FROM `{udb}`;"])
+                if t_code == 0:
+                    tables = [t.strip() for t in t_out.splitlines() if t.strip()]
+                    for tbl in tables:
+                        cnt_code, cnt_out, _ = runner.run(["mariadb", f"--socket={cfg.paths.socket}", "-u", "root", "-B", "-N", "-e", f"SELECT COUNT(*) FROM `{udb}`.`{tbl}`;"])
+                        if cnt_code == 0 and cnt_out.strip().isdigit():
+                            total_rows += int(cnt_out.strip())
+
+            if total_rows == 0:
+                raise BackupError("E_INTEGRITY", "Restored database contains zero user table rows")
+
+        finally:
+            if server_proc:
+                # Shutdown standalone MariaDB
+                runner.run(["mariadb-admin", f"--socket={cfg.paths.socket}", "-u", "root", "shutdown"])
+                try:
+                    server_proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    server_proc.terminate()
+                    try:
+                        server_proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        server_proc.kill()
+
+        state_mgr.update_success("restore", int(time.time()), artifact=art_set.backup_name)
+        event_mgr.emit("state.restore_success", {"backup_name": art_set.backup_name, "total_rows": total_rows})
+        print(f"galera-backup restore for {cluster_name} completed successfully ({art_set.backup_name}, {total_rows} rows checked)")
+
+    except Exception as exc:
+        err_code = exc.code if isinstance(exc, BackupError) else "E_INTEGRITY"
+        err_msg = exc.public_message if isinstance(exc, BackupError) else str(exc)
+        state_mgr.update_failure("restore", int(time.time()), err_code, redactor.redact(err_msg))
+        event_mgr.emit("state.restore_failure", {"error_code": err_code, "error_message": redactor.redact(err_msg)})
+        if backend:
+            try:
+                backend.close()
+            except Exception:
+                pass
+        raise
+    finally:
+        if work_dir and work_dir.exists():
+            shutil.rmtree(work_dir, ignore_errors=True)
+        if backend:
+            try:
+                backend.close()
+            except Exception:
+                pass
 def main() -> int:
     parser = argparse.ArgumentParser(description="Galera cluster physical backup & restore runner")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1417,11 +1708,15 @@ def main() -> int:
             print(f"ERROR: Unexpected error: {exc}", file=sys.stderr)
             return 1
     elif args.command == "restore":
-        if not args.confirm:
-            print("ERROR: Restore requires --confirm flag", file=sys.stderr)
+        try:
+            run_restore(cluster_name=cluster_name, confirm=args.confirm)
+            return 0
+        except BackupError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
             return 1
-        print(f"galera-backup restore for {cluster_name} starting...")
-        return 0
+        except Exception as exc:
+            print(f"ERROR: Unexpected error: {exc}", file=sys.stderr)
+            return 1
     return 0
 
 
