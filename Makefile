@@ -34,6 +34,7 @@ galera-rebuild:  ## Przebuduj TYLKO wezly Galera+restore (zachowuje PMM i ProxyS
 	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
 	@: "$${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_PASSWORD}"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje $(GALERA_VMS) w $(CLUSTER))"; exit 1)
+	@cd $(TF_DIR) && terraform init -input=false >/dev/null
 	terraform/pve-teardown.sh $(TF_DIR) $(GALERA_VMS)
 	cd $(TF_DIR) && terraform apply -auto-approve -parallelism=1
 
@@ -42,6 +43,7 @@ infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM
 	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
 	@: "$${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_PASSWORD}"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje WSZYSTKIE VM klastra $(CLUSTER))"; exit 1)
+	@cd $(TF_DIR) && terraform init -input=false >/dev/null
 	terraform/pve-teardown.sh $(TF_DIR)
 
 infra-provision:  ## Utwórz VM klastra (parallelism=1 — równoległość wywala locki ZFS na PVE)

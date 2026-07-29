@@ -1,0 +1,116 @@
+---
+# claude-r10b — DRUGI klaster ISA na Rocky Linux 10 (rozlaczny z claude-r10) (Proxmox, real VM: systemd/SELinux/firewalld).
+# Druga platforma obok EL9. Kod playbookow jest wspolny i nie zna platformy —
+# rozniczke niesie wylacznie versions.lock_file ponizej.
+#
+# Adresacja .30-.36 + VIP .40 (lustrzana wobec EL9: .10-.16 + .20).
+# Infra (.36): PMM + MinIO + maildev.
+#
+# UWAGA: warstwa bazodanowa jest wersyjnie IDENTYCZNA z EL9 (MariaDB 11.4.12,
+# galera-4 26.4.27) — to zmiana systemu operacyjnego, nie upgrade bazy.
+
+cluster:
+  name: "claude-r10b"
+  environment: "laboratory"
+  profile: "laboratory"
+  automation_release: "0.1.0"
+
+platform:
+  virtualization: "proxmox_kvm"
+  rocky_linux_major: 10
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/versions-el10.lock.yml"
+
+galera:
+  # Nazwa rozlaczna z EL9 (claude_galera) — dwa klastry nie moga dzielic nazwy,
+  # bo wsrep_cluster_name jest czescia tozsamosci Primary Component.
+  cluster_name: "r10b_galera"
+  nodes_expected: 3
+
+proxysql:
+  nodes_expected: 2
+  max_writers: 1
+  read_write_split_enabled: false
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.50"   # VIP Keepalived na pnode1/pnode2
+    port: 6033
+
+# TLS disabled na start — tak samo jak na EL9, zeby porownanie platform bylo 1:1.
+# Wlaczenie trybu full to osobny krok (wymaga certow z SAN = wszystkie IP + VIP).
+tls:
+  mode: "disabled"
+  certificate_source: ""
+  ca_reference: ""
+  certificate_reference: ""
+  private_key_reference: ""
+  require_secure_transport: false
+
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.47/32"]
+
+secrets:
+  backend: "ansible_vault"   # env-only w aktualnej implementacji (patrz opis w schema)
+
+storage:
+  data_directory: "/var/lib/mysql"
+  backup_staging_directory: "/var/tmp/mariadb-backup"
+  filesystem: "xfs"
+  expected_database_size_gb: "unknown"
+  expected_growth_gb_per_month: "unknown"
+  available_iops: "unknown"
+
+workload:
+  peak_qps: "unknown"
+  peak_connections: "unknown"
+  read_write_ratio: "unknown"
+  largest_transaction_mb: "unknown"
+  largest_table_gb: "unknown"
+  expected_write_latency_ms: "unknown"
+
+availability:
+  rpo: "0"
+  rto_node_failure: "2m"
+  rto_full_cluster_failure: "30m"
+  maintenance_window: "weekend"
+  allowed_service_interruption: "2m"
+
+backup:
+  enabled: true
+  destination: "s3"
+  full_backup_schedule: "0 2 * * *"
+  incremental_backup_schedule: "disabled"
+  retention_days: 14
+  encryption_enabled: true
+  immutable_or_offsite_copy: true
+  restore_test_schedule: "0 4 * * 0"
+  s3:
+    endpoint: "192.168.1.47:9000"   # MinIO na infra VM
+    bucket: "r10b-galera-backups"    # rozlaczny z bucketami claude-r10 i EL9
+    secure: false
+
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.47"
+    agent_id: "pmm-server"
+    # Etykieta klastra namespace'uje reguly alertow w PMM (UID/folder/contact point).
+    # Musi byc rozlaczna z EL9 (claude-galera), inaczej drugi klaster nadpisze reguly.
+    cluster_name: "r10b-galera"
+    validate_certs: false
+    credentials_revision: 1
+  system: "pmm"
+  alerts:
+    email: "ops@claude.local"
+  log_destination: "journald"
+
+mariadb_tuning:
+  innodb_buffer_pool_size: "1G"
+  innodb_log_file_size: "256M"
+  max_connections: 100
+  innodb_flush_log_at_trx_commit: 0
+  gcache_size: "256M"

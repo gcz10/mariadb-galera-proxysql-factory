@@ -21,21 +21,36 @@
     textfile_dir: "/var/lib/node_exporter/textfile_collector"
     state_file: "{{ textfile_dir }}/isa_monitoring_state.prom"
     cluster_label: "{{ monitoring.pmm.cluster_name }}"
-    backup_host: "{{ groups['galera'][1] }}"
+    # NIE zakladamy galera[1]: f10_backup wybiera zrodlo dynamicznie (zdrowy non-writer),
+    # wiec last_backup.json lada na TYM wezle, ktory wykonal backup. Przy innym ukladzie
+    # writera niz w claude-r10 (tam trafialo na galera[1] przez przypadek) plik jest gdzie
+    # indziej i metryka swiezosci zostawala 0 → falszywy alarm "backup stale".
+    # Dlatego odpytujemy wszystkie wezly Galera i bierzemy najswiezszy znacznik.
     restore_host: "{{ groups['restore'][0] }}"
 
   tasks:
     # === Zbierz realne unixtimes z węzłów źródłowych ===
-    - name: "Odczytaj unixtime ostatniego udanego backupu (galera[1])"
+    - name: "Odczytaj unixtime ostatniego udanego backupu (wszystkie wezly Galera)"
       ansible.builtin.shell: >-
         set -o pipefail;
         f={{ state_dir }}/last_backup.json;
         if [ -f "$f" ]; then
           python3 -c "import json,sys; d=json.load(open('$f')); print(d.get('last_backup',''))";
         else echo ""; fi
-      register: backup_iso
-      delegate_to: "{{ backup_host }}"
+      register: backup_iso_all
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
       changed_when: false
+
+    - name: "Wybierz najswiezszy znacznik backupu z wezlow Galera"
+      ansible.builtin.set_fact:
+        backup_iso:
+          stdout: >-
+            {{ backup_iso_all.results
+               | map(attribute='stdout')
+               | map('trim')
+               | select('match', '^[0-9]{4}-')
+               | list | sort | last | default('', true) }}
 
     - name: "Odczytaj unixtime ostatniego udanego restore drill (restore[0])"
       ansible.builtin.shell: >-
