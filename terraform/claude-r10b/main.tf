@@ -30,9 +30,11 @@ locals {
 
   # Adresacja .41-.47 + VIP .50 — drugi klaster EL10 obok claude-r10 (.31-.37 + .40).
   vms = {
-    gnode1 = { id = 9120, ip = 41, role = "galera", cpu = 2, ram = 4096, disk = 40 }
-    gnode2 = { id = 9121, ip = 42, role = "galera", cpu = 2, ram = 4096, disk = 40 }
-    gnode3 = { id = 9122, ip = 43, role = "galera", cpu = 2, ram = 4096, disk = 40 }
+    # Druga generacja wezlow Galera: nowe VMID/IP/hostname. ProxySQL, restore i infra
+    # zostaja NIETKNIETE (te same VMID/IP) — wymianie podlega tylko warstwa bazy.
+    gnode4 = { id = 9130, ip = 51, role = "galera", cpu = 2, ram = 4096, disk = 40 }
+    gnode5 = { id = 9131, ip = 52, role = "galera", cpu = 2, ram = 4096, disk = 40 }
+    gnode6 = { id = 9132, ip = 53, role = "galera", cpu = 2, ram = 4096, disk = 40 }
     pnode1 = { id = 9123, ip = 44, role = "proxysql", cpu = 1, ram = 2560, disk = 40 }
     pnode2 = { id = 9124, ip = 45, role = "proxysql", cpu = 1, ram = 2560, disk = 40 }
     rnode1 = { id = 9125, ip = 46, role = "restore", cpu = 1, ram = 2560, disk = 40 }

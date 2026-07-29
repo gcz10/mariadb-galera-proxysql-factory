@@ -139,7 +139,9 @@ def main():
         "WHERE t.TABLE_TYPE='BASE TABLE' AND tc.CONSTRAINT_NAME IS NULL "
         "AND t.TABLE_SCHEMA NOT IN ('information_schema','performance_schema','mysql','sys')"
     )
-    pk_raw = run_ansible_query("gnode1", pk_query)
+    # Dowolny wezel Galera — schemat jest replikowany, wiec pytamy grupe, a nie
+    # zaszyta nazwe "gnode1" (klaster moze miec wezly nazwane inaczej).
+    pk_raw = run_ansible_query("galera[0]", pk_query)
     for node, body in pk_raw.items():
         tables = [line.strip() for line in body.splitlines() if line.strip()]
         check(

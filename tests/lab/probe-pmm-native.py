@@ -4,6 +4,7 @@
 import base64
 import json
 import os
+import re
 import ssl
 import sys
 import time
@@ -46,6 +47,8 @@ EXPECTED_MYSQL = {
     for host_name in GALERA_HOSTS
 }
 EXPECTED_NODE_EXPORTERS = {f"{name}-node-exporter" for name in EXPECTED_NODES}
+# Pierwszy wezel Galera wg inventory — NIE zaszyte "gnode1".
+FIRST_GALERA_NODE = f"{CLUSTER}-{next(iter(GALERA_HOSTS))}"
 EXPECTED_PROXYSQL = {
     f"{CLUSTER}-{host_name}-proxysql" for host_name in PROXYSQL_HOSTS
 }
@@ -457,17 +460,23 @@ def main():
                 failures,
             )
 
-    node_query = quote(
-        f'node_load1{{node_name=~"{CLUSTER}-(gnode[1-3]|pnode[1-2])"}}'
-    )
-    node_build_query = quote(
-        f'node_exporter_build_info{{node_name=~"{CLUSTER}-(gnode[1-3]|pnode[1-2])"}}'
-    )
-    mysql_query = quote(
-        f'mysql_up{{service_name=~"{CLUSTER}-gnode[1-3]-mysql",job=~".*_hr"}}'
-    )
+    # Nazwy wezlow biora sie z inventory, NIE z zaszytego wzorca. Wczesniej bylo tu
+    # sztywne "gnode[1-3]" — klaster z wezlami gnode4-6 przechodzil poprawnie caly
+    # deploy, a sonda i tak raportowala brak metryk, bo regex do nich nie pasowal.
+    # RE2 (PromQL) odrzuca "\-" jako nieznana sekwencje ucieczki, a re.escape() w
+    # starszych Pythonach wlasnie tak escapuje myslnik. Escapujemy tylko kropke,
+    # jedyny metaznak wystepujacy w nazwach wezlow/serwisow.
+    def _alt(names):
+        return "|".join(name.replace(".", r"\.") for name in sorted(names))
+
+    node_alt = _alt(EXPECTED_NODES)
+    mysql_alt = _alt(EXPECTED_MYSQL)
+    galera_service = sorted(EXPECTED_MYSQL)[0]
+    node_query = quote(f'node_load1{{node_name=~"{node_alt}"}}')
+    node_build_query = quote(f'node_exporter_build_info{{node_name=~"{node_alt}"}}')
+    mysql_query = quote(f'mysql_up{{service_name=~"{mysql_alt}",job=~".*_hr"}}')
     galera_query = quote(
-        f'mysql_global_status_wsrep_cluster_size{{service_name="{CLUSTER}-gnode1-mysql"}}'
+        f'mysql_global_status_wsrep_cluster_size{{service_name="{galera_service}"}}'
     )
     state_queries = {
         name: quote(f'{name}{{cluster="{CLUSTER}"}}')
@@ -532,7 +541,7 @@ def main():
         results, value = state_value(metric_name)
         check(
             len(results) == 1
-            and results[0]["metric"].get("node_name") == f"{CLUSTER}-gnode1"
+            and results[0]["metric"].get("node_name") == FIRST_GALERA_NODE
             and value == expected_value
             and float(results[0]["value"][0]) >= probe_started,
             f"invalid lifecycle config metric {metric_name}: {results}",
@@ -546,7 +555,7 @@ def main():
         fresh = value and value > 0 and (now - value) <= max_age_days * 86400
         check(
             len(results) == 1
-            and results[0]["metric"].get("node_name") == f"{CLUSTER}-gnode1"
+            and results[0]["metric"].get("node_name") == FIRST_GALERA_NODE
             and fresh
             and float(results[0]["value"][0]) >= probe_started,
             f"stale or zero freshness metric {metric_name} "
@@ -559,7 +568,7 @@ def main():
     if TLS_EXPIRY_DISABLED_EXPECTED:
         check(
             len(results) == 1
-            and results[0]["metric"].get("node_name") == f"{CLUSTER}-gnode1"
+            and results[0]["metric"].get("node_name") == FIRST_GALERA_NODE
             and value == 0
             and float(results[0]["value"][0]) >= probe_started,
             f"unexpected non-zero TLS expiry in disabled mode: {results}",
@@ -595,8 +604,8 @@ def main():
         failures,
     )
     check(
-        measured_mysql.get(f"{CLUSTER}-gnode1-mysql") == "1",
-        f"{CLUSTER}-gnode1-mysql is not reachable by PMM",
+        measured_mysql.get(f"{FIRST_GALERA_NODE}-mysql") == "1",
+        f"{FIRST_GALERA_NODE}-mysql is not reachable by PMM",
         failures,
     )
 
@@ -607,7 +616,7 @@ def main():
         galera_cluster_size = 0
     check(
         len(galera_results) == 1 and galera_cluster_size > 0,
-        "gnode1 Galera cluster-size metric is missing or invalid",
+        f"{FIRST_GALERA_NODE} Galera cluster-size metric is missing or invalid",
         failures,
     )
     check(
