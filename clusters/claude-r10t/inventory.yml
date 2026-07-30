@@ -40,19 +40,25 @@ all:
           galera_node_idx: 3
           galera_node_address: "192.168.1.56"
 
-    # WSPOLDZIELONE z claude-r10b — deklaracja endpointu, bez wdrozenia.
+    # WLASNA para ProxySQL (.58/.59, VMID 9164-9165) — NIE wspoldzielona.
+    # f7_proxysql.yml przy tls.mode=full rozprowadza tu CA (owner root, bez
+    # klucza prywatnego) i ustawia use_ssl=1 dla backendow. Uzycie pnode1/pnode2
+    # klastra claude-r10b przekonfigurowaloby zywy endpoint.
+    #
+    # ProxySQL waliduje cert backendu wobec CA, a backendy to .54-.56 — sa w SAN
+    # certyfikatu, wiec wezly ProxySQL nie potrzebuja wlasnego certu.
     proxysql:
       vars:
         proxysql_role: "proxysql"
       hosts:
-        pnode1:
-          ansible_host: "192.168.1.44"
+        ptnode1:
+          ansible_host: "192.168.1.58"
           proxysql_node_idx: 1
-          proxysql_node_address: "192.168.1.44"
-        pnode2:
-          ansible_host: "192.168.1.45"
+          proxysql_node_address: "192.168.1.58"
+        ptnode2:
+          ansible_host: "192.168.1.59"
           proxysql_node_idx: 2
-          proxysql_node_address: "192.168.1.45"
+          proxysql_node_address: "192.168.1.59"
 
     # WLASNY wezel EL10 — host restore musi nalezec do tej samej rodziny OS co
     # klaster, bo f10_restore instaluje pakiety przypiete z lockfile'a

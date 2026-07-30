@@ -31,16 +31,20 @@ galera:
   cluster_name: "r10t_galera_tls"
   nodes_expected: 3
 
-# ProxySQL nie jest stawiany przez ten klaster. Blok jest wymagany przez schema
-# (nodes_expected >= 2) i walidator inventory. NIE uruchamiaj site.yml ani
-# playbookow ProxySQL z tym cluster.yml.
+# Wlasna para ProxySQL (.58/.59) + wlasny VIP .60 — klaster jest samowystarczalny.
+# VIP MUSI byc rozlaczny z .50 (claude-r10b), inaczej dwa Keepalived walczylyby
+# o ten sam adres.
+#
+# Przy tls.mode=full f7_proxysql.yml rozprowadza CA na wezly ProxySQL (bez klucza
+# prywatnego), ustawia mysql-ssl_p2s_ca i wpisuje mysql_servers.use_ssl=1,
+# czyli szyfruje odcinek ProxySQL->MariaDB.
 proxysql:
   nodes_expected: 2
   max_writers: 1
   read_write_split_enabled: false
   endpoint:
     type: "keepalived_vip"
-    address: "192.168.1.50"   # VIP claude-r10b — deklaracja, nie wdrozenie
+    address: "192.168.1.60"
     port: 6033
 
 # TLS full — sedno tego klastra.

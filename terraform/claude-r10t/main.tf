@@ -46,6 +46,12 @@ locals {
     gtnode2 = { id = 9161, ip = 55, role = "galera", cpu = 2, ram = 2560, disk = 40 }
     gtnode3 = { id = 9162, ip = 56, role = "galera", cpu = 2, ram = 2560, disk = 40 }
     rtnode1 = { id = 9163, ip = 57, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    # Wlasna para ProxySQL: f7_proxysql.yml przy tls.mode=full rozprowadza CA na
+    # te wezly i przestawia mysql_servers.use_ssl=1. Uzycie wspoldzielonych
+    # pnode1/pnode2 klastra claude-r10b przekonfigurowaloby zywy endpoint.
+    # VIP Keepalived to .60 — NIE .50, ktore nalezy do claude-r10b.
+    ptnode1 = { id = 9164, ip = 58, role = "proxysql", cpu = 1, ram = 2560, disk = 40, store = "local-zfs" }
+    ptnode2 = { id = 9165, ip = 59, role = "proxysql", cpu = 1, ram = 2560, disk = 40, store = "local-zfs" }
   }
 }
 
@@ -77,8 +83,12 @@ resource "proxmox_virtual_environment_vm" "node" {
   }
   memory { dedicated = each.value.ram }
 
+  # `store` per VM nadpisuje domyslna pule. Powod: data1 jest zapelnione
+  # (904/922 GiB, ~19 GiB wolnego), wiec kolejne 40 GB zvole sie tam nie mieszcza,
+  # a dopychanie puli do pelna zagraza VM-om, ktore juz na niej stoja — w tym
+  # wezlom Galera tego klastra. Wezly ProxySQL ida na local-zfs (404 GiB wolne).
   disk {
-    datastore_id = local.storage
+    datastore_id = try(each.value.store, local.storage)
     interface    = "virtio0"
     import_from  = local.source_img
     size         = each.value.disk
@@ -87,7 +97,7 @@ resource "proxmox_virtual_environment_vm" "node" {
 
   initialization {
     interface    = "scsi1"
-    datastore_id = local.storage
+    datastore_id = try(each.value.store, local.storage)
     # Klucz ed25519 idzie do roota — logowanie SSH bezposrednio jako root.
     user_account {
       username = "root"
