@@ -7,6 +7,21 @@
 #   tls_file_owner  (domyślnie 'mysql')  — właściciel plików/katalogu
 #   tls_deploy_key  (domyślnie true)     — czy kopiować klucz prywatny (ProxySQL: false)
 ---
+# audit: `copy` rozwiazuje relatywny `src` wzgledem katalogu PLAYBOOKA, wiec
+# repo-relatywne referencje z cluster.yml (np. "tests/lab/tls/ca.pem", tak jak
+# ma je lab2-cluster) laduja jako "playbooks/tests/lab/tls/ca.pem" i zadanie
+# pada na "Could not find or access". Sciezki bezwzgledne (artefakty PKI
+# produkcji) zostaja bez zmian.
+- name: "TLS: rozwiaz referencje wzgledem katalogu repozytorium"
+  ansible.builtin.set_fact:
+    tls_reference_root: "{{ playbook_dir | dirname }}"
+
+- name: "TLS: ustal zrodlowe sciezki certyfikatow"
+  ansible.builtin.set_fact:
+    tls_ca_src: "{{ tls.ca_reference if tls.ca_reference.startswith('/') else tls_reference_root ~ '/' ~ tls.ca_reference }}"
+    tls_cert_src: "{{ tls.certificate_reference if tls.certificate_reference.startswith('/') else tls_reference_root ~ '/' ~ tls.certificate_reference }}"
+    tls_key_src: "{{ tls.private_key_reference if tls.private_key_reference.startswith('/') else tls_reference_root ~ '/' ~ tls.private_key_reference }}"
+
 - name: "TLS: utwórz katalog na certyfikaty"
   ansible.builtin.file:
     path: /etc/mysql/tls
@@ -17,7 +32,7 @@
 
 - name: "TLS: skopiuj CA"
   ansible.builtin.copy:
-    src: "{{ tls.ca_reference }}"
+    src: "{{ tls_ca_src }}"
     dest: /etc/mysql/tls/ca.pem
     owner: "{{ tls_file_owner | default('mysql') }}"
     group: "{{ tls_file_owner | default('mysql') }}"
@@ -26,7 +41,7 @@
 
 - name: "TLS: skopiuj certyfikat serwera"
   ansible.builtin.copy:
-    src: "{{ tls.certificate_reference }}"
+    src: "{{ tls_cert_src }}"
     dest: /etc/mysql/tls/server-cert.pem
     owner: "{{ tls_file_owner | default('mysql') }}"
     group: "{{ tls_file_owner | default('mysql') }}"
@@ -35,7 +50,7 @@
 
 - name: "TLS: skopiuj klucz prywatny (0600, tylko gdy potrzebny na węźle)"
   ansible.builtin.copy:
-    src: "{{ tls.private_key_reference }}"
+    src: "{{ tls_key_src }}"
     dest: /etc/mysql/tls/server-key.pem
     owner: "{{ tls_file_owner | default('mysql') }}"
     group: "{{ tls_file_owner | default('mysql') }}"
