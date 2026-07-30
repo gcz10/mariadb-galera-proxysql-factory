@@ -143,13 +143,14 @@
     },
     "backup": {
       "type": "object",
-      "required": ["enabled", "destination", "full_backup_schedule", "incremental_backup_schedule", "retention_days", "encryption_enabled", "immutable_or_offsite_copy", "restore_test_schedule", "scheduler"],
+      "required": ["enabled", "destination", "full_backup_schedule", "incremental_backup_schedule", "freshness_sla_hours", "retention_days", "encryption_enabled", "immutable_or_offsite_copy", "restore_test_schedule", "scheduler"],
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
         "destination": { "type": "string", "enum": ["s3", "smb", "filesystem"] },
         "full_backup_schedule": { "type": "string" },
         "incremental_backup_schedule": { "type": "string" },
+        "freshness_sla_hours": { "type": "integer", "minimum": 1 },
         "retention_days": { "type": ["integer", "string"] },
         "encryption_enabled": { "type": "boolean" },
         "immutable_or_offsite_copy": { "type": "boolean" },

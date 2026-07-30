@@ -88,6 +88,7 @@ class BackupConfigValidatorTests(unittest.TestCase):
                 "destination": "s3",
                 "full_backup_schedule": "0 2 * * *",
                 "incremental_backup_schedule": "disabled",
+                "freshness_sla_hours": 26,
                 "retention_days": 14,
                 "encryption_enabled": True,
                 "immutable_or_offsite_copy": True,
@@ -160,6 +161,13 @@ class BackupConfigValidatorTests(unittest.TestCase):
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("cron", res.stderr.lower())
 
+    def test_rejects_non_positive_backup_freshness_sla(self):
+        c = self.valid_s3_cluster()
+        c["backup"]["freshness_sla_hours"] = 0
+        self.create_cluster_pair("c1", c, self.valid_inventory())
+        res = self.validate()
+        self.assertNotEqual(res.returncode, 0)
+
     def test_rejects_non_disabled_incremental_schedule(self):
         c = self.valid_s3_cluster()
         c["backup"]["incremental_backup_schedule"] = "0 3 * * *"
@@ -199,13 +207,35 @@ class BackupConfigValidatorTests(unittest.TestCase):
         res = self.validate()
         self.assertNotEqual(res.returncode, 0)
 
+    def test_rejects_noncanonical_smb_source(self):
+        for source in ("//nas/share/", "//nas/share/nested", "//nas", "nas/share"):
+            with self.subTest(source=source):
+                c = self.valid_s3_cluster()
+                c["backup"]["destination"] = "smb"
+                del c["backup"]["s3"]
+                c["backup"]["smb"] = {
+                    "source": source,
+                    "mount_point": "/mnt/backup",
+                    "options": ["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
+                }
+                self.create_cluster_pair(
+                    f"c_source_{abs(hash(source))}",
+                    c,
+                    self.valid_inventory(),
+                )
+                res = self.validate()
+                self.assertNotEqual(res.returncode, 0, f"Source was accepted: {source}")
+
     def test_rejects_unsafe_smb_options(self):
         unsafe_cases = [
             ["username=admin", "vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
             ["password=secret", "vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
             ["credentials=/etc/smb", "vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
             ["vers=2.0", "seal", "nosuid", "nodev", "noexec"],
+            ["vers=3.0", "seal", "nosuid", "nodev", "noexec"],
             ["noseal", "vers=3.1.1", "nosuid", "nodev", "noexec"],
+            ["vers=3.1.1", "Seal", "nosuid", "nodev", "noexec"],
+            ["VERS=3.1.1", "seal", "nosuid", "nodev", "noexec"],
         ]
         for options in unsafe_cases:
             c = self.valid_s3_cluster()
@@ -219,6 +249,20 @@ class BackupConfigValidatorTests(unittest.TestCase):
             self.create_cluster_pair(f"c_unsafe_{hash(str(options))}", c, self.valid_inventory())
             res = self.validate()
             self.assertNotEqual(res.returncode, 0, f"Options failed to trigger rejection: {options}")
+    def test_rejects_smb_3_0_when_3_1_1_is_required(self):
+        c = self.valid_s3_cluster()
+        c["backup"]["destination"] = "smb"
+        del c["backup"]["s3"]
+        c["backup"]["smb"] = {
+            "source": "//nas/share",
+            "mount_point": "/mnt/backup",
+            "options": ["vers=3.0", "seal", "nosuid", "nodev", "noexec"],
+        }
+        self.create_cluster_pair("c_smb_3_0", c, self.valid_inventory())
+        res = self.validate()
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("vers=3.1.1", res.stderr)
+
 
     def test_rejects_missing_required_smb_options(self):
         c = self.valid_s3_cluster()

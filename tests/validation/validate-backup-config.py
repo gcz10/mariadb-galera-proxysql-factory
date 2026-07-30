@@ -6,6 +6,7 @@ Usage: validate-backup-config.py <clusters-root>
 """
 import sys
 import json
+import re
 import yaml
 from pathlib import Path
 from dataclasses import dataclass
@@ -56,11 +57,13 @@ def validate_cron(value: str) -> list[str]:
 
 def validate_smb_options(options: list[str]) -> list[str]:
     errors = []
-    opt_set = set(options)
+    opt_set = {str(opt) for opt in options}
 
     # Forbidden options check
     for opt in options:
         opt_lower = opt.lower()
+        if opt != opt_lower:
+            errors.append(f"SMB option must use canonical lowercase spelling: '{opt}'")
         if opt_lower.startswith("username=") or opt_lower == "username":
             errors.append("Unsafe SMB option 'username=' specified (credentials must be stored in root-only secrets)")
         if opt_lower.startswith("password=") or opt_lower == "password":
@@ -78,10 +81,8 @@ def validate_smb_options(options: list[str]) -> list[str]:
         if req not in opt_set:
             errors.append(f"Missing required SMB option: '{req}'")
 
-    # Dialect check (must have vers=3.x)
-    has_vers_3 = any(opt.lower().startswith("vers=3") for opt in options)
-    if not has_vers_3:
-        errors.append("Missing required SMB 3.x version option (e.g. 'vers=3.1.1')")
+    if "vers=3.1.1" not in opt_set:
+        errors.append("Missing required SMB option: 'vers=3.1.1'")
 
     return errors
 
@@ -167,6 +168,13 @@ def validate_pair(cluster_path: Path, inventory_path: Path) -> list[str]:
     if backup.get("encryption_enabled") is not True:
         errors.append("encryption_enabled must be true")
 
+    # Freshness SLA check. Duplikuje `minimum: 1` ze schematu swiadomie:
+    # walidacja schematem wyzej jest warunkowa (`if schema_path.exists()`),
+    # wiec bez tego kontrola znika, gdy root nie zawiera schema/.
+    sla = backup.get("freshness_sla_hours")
+    if not isinstance(sla, int) or isinstance(sla, bool) or sla < 1:
+        errors.append(f"freshness_sla_hours must be a positive integer, got '{sla}'")
+
     dest = backup.get("destination")
     s3_block = backup.get("s3")
     smb_block = backup.get("smb")
@@ -188,6 +196,11 @@ def validate_pair(cluster_path: Path, inventory_path: Path) -> list[str]:
         if not smb_block:
             errors.append("Destination is 'smb' but missing required 'smb' block")
         else:
+            source = str(smb_block.get("source", ""))
+            if not re.fullmatch(r"//[^/]+/[^/]+", source):
+                errors.append(
+                    f"SMB source must identify exactly one UNC share as '//server/share', got '{source}'"
+                )
             mount_point = smb_block.get("mount_point", "")
             if not mount_point.startswith("/"):
                 errors.append(f"SMB mount_point must be an absolute path, got '{mount_point}'")
