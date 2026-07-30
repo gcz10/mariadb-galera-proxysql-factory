@@ -22,6 +22,23 @@
     tls_cert_src: "{{ tls.certificate_reference if tls.certificate_reference.startswith('/') else tls_reference_root ~ '/' ~ tls.certificate_reference }}"
     tls_key_src: "{{ tls.private_key_reference if tls.private_key_reference.startswith('/') else tls_reference_root ~ '/' ~ tls.private_key_reference }}"
 
+# audit: katalog nadrzedny musi byc PRZECHODNI dla uslugi, ktora czyta certy.
+# Wczesniej powstawal jako efekt uboczny tworzenia /etc/mysql/tls i dziedziczyl
+# tls_file_owner: na wezlach Galera wychodzilo mysql:mysql 0750 (dziala), ale na
+# wezlach ProxySQL root:root 0750 — proces proxysql nie mogl wejsc do katalogu i
+# monitor raportowal "TLS/SSL error: Permission denied (13)", co SHUNNOWALO
+# wszystkie backendy. Zarzadzamy nim jawnie, zeby fix dzialal takze na hostach,
+# gdzie katalog juz istnieje (Ansible nie zmienia wlasciciela istniejacych
+# katalogow nadrzednych). 0755 jest bezpieczne: to sam kontener, a klucz
+# prywatny zostaje 0600 w katalogu 0750 ponizej.
+- name: "TLS: zapewnij przechodni katalog nadrzedny"
+  ansible.builtin.file:
+    path: /etc/mysql
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: "TLS: utwórz katalog na certyfikaty"
   ansible.builtin.file:
     path: /etc/mysql/tls

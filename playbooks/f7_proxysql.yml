@@ -164,10 +164,16 @@
       changed_when: true
 
 
+    # tls_file_owner MUSI byc uzytkownikiem uslugi, a nie rootem: proxysql dziala
+    # jako uzytkownik `proxysql` i sam czyta CA, zeby zweryfikowac certyfikat
+    # backendu. Przy owner=root katalog wychodzil 0750 root:root, monitor
+    # raportowal "TLS/SSL error: Permission denied (13)" i SHUNNOWAL wszystkie
+    # backendy, czyli caly odcinek ProxySQL->MariaDB po TLS byl nieczynny.
+    # Klucz prywatny nadal NIE jest tu kopiowany (tls_deploy_key: false).
     - name: "TLS: rozprowadź CA na węzeł ProxySQL (walidacja backendu; gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
       vars:
-        tls_file_owner: root
+        tls_file_owner: proxysql
         tls_deploy_key: false
       when: (tls | default({})).mode | default('disabled') == 'full'
 
