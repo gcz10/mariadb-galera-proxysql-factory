@@ -1,0 +1,77 @@
+---
+# claude-r9g — 3 NOWE wezly Galera na Rocky 9 (.17-.19, VMID 9150-9152),
+# stworzone przez terraform/claude-r9g/.
+#
+# Grupy proxysql i restore wskazuja na JUZ DZIALAJACE wezly klastra claude-r10b.
+# Uzasadnienie: f10_backup.yml / f10_restore.yml dotykaja wylacznie grup
+# `galera`, `{{ backup.scheduler.host }}` i `restore` — ProxySQL jest tu
+# deklaracja wymagana przez schema/walidator, nie celem wdrozenia.
+#
+# NIE uruchamiaj site.yml ani playbookow ProxySQL/infra z tym inventory —
+# przekonfigurowalyby zywy ProxySQL i PMM klastra claude-r10b.
+#
+# Runner galera-backup jest kluczowany nazwa klastra
+# (/opt/galera-backup/clusters/<cluster>/), wiec dwie konfiguracje wspolistnieja
+# na rnode1 bez kolizji.
+
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: tests/lab/ssh_key
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        g9node1:
+          ansible_host: "192.168.1.17"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.17"
+        g9node2:
+          ansible_host: "192.168.1.18"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.18"
+        g9node3:
+          ansible_host: "192.168.1.19"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.19"
+
+    # WSPOLDZIELONE z claude-r10b — deklaracja endpointu, bez wdrozenia.
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        pnode1:
+          ansible_host: "192.168.1.44"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.44"
+        pnode2:
+          ansible_host: "192.168.1.45"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.45"
+
+    # WLASNY wezel EL9 (.39, VMID 9153) — NIE wspoldzielony z claude-r10b.
+    #
+    # Host restore musi nalezec do tej samej rodziny OS co klaster: f10_restore.yml
+    # instaluje pakiety przypiete z versions.lock_file, czyli
+    # MariaDB-server-11.4.12-1.el9. Proba uzycia rnode1 klastra claude-r10b
+    # (Rocky 10) konczy sie "No package MariaDB-server-11.4.12-1.el9 available".
+    restore:
+      vars:
+        restore_role: "restore"
+      hosts:
+        r9node1:
+          ansible_host: "192.168.1.39"
+          restore_node_address: "192.168.1.39"
+
+    # WSPOLDZIELONY z claude-r10b — PMM + MinIO + maildev.
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        infranode:
+          ansible_host: "192.168.1.47"
+          infra_node_address: "192.168.1.47"
