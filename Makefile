@@ -9,7 +9,7 @@
         lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
-        lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify \
+        lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak \
         infra-teardown infra-provision cluster-trust-hosts
 
@@ -188,6 +188,10 @@ cluster-backup-configure:  ## F10 — skonfiguruj runner, minio identity i cron 
 cluster-backup:  ## F10 — backup → destination storage via galera-backup runner
 	$(cluster_guard)
 	ansible-playbook playbooks/f10_backup.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e galera_backup_action=run $(ANSIBLE_OPTS)
+
+lab-seed-smoke:  ## LAB — zasiej minimalne dane user-space, bez których drill restore pada
+	$(cluster_guard)
+	ansible-playbook playbooks/lab_seed_smoke.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 cluster-restore-drill:  ## F10 — restore drill na czysty host + integralność (wymaga CONFIRM=yes)
 	$(cluster_guard)

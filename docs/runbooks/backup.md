@@ -142,6 +142,8 @@ make cluster-restore-drill CLUSTER=<name> CONFIRM=yes
 
 Restore jest odrzucany bez `CONFIRM=yes`, na schedulerze lub na hoście należącym do grup `galera`/`proxysql`. Odtwarzany MariaDB działa standalone bez wsrep; runner wykonuje checksum, `mariadb-check --all-databases`, bezpieczną ekstrakcję tar i co najmniej jedno zapytanie do każdej tabeli użytkownika. Puste tabele są prawidłowe; brak baz lub tabel użytkownika nie jest.
 
+Wymóg "co najmniej jedna baza użytkownika" jest celowy — backup pustego serwera nie dowodzi odtwarzalności danych. Na klastrze z ruchem dane po prostu są. Świeżo postawiony klaster laboratoryjny jest jednak pusty i drill kończy się `E_INTEGRITY: Restored database contains zero user databases`, dopóki nie zapisano czegokolwiek. Do tego służy `make lab-seed-smoke CLUSTER=<name>` (`playbooks/lab_seed_smoke.yml`): zakłada `isa_test.restore_probe` z jednym wierszem, jest idempotentny (drugi przebieg raportuje `changed=0`) i odmawia pracy poza `cluster.profile: laboratory`. Nie jest wpięty w `f10_backup` ani `f10_restore` — automatyka wdrożeniowa nie zakłada schematów na klastrze z danymi.
+
 ## Artefakty i retencja
 
 Kompletny artefakt `galera-<cluster>-YYYYmmdd-HHMMSS` zawiera:

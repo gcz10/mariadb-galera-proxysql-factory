@@ -1,0 +1,115 @@
+---
+# lab_seed_smoke.yml — minimalne dane uzytkownika dla drilla restore (LAB ONLY).
+#
+# Po co: f10_restore.yml odrzuca odtworzenie, ktore nie zawiera ANI JEDNEJ bazy
+# uzytkownika ("Restored database contains zero user databases"). Ta asercja jest
+# poprawna — backup pustego serwera nie dowodzi niczego o odtwarzalnosci danych.
+# Na produkcji dane po prostu sa. Swiezo postawiony klaster laboratoryjny jest
+# jednak pusty, wiec drill pada, dopoki ktos recznie czegos nie zapisze; to byla
+# JEDYNA reczna czynnosc w odtworzeniu klastra r10n i ten playbook ja domyka.
+#
+# Czego ten playbook NIE robi: nie jest wpiety w f10_backup ani w f10_restore.
+# Automatyka wdrozeniowa nie ma prawa zakladac schematow na klastrze z danymi —
+# dlatego to osobny, jawnie wywolywany cel `make lab-seed-smoke`, z bramka na
+# profil laboratoryjny ponizej.
+#
+# Schemat celowo pokrywa sie z `isa_test`, na ktory f7_proxysql.yml nadaje granty
+# app_user (linia z priv: "isa_test.*:ALL") oraz z ktorego korzystaja sondy
+# laboratoryjne (tests/lab/chaos-*.py, tests/validation/probe-replication.sh).
+
+- name: "LAB — zasiej minimalne dane smoke dla drilla restore"
+  hosts: galera[0]
+  become: true
+  gather_facts: false
+  vars:
+    seed_database: "isa_test"
+    seed_table: "restore_probe"
+
+  pre_tasks:
+    - name: "Blokuj zasiew poza laboratorium"
+      ansible.builtin.assert:
+        that:
+          - cluster.profile == 'laboratory'
+          - cluster.environment != 'production'
+        fail_msg: >-
+          lab_seed_smoke.yml tworzy baze {{ seed_database }} i jest przeznaczony
+          WYLACZNIE dla klastrow laboratoryjnych. Konfiguracja klastra:
+          profile={{ cluster.profile }}, environment={{ cluster.environment }}.
+          Na klastrze z danymi drill restore weryfikuje dane produkcyjne i nie
+          potrzebuje zasiewu.
+        success_msg: "Profil laboratoryjny — zasiew danych smoke dozwolony."
+
+  tasks:
+    # ISC-2: powtorzony przebieg MUSI raportowac changed=0, wiec kazdy krok
+    # tworzacy jest poprzedzony sprawdzeniem istnienia. `CREATE ... IF NOT EXISTS`
+    # z bezwarunkowym changed_when klamalby o stanie.
+    - name: "Sprawdz, co juz istnieje"
+      ansible.mysql.mysql_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: >-
+          SELECT
+            (SELECT COUNT(*) FROM information_schema.SCHEMATA
+              WHERE SCHEMA_NAME = %s) AS db_present,
+            (SELECT COUNT(*) FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s) AS table_present
+        positional_args:
+          - "{{ seed_database }}"
+          - "{{ seed_database }}"
+          - "{{ seed_table }}"
+      register: seed_presence
+      changed_when: false
+
+    - name: "Utworz baze smoke"
+      ansible.mysql.mysql_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: "CREATE DATABASE {{ seed_database }}"
+      when: (seed_presence.query_result[0][0].db_present | int) == 0
+      changed_when: true
+
+    - name: "Utworz tabele smoke"
+      ansible.mysql.mysql_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: >-
+          CREATE TABLE {{ seed_database }}.{{ seed_table }} (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            note VARCHAR(64) NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+          ) ENGINE=InnoDB
+      when: (seed_presence.query_result[0][0].table_present | int) == 0
+      changed_when: true
+
+    - name: "Policz istniejace wiersze smoke"
+      ansible.mysql.mysql_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: "SELECT COUNT(*) AS rows_present FROM {{ seed_database }}.{{ seed_table }}"
+      register: seed_rows
+      changed_when: false
+
+    # Wstawiamy TYLKO gdy tabela jest pusta — powtorzone uruchomienie nie puchnie
+    # i nie zmienia stanu, wiec cel nadaje sie do bezwarunkowego wolania w bring-upie.
+    - name: "Wstaw wiersz startowy, gdy tabela pusta"
+      ansible.mysql.mysql_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: "INSERT INTO {{ seed_database }}.{{ seed_table }} (note) VALUES (%s)"
+        positional_args:
+          - "seed for restore drill ({{ cluster.name }})"
+      when: (seed_rows.query_result[0][0].rows_present | int) == 0
+      changed_when: true
+
+    - name: "Potwierdz, ze drill ma co weryfikowac"
+      ansible.mysql.mysql_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: >-
+          SELECT COUNT(*) AS user_databases FROM information_schema.SCHEMATA
+          WHERE SCHEMA_NAME NOT IN ('mysql','information_schema','performance_schema','sys')
+      register: seed_user_databases
+      changed_when: false
+
+    - name: "Wymagaj co najmniej jednej bazy uzytkownika"
+      ansible.builtin.assert:
+        that:
+          - (seed_user_databases.query_result[0][0].user_databases | int) > 0
+        fail_msg: "Brak baz uzytkownika — drill restore nadal padnie na 'zero user databases'."
+        success_msg: >-
+          Baz uzytkownika: {{ seed_user_databases.query_result[0][0].user_databases }}
+          — drill restore ma dane do weryfikacji.
