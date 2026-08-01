@@ -93,16 +93,27 @@ Jeżeli którykolwiek punkt jest fałszywy — **zatrzymaj się przed Fazą 1**.
 
 ## Decyzje wymagane przed startem
 
-### D1. Zakres kasowania
+### D1. Zakres kasowania — rozstrzygnięte
 
-| Grupa | VMID | Rekomendacja |
+| Grupa | VMID | Decyzja |
 |---|---|---|
-| Nasze | `9123-9126`, `9130-9132`, `9150-9153`, `9170-9173`, `9193-9195` (18) | **kasuj** |
-| Poprzednicy ISA, poza Terraform | `9010-9012`, `9040-9042`, `9050`, `9060` (8) | **kasuj** — zatrzymane, w żadnym inventory, ~30 GB na `rpool` |
+| Nasze — utworzone przez tę automatyzację | `9123-9126`, `9130-9132`, `9150-9153`, `9170-9173`, `9193-9195` (18) | **kasuj** |
+| Poprzednicy ISA | `9010-9012`, `9040-9042`, `9050`, `9060` (8) | **nie dotykaj** — powstały przed tą automatyzacją, decyzja o nich nie należy do nas |
 | Obce | `9000`, `9201-9235`, `9301`, `9501-9999` | **nie dotykaj** — RKE2, GitLab, `qoder-*` |
 
 Uwaga na nazwy: `qoder-galera-01`, `qoder-proxysql-01`, `qoder-pmm-01` brzmią
 jak nasze, **nie są nasze** i działają. Rozróżnia je wyłącznie prefiks `qoder-`.
+
+### D1a. Reguła stała: pula `claude-isa`
+
+Każdy zasób tworzony lub zmieniany przez tę automatyzację należy do puli
+Proxmox `claude-isa` — bez wyjątków. Wszystkie moduły ustawiają już
+`pool_id = "claude-isa"`, a nowy `terraform/infra/` musi to powtórzyć.
+
+Kierunek użycia puli jest jednostronny: **sprawdzamy przynależność, nigdy nie
+wyprowadzamy z niej listy do kasowania.** Pula mówi „to jest nasze", nie „to
+wolno skasować" — te dwa zdania nie są równoważne, a pomylenie ich zamiata
+wszystko, co ktoś kiedyś do puli wrzucił.
 
 ### D2. Zakres odbudowy
 
@@ -133,22 +144,35 @@ Zapisujemy fakty o maszynach i usługach, nie archeologię Terraform:
 
 ## Faza 1 — Teardown
 
-Jedna pętla, storage-agnostyczna. `--purge` usuwa dyski i odwołania z innych
-konfiguracji niezależnie od tego, na którym poolu leżą — dlatego nie
-potrzebujemy per-modułowego `PVE_STORAGE`, który był głównym źródłem ryzyka
+Zakres jest **zamkniętą listą 18 VMID**, nie zapytaniem. Nie wyprowadzamy go
+z puli, z prefiksu nazwy ani z tagów: pula `claude-isa` służy wyłącznie jako
+*asercja* („każda maszyna, którą kasuję, musi w niej być"), nigdy jako źródło
+listy. Odwrotny kierunek wciągnąłby wszystko, co ktoś kiedyś do puli wrzucił.
+
+`--purge` usuwa dyski i odwołania niezależnie od datastore'u, więc nie
+potrzebujemy per-modułowego `PVE_STORAGE` — głównego źródła ryzyka
 w poprzedniej wersji tego planu.
 
 ```bash
 # na hoście PVE
-for id in 9123 9124 9125 9126 9130 9131 9132 \
-          9150 9151 9152 9153 \
-          9170 9171 9172 9173 \
-          9193 9194 9195 \
-          9010 9011 9012 9040 9041 9042 9050 9060; do
+MINE="9123 9124 9125 9126 9130 9131 9132 9150 9151 9152 9153 9170 9171 9172 9173 9193 9194 9195"
+
+# Bramka: przerwij, jeśli którakolwiek nie należy do claude-isa
+POOL=$(pvesh get /pools/claude-isa --output-format json | python3 -c \
+  'import sys,json; print(" ".join(str(m["vmid"]) for m in json.load(sys.stdin)["members"]))')
+for id in $MINE; do
+  case " $POOL " in *" $id "*) ;; *) echo "STOP: $id poza claude-isa"; exit 1;; esac
+done
+
+for id in $MINE; do
   qm stop    "$id" 2>/dev/null || true
   qm destroy "$id" --purge --destroy-unreferenced-disks 1
 done
 ```
+
+**Nie dotykamy `9010-9012`, `9040-9042`, `9050`, `9060`** (`galera-01..03`,
+`galera10-01..03`, `proxysql-01`, `monitoring-01`). To nie są maszyny tej
+automatyzacji — powstały przed nią i nie jest naszą rzeczą o nich decydować.
 
 Następnie w repo — usunięcie modułów i ich stanu:
 
@@ -168,11 +192,11 @@ Teardown bez tej fazy jest twierdzeniem, nie faktem.
 
 ```bash
 # Zero naszych VM
-qm list | grep -E '\b(912[3-6]|913[0-2]|915[0-3]|917[0-3]|919[3-5]|901[0-2]|904[0-2]|9050|9060)\b'
+qm list | grep -E '\b(912[3-6]|913[0-2]|915[0-3]|917[0-3]|919[3-5])\b'
 # oczekiwane: brak wyników
 
 # Zero osieroconych wolumenów na OBU poolach
-zfs list -t volume -o name | grep -E 'vm-(912[3-6]|913[0-2]|915[0-3]|917[0-3]|919[3-5]|901[0-2]|904[0-2]|9050|9060)-'
+zfs list -t volume -o name | grep -E 'vm-(912[3-6]|913[0-2]|915[0-3]|917[0-3]|919[3-5])-'
 # oczekiwane: brak wyników
 
 # Rezerwacja data1 zwolniona: ~906G -> ~580G used
