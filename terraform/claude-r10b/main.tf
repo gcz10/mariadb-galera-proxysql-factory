@@ -33,7 +33,7 @@ locals {
     # Druga generacja wezlow Galera: nowe VMID/IP/hostname. ProxySQL, restore i infra
     # zostaja NIETKNIETE (te same VMID/IP) — wymianie podlega tylko warstwa bazy.
     # started=false: wezly Galera sa CELOWO wylaczone (zatrzymane 2026-08-01, dyski
-    # zachowane). Warstwe bazy przejal klaster r10n (terraform/r10n/, .71-.73), a
+    # zachowane). Warstwe bazy przejal claude-r10c (terraform/claude-r10c/, .71-.73), a
     # wspoldzielony ProxySQL/VIP/PMM/restore ponizej dziala dalej. Bez tej flagi
     # `terraform apply` po cichu wystartowalby martwy klaster.
     gnode4 = { id = 9130, ip = 51, role = "galera", cpu = 2, ram = 4096, disk = 40, started = false }
