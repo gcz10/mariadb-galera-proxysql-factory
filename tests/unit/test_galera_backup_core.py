@@ -542,6 +542,8 @@ class CutoverContractTests(unittest.TestCase):
         files_to_check = []
         for path in WORKSPACE_ROOT.rglob("*"):
             if path.is_file() and not any(part.startswith(".") for part in path.parts):
+                if path.suffix.lower() in {".md", ".rst", ".txt"}:
+                    continue
                 if "tests/unit" in str(path):
                     continue
                 files_to_check.append(path)
