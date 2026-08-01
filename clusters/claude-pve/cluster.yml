@@ -78,15 +78,19 @@ backup:
   destination: "s3"          # SMB przetestujemy osobno (wymaga mount + zmian w f10_backup)
   full_backup_schedule: "0 2 * * *"
   incremental_backup_schedule: "disabled"
+  freshness_sla_hours: 26
   retention_days: 14
   encryption_enabled: true
   immutable_or_offsite_copy: true
   restore_test_schedule: "0 4 * * 0"
+  scheduler:
+    mode: "manual"
+    host: "gnode1"
+    timezone: "UTC"
   s3:
     endpoint: "192.168.1.16:9000"   # MinIO na infra VM
     bucket: "claude-galera-backups"
     secure: false
-
 monitoring:
   pmm:
     server_url: "https://192.168.1.16"   # PMM na infra VM

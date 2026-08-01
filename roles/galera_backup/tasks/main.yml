@@ -1,0 +1,266 @@
+---
+# main.yml for galera_backup role
+
+- name: Install common packages required by backup runner
+  ansible.builtin.package:
+    name:
+      - "{{ lock.backup_tools.python_pip_package }}"
+      - "{{ lock.backup_tools.encryption_package }}"
+      - "{{ lock.backup_tools.archive_package }}"
+    state: present
+
+- name: Install cron package if scheduled cron mode enabled
+  ansible.builtin.package:
+    name: "{{ lock.backup_tools.cron_package }}"
+    state: present
+  when:
+    - (galera_backup_install_cron | default(true)) | bool
+    - backup.enabled
+    - backup.scheduler.mode == 'cron'
+
+- name: Install CIFS userspace package for managed SMB or restore-host verification
+  ansible.builtin.package:
+    name: "{{ lock.backup_tools.cifs_userspace_package }}"
+    state: present
+  when:
+    - backup.enabled
+    - (galera_backup_local_role | default('scheduler')) == 'restore' or backup.destination == 'smb'
+
+- name: Ensure MinIO Python SDK is installed
+  ansible.builtin.pip:
+    name: "minio=={{ lock.minio.sdk_version }}"
+    state: present
+
+- name: Ensure directory structure under /opt/galera-backup
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /opt/galera-backup
+    - "/opt/galera-backup/clusters/{{ cluster.name }}"
+
+- name: Deploy galera-backup executable
+  ansible.builtin.copy:
+    src: galera-backup
+    dest: /opt/galera-backup/galera-backup
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy cluster config.json
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "/opt/galera-backup/clusters/{{ cluster.name }}/config.json"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Determine whether the configured S3 service is managed MinIO
+  ansible.builtin.set_fact:
+    galera_backup_managed_minio: >-
+      {{
+        backup.enabled
+        and backup.destination == 's3'
+        and (galera_backup_provision_s3 | default(true))
+        and groups['infra'] is defined
+        and (groups['infra'] | length) > 0
+        and (
+          (backup.s3.endpoint | regex_replace(':[0-9]+$', ''))
+          == (hostvars[groups['infra'][0]].ansible_host | string)
+        )
+      }}
+
+- name: Inspect existing per-cluster secrets
+  ansible.builtin.stat:
+    path: "/opt/galera-backup/clusters/{{ cluster.name }}/secrets.env"
+  register: galera_backup_secrets_stat
+
+- name: Initialize existing scheduler secret values
+  ansible.builtin.set_fact:
+    galera_backup_existing_encryption_key: ""
+    galera_backup_existing_s3_access_key: ""
+    galera_backup_existing_s3_secret_key: ""
+  no_log: true
+
+- name: Read existing scheduler secrets for idempotent MinIO provisioning
+  ansible.builtin.slurp:
+    src: "/opt/galera-backup/clusters/{{ cluster.name }}/secrets.env"
+  register: galera_backup_existing_secrets
+  when:
+    - inventory_hostname == backup.scheduler.host
+    - galera_backup_secrets_stat.stat.exists
+  no_log: true
+
+- name: Extract existing scheduler secret values
+  ansible.builtin.set_fact:
+    galera_backup_existing_encryption_key: >-
+      {{
+        (
+          (galera_backup_existing_secrets.content | b64decode)
+          | regex_findall('(?m)^GALERA_BACKUP_ENCRYPTION_KEY="([^"]+)"$')
+          | first
+        ) | default('', true)
+      }}
+    galera_backup_existing_s3_access_key: >-
+      {{
+        (
+          (galera_backup_existing_secrets.content | b64decode)
+          | regex_findall('(?m)^GALERA_BACKUP_S3_ACCESS_KEY="([^"]+)"$')
+          | first
+        ) | default('', true)
+      }}
+    galera_backup_existing_s3_secret_key: >-
+      {{
+        (
+          (galera_backup_existing_secrets.content | b64decode)
+          | regex_findall('(?m)^GALERA_BACKUP_S3_SECRET_KEY="([^"]+)"$')
+          | first
+        ) | default('', true)
+      }}
+  when:
+    - inventory_hostname == backup.scheduler.host
+    - galera_backup_secrets_stat.stat.exists
+  no_log: true
+
+- name: Provision or converge scoped MinIO credentials
+  ansible.builtin.include_tasks:
+    file: provision_minio.yml
+    apply:
+      delegate_to: "{{ groups['infra'][0] }}"
+  when:
+    - galera_backup_managed_minio
+    - inventory_hostname == backup.scheduler.host
+
+- name: Resolve shared backup secrets
+  ansible.builtin.set_fact:
+    galera_backup_resolved_shared_secrets:
+      encryption_key: >-
+        {{
+          (galera_backup_inherited_shared_secrets | default({})).get('encryption_key')
+          | default(
+              galera_backup_encryption_key
+              | default(galera_backup_existing_encryption_key, true),
+              true
+            )
+        }}
+      s3_access_key: >-
+        {{
+          (galera_backup_inherited_shared_secrets | default({})).get('s3_access_key')
+          | default(
+              galera_backup_s3_access_key
+              | default(galera_backup_existing_s3_access_key, true),
+              true
+            )
+        }}
+      s3_secret_key: >-
+        {{
+          (galera_backup_inherited_shared_secrets | default({})).get('s3_secret_key')
+          | default(
+              galera_backup_s3_secret_key
+              | default(galera_backup_existing_s3_secret_key, true),
+              true
+            )
+        }}
+      smb_username: >-
+        {{
+          (galera_backup_inherited_shared_secrets | default({})).get('smb_username')
+          | default(galera_backup_smb_username | default('', true), true)
+        }}
+      smb_password: >-
+        {{
+          (galera_backup_inherited_shared_secrets | default({})).get('smb_password')
+          | default(galera_backup_smb_password | default('', true), true)
+        }}
+      smb_domain: >-
+        {{
+          (galera_backup_inherited_shared_secrets | default({})).get('smb_domain')
+          | default(galera_backup_smb_domain | default('', true), true)
+        }}
+  no_log: true
+
+- name: Decide whether this invocation may replace secrets
+  ansible.builtin.set_fact:
+    galera_backup_write_secrets: >-
+      {{
+        inventory_hostname == backup.scheduler.host
+        or (galera_backup_inherited_shared_secrets | default({}) | length) > 0
+        or not galera_backup_secrets_stat.stat.exists
+      }}
+
+- name: Validate resolved backup secrets before deployment
+  ansible.builtin.assert:
+    that:
+      - (galera_backup_resolved_shared_secrets.encryption_key | length) > 0
+      - backup.destination != 's3' or (galera_backup_resolved_shared_secrets.s3_access_key | length) > 0
+      - backup.destination != 's3' or (galera_backup_resolved_shared_secrets.s3_secret_key | length) > 0
+      - backup.destination != 'smb' or (galera_backup_resolved_shared_secrets.smb_username | length) > 0
+      - backup.destination != 'smb' or (galera_backup_resolved_shared_secrets.smb_password | length) > 0
+      - not (backup.enabled | bool) or (galera_backup_local_role | default('scheduler')) != 'scheduler' or (galera_backup_proxysql_admin_user | default('') | length) > 0
+      - not (backup.enabled | bool) or (galera_backup_local_role | default('scheduler')) != 'scheduler' or (galera_backup_proxysql_admin_password | default('') | length) > 0
+    fail_msg: Required backup credentials are unavailable
+    quiet: true
+  when: galera_backup_write_secrets
+  no_log: true
+
+- name: Publish resolved secrets for following restore-host play
+  ansible.builtin.set_fact:
+    galera_backup_shared_secrets: "{{ galera_backup_resolved_shared_secrets }}"
+  when: inventory_hostname == backup.scheduler.host
+  no_log: true
+
+- name: Deploy cluster secrets.env
+  ansible.builtin.template:
+    src: secrets.env.j2
+    dest: "/opt/galera-backup/clusters/{{ cluster.name }}/secrets.env"
+    owner: root
+    group: root
+    mode: "0600"
+  when: galera_backup_write_secrets
+  no_log: true
+
+- name: Verify durable cron log sink is installed
+  ansible.builtin.stat:
+    path: /usr/bin/systemd-cat
+  register: galera_backup_systemd_cat
+  when:
+    - (galera_backup_install_cron | default(true))
+    - backup.enabled
+    - backup.scheduler.mode == 'cron'
+    - inventory_hostname == backup.scheduler.host
+
+- name: Require durable cron log sink
+  ansible.builtin.assert:
+    that:
+      - galera_backup_systemd_cat.stat.exists
+      - galera_backup_systemd_cat.stat.executable
+    fail_msg: /usr/bin/systemd-cat is required for durable backup cron diagnostics
+    quiet: true
+  when:
+    - (galera_backup_install_cron | default(true))
+    - backup.enabled
+    - backup.scheduler.mode == 'cron'
+    - inventory_hostname == backup.scheduler.host
+
+- name: Manage per-cluster cron job
+  ansible.builtin.template:
+    src: cron.j2
+    dest: "/etc/cron.d/galera-backup-{{ cluster.name }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - (galera_backup_install_cron | default(true))
+    - backup.enabled
+    - backup.scheduler.mode == 'cron'
+    - inventory_hostname == backup.scheduler.host
+
+- name: Remove cron file on non-scheduler hosts or manual mode
+  ansible.builtin.file:
+    path: "/etc/cron.d/galera-backup-{{ cluster.name }}"
+    state: absent
+  when: >
+    not (backup.enabled and backup.scheduler.mode == 'cron' and inventory_hostname == backup.scheduler.host) or
+    not (galera_backup_install_cron | default(true))

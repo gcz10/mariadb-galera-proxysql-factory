@@ -1,0 +1,331 @@
+---
+- name: Provision scoped MinIO credentials on infra host
+  block:
+    - name: Create root-only MinIO provisioning directory
+      ansible.builtin.file:
+        path: /run/galera-backup-minio-tmp
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Render root-only MinIO client environment
+      ansible.builtin.copy:
+        dest: /run/galera-backup-minio-tmp/root.env
+        owner: root
+        group: root
+        mode: "0600"
+        content: >-
+          MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') | urlencode }}:{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') | urlencode }}@localhost:9000
+      no_log: true
+
+    - name: Render policy to temporary file
+      ansible.builtin.template:
+        src: minio-policy.json.j2
+        dest: /run/galera-backup-minio-tmp/policy.json
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Ensure bucket exists
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - mb
+          - --ignore-existing
+          - "myminio/{{ backup.s3.bucket }}"
+      changed_when: false
+      no_log: true
+
+    - name: Read managed bucket owner marker
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - cat
+          - "myminio/{{ backup.s3.bucket }}/galera-backup-owner.json"
+      register: galera_backup_owner_marker_initial
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Validate existing managed bucket owner marker
+      ansible.builtin.assert:
+        that:
+          - (galera_backup_owner_marker_initial.stdout | from_json).format_version == 1
+          - (galera_backup_owner_marker_initial.stdout | from_json).cluster_name == cluster.name
+        fail_msg: Managed S3 bucket owner marker belongs to another cluster or is malformed
+        quiet: true
+      when: galera_backup_owner_marker_initial.rc == 0
+
+    - name: Create managed bucket owner marker with root credentials
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - -i
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - pipe
+          - "myminio/{{ backup.s3.bucket }}/galera-backup-owner.json"
+        stdin: >-
+          {{ {'format_version': 1, 'cluster_name': cluster.name} | to_json }}
+      when: galera_backup_owner_marker_initial.rc != 0
+      no_log: true
+
+    - name: Verify managed bucket owner marker after provisioning
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - cat
+          - "myminio/{{ backup.s3.bucket }}/galera-backup-owner.json"
+      register: galera_backup_owner_marker_final
+      changed_when: false
+      no_log: true
+
+    - name: Require exact managed bucket ownership
+      ansible.builtin.assert:
+        that:
+          - (galera_backup_owner_marker_final.stdout | from_json).format_version == 1
+          - (galera_backup_owner_marker_final.stdout | from_json).cluster_name == cluster.name
+        fail_msg: Managed S3 bucket owner marker verification failed
+        quiet: true
+
+    - name: List existing MinIO service accounts
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - admin
+          - accesskey
+          - list
+          - myminio
+          - --all
+          - --json
+      register: mc_accesskey_list
+      changed_when: false
+      no_log: true
+
+    - name: Extract existing MinIO service-account keys
+      ansible.builtin.set_fact:
+        galera_backup_all_access_keys: >-
+          {{ mc_accesskey_list.stdout | minio_service_account_keys }}
+      no_log: true
+
+    - name: Read existing MinIO service-account identities
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - admin
+          - accesskey
+          - info
+          - myminio
+          - "{{ item }}"
+          - --json
+      loop: "{{ galera_backup_all_access_keys }}"
+      register: mc_accesskey_info
+      changed_when: false
+      no_log: true
+
+    - name: Select all service accounts owned by this cluster
+      ansible.builtin.set_fact:
+        galera_backup_existing_access_keys: >-
+          {{
+            mc_accesskey_info.results
+            | default([])
+            | map(attribute='stdout')
+            | list
+            | minio_access_keys_named('galera-backup-' ~ cluster.name)
+          }}
+      no_log: true
+
+    - name: Select candidate existing scoped credential
+      ansible.builtin.set_fact:
+        galera_backup_existing_key_candidate: >-
+          {{
+            (galera_backup_existing_s3_access_key | length) > 0
+            and (galera_backup_existing_s3_secret_key | length) > 0
+            and galera_backup_existing_s3_access_key in galera_backup_existing_access_keys
+          }}
+      no_log: true
+
+    - name: Render candidate scoped MinIO client environment
+      ansible.builtin.copy:
+        dest: /run/galera-backup-minio-tmp/scoped.env
+        owner: root
+        group: root
+        mode: "0600"
+        content: >-
+          MC_HOST_scoped=http://{{ galera_backup_existing_s3_access_key | urlencode }}:{{ galera_backup_existing_s3_secret_key | urlencode }}@localhost:9000
+      when: galera_backup_existing_key_candidate
+      no_log: true
+
+    - name: Verify candidate scoped credential can access its bucket
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/scoped.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - ls
+          - "scoped/{{ backup.s3.bucket }}"
+          - --json
+      register: galera_backup_existing_key_probe
+      changed_when: false
+      failed_when: false
+      when: galera_backup_existing_key_candidate
+      no_log: true
+
+    - name: Decide whether to reuse the existing scoped credential
+      ansible.builtin.set_fact:
+        galera_backup_reuse_existing_s3_key: >-
+          {{
+            (galera_backup_existing_key_candidate | bool)
+            and (galera_backup_existing_key_probe.rc | default(1) | int) == 0
+          }}
+
+
+    - name: Converge policy on the existing scoped credential
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - -v
+          - /run/galera-backup-minio-tmp/policy.json:/tmp/policy.json:ro,Z
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - admin
+          - accesskey
+          - edit
+          - myminio
+          - "{{ galera_backup_existing_s3_access_key }}"
+          - --policy
+          - /tmp/policy.json
+          - --name
+          - "galera-backup-{{ cluster.name }}"
+      when: galera_backup_reuse_existing_s3_key
+      no_log: true
+
+    - name: Select stale MinIO service accounts for removal
+      ansible.builtin.set_fact:
+        galera_backup_access_keys_to_revoke: >-
+          {{
+            (
+              galera_backup_existing_access_keys
+              | reject('equalto', galera_backup_existing_s3_access_key)
+              | list
+            )
+            if galera_backup_reuse_existing_s3_key
+            else galera_backup_existing_access_keys
+          }}
+      no_log: true
+
+    - name: Revoke stale service accounts owned by this cluster
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - admin
+          - accesskey
+          - remove
+          - myminio
+          - "{{ item }}"
+      loop: "{{ galera_backup_access_keys_to_revoke }}"
+      no_log: true
+
+    - name: Create new scoped access key pair
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - -v
+          - /run/galera-backup-minio-tmp/policy.json:/tmp/policy.json:ro,Z
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - admin
+          - accesskey
+          - create
+          - myminio/
+          - --json
+          - --name
+          - "galera-backup-{{ cluster.name }}"
+          - --policy
+          - /tmp/policy.json
+      register: mc_create_result
+      when: not galera_backup_reuse_existing_s3_key
+      no_log: true
+
+    - name: Reuse existing scoped credentials
+      ansible.builtin.set_fact:
+        galera_backup_s3_access_key: "{{ galera_backup_existing_s3_access_key }}"
+        galera_backup_s3_secret_key: "{{ galera_backup_existing_s3_secret_key }}"
+      when: galera_backup_reuse_existing_s3_key
+      no_log: true
+
+    - name: Extract generated scoped credentials
+      ansible.builtin.set_fact:
+        galera_backup_s3_access_key: "{{ (mc_create_result.stdout | from_json).accessKey }}"
+        galera_backup_s3_secret_key: "{{ (mc_create_result.stdout | from_json).secretKey }}"
+      when: not galera_backup_reuse_existing_s3_key
+      no_log: true
+
+  always:
+    - name: Remove root credentials and temporary policy
+      ansible.builtin.file:
+        path: /run/galera-backup-minio-tmp
+        state: absent

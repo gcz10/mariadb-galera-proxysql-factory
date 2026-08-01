@@ -8,7 +8,7 @@
 # - node loss / writer loss: wsrep_cluster_size < expected (writer jest węzłem)
 # - quorum loss: wsrep_cluster_status != 1 (Primary)
 # - node not Synced: wsrep_local_state != 4
-# - backup stale: ostatni backup > retention_days
+# - backup stale: ostatni backup przekracza jawny freshness SLA
 #
 # Delivery: email przez SMTP; laboratorium używa Maildev.
 
@@ -27,7 +27,7 @@
     cluster_label: "{{ monitoring.pmm.cluster_name }}"
     folder_uid: "{{ (monitoring.alerts | default({})).folder_uid | default('isa-alerts-' ~ cluster_label) }}"
     ds_uid: "{{ (monitoring.alerts | default({})).datasource_uid | default('') }}"
-    backup_retention_days: "{{ backup.retention_days | default(14) }}"
+    backup_freshness_sla_hours: "{{ backup.freshness_sla_hours }}"
     f15_email: "{{ (monitoring.alerts | default({})).email | default('') }}"
     f15_folder_title: "ISA Alerts ({{ cluster_label }})"
     f15_contact_uid: "email-isa-{{ cluster_label }}"
@@ -69,10 +69,17 @@
         summary: "No ONLINE backend in ProxySQL writer hostgroup {{ galera_writer_hg }} — writes will fail"
         severity: "critical"
         noDataState: "Alerting"
+      - uid: "isa-{{ cluster_label }}-backup-failed"
+        title: "Backup run failed"
+        expr: "(min(galera_backup_last_run_success{cluster=\"{{ cluster_label }}\"}) or vector(0)) != bool 1"
+        summary: "Last Galera backup run failed or metrics missing for cluster {{ cluster_label }}"
+        severity: "critical"
+        noDataState: "Alerting"
+        pending_for: "0s"
       - uid: "isa-{{ cluster_label }}-backup-stale"
         title: "Backup freshness stale"
-        expr: "(time() - (max(isa_backup_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool ({{ backup_retention_days }} * 86400)"
-        summary: "Last successful backup older than {{ backup_retention_days }} days (or freshness metric missing)"
+        expr: "(time() - (max(galera_backup_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool ({{ backup_freshness_sla_hours }} * 3600)"
+        summary: "Last successful backup older than {{ backup_freshness_sla_hours }} hours (or freshness metric missing)"
         severity: "critical"
         noDataState: "Alerting"
 
@@ -194,7 +201,7 @@
           ruleGroup: "isa-{{ cluster_label }}"
           title: "{{ item.title }}"
           condition: "A"
-          for: "2m"
+          for: "{{ item.pending_for | default('2m') }}"
           noDataState: "{{ item.noDataState | default('Alerting') }}"
           execErrState: "Error"
           isPaused: false

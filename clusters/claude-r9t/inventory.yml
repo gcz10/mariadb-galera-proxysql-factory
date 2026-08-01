@@ -1,0 +1,66 @@
+---
+# claude-r9t — 6 NOWYCH VM Rocky 9 z tls.mode=full (.61-.66, VMID 9180-9185).
+#
+# Klaster samowystarczalny: 3 wezly Galera + para ProxySQL + wlasny wezel restore.
+# PMM i MinIO sa wspoldzielone z claude-r10b na .47; ProxySQL i VIP sa wlasne.
+#
+# Nie uruchamiaj playbookow z inventory innego klastra na tych hostach.
+#
+# Nazwy hostow sa w SAN certyfikatu (tests/lab/tls/r9t/server-cert.pem).
+#
+
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: tests/lab/ssh_key
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        g9tnode1:
+          ansible_host: "192.168.1.61"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.61"
+        g9tnode2:
+          ansible_host: "192.168.1.62"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.62"
+        g9tnode3:
+          ansible_host: "192.168.1.63"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.63"
+    # WLASNA para ProxySQL (.64/.65) z VIP .70.
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        p9tnode1:
+          ansible_host: "192.168.1.64"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.64"
+        p9tnode2:
+          ansible_host: "192.168.1.65"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.65"
+
+    # WLASNY wezel EL9 (.66) — host restore musi byc z tej samej rodziny OS.
+    restore:
+      vars:
+        restore_role: "restore"
+      hosts:
+        r9tnode1:
+          ansible_host: "192.168.1.66"
+          restore_node_address: "192.168.1.66"
+
+    # WSPOLDZIELONY z claude-r10b — PMM + MinIO.
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        infranode:
+          ansible_host: "192.168.1.47"
+          infra_node_address: "192.168.1.47"

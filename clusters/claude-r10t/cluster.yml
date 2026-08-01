@@ -1,0 +1,140 @@
+---
+# claude-r10t — klaster weryfikacyjny Rocky Linux 10 z tls.mode=full.
+#
+# Cel: pierwszy zywy przebieg sciezki TLS `full`. ADR-002 zostawia ISC-44
+# (tryb full odrzuca niezaufany certyfikat) jako OTWARTY, a szablon
+# roles/mariadb_install/templates/server.cnf.j2 wypelnia wtedy zarowno
+# ssl_ca/ssl_cert/ssl_key, jak i socket.ssl_* w wsrep_provider_options —
+# czyli szyfruje takze replikacje Galera i SST, nie tylko ruch kliencki.
+#
+# Klaster jest samowystarczalny w warstwie bazy (3x galera + wlasny restore).
+# ProxySQL i PMM NIE sa wdrazane: f7_proxysql.yml rozprowadza CA na wezly
+# ProxySQL, a te sa wspoldzielone z zywym claude-r10b.
+
+cluster:
+  name: "claude-r10t"
+  environment: "laboratory"
+  profile: "laboratory"
+  automation_release: "0.1.0"
+
+platform:
+  virtualization: "proxmox_kvm"
+  rocky_linux_major: 10
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/versions-el10.lock.yml"
+
+galera:
+  # Rozlaczna z claude_galera, r10b_galera_g2 i r9g_galera — wsrep_cluster_name
+  # jest czescia tozsamosci Primary Component.
+  cluster_name: "r10t_galera_tls"
+  nodes_expected: 3
+
+# Wlasna para ProxySQL (.58/.59) + wlasny VIP .60 — klaster jest samowystarczalny.
+# VIP MUSI byc rozlaczny z .50 (claude-r10b), inaczej dwa Keepalived walczylyby
+# o ten sam adres.
+#
+# Przy tls.mode=full f7_proxysql.yml rozprowadza CA na wezly ProxySQL (bez klucza
+# prywatnego), ustawia mysql-ssl_p2s_ca i wpisuje mysql_servers.use_ssl=1,
+# czyli szyfruje odcinek ProxySQL->MariaDB.
+proxysql:
+  nodes_expected: 2
+  max_writers: 1
+  read_write_split_enabled: false
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.60"
+    port: 6033
+
+# TLS full — sedno tego klastra.
+#
+# certificate_source=file oznacza, ze *_reference sa sciezkami na hoscie
+# KONTROLNYM; playbooks/tls_certs.yml kopiuje je do /etc/mysql/tls/ na wezle
+# (CA 0644, cert 0644, klucz 0600, owner mysql).
+#
+# Jeden wspolny certyfikat serwera dla wszystkich wezlow: tls_certs.yml
+# rozprowadza ten sam plik, wiec SAN musi pokrywac WSZYSTKIE adresy i nazwy
+# wezlow (.54-.57 + gtnode1-3 + rtnode1). Zmiana adresacji => regeneracja certu.
+#
+# Katalog tests/lab/tls/ jest w .gitignore — klucz prywatny nie trafia do repo.
+tls:
+  mode: "full"
+  certificate_source: "file"
+  ca_reference: "tests/lab/tls/ca.pem"
+  certificate_reference: "tests/lab/tls/server-cert.pem"
+  private_key_reference: "tests/lab/tls/server-key.pem"
+  # Wymusza TLS dla polaczen po TCP. Polaczenia po unix socket sa zwolnione,
+  # a wszystkie playbooki repo lacza sie socketem, wiec to nie blokuje automatyki.
+  require_secure_transport: true
+
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.47/32"]
+
+secrets:
+  backend: "ansible_vault"   # env-only w aktualnej implementacji (patrz opis w schema)
+
+storage:
+  data_directory: "/var/lib/mysql"
+  backup_staging_directory: "/var/tmp/mariadb-backup"
+  filesystem: "xfs"
+  expected_database_size_gb: "unknown"
+  expected_growth_gb_per_month: "unknown"
+  available_iops: "unknown"
+
+workload:
+  peak_qps: "unknown"
+  peak_connections: "unknown"
+  read_write_ratio: "unknown"
+  largest_transaction_mb: "unknown"
+  largest_table_gb: "unknown"
+  expected_write_latency_ms: "unknown"
+
+availability:
+  rpo: "0"
+  rto_node_failure: "2m"
+  rto_full_cluster_failure: "30m"
+  maintenance_window: "weekend"
+  allowed_service_interruption: "2m"
+
+backup:
+  enabled: true
+  destination: "s3"
+  full_backup_schedule: "0 2 * * *"
+  incremental_backup_schedule: "disabled"
+  freshness_sla_hours: 26
+  retention_days: 14
+  encryption_enabled: true
+  immutable_or_offsite_copy: true
+  restore_test_schedule: "0 4 * * 0"
+  scheduler:
+    mode: "manual"
+    host: "gtnode1"
+    timezone: "UTC"
+  s3:
+    endpoint: "192.168.1.47:9000"     # wspoldzielone MinIO claude-r10b
+    bucket: "r10t-galera-backups"     # bucket rozlaczny — wlasnosc egzekwuje owner marker
+    secure: false
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.47"
+    agent_id: "pmm-server"
+    cluster_name: "r10t-galera"
+    validate_certs: false
+    credentials_revision: 1
+  system: "pmm"
+  alerts:
+    email: "ops@claude.local"
+  log_destination: "journald"
+
+mariadb_tuning:
+  # VM ma 2560 MB. Buffer pool 512M + gcache 256M zostawia zapas na mariadbd,
+  # SST (mariabackup) i system.
+  innodb_buffer_pool_size: "512M"
+  innodb_log_file_size: "128M"
+  max_connections: 100
+  innodb_flush_log_at_trx_commit: 0
+  gcache_size: "256M"

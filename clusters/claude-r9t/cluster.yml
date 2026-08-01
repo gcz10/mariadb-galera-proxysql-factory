@@ -1,0 +1,109 @@
+---
+# claude-r9t — klaster weryfikacyjny Rocky Linux 9 z tls.mode=full.
+#
+# Odpowiednik claude-r10t (EL10 TLS), ale na EL9. Cel: udowodnic, ze sciezka
+# TLS full dziala takze na Rocky 9. Klaster samowystarczalny w warstwie bazy.
+
+cluster:
+  name: "claude-r9t"
+  environment: "laboratory"
+  profile: "laboratory"
+  automation_release: "0.1.0"
+
+platform:
+  virtualization: "proxmox_kvm"
+  rocky_linux_major: 9
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/versions.lock.yml"
+
+galera:
+  cluster_name: "r9t_galera_tls"
+  nodes_expected: 3
+
+proxysql:
+  nodes_expected: 2
+  max_writers: 1
+  read_write_split_enabled: false
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.70"
+    port: 6033
+
+tls:
+  mode: "full"
+  certificate_source: "file"
+  ca_reference: "tests/lab/tls/r9t/ca.pem"
+  certificate_reference: "tests/lab/tls/r9t/server-cert.pem"
+  private_key_reference: "tests/lab/tls/r9t/server-key.pem"
+  require_secure_transport: true
+
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.47/32"]
+
+secrets:
+  backend: "ansible_vault"
+
+storage:
+  data_directory: "/var/lib/mysql"
+  backup_staging_directory: "/var/tmp/mariadb-backup"
+  filesystem: "xfs"
+  expected_database_size_gb: "unknown"
+  expected_growth_gb_per_month: "unknown"
+  available_iops: "unknown"
+
+workload:
+  peak_qps: "unknown"
+  peak_connections: "unknown"
+  read_write_ratio: "unknown"
+  largest_transaction_mb: "unknown"
+  largest_table_gb: "unknown"
+  expected_write_latency_ms: "unknown"
+
+availability:
+  rpo: "0"
+  rto_node_failure: "2m"
+  rto_full_cluster_failure: "30m"
+  maintenance_window: "weekend"
+  allowed_service_interruption: "2m"
+
+backup:
+  enabled: true
+  destination: "s3"
+  full_backup_schedule: "0 2 * * *"
+  incremental_backup_schedule: "disabled"
+  freshness_sla_hours: 26
+  retention_days: 14
+  encryption_enabled: true
+  immutable_or_offsite_copy: true
+  restore_test_schedule: "0 4 * * 0"
+  scheduler:
+    mode: "manual"
+    host: "g9tnode1"
+    timezone: "UTC"
+  s3:
+    endpoint: "192.168.1.47:9000"
+    bucket: "r9t-galera-backups"
+    secure: false
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.47"
+    agent_id: "pmm-server"
+    cluster_name: "r9t-galera"
+    validate_certs: false
+    credentials_revision: 1
+  system: "pmm"
+  alerts:
+    email: "ops@claude.local"
+  log_destination: "journald"
+
+mariadb_tuning:
+  innodb_buffer_pool_size: "512M"
+  innodb_log_file_size: "128M"
+  max_connections: 100
+  innodb_flush_log_at_trx_commit: 0
+  gcache_size: "256M"

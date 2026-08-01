@@ -73,11 +73,20 @@ docker:
   compose_version: "5.3.1-1.el10"
   repo_baseurl: "https://download.docker.com/linux/centos/$releasever/$basearch/stable"
   repo_gpgkey: "https://download.docker.com/linux/centos/gpg"
+backup_tools:
+  python_pip_package: "python3-pip"
+  encryption_package: "openssl"
+  archive_package: "tar"
+  cron_package: "cronie"
+  cifs_userspace_package: "cifs-utils"
+
 
 minio:
   image: "minio/minio:RELEASE.2025-09-07T16-13-09Z"
   image_digest: "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
   sdk_version: "7.2.7"
+  mc_image: "minio/mc:RELEASE.2025-08-13T08-35-41Z"
+  mc_image_digest: "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
 
 maildev:
   image: "maildev/maildev:2.2.1"

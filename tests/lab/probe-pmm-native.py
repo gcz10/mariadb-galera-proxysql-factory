@@ -57,23 +57,29 @@ EXPECTED_NODE_EXPORTER_VERSION = str(VERSION_LOCK["node_exporter"]["version"])
 EXPECTED_PMM_VERSION = str(VERSION_LOCK["pmm"]["version"])
 # Lifecycle config gauges — exact value match expected (baseline from F11).
 EXPECTED_CONFIG_METRICS = {
-    "isa_backup_monitoring_enabled": 1,
     "isa_restore_test_monitoring_enabled": 1,
     "isa_tls_monitoring_enabled": 0,
 }
 # ISC-49 freshness unixtimes: non-zero + within an age window after F10 runs.
-BACKUP_RETENTION_DAYS = int(CLUSTER_CONFIG.get("backup", {}).get("retention_days", 14))
+BACKUP_FRESHNESS_SLA_HOURS = int(CLUSTER_CONFIG["backup"]["freshness_sla_hours"])
 EXPECTED_FRESHNESS_METRICS = {
-    # metric name → max acceptable age in days
-    "isa_backup_last_success_unixtime": BACKUP_RETENTION_DAYS,
-    "isa_restore_test_last_success_unixtime": 8,  # weekly restore_test_schedule + 1d grace
+    # metric name → max acceptable age in hours
+    "isa_restore_test_last_success_unixtime": 8 * 24,  # weekly schedule + 1d grace
 }
+EXPECTED_GALERA_BACKUP_METRICS = [
+    "galera_backup_last_success_unixtime",
+    "galera_backup_last_failure_unixtime",
+    "galera_backup_last_run_success",
+    "galera_backup_last_size_bytes",
+    "galera_backup_last_duration_seconds",
+]
 # TLS cert expiry: 0 when tls.mode != full; future epoch when full.
 TLS_MODE = CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled")
 TLS_EXPIRY_DISABLED_EXPECTED = TLS_MODE != "full"
 ALL_STATE_METRICS = (
     set(EXPECTED_CONFIG_METRICS)
     | set(EXPECTED_FRESHNESS_METRICS)
+    | set(EXPECTED_GALERA_BACKUP_METRICS)
     | {"isa_tls_cert_expiry_unixtime"}
 )
 
@@ -150,6 +156,7 @@ def main():
         f"isa-{_cl}-quorum-loss",
         f"isa-{_cl}-not-synced",
         f"isa-{_cl}-no-writer",
+        f"isa-{_cl}-backup-failed",
         f"isa-{_cl}-backup-stale",
     }
     managed_alert_rules = [
@@ -163,6 +170,19 @@ def main():
         managed_uids == expected_alert_rules,
         f"ISC-47 managed alert rules differ: got {sorted(managed_uids)}, "
         f"expected {sorted(expected_alert_rules)}",
+        failures,
+    )
+    backup_failure_rule = next(
+        (
+            rule
+            for rule in managed_alert_rules
+            if rule.get("uid") == f"isa-{_cl}-backup-failed"
+        ),
+        {},
+    )
+    check(
+        backup_failure_rule.get("for") == "0s",
+        "Backup failure alert must evaluate immediately (for=0s)",
         failures,
     )
     # Reguly zwracaja 0 przy zdrowym klastrze (nie pusty wektor), wiec NoData oznacza
@@ -550,16 +570,44 @@ def main():
 
     # ISC-49 freshness unixtimes — non-zero and within an age window.
     now = time.time()
-    for metric_name, max_age_days in EXPECTED_FRESHNESS_METRICS.items():
+    for metric_name, max_age_hours in EXPECTED_FRESHNESS_METRICS.items():
         results, value = state_value(metric_name)
-        fresh = value and value > 0 and (now - value) <= max_age_days * 86400
+        fresh = value and value > 0 and (now - value) <= max_age_hours * 3600
         check(
             len(results) == 1
             and results[0]["metric"].get("node_name") == FIRST_GALERA_NODE
             and fresh
             and float(results[0]["value"][0]) >= probe_started,
             f"stale or zero freshness metric {metric_name} "
-            f"(value={value}, max_age_days={max_age_days}): {results}",
+            f"(value={value}, max_age_hours={max_age_hours}): {results}",
+            failures,
+        )
+
+    # Backup runner metrics — one fresh series from the scheduler, with the
+    # logical-cluster and backend labels used by the managed alert rules.
+    for metric_name in EXPECTED_GALERA_BACKUP_METRICS:
+        results, value = state_value(metric_name)
+        labels = results[0]["metric"] if len(results) == 1 else {}
+        valid_value = value is not None and value >= 0
+        if metric_name == "galera_backup_last_success_unixtime":
+            valid_value = bool(
+                value
+                and value > 0
+                and (now - value) <= BACKUP_FRESHNESS_SLA_HOURS * 3600
+            )
+        elif metric_name == "galera_backup_last_run_success":
+            valid_value = value == 1
+        elif metric_name == "galera_backup_last_size_bytes":
+            valid_value = bool(value and value > 0)
+        check(
+            len(results) == 1
+            and labels.get("node_name") == FIRST_GALERA_NODE
+            and labels.get("logical_cluster")
+            == CLUSTER_CONFIG["cluster"]["name"]
+            and labels.get("backend") == CLUSTER_CONFIG["backup"]["destination"]
+            and valid_value
+            and float(results[0]["value"][0]) >= probe_started,
+            f"invalid Galera backup metric {metric_name}: {results}",
             failures,
         )
 

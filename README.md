@@ -1,8 +1,8 @@
 # Galera + ProxySQL Cluster Factory
 
-Powtarzalna, idempotentna fabryka produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących hostach Rocky Linux 9.
+Powtarzalna, idempotentna fabryka produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących hostach Rocky Linux 9 i 10.
 
-**Status: faza BUILD — laboratorium 5× Rocky Linux 9 (+ MinIO + host restore) działa; 3-węzłowy klaster Galera (mariabackup SST, IST) jest zdrowy i Synced. MariaDB zahardenowana (bez anon/test, root localhost-only, least privilege). ProxySQL na obu węzłach routuje ruch przez `mysql_galera_hostgroups` (jeden aktywny writer, R/W split wyłączony), a redundantny endpoint Keepalived VIP przełącza się przy awarii ProxySQL w kilka sekund. Testy chaos potwierdzają failover writera bez utraty transakcji i brak split-brain. Backup jest szyfrowany, off-cluster (S3/MinIO), z checksumą i metadanymi wsrep; restore drill odtwarza na czysty host z testem integralności. PMM monitoruje wszystkie hosty, trzy usługi MariaDB i QAN.**
+**Status: faza BUILD — wspólny kod ról działa na Rocky Linux 9 i 10. Galera, ProxySQL/Keepalived, hardening, monitoring oraz szyfrowany backup/restore zostały sprawdzone na rzeczywistych klastrach. Backup obsługuje S3, zarządzany SMB i wcześniej zamontowany filesystem; scheduler, retencja, sekrety i artefakty są izolowane per klaster.**
 
 Zobacz `ISA.md` — jedyne źródło prawdy dla idealnego stanu, kryteriów, mapy testów i postępu.
 
@@ -16,7 +16,7 @@ export PROXYSQL_ADMIN_PASSWORD='<proxysql-admin-password>'
 export PROXYSQL_MONITOR_PASSWORD='<proxysql-galera-monitor-password>'
 export APP_DB_PASSWORD='<application-db-password>'
 export KEEPALIVED_AUTH_PASS='<vrrp-8-znakowe-haslo>'
-export BACKUP_ENCRYPTION_KEY='<klucz-szyfrowania-backupu>'
+export GALERA_BACKUP_ENCRYPTION_KEY='<klucz-szyfrowania-backupu>'
 export MINIO_ROOT_USER='labbackup'
 export MINIO_ROOT_PASSWORD='<minio-s3-secret>'
 # Alternatywnie załaduj lokalny, ignorowany plik utworzony dla działającego labu:
@@ -68,12 +68,16 @@ make lab-failover-test CLUSTER=lab-cluster      # ISC-27/28: kill writera, brak 
 make lab-split-brain-test CLUSTER=lab-cluster   # ISC-30: partycja sieci, jeden Primary
 make verify-no-mass-restart                     # ISC-31: brak masowego restartu Galery
 
-# F10 — backup / restore (off-cluster S3, szyfrowany, restore drill)
-make cluster-backup CLUSTER=lab-cluster         # ISC-32/33/34/35: backup → S3
-make lab-backup-verify                          # weryfikacja szyfr/checksum/metadata
-make cluster-restore-drill CLUSTER=lab-cluster  # ISC-36: restore na czysty host rnode1
-make lab-restore-verify                         # ISC-37: świeżość drilla wg harmonogramu
-make lab-backup-impact CLUSTER=lab-cluster      # ISC-39: backup pod obciążeniem nie degraduje writera
+# F10 — konfiguracja schedulera, ręczny backup i potwierdzany restore
+make cluster-backup-configure CLUSTER=lab-cluster
+make cluster-backup CLUSTER=lab-cluster                  # ISC-32/33/34/35
+make lab-backup-verify CLUSTER=lab-cluster               # S3: szyfr/checksum/metadata
+make cluster-restore-drill CLUSTER=lab-cluster CONFIRM=yes
+make lab-restore-verify CLUSTER=lab-cluster               # integralność i świeżość
+make lab-backup-impact CLUSTER=lab-cluster                # ISC-39, lab-only
+#
+# Backend, scheduler, sekrety, rotacja i diagnostyka:
+# docs/runbooks/backup.md
 
 # F15 — reguły alertów (ISC-47); adres e-mail z monitoring.alerts.email w cluster.yml
 make cluster-alerts CLUSTER=lab-cluster
@@ -86,9 +90,9 @@ make lab-monitoring-verify
 
 PMM UI laboratorium: `http://127.0.0.1:8080`. Stan usług w PMM jest diagnostyczny: `Down` oznacza rzeczywiście nieosiągalną usługę, a nie błąd rejestracji.
 `GF_SECURITY_ADMIN_PASSWORD` inicjalizuje tylko czysty `pmm-data`; istniejący volume zachowuje zapisane hasło. Rotację wykonaj w PMM UI, po czym ustaw tę samą wartość w `PMM_ADMIN_PASSWORD`.
-Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje 4 reguły ISC-47 (node loss, quorum loss, node not Synced, backup stale) w folderze „ISA Alerts", z `for: 2m` i `noDataState: Alerting` — martwy węzeł, który przestaje raportować metryki, alarmuje zamiast milczeć. Reguły są opóźnione o 2 minuty, żeby planowany rolling restart nie generował fałszywych alarmów. Contact point i notification policy (`managed_by=ansible` → e-mail) biorą adres z `monitoring.alerts.email` w `cluster.yml`; w laboratorium poczta trafia do kontenera `maildev`. PMM używa ograniczonego drivera logów Docker (`10m × 3`); hosty z systemd dostają timer logrotate, a laboratorium bez systemd waliduje tę samą politykę bez uruchamiania timera.
+Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje 6 reguł (node loss, quorum loss, node not Synced, brak writera, ostatni backup nieudany, backup przeterminowany). Krytyczne reguły używają `noDataState: Alerting`; brak metryk nie przechodzi cicho. Contact point i notification policy (`managed_by=ansible` → e-mail) biorą adres z `monitoring.alerts.email` w `cluster.yml`. W laboratorium poczta trafia do `maildev`.
 
-Sondy backupu (`probe-backup.py`) używają klienta S3 — zainstaluj przypięty SDK na maszynie uruchamiającej testy: `pip install minio==7.2.7`. Off-cluster backup w labie to MinIO (S3); produkcja używa SMB (kernel OrbStack nie ma modułu cifs — patrz Decisions w ISA).
+`lab-backup-verify` weryfikuje backend S3 i wymaga przypiętego SDK (`minio.sdk_version` z lockfile). Zarządzany SMB oraz wcześniej zamontowany filesystem weryfikuje `tests/live/probe-galera-backup-backends.py`; procedury i ograniczenia opisuje `docs/runbooks/backup.md`.
 
 ## Struktura
 

@@ -59,6 +59,14 @@ jobs:
           done
           exit $rc
 
+      - name: Backup configuration semantics and ownership
+        run: python3 tests/validation/validate-backup-config.py clusters
+      - name: Galera backup unit tests
+        run: python3 -m unittest discover -s tests/unit -p 'test_*.py' -v
+
+      - name: Galera backup executable compile
+        run: python3 -m py_compile roles/galera_backup/files/galera-backup
+
       # Walidujemy lockfile'e faktycznie UZYWANE przez klastry (versions.lock_file),
       # nie kazdy plik w versions/. candidate.lock.yml jest z zalozenia niedokonczony
       # (placeholdery to-confirm-F0 czekajace na F0) i nie jest przez nikogo wskazywany.
@@ -97,7 +105,7 @@ jobs:
             if ! grep -qE '^[[:space:]]*hosts:' "$pb"; then
               echo "skip (include-only): $pb"; continue
             fi
-            if ansible-playbook "$pb" -i clusters/example-cluster/inventory.yml --syntax-check >/tmp/sx.out 2>&1; then
+            if ansible-playbook "$pb" -i clusters/example-cluster/inventory.yml -e @clusters/example-cluster/cluster.yml --syntax-check >/tmp/sx.out 2>&1; then
               echo "syntax OK: $pb"
             else
               echo "syntax FAIL: $pb"; cat /tmp/sx.out; rc=1
@@ -108,13 +116,14 @@ jobs:
       - name: python compile (tests + validation)
         run: python3 -m compileall -q tests
 
-      - name: Static guards (mass restart, double bootstrap, zero hardcode, conditional env)
+      - name: Static guards (mass restart, double bootstrap, zero hardcode, conditional env, secret leak)
         run: |
           set -e
           python3 tests/validation/probe-no-mass-restart.py
           python3 tests/validation/probe-no-double-bootstrap.py
           python3 tests/validation/probe-zero-hardcode.py
           python3 tests/validation/probe-no-conditional-env.py
+          bash tests/validation/probe-no-secrets-leak.sh
 
       - name: bash -n (all shell scripts)
         run: |

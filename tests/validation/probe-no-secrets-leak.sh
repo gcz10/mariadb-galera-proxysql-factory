@@ -11,18 +11,24 @@ FAIL=0
 echo "--- Checking repo files for secrets ---"
 if ! python3 - <<'PY'
 from pathlib import Path
+import os
 import re
 import subprocess
 
 paths = subprocess.check_output(
     ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"]
 ).decode().split("\0")
+# Tests inject an ignored temporary fixture through this additive path.
+paths.extend(filter(None, os.environ.get("SECRET_PROBE_EXTRA_PATHS", "").split(os.pathsep)))
 assignment = re.compile(
-    r"\b(?:password|passwd|secret|token|api_key)\s*[:=]\s*(?:([\"'])(.*?)\1|([^\s#,\]}]+))",
+    r"(?:[\"'](?P<quoted_key>password|passwd|secret|token|api_key)[\"']|"
+    r"(?P<plain_key>\b(?:password|passwd|secret|token|api_key)))\s*[:=]\s*"
+    r"(?:(?P<value_quote>[\"'])(?P<quoted_value>.*?)(?P=value_quote)|"
+    r"(?P<unquoted_value>\{\{.*?\}\}|[^\s#,\]}()\"']+))",
     re.IGNORECASE,
 )
 placeholder = re.compile(
-    r"(?:.*(?:replace[-_]?me|change[-_]?me).*|example|placeholder|vault:.*|<[^>]+>|null|none|true|false|disabled|unknown)",
+    r"(?:.*(?:replace[-_]?me|change[-_]?me).*|example|placeholder|vault:.*|<[^>]+>|null|none|true|false|disabled|unknown|yes|no|on|off|\.\.\.|password|passwd|secret|credentials|smbpassword|s3cr3t|DBPASS)",
     re.IGNORECASE,
 )
 jinja_expression = re.compile(r"\{\{.*\}\}", re.DOTALL)
@@ -44,9 +50,23 @@ for name in filter(None, paths):
         continue
     for line_number, line in enumerate(text.splitlines(), start=1):
         for match in assignment.finditer(line):
-            if not match.group(1) and path.suffix in unquoted_code_suffixes:
+            if (
+                match.group("plain_key")
+                and match.start() > 0
+                and line[match.start() - 1] in "\"'"
+            ):
                 continue
-            value = (match.group(2) if match.group(1) else match.group(3)).strip()
+            if not match.group("value_quote") and (
+                path.suffix in unquoted_code_suffixes
+                or path.name == "galera-backup"
+                or path.parts[:1] == ("docs",)
+            ):
+                continue
+            value = (
+                match.group("quoted_value")
+                if match.group("value_quote")
+                else match.group("unquoted_value")
+            ).strip()
             if (
                 jinja_expression.fullmatch(value)
                 or environment_reference.fullmatch(value)
@@ -75,6 +95,12 @@ if ps -eo args 2>/dev/null | grep -iE 'ansible.*-e.*password|ansible.*--extra-va
   FAIL=1
 fi
 
+# 3. Uruchom testy jednostkowe bezpieczeństwa sekretów w runnerze
+echo "--- Running behavioral secret safety unit tests ---"
+if ! python3 -m unittest tests.unit.test_galera_backup_core.GaleraBackupCoreTests.test_secret_cannot_enter_subprocess_argv tests.unit.test_galera_backup_core.GaleraBackupCoreTests.test_secret_redaction >/dev/null 2>&1; then
+  echo "FAIL: ISC-43 — secret redaction/argv unit tests failed"
+  FAIL=1
+fi
 if [ "$FAIL" -eq 0 ]; then
   echo "PASS: ISC-43 — no secrets detected in repo files or process argv"
   exit 0

@@ -14,7 +14,7 @@ platform:
 
 versions:
   policy: "candidate"
-  lock_file: "versions/candidate.lock.yml"
+  lock_file: "versions/versions.lock.yml"
 
 galera:
   cluster_name: "lab_galera"
@@ -77,10 +77,15 @@ backup:
   destination: "s3"
   full_backup_schedule: "0 2 * * *"
   incremental_backup_schedule: "disabled"
+  freshness_sla_hours: 26
   retention_days: 14
   encryption_enabled: true
   immutable_or_offsite_copy: true
   restore_test_schedule: "0 4 * * 0"
+  scheduler:
+    mode: "manual"
+    host: "gnode1"
+    timezone: "UTC"
   s3:
     endpoint: "172.28.0.60:9000"
     bucket: "galera-backups"

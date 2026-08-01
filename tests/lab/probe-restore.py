@@ -5,7 +5,7 @@ Checks: ISC-36 (last restore drill restored to the isolated host and passed the
 integrity check), ISC-37 (the last successful drill is within the configured
 restore_test_schedule window).
 
-Reads /var/lib/mariadb-backup-state/last_restore.json from the restore host.
+Reads /opt/galera-backup/clusters/<cluster>/state.json from the restore host.
 """
 
 import json
@@ -20,11 +20,12 @@ import yaml
 CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
 INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
-STATE_FILE = "/var/lib/mariadb-backup-state/last_restore.json"
 
 with open(CONFIG_PATH, encoding="utf-8") as fh:
     CLUSTER = yaml.safe_load(fh)
 
+CLUSTER_NAME = CLUSTER["cluster"]["name"]
+STATE_FILE = f"/opt/galera-backup/clusters/{CLUSTER_NAME}/state.json"
 RESTORE_SCHEDULE = str(CLUSTER["backup"].get("restore_test_schedule", "0 4 * * 0"))
 
 
@@ -64,25 +65,41 @@ def main():
         print(f"FAIL: cannot parse restore state: {exc}")
         return 1
 
-    # ISC-36: the drill restored and passed integrity.
-    if state.get("status") != "success":
-        failures.append(f"ISC-36 — last restore drill status={state.get('status')!r} (expected success)")
-    if int(state.get("rows_verified", 0)) <= 0:
-        failures.append(f"ISC-36 — restore verified {state.get('rows_verified')} rows (expected > 0)")
+    if state.get("cluster") != CLUSTER_NAME:
+        failures.append(f"ISC-36 — state cluster {state.get('cluster')!r} != {CLUSTER_NAME!r}")
 
-    # ISC-37: the drill is within the scheduled window.
-    last = state.get("last_restore", "")
-    try:
-        last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-        age_days = (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400
+    last_run = state.get("last_run", {})
+    if last_run.get("command") != "restore":
+        failures.append(f"ISC-36 — last run command={last_run.get('command')!r} (expected restore)")
+    if last_run.get("status") != "success":
+        failures.append(f"ISC-36 — last restore drill status={last_run.get('status')!r} (expected success)")
+
+    last_success = state.get("last_success", {})
+    if last_success.get("command") != "restore":
+        failures.append(f"ISC-36 — last success command={last_success.get('command')!r} (expected restore)")
+
+    artifact = last_success.get("artifact", {})
+    if isinstance(artifact, dict):
+        rows_verified = artifact.get("rows_verified", 0)
+        backup_name = artifact.get("backup_name", "unknown")
+    else:
+        rows_verified = 0
+        backup_name = str(artifact)
+
+    if int(rows_verified) <= 0:
+        failures.append(f"ISC-36 — restore verified {rows_verified} rows (expected > 0)")
+
+    unixtime = last_success.get("unixtime", 0)
+    if unixtime <= 0:
+        failures.append("ISC-37 — missing or invalid last_success unixtime")
+        age_days = None
+    else:
+        age_days = (datetime.now(timezone.utc).timestamp() - unixtime) / 86400
         max_age = schedule_max_age_days(RESTORE_SCHEDULE)
         if age_days > max_age:
             failures.append(
                 f"ISC-37 — last restore drill {age_days:.1f}d ago exceeds "
                 f"schedule window {max_age}d ('{RESTORE_SCHEDULE}')")
-    except (ValueError, AttributeError):
-        failures.append(f"ISC-37 — invalid last_restore timestamp: {last!r}")
-        age_days = None
 
     if failures:
         print("FAIL: restore drill verification failed:")
@@ -91,8 +108,8 @@ def main():
         return 1
 
     print(
-        f"PASS: restore drill OK — {state['backup_name']} restored to isolated host, "
-        f"{state['rows_verified']} rows verified, drill {age_days:.2f}d ago "
+        f"PASS: restore drill OK — {backup_name} restored to isolated host, "
+        f"{rows_verified} rows verified, drill {age_days:.2f}d ago "
         f"(within '{RESTORE_SCHEDULE}' window)")
     return 0
 

@@ -13,9 +13,20 @@
     galera_cluster_name: "{{ galera.cluster_name }}"
     galera_nodes_csv: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | join(',') }}"
     sst_user: "sst_user"
-    sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
+    sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') | default('', true) }}"
     gcache_size: "{{ (mariadb_tuning | default({})).gcache_size | default('128M') }}"
     mariadb_config_dir: /etc/my.cnf.d
+  pre_tasks:
+    - name: "Wymagaj SST_PASSWORD przed konfiguracja"
+      ansible.builtin.assert:
+        that:
+          - sst_user is string
+          - sst_user | length > 0
+          - sst_password is string
+          - sst_password | length > 0
+        fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env)."
+        quiet: true
+      no_log: true
 
   tasks:
     - name: "Utwórz katalogi MariaDB"
@@ -51,14 +62,18 @@
   become: true
   vars:
     sst_user: "sst_user"
-    sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
+    sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') | default('', true) }}"
   pre_tasks:
-    - name: "Wymagaj SST_PASSWORD"
+    - name: "Wymagaj SST_PASSWORD przed utworzeniem konta"
       ansible.builtin.assert:
         that:
+          - sst_user is string
+          - sst_user | length > 0
+          - sst_password is string
           - sst_password | length > 0
         fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env)."
-
+        quiet: true
+      no_log: true
   tasks:
     - name: "Sprawdź czy MariaDB jest uruchomiona"
       ansible.builtin.shell: "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e 'SELECT 1' 2>/dev/null"
@@ -75,6 +90,60 @@
         state: present
         login_unix_socket: /var/lib/mysql/mysql.sock
       when: mariadb_check.rc == 0
+      no_log: true
+
+# audit: wsrep_sst_auth jest wczytywany z pliku TYLKO przy starcie mysqld.
+# Rotacja SST_PASSWORD aktualizuje server.cnf oraz konto w bazie, ale dzialajacy
+# mysqld trzyma w pamieci STARA wartosc. Dawca uwierzytelnia sie wtedy starym
+# haslem do konta, ktore ma juz nowe, i SST pada:
+#   [Warning] Access denied for user 'sst_user'@'localhost' (using password: YES)
+#   WSREP_SST: [ERROR] mariadb-backup finished with error: 1
+# Awaria jest UTAJONA — klaster raportuje sie zdrowo, dopoki jakis wezel nie musi
+# sie dolaczyc, czyli ujawnia sie dopiero w trakcie awarii. site.yml tego nie
+# ratuje: konfiguracje zapisal juz ten playbook, wiec nie widzi zmiany i nie
+# restartuje. Zmienna jest dynamiczna, wiec synchronizujemy runtime bez restartu.
+#
+# Haslo idzie przez stdin, nie przez argv — argv jest widoczne w ps dla kazdego.
+- name: "F5 — zsynchronizuj wsrep_sst_auth w działającym mysqld (rotacja hasła)"
+  hosts: galera
+  become: true
+  gather_facts: false
+  vars:
+    sst_user: "sst_user"
+    sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') | default('', true) }}"
+  pre_tasks:
+    - name: "Wymagaj SST_PASSWORD przed synchronizacja runtime"
+      ansible.builtin.assert:
+        that:
+          - sst_user is string
+          - sst_user | length > 0
+          - sst_password is string
+          - sst_password | length > 0
+        fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env)."
+        quiet: true
+      no_log: true
+  tasks:
+    - name: "Sprawdź czy MariaDB jest uruchomiona"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SELECT 1"
+      register: f5_sst_auth_alive
+      changed_when: false
+      failed_when: false
+
+    - name: "Ustaw wsrep_sst_auth zgodnie z konfiguracja"
+      ansible.mysql.mysql_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: "SET GLOBAL wsrep_sst_auth = %s"
+        positional_args:
+          - "{{ sst_user }}:{{ sst_password }}"
+      when: f5_sst_auth_alive.rc == 0
+      changed_when: true
       no_log: true
 
 - name: "F5 — dołącz węzły do Primary Component"

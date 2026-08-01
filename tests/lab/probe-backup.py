@@ -5,9 +5,8 @@ Checks: ISC-32 (backup stored off-cluster in object storage), ISC-33 (encrypted)
 ISC-34 (sha256 checksum matches), ISC-35 (metadata has MariaDB version, time,
 cluster name and wsrep seqno).
 
-Requires MINIO_ROOT_USER / MINIO_ROOT_PASSWORD in the environment.
-The probe resolves the configured S3 hostname through the selected inventory;
-S3_PROBE_ENDPOINT remains an optional controller-side override.
+Uses GALERA_BACKUP_S3_ACCESS_KEY / SECRET_KEY (falling back to MINIO_ROOT_USER / PASSWORD).
+Enforces bucket ownership marker, prefix filtering, format version, and metadata completeness.
 """
 
 import hashlib
@@ -23,8 +22,8 @@ from minio import Minio
 CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
 INVENTORY_PATH = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
 PROBE_ENDPOINT_OVERRIDE = os.environ.get("S3_PROBE_ENDPOINT", "")
-ACCESS = os.environ.get("MINIO_ROOT_USER", "")
-SECRET = os.environ.get("MINIO_ROOT_PASSWORD", "")
+ACCESS = os.environ.get("GALERA_BACKUP_S3_ACCESS_KEY") or os.environ.get("MINIO_ROOT_USER", "")
+SECRET = os.environ.get("GALERA_BACKUP_S3_SECRET_KEY") or os.environ.get("MINIO_ROOT_PASSWORD", "")
 
 with open(CONFIG_PATH, encoding="utf-8") as fh:
     CLUSTER = yaml.safe_load(fh)
@@ -34,11 +33,14 @@ with open(INVENTORY_PATH, encoding="utf-8") as fh:
 endpoint_text = str(CLUSTER["backup"]["s3"]["endpoint"])
 configured_endpoint = urlparse(endpoint_text if "://" in endpoint_text else f"//{endpoint_text}")
 configured_host = configured_endpoint.hostname or ""
-inventory_addresses = {
-    host: values.get("ansible_host", host)
-    for group in INVENTORY["all"]["children"].values()
-    for host, values in group.get("hosts", {}).items()
-}
+inventory_addresses = {}
+for group in INVENTORY["all"]["children"].values():
+    for host, values in group.get("hosts", {}).items():
+        host_vars = values or {}
+        if host_vars.get("ansible_host"):
+            inventory_addresses[host] = host_vars["ansible_host"]
+        else:
+            inventory_addresses.setdefault(host, host)
 probe_host = inventory_addresses.get(configured_host, configured_host)
 PROBE_SECURE = bool(CLUSTER["backup"]["s3"].get("secure", configured_endpoint.scheme == "https"))
 probe_port = configured_endpoint.port or (443 if PROBE_SECURE else 80)
@@ -46,7 +48,10 @@ PROBE_ENDPOINT = PROBE_ENDPOINT_OVERRIDE or f"{probe_host}:{probe_port}"
 
 BUCKET = CLUSTER["backup"]["s3"]["bucket"]
 CLUSTER_NAME = CLUSTER["cluster"]["name"]
-REQUIRED_META = ["cluster_name", "mariadb_version", "created_at", "wsrep_seqno", "wsrep_uuid"]
+REQUIRED_META = [
+    "cluster_name", "mariadb_version", "created_at", "wsrep_seqno", "wsrep_uuid",
+    "sha256_encrypted", "sha256_plaintext", "size_bytes", "format_version", "backend"
+]
 
 
 def check(cond, msg, failures):
@@ -57,7 +62,7 @@ def check(cond, msg, failures):
 def main():
     failures = []
     if not ACCESS or not SECRET:
-        print("FAIL: MINIO_ROOT_USER / MINIO_ROOT_PASSWORD must be set")
+        print("FAIL: S3 credentials must be set in environment (GALERA_BACKUP_S3_ACCESS_KEY/SECRET_KEY or MINIO_ROOT_USER/PASSWORD)")
         return 1
 
     c = Minio(PROBE_ENDPOINT, access_key=ACCESS, secret_key=SECRET, secure=PROBE_SECURE)
@@ -66,14 +71,27 @@ def main():
     if not c.bucket_exists(BUCKET):
         print(f"FAIL: ISC-32 — backup bucket '{BUCKET}' does not exist (no off-cluster backup)")
         return 1
+
+    # Check owner marker
+    try:
+        data = c.get_object(BUCKET, "galera-backup-owner.json").read().decode("utf-8")
+        owner_info = json.loads(data)
+        check(owner_info.get("cluster_name") == CLUSTER_NAME,
+              f"Owner marker cluster_name '{owner_info.get('cluster_name')}' != '{CLUSTER_NAME}'", failures)
+        check(owner_info.get("format_version") == 1,
+              f"Owner marker format_version {owner_info.get('format_version')} != 1", failures)
+    except Exception as e:
+        check(False, f"galera-backup-owner.json missing or invalid: {e}", failures)
+
+    prefix = f"galera-{CLUSTER_NAME}-"
     metas = sorted(
-        o.object_name for o in c.list_objects(BUCKET, recursive=True)
+        o.object_name for o in c.list_objects(BUCKET, prefix=prefix, recursive=True)
         if o.object_name.endswith("/metadata.json")
     )
-    check(len(metas) > 0, f"ISC-32 — no backups found in s3://{BUCKET}", failures)
+    check(len(metas) > 0, f"ISC-32 — no backups found under prefix s3://{BUCKET}/{prefix}", failures)
     if not metas:
-        print("FAIL: ISC-32 — no backup found off-cluster:")
-        print(f"  - bucket {BUCKET} empty")
+        print("FAIL: ISC-32 — no backup found off-cluster under prefix:")
+        print(f"  - bucket {BUCKET} prefix {prefix}")
         return 1
 
     latest = metas[-1].rsplit("/", 1)[0]
@@ -116,6 +134,10 @@ def main():
           f"ISC-35 — wsrep_seqno not numeric: {meta.get('wsrep_seqno')!r}", failures)
     check(meta.get("cluster_name") == CLUSTER_NAME,
           f"ISC-35 — cluster_name {meta.get('cluster_name')!r} != {CLUSTER_NAME!r}", failures)
+    check(meta.get("format_version") == 1,
+          f"ISC-35 — format_version {meta.get('format_version')!r} != 1", failures)
+    check(meta.get("sha256_encrypted") == computed,
+          f"ISC-35 — sha256_encrypted in metadata mismatch with computed", failures)
 
     for f in (enc, os.path.join(tmp, "backup.sha256"), os.path.join(tmp, "metadata.json")):
         os.unlink(f)
@@ -129,7 +151,7 @@ def main():
 
     print(
         f"PASS: backup verified — {latest} off-cluster in s3://{BUCKET}, encrypted "
-        f"(aes-256-cbc), sha256 OK, metadata {meta['mariadb_version']} "
+        f"({meta.get('encryption', 'aes-256-cbc')}), sha256 OK, metadata {meta['mariadb_version']} "
         f"seqno={meta['wsrep_seqno']} cluster={meta['cluster_name']}")
     return 0
 

@@ -23,7 +23,7 @@ locals {
   # Rocky-10-GenericCloud-Base-10.2 — jedyny obraz GenericCloud opublikowany dla 10
   # (zweryfikowane 2026-07-26: download.rockylinux.org/pub/rocky/10/images/x86_64/).
   # Obraz musi byc wczesniej zaimportowany na PVE do `local:import/`.
-  source_img = "local:import/Rocky-10.2-GenericCloud.qcow2"   # nazwa pliku na PVE (zweryfikowane 2026-07-27)
+  source_img = "local:import/Rocky-10.2-GenericCloud.qcow2" # nazwa pliku na PVE (zweryfikowane 2026-07-27)
 
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
