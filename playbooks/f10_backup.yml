@@ -5,6 +5,8 @@
   hosts: galera
   become: true
   gather_facts: false
+  vars_files:
+    - vars/proxysql_hostgroups.yml
   vars:
     galera_backup_action: "{{ action | default('configure') }}"
   pre_tasks:
@@ -31,6 +33,8 @@
   hosts: "{{ backup.scheduler.host }}"
   become: true
   gather_facts: true
+  vars_files:
+    - vars/proxysql_hostgroups.yml
   vars:
     galera_backup_action: "{{ action | default('configure') }}"
     galera_backup_encryption_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_ENCRYPTION_KEY') | default(lookup('ansible.builtin.env', 'BACKUP_ENCRYPTION_KEY'), true) }}"
@@ -39,6 +43,8 @@
     galera_backup_smb_username: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_USERNAME') | default('', true) }}"
     galera_backup_smb_password: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_PASSWORD') | default('', true) }}"
     galera_backup_smb_domain: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_DOMAIN') | default('', true) }}"
+    galera_backup_proxysql_admin_user: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_PROXYSQL_ADMIN_USER') | default('admin', true) }}"
+    galera_backup_proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
   pre_tasks:
     - name: Load platform lockfile
       ansible.builtin.include_vars:
@@ -50,6 +56,12 @@
         that:
           - galera_backup_action in ['configure', 'run']
         fail_msg: "galera_backup_action must be 'configure' or 'run'"
+    - name: Require ProxySQL credentials for the scheduler writer guard
+      ansible.builtin.assert:
+        that:
+          - galera_backup_proxysql_admin_password | length > 0
+        fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD — backup musi odrzucać aktywnego writera."
+      when: backup.enabled | bool
 
     - name: Validate scheduler host membership
       ansible.builtin.assert:
@@ -73,6 +85,8 @@
 - name: Pre-position restore executable and scoped secrets
   hosts: restore
   become: true
+  vars_files:
+    - vars/proxysql_hostgroups.yml
   gather_facts: true
   vars:
     galera_backup_action: "{{ action | default('configure') }}"

@@ -1,7 +1,7 @@
 ---
 # claude-r10 — klaster ISA na Rocky Linux 10 (Proxmox, real VM).
 # Logowanie jako root przez klucz cloud-init; become:true jest wtedy no-opem.
-# VM tworzy terraform/claude-r10/ (VMID 9110-9116), IP 192.168.1.30-36, VIP .40.
+# VM tworzy terraform/claude-r10/ (VMID 9110-9116): gnode1 .37 (.30 zajęte przez lab-rke2-ha-server-01, VMID 9221), gnode2-3 .31-.32, pnode1-2 .33-.34, rnode1 .35, infra .36, VIP .40.
 
 all:
   vars:

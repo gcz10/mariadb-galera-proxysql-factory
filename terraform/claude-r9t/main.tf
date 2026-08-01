@@ -14,11 +14,12 @@ provider "proxmox" {}
 #
 # Powstal jako odpowiednik claude-r10t (EL10 TLS), ale na EL9 — zeby udowodnic,
 # ze sciezka TLS full dziala takze na Rocky 9, nie tylko na Rocky 10.
-# Klaster jest samowystarczalny: 3 wezly Galera + wlasny wezel restore.
-# ProxySQL (VIP .60) i PMM (.47) zostaja wspoldzielone — nie sa tworzone tutaj.
+# Klaster jest samowystarczalny: 3 wezly Galera, para ProxySQL i wlasny restore.
+# PMM oraz MinIO (.47) sa wspoldzielone z claude-r10b.
 #
-# Adresacja .54-.57: przejeta po wylaczonym claude-r10t. Rozlaczna z claude-r9g
-# (.17-.19/.39), claude-r10b (.41-.47/.51-.53) i claude-pve (.10-.16).
+# Adresacja .61-.66 i VIP .70 jest rozlaczna z claude-r10t (.54-.60),
+# claude-r9g (.17-.19/.39), claude-r10b (.41-.47/.51-.53)
+# i claude-pve (.10-.16/.20).
 locals {
   node_name = "pve"
   pool_id   = "claude-isa"
@@ -34,10 +35,12 @@ locals {
   # od bramki f2_preflight ansible_memtotal_mb >= 2048. 2560 przechodzi bez
   # oslabiania guardu.
   vms = {
-    g9tnode1 = { id = 9170, ip = 54, role = "galera", cpu = 2, ram = 2560, disk = 40 }
-    g9tnode2 = { id = 9171, ip = 55, role = "galera", cpu = 2, ram = 2560, disk = 40 }
-    g9tnode3 = { id = 9172, ip = 56, role = "galera", cpu = 2, ram = 2560, disk = 40 }
-    r9tnode1 = { id = 9173, ip = 57, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    g9tnode1 = { id = 9180, ip = 61, role = "galera", cpu = 2, ram = 2560, disk = 40 }
+    g9tnode2 = { id = 9181, ip = 62, role = "galera", cpu = 2, ram = 2560, disk = 40 }
+    g9tnode3 = { id = 9182, ip = 63, role = "galera", cpu = 2, ram = 2560, disk = 40 }
+    r9tnode1 = { id = 9183, ip = 66, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    p9tnode1 = { id = 9184, ip = 64, role = "proxysql", cpu = 1, ram = 2560, disk = 40, store = "local-zfs" }
+    p9tnode2 = { id = 9185, ip = 65, role = "proxysql", cpu = 1, ram = 2560, disk = 40, store = "local-zfs" }
   }
 }
 
@@ -65,7 +68,7 @@ resource "proxmox_virtual_environment_vm" "node" {
   memory { dedicated = each.value.ram }
 
   disk {
-    datastore_id = local.storage
+    datastore_id = try(each.value.store, local.storage)
     interface    = "virtio0"
     import_from  = local.source_img
     size         = each.value.disk
@@ -74,7 +77,7 @@ resource "proxmox_virtual_environment_vm" "node" {
 
   initialization {
     interface    = "scsi1"
-    datastore_id = local.storage
+    datastore_id = try(each.value.store, local.storage)
     user_account {
       username = "root"
       keys     = [local.ssh_pubkey]
@@ -97,4 +100,5 @@ output "vms" {
     cpu  = v.cpu, ram_mb = v.ram, disk_gb = v.disk
   } }
 }
+output "vip" { value = "192.168.1.70" }
 output "tls_mode" { value = "full — certyfikaty z tests/lab/tls/r9t/ (gitignored)" }

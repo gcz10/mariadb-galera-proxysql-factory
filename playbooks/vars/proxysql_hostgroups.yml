@@ -1,0 +1,11 @@
+---
+# Jedyne źródło prawdy dla ID hostgroup ProxySQL (mysql_galera_hostgroups).
+# f7_proxysql.yml je ZAPISUJE, f10/f12/f13/f15 je CZYTAJĄ. Rozjazd między
+# zapisem a odczytem = playbooki odpytują pusty hostgroup, nie wykrywają
+# aktywnego writera i wybierają go jako źródło backupu (łamie ISC-39).
+# To stała topologii ProxySQL, identyczna dla każdego klastra — celowo NIE
+# jest w clusters/<name>/cluster.yml, bo nie jest parametrem operatora.
+galera_writer_hg: 10
+galera_backup_hg: 20
+galera_reader_hg: 30
+galera_offline_hg: 40

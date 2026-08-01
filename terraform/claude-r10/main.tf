@@ -23,16 +23,15 @@ locals {
   # Rocky-10-GenericCloud-Base-10.2 — jedyny obraz GenericCloud opublikowany dla 10
   # (zweryfikowane 2026-07-26: download.rockylinux.org/pub/rocky/10/images/x86_64/).
   # Obraz musi byc wczesniej zaimportowany na PVE do `local:import/`.
-  source_img = "local:import/Rocky-10.2-GenericCloud.qcow2"   # nazwa pliku na PVE (zweryfikowane 2026-07-27)
+  source_img = "local:import/Rocky-10.2-GenericCloud.qcow2" # nazwa pliku na PVE (zweryfikowane 2026-07-27)
 
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
 
-  # Adresacja .30-.36 + VIP .40 — lustrzana wobec EL9 (.10-.16 + .20), zeby mapowanie
-  # bylo oczywiste. Blok zweryfikowany jako wolny (zajete .25-.28); .37-.39 zostaja
-  # jako zapas na czwarty wezel Galera albo arbitra garbd.
+  # Adresacja: gnode1 .37 (.30 zajęte przez lab-rke2-ha-server-01, VMID 9221),
+  # gnode2-3 .31-.32, pnode1-2 .33-.34, rnode1 .35, infra .36 + VIP .40.
   vms = {
-    gnode1 = { id = 9110, ip = 37, role = "galera", cpu = 2, ram = 4096, disk = 40 }   # .30 konflikt z lab-rke2-ha-server-01 (vmid 9221) -> .37
+    gnode1 = { id = 9110, ip = 37, role = "galera", cpu = 2, ram = 4096, disk = 40 } # .30 konflikt z lab-rke2-ha-server-01 (vmid 9221) -> .37
     gnode2 = { id = 9111, ip = 31, role = "galera", cpu = 2, ram = 4096, disk = 40 }
     gnode3 = { id = 9112, ip = 32, role = "galera", cpu = 2, ram = 4096, disk = 40 }
     pnode1 = { id = 9113, ip = 33, role = "proxysql", cpu = 1, ram = 2560, disk = 40 }

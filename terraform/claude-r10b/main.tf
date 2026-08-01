@@ -23,12 +23,12 @@ locals {
   # Rocky-10-GenericCloud-Base-10.2 — jedyny obraz GenericCloud opublikowany dla 10
   # (zweryfikowane 2026-07-26: download.rockylinux.org/pub/rocky/10/images/x86_64/).
   # Obraz musi byc wczesniej zaimportowany na PVE do `local:import/`.
-  source_img = "local:import/Rocky-10.2-GenericCloud.qcow2"   # nazwa pliku na PVE (zweryfikowane 2026-07-27)
+  source_img = "local:import/Rocky-10.2-GenericCloud.qcow2" # nazwa pliku na PVE (zweryfikowane 2026-07-27)
 
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
 
-  # Adresacja .41-.47 + VIP .50 — drugi klaster EL10 obok claude-r10 (.31-.37 + .40).
+  # Adresacja .44-.47 + .51-.53 + VIP .50 — drugi klaster EL10 obok claude-r10 (.31-.37 + .40).
   vms = {
     # Druga generacja wezlow Galera: nowe VMID/IP/hostname. ProxySQL, restore i infra
     # zostaja NIETKNIETE (te same VMID/IP) — wymianie podlega tylko warstwa bazy.
@@ -111,4 +111,4 @@ output "vms" {
   } }
 }
 output "vip" { value = "192.168.1.50" }
-output "pmm_url" { value = "https://192.168.1.46" }
+output "pmm_url" { value = "https://192.168.1.47" }

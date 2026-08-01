@@ -217,10 +217,12 @@ class RunConfig:
     metric_cluster_label: str
     local_role: str
     scheduler_system_hostname: str
+    scheduler_system_address: str
     galera_nodes_expected: int
     mariadb_version: str
     retention_days: int
     flow_control_threshold_ns: int
+    proxysql: dict[str, Any]
     backend: dict[str, Any]
     paths: Paths
 
@@ -251,10 +253,12 @@ def load_run_config(config_path: Path, expected_cluster_name: str) -> RunConfig:
             metric_cluster_label=data.get("metric_cluster_label", cluster_name),
             local_role=data.get("local_role", "scheduler"),
             scheduler_system_hostname=data.get("scheduler_system_hostname", ""),
+            scheduler_system_address=data.get("scheduler_system_address", ""),
             galera_nodes_expected=int(data.get("galera_nodes_expected", 3)),
             mariadb_version=str(data.get("mariadb_version", "")),
             retention_days=int(data.get("retention_days", 14)),
             flow_control_threshold_ns=int(data.get("flow_control_threshold_ns", 1000000000)),
+            proxysql=data.get("proxysql", {}),
             backend=data.get("backend", {}),
             paths=paths,
         )
@@ -262,7 +266,12 @@ def load_run_config(config_path: Path, expected_cluster_name: str) -> RunConfig:
         raise BackupError("E_CONFIG", f"Missing required configuration key in {config_path}: {e}")
 
 
-def load_secrets(env_path: Path, backend_type: str, enforce_permissions: bool = True) -> dict[str, str]:
+def load_secrets(
+    env_path: Path,
+    backend_type: str,
+    enforce_permissions: bool = True,
+    require_writer_credentials: bool = False,
+) -> dict[str, str]:
     if not env_path.exists():
         raise BackupError("E_SECRETS", f"Secrets file not found: {env_path}")
 
@@ -302,6 +311,12 @@ def load_secrets(env_path: Path, backend_type: str, enforce_permissions: bool = 
             raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_SMB_USERNAME in {env_path}")
         if "GALERA_BACKUP_SMB_PASSWORD" not in secrets or not secrets["GALERA_BACKUP_SMB_PASSWORD"]:
             raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_SMB_PASSWORD in {env_path}")
+
+    if require_writer_credentials:
+        if not secrets.get("GALERA_BACKUP_PROXYSQL_ADMIN_USER"):
+            raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_PROXYSQL_ADMIN_USER in {env_path}")
+        if not secrets.get("GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD"):
+            raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD in {env_path}")
 
     return secrets
 
@@ -413,6 +428,83 @@ class CommandRunner:
             raise BackupError("E_SUBPROCESS", f"Command '{cmd[0]}' timed out after {timeout}s")
         except Exception as exc:
             raise BackupError("E_SUBPROCESS", f"Failed to execute command '{cmd[0]}': {exc}")
+
+
+def assert_scheduler_is_not_writer(
+    cfg: RunConfig,
+    secrets: dict[str, str],
+    runner: CommandRunner,
+    current_hostname: str,
+) -> None:
+    proxysql = cfg.proxysql
+    admin_host = str(proxysql.get("admin_host", "")).strip()
+    admin_port = int(proxysql.get("admin_port", 0) or 0)
+    writer_hostgroup = int(proxysql.get("writer_hostgroup", 0) or 0)
+    admin_user = secrets.get("GALERA_BACKUP_PROXYSQL_ADMIN_USER", "").strip()
+    admin_password = secrets.get("GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD", "")
+
+    if not admin_host or admin_port <= 0 or writer_hostgroup <= 0:
+        raise BackupError(
+            "E_CONFIG",
+            "ProxySQL writer guard configuration is missing or invalid",
+        )
+    if not admin_user or not admin_password:
+        raise BackupError(
+            "E_SECRETS",
+            "ProxySQL writer guard credentials are missing",
+        )
+
+    command = [
+        "mariadb",
+        "--protocol=tcp",
+        "-h",
+        admin_host,
+        "-P",
+        str(admin_port),
+        "-u",
+        admin_user,
+        "-N",
+        "-B",
+        "-e",
+        (
+            "SELECT hostname FROM runtime_mysql_servers "
+            f"WHERE hostgroup_id={writer_hostgroup} AND status='ONLINE' "
+            "ORDER BY hostname"
+        ),
+    ]
+    rc, stdout, stderr = runner.run(
+        command,
+        env={"MYSQL_PWD": admin_password},
+        timeout=20,
+    )
+    if rc != 0:
+        detail = (stderr or stdout or "unknown error").strip()
+        raise BackupError(
+            "E_PROXYSQL",
+            f"Cannot determine active ProxySQL writer: {detail}",
+        )
+
+    writers = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if len(writers) != 1:
+        raise BackupError(
+            "E_PROXYSQL",
+            f"Expected exactly one ONLINE ProxySQL writer, found {len(writers)}",
+        )
+
+    scheduler_identities = {
+        value.strip()
+        for value in (
+            cfg.scheduler_system_address,
+            cfg.scheduler_system_hostname,
+            current_hostname,
+        )
+        if value and value.strip()
+    }
+    if writers[0] in scheduler_identities:
+        raise BackupError(
+            "E_WRITER",
+            f"Backup scheduler '{current_hostname}' is the active ProxySQL writer; backup aborted",
+        )
 
 
 class StateManager:
@@ -534,6 +626,15 @@ class PublishedArtifact:
     encrypted_size: int
     unixtime: int
 
+
+def metadata_unixtime(meta: dict[str, Any], object_name: str) -> int:
+    created_ts = meta.get("created_unixtime")
+    if type(created_ts) is not int or created_ts < 0:
+        raise BackupError(
+            "E_STORAGE",
+            f"Invalid integer created_unixtime in metadata '{object_name}'",
+        )
+    return created_ts
 
 class S3Backend:
     def __init__(
@@ -833,7 +934,9 @@ class S3Backend:
                     resp = self.client.get_object(self.bucket, meta_key)
                     meta = json.loads(resp.read().decode("utf-8"))
                     if meta.get("cluster_name") == self.cluster_name and meta.get("format_version") == 1:
-                        candidates.append((meta.get("created_unixtime", 0), b_prefix, meta))
+                        candidates.append((metadata_unixtime(meta, meta_key), b_prefix, meta))
+                except BackupError:
+                    raise
                 except Exception:
                     continue
 
@@ -886,7 +989,7 @@ class S3Backend:
             except Exception as exc:
                 raise BackupError("E_STORAGE", f"Malformed metadata in '{meta_key}' during retention: {exc}")
 
-            created_ts = meta.get("created_unixtime", 0)
+            created_ts = metadata_unixtime(meta, meta_key)
             if created_ts < cutoff_ts:
                 del_list = [getattr(o, "object_name", "") for o in obj_list]
                 for item_name in del_list:
@@ -1108,7 +1211,9 @@ class FilesystemBackend:
                     try:
                         meta = json.loads(metadata.read_text(encoding="utf-8"))
                         if meta.get("cluster_name") == self.cluster_name and meta.get("format_version") == 1:
-                            candidates.append((meta.get("created_unixtime", 0), child, meta))
+                            candidates.append((metadata_unixtime(meta, str(metadata)), child, meta))
+                    except BackupError:
+                        raise
                     except Exception:
                         continue
 
@@ -1155,7 +1260,7 @@ class FilesystemBackend:
                 except Exception as exc:
                     raise BackupError("E_STORAGE", f"Malformed metadata in '{metadata}' during retention: {exc}")
 
-                created_ts = meta.get("created_unixtime", 0)
+                created_ts = metadata_unixtime(meta, str(metadata))
                 if created_ts < cutoff_ts:
                     remove_tree_or_raise(
                         child,
@@ -1570,7 +1675,12 @@ def run_backup(
 
     cfg = load_run_config(config_path, cluster_name)
     b_type = str(cfg.backend.get("type", cfg.backend.get("destination", ""))).lower()
-    secrets = load_secrets(secrets_path, backend_type=b_type, enforce_permissions=False)
+    secrets = load_secrets(
+        secrets_path,
+        backend_type=b_type,
+        enforce_permissions=True,
+        require_writer_credentials=bool(cfg.proxysql),
+    )
 
     secret_values = set(secrets.values())
     redactor = SecretRedactor(secret_values)
@@ -1605,6 +1715,7 @@ def run_backup(
                 "E_GALERA",
                 f"Current hostname '{curr_host}' does not match configured scheduler hostname '{sched_host}'"
             )
+        assert_scheduler_is_not_writer(cfg, secrets, runner, curr_host)
 
         backend = get_storage_backend(cfg, secrets)
         event_mgr.emit("backend.preflight", {"backend": b_type})

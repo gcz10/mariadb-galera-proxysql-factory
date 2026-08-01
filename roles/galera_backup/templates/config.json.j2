@@ -4,10 +4,16 @@
   "metric_cluster_label": "{{ (cluster.monitoring.pmm.cluster_name) if (cluster.monitoring is defined) else monitoring.pmm.cluster_name }}",
   "local_role": "{{ galera_backup_local_role | default('scheduler') }}",
   "scheduler_system_hostname": "{{ backup.scheduler.host }}",
+  "scheduler_system_address": "{{ hostvars[backup.scheduler.host].galera_node_address }}",
   "galera_nodes_expected": {{ galera.nodes_expected | default(3) }},
   "mariadb_version": "{{ lock.mariadb.version | default('') }}",
   "retention_days": {{ backup.retention_days | default(14) }},
   "flow_control_threshold_ns": {{ backup.flow_control_threshold_ns | default(1000000000) }},
+  "proxysql": {
+    "admin_host": "{{ hostvars[groups['proxysql'][0]].proxysql_node_address }}",
+    "admin_port": 6032,
+    "writer_hostgroup": {{ galera_writer_hg }}
+  },
   "backend": {
     "type": "{{ backup.destination }}",
 {% if backup.destination == 's3' %}

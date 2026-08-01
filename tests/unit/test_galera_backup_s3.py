@@ -288,6 +288,43 @@ class GaleraBackupS3Tests(unittest.TestCase):
         self.assertIn("galera-other-cluster-20260701-120000/metadata.json", self.client.objects)
 
 
+    def test_retention_rejects_non_integer_metadata_timestamp(self):
+        prefix = "galera-claude-r10b-20260701-120000/"
+        self.client.objects[f"{prefix}metadata.json"] = json.dumps(
+            {
+                "format_version": 1,
+                "cluster_name": "claude-r10b",
+                "created_unixtime": "1000",
+            }
+        ).encode()
+        self.client.objects[f"{prefix}backup.tar.enc"] = b"old-data"
+
+        with self.assertRaises(self.mod.BackupError) as ctx:
+            self.backend.prune(
+                datetime.fromtimestamp(1785240000, tz=timezone.utc),
+                retention_days=14,
+            )
+
+        self.assertEqual(ctx.exception.code, "E_STORAGE")
+        self.assertIn(f"{prefix}metadata.json", self.client.objects)
+    def test_fetch_latest_rejects_non_integer_metadata_timestamp(self):
+        prefix = "galera-claude-r10b-20260701-120000/"
+        self.client.objects[f"{prefix}metadata.json"] = json.dumps(
+            {
+                "format_version": 1,
+                "cluster_name": "claude-r10b",
+                "created_unixtime": "1000",
+            }
+        ).encode()
+        self.client.objects[f"{prefix}backup.tar.enc"] = b"old-data"
+        self.client.objects[f"{prefix}backup.sha256"] = b"sha256  backup.tar.enc\n"
+
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(self.mod.BackupError) as ctx:
+                self.backend.fetch_latest(Path(td))
+
+        self.assertEqual(ctx.exception.code, "E_STORAGE")
+
     def load_minio_access_key_filters(self):
         plugin_path = (
             Path(__file__).resolve().parents[2]

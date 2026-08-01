@@ -16,6 +16,8 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  vars_files:
+    - vars/proxysql_hostgroups.yml
   vars:
     ansible_become: false
     pmm_api_url: "{{ lookup('ansible.builtin.env', 'PMM_SERVER_URL') | default(monitoring.pmm.server_url, true) | regex_replace('/$', '') }}"
@@ -31,7 +33,6 @@
     f15_contact_uid: "email-isa-{{ cluster_label }}"
     f15_contact_name: "ISA Email Alerts ({{ cluster_label }})"
 
-    writer_hg: "{{ proxysql.writer_hostgroup | default(10) }}"
     # audit#9: reguły MUSZĄ zawsze zwracać wartość (operator `bool` + `or vector(...)`).
     # Wyrażenie filtrujące (np. `size < 3`) zwraca PUSTY wektor gdy jest zdrowo — Grafana
     # interpretuje to jako NoData, więc noDataState=Alerting zapalałoby alarm na zdrowym
@@ -64,8 +65,8 @@
       # 1=ONLINE, 2=SHUNNED, 4=OFFLINE_HARD). Zdrowo: >=1 seria ONLINE w writer hostgroup.
       - uid: "isa-{{ cluster_label }}-no-writer"
         title: "ProxySQL no ONLINE writer (writer hostgroup empty)"
-        expr: "(count(proxysql_connpool_conns_status{cluster=\"{{ cluster_label }}\",hostgroup=\"{{ writer_hg }}\"} == 1) or vector(0)) < bool 1"
-        summary: "No ONLINE backend in ProxySQL writer hostgroup {{ writer_hg }} — writes will fail"
+        expr: "(count(proxysql_connpool_conns_status{cluster=\"{{ cluster_label }}\",hostgroup=\"{{ galera_writer_hg }}\"} == 1) or vector(0)) < bool 1"
+        summary: "No ONLINE backend in ProxySQL writer hostgroup {{ galera_writer_hg }} — writes will fail"
         severity: "critical"
         noDataState: "Alerting"
       - uid: "isa-{{ cluster_label }}-backup-failed"

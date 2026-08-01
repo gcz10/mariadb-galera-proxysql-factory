@@ -240,6 +240,80 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
             self.assertTrue(old_dir.exists())
 
 
+    def test_retention_rejects_non_integer_metadata_timestamp(self):
+        for invalid_timestamp in ("1000", True):
+            with self.subTest(invalid_timestamp=invalid_timestamp):
+                with tempfile.TemporaryDirectory() as td:
+                    mount_path = Path(td)
+                    backend = self.mod.FilesystemBackend(
+                        mount_point=mount_path,
+                        expected_fstype="nfs4",
+                        cluster_name="claude-r10b",
+                    )
+                    fake_mount = self.make_fake_findmnt_info(str(mount_path))
+                    old_dir = (
+                        mount_path
+                        / "claude-r10b"
+                        / "galera-claude-r10b-20260701-120000"
+                    )
+                    old_dir.mkdir(parents=True)
+                    (old_dir / "metadata.json").write_text(
+                        json.dumps(
+                            {
+                                "format_version": 1,
+                                "cluster_name": "claude-r10b",
+                                "created_unixtime": invalid_timestamp,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    with patch.object(backend, "_get_mount_info", return_value=fake_mount):
+                        with self.assertRaises(self.mod.BackupError) as ctx:
+                            backend.prune(
+                                datetime.fromtimestamp(1785240000, tz=timezone.utc),
+                                retention_days=14,
+                            )
+
+                    self.assertEqual(ctx.exception.code, "E_STORAGE")
+                    self.assertTrue(old_dir.exists())
+    def test_fetch_latest_rejects_non_integer_metadata_timestamp(self):
+        for invalid_timestamp in ("1000", True):
+            with self.subTest(invalid_timestamp=invalid_timestamp):
+                with tempfile.TemporaryDirectory() as td:
+                    mount_path = Path(td)
+                    backend = self.mod.FilesystemBackend(
+                        mount_point=mount_path,
+                        expected_fstype="nfs4",
+                        cluster_name="claude-r10b",
+                    )
+                    backup_dir = (
+                        mount_path
+                        / "claude-r10b"
+                        / "galera-claude-r10b-20260701-120000"
+                    )
+                    backup_dir.mkdir(parents=True)
+                    (backup_dir / "backup.tar.enc").write_bytes(b"old-data")
+                    (backup_dir / "backup.sha256").write_text(
+                        "sha256  backup.tar.enc\n",
+                        encoding="utf-8",
+                    )
+                    (backup_dir / "metadata.json").write_text(
+                        json.dumps(
+                            {
+                                "format_version": 1,
+                                "cluster_name": "claude-r10b",
+                                "created_unixtime": invalid_timestamp,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    with self.assertRaises(self.mod.BackupError) as ctx:
+                        backend.fetch_latest(Path(td) / "work")
+
+                    self.assertEqual(ctx.exception.code, "E_STORAGE")
+
 class ManagedSMBTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

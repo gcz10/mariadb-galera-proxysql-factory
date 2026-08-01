@@ -21,7 +21,9 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
     def setUp(self):
         if self.mod is None:
             self.skipTest("galera-backup executable not implemented yet")
-
+        self.writer_guard = patch.object(self.mod, "assert_scheduler_is_not_writer")
+        self.writer_guard.start()
+        self.addCleanup(self.writer_guard.stop)
     def test_run_backup_hostname_mismatch_fails(self):
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)

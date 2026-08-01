@@ -1,13 +1,13 @@
 ---
-# claude-r9t — 4 NOWE VM Rocky 9 z tls.mode=full (.54-.57, VMID 9170-9173).
+# claude-r9t — 6 NOWYCH VM Rocky 9 z tls.mode=full (.61-.66, VMID 9180-9185).
 #
-# Klaster samowystarczalny: 3 wezly Galera + wlasny wezel restore.
-# ProxySQL NIE jest wdrazany — grupa proxysql wskazuje na zywe wezly claude-r10b
-# wylacznie po to, by spelnic nodes_expected=2 wymagane przez schema/walidator.
-# NIE uruchamiaj site.yml, f7_proxysql.yml, f8_keepalived.yml z tym inventory —
-# przekonfigurowalyby zywy ProxySQL i VIP claude-r10b.
+# Klaster samowystarczalny: 3 wezly Galera + para ProxySQL + wlasny wezel restore.
+# PMM i MinIO sa wspoldzielone z claude-r10b na .47; ProxySQL i VIP sa wlasne.
+#
+# Nie uruchamiaj playbookow z inventory innego klastra na tych hostach.
 #
 # Nazwy hostow sa w SAN certyfikatu (tests/lab/tls/r9t/server-cert.pem).
+#
 
 all:
   vars:
@@ -22,40 +22,39 @@ all:
         galera_role: "galera"
       hosts:
         g9tnode1:
-          ansible_host: "192.168.1.54"
+          ansible_host: "192.168.1.61"
           galera_node_idx: 1
-          galera_node_address: "192.168.1.54"
+          galera_node_address: "192.168.1.61"
         g9tnode2:
-          ansible_host: "192.168.1.55"
+          ansible_host: "192.168.1.62"
           galera_node_idx: 2
-          galera_node_address: "192.168.1.55"
+          galera_node_address: "192.168.1.62"
         g9tnode3:
-          ansible_host: "192.168.1.56"
+          ansible_host: "192.168.1.63"
           galera_node_idx: 3
-          galera_node_address: "192.168.1.56"
-
-    # WSPOLDZIELONE z claude-r10b — deklaracja endpointu, bez wdrozenia.
+          galera_node_address: "192.168.1.63"
+    # WLASNA para ProxySQL (.64/.65) z VIP .70.
     proxysql:
       vars:
         proxysql_role: "proxysql"
       hosts:
-        pnode1:
-          ansible_host: "192.168.1.44"
+        p9tnode1:
+          ansible_host: "192.168.1.64"
           proxysql_node_idx: 1
-          proxysql_node_address: "192.168.1.44"
-        pnode2:
-          ansible_host: "192.168.1.45"
+          proxysql_node_address: "192.168.1.64"
+        p9tnode2:
+          ansible_host: "192.168.1.65"
           proxysql_node_idx: 2
-          proxysql_node_address: "192.168.1.45"
+          proxysql_node_address: "192.168.1.65"
 
-    # WLASNY wezel EL9 — host restore musi byc z tej samej rodziny OS.
+    # WLASNY wezel EL9 (.66) — host restore musi byc z tej samej rodziny OS.
     restore:
       vars:
         restore_role: "restore"
       hosts:
         r9tnode1:
-          ansible_host: "192.168.1.57"
-          restore_node_address: "192.168.1.57"
+          ansible_host: "192.168.1.66"
+          restore_node_address: "192.168.1.66"
 
     # WSPOLDZIELONY z claude-r10b — PMM + MinIO.
     infra:

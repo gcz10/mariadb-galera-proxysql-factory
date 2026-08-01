@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+import yaml
 
 from tests.unit.galera_backup_testlib import load_galera_backup_module, WORKSPACE_ROOT
 
@@ -115,6 +116,39 @@ class GaleraBackupCoreTests(unittest.TestCase):
         finally:
             if tf_path.exists():
                 tf_path.unlink()
+
+    def test_scheduler_secrets_require_proxysql_writer_credentials(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as tf:
+            tf.write(
+                'GALERA_BACKUP_ENCRYPTION_KEY="enc"\n'
+                'GALERA_BACKUP_S3_ACCESS_KEY="access"\n'
+                'GALERA_BACKUP_S3_SECRET_KEY="secret"\n'
+            )
+            tf_path = Path(tf.name)
+
+        try:
+            os.chmod(tf_path, 0o600)
+            with self.assertRaises(self.mod.BackupError) as ctx:
+                self.mod.load_secrets(
+                    tf_path,
+                    backend_type="s3",
+                    require_writer_credentials=True,
+                )
+            self.assertEqual(ctx.exception.code, "E_SECRETS")
+
+            with tf_path.open("a", encoding="utf-8") as f:
+                f.write(
+                    'GALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\n'
+                    'GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql"\n'
+                )
+            secrets = self.mod.load_secrets(
+                tf_path,
+                backend_type="s3",
+                require_writer_credentials=True,
+            )
+            self.assertEqual(secrets["GALERA_BACKUP_PROXYSQL_ADMIN_USER"], "admin")
+        finally:
+            tf_path.unlink(missing_ok=True)
 
     def test_lock_contention(self):
         with tempfile.TemporaryDirectory() as td:
@@ -261,6 +295,55 @@ class GaleraBackupCoreTests(unittest.TestCase):
         run.assert_not_called()
 
 
+    def test_active_writer_guard_rejects_scheduler_and_uses_env_password(self):
+        self.assertTrue(hasattr(self.mod, "assert_scheduler_is_not_writer"))
+        cfg = MagicMock(
+            proxysql={
+                "admin_host": "192.168.1.44",
+                "admin_port": 6032,
+                "writer_hostgroup": 10,
+            },
+            scheduler_system_address="192.168.1.51",
+            scheduler_system_hostname="gnode4",
+        )
+        runner = MagicMock()
+        runner.run.return_value = (0, "192.168.1.51\n", "")
+        secrets = {
+            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
+        }
+
+        with self.assertRaises(self.mod.BackupError) as ctx:
+            self.mod.assert_scheduler_is_not_writer(
+                cfg, secrets, runner, current_hostname="gnode4"
+            )
+
+        self.assertEqual(ctx.exception.code, "E_WRITER")
+        command = runner.run.call_args.args[0]
+        self.assertNotIn("proxysql-secret", command)
+        self.assertEqual(runner.run.call_args.kwargs["env"]["MYSQL_PWD"], "proxysql-secret")
+
+    def test_active_writer_guard_fails_closed_on_proxysql_error(self):
+        self.assertTrue(hasattr(self.mod, "assert_scheduler_is_not_writer"))
+        cfg = MagicMock(
+            proxysql={"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+            scheduler_system_address="192.168.1.51",
+            scheduler_system_hostname="gnode4",
+        )
+        runner = MagicMock()
+        runner.run.return_value = (1, "", "connection refused")
+        secrets = {
+            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
+        }
+
+        with self.assertRaises(self.mod.BackupError) as ctx:
+            self.mod.assert_scheduler_is_not_writer(
+                cfg, secrets, runner, current_hostname="gnode4"
+            )
+
+        self.assertEqual(ctx.exception.code, "E_PROXYSQL")
+
 class TemplateContractTests(unittest.TestCase):
     def setUp(self):
         try:
@@ -293,8 +376,22 @@ class TemplateContractTests(unittest.TestCase):
                 "s3": {"endpoint": "192.168.1.47:9000", "bucket": "r10b-galera-backups", "secure": False},
             },
             "galera": {"nodes_expected": 3},
+            "groups": {"proxysql": ["pnode1"], "galera": ["gnode4"]},
+            "hostvars": {
+                "pnode1": {
+                    "ansible_host": "127.0.0.1",
+                    "proxysql_node_address": "172.28.0.21",
+                },
+                "gnode4": {
+                    "ansible_host": "127.0.0.1",
+                    "galera_node_address": "172.28.0.11",
+                },
+            },
+            "galera_writer_hg": 10,
             "lock": {"mariadb": {"version": "11.4.12"}},
             "galera_backup_local_role": "scheduler",
+            "galera_backup_proxysql_admin_user": "admin",
+            "galera_backup_proxysql_admin_password": "proxysql_pass_999",
             "galera_backup_encryption_key": "enc_pass_123",
             "galera_backup_s3_access_key": "access_key_456",
             "galera_backup_s3_secret_key": "secret_key_789",
@@ -311,16 +408,29 @@ class TemplateContractTests(unittest.TestCase):
         # 1. config.json.j2
         tmpl_config = self.env.get_template("config.json.j2")
         rendered_config = tmpl_config.render(ctx)
+        cfg_dict = json.loads(rendered_config)
         self.assertNotIn("enc_pass_123", rendered_config)
         self.assertNotIn("secret_key_789", rendered_config)
-        cfg_dict = json.loads(rendered_config)
         self.assertEqual(cfg_dict["cluster_name"], "claude-r10b")
+        self.assertEqual(cfg_dict["proxysql"], {
+            "admin_host": "172.28.0.21",
+            "admin_port": 6032,
+            "writer_hostgroup": 10,
+        })
+        self.assertEqual(cfg_dict["scheduler_system_address"], "172.28.0.11")
 
         # 2. secrets.env.j2
         tmpl_secrets = self.env.get_template("secrets.env.j2")
         rendered_secrets = tmpl_secrets.render(ctx)
+        restore_ctx = dict(ctx)
+        restore_ctx["galera_backup_local_role"] = "restore"
+        restore_secrets = tmpl_secrets.render(restore_ctx)
+        self.assertNotIn("GALERA_BACKUP_PROXYSQL_ADMIN_USER", restore_secrets)
+        self.assertNotIn("GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD", restore_secrets)
         self.assertIn('GALERA_BACKUP_ENCRYPTION_KEY="enc_pass_123"', rendered_secrets)
         self.assertIn('GALERA_BACKUP_S3_ACCESS_KEY="access_key_456"', rendered_secrets)
+        self.assertIn('GALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"', rendered_secrets)
+        self.assertIn('GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"', rendered_secrets)
         self.assertIn('GALERA_BACKUP_S3_SECRET_KEY="secret_key_789"', rendered_secrets)
 
         # 3. cron.j2
@@ -360,10 +470,42 @@ class CutoverContractTests(unittest.TestCase):
         restore_playbook = (WORKSPACE_ROOT / "playbooks" / "f10_restore.yml").read_text()
         self.assertIn("/opt/galera-backup/galera-backup", restore_playbook)
         self.assertIn("restore", restore_playbook)
+        self.assertIn("galera_backup_provision_s3: false", restore_playbook)
+        self.assertNotIn("GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD", restore_playbook)
+        self.assertNotIn("PROXYSQL_ADMIN_PASSWORD", restore_playbook)
         self.assertIn("--confirm", restore_playbook)
         self.assertNotIn("s3_object.py", restore_playbook)
         self.assertNotIn("openssl enc", restore_playbook)
         self.assertNotIn("mariadb-backup --copy-back", restore_playbook)
+    def test_backup_role_plays_load_shared_proxy_sql_hostgroups(self):
+        for playbook_name in ("f10_backup.yml", "f10_restore.yml"):
+            with self.subTest(playbook_name=playbook_name):
+                playbook = yaml.safe_load(
+                    (WORKSPACE_ROOT / "playbooks" / playbook_name).read_text()
+                )
+                role_plays = [
+                    play
+                    for play in playbook
+                    if any("galera_backup" in str(role) for role in play.get("roles", []))
+                ]
+                self.assertTrue(role_plays)
+                self.assertTrue(
+                    all(
+                        "vars/proxysql_hostgroups.yml" in play.get("vars_files", [])
+                        for play in role_plays
+                    )
+                )
+
+    def test_sst_rotation_uses_parameterized_sql_and_validates_password(self):
+        join_playbook = (WORKSPACE_ROOT / "playbooks" / "f5_join.yml").read_text()
+        self.assertIn("ansible.mysql.mysql_query", join_playbook)
+        self.assertIn("positional_args:", join_playbook)
+        self.assertIn("SET GLOBAL wsrep_sst_auth = %s", join_playbook)
+        self.assertNotIn(
+            "SET GLOBAL wsrep_sst_auth='{{ sst_user }}:{{ sst_password }}';",
+            join_playbook,
+        )
+        self.assertGreaterEqual(join_playbook.count("Wymagaj SST_PASSWORD"), 3)
 
     def test_managed_minio_credentials_are_reused_and_shared(self):
         backup_playbook = (WORKSPACE_ROOT / "playbooks" / "f10_backup.yml").read_text()

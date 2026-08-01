@@ -7,6 +7,8 @@
   hosts: restore
   become: true
   gather_facts: true
+  vars_files:
+    - vars/proxysql_hostgroups.yml
   vars:
     mariadb_version: "{{ lock.mariadb.version.split('.')[:2] | join('.') }}"
     galera_backup_encryption_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_ENCRYPTION_KEY') | default(lookup('ansible.builtin.env', 'BACKUP_ENCRYPTION_KEY'), true) }}"
@@ -43,7 +45,7 @@
       vars:
         galera_backup_local_role: restore
         galera_backup_install_cron: false
-
+        galera_backup_provision_s3: false
   tasks:
     - name: "MariaDB repo - pobierz setup (audit#6: weryfikacja sha256)"
       ansible.builtin.get_url:

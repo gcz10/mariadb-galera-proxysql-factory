@@ -28,7 +28,7 @@ proxysql:
   read_write_split_enabled: false
   endpoint:
     type: "keepalived_vip"
-    address: "192.168.1.60"
+    address: "192.168.1.70"
     port: 6033
 
 tls:

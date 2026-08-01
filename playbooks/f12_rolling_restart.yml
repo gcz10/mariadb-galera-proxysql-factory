@@ -18,9 +18,10 @@
   become: true
   gather_facts: false
   any_errors_fatal: true
+  vars_files:
+    - vars/proxysql_hostgroups.yml
   vars:
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
-    writer_hg: "{{ proxysql.writer_hostgroup | default(10) }}"
   environment:
     MYSQL_PWD: "{{ proxysql_admin_password }}"
 
@@ -35,7 +36,7 @@
       ansible.builtin.shell: >-
         mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "SELECT hostname FROM runtime_mysql_servers
-         WHERE hostgroup_id={{ writer_hg }} AND status='ONLINE'"
+         WHERE hostgroup_id={{ galera_writer_hg }} AND status='ONLINE'"
       register: writer_ip_raw
       changed_when: false
       no_log: true
