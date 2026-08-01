@@ -105,7 +105,7 @@ jobs:
             if ! grep -qE '^[[:space:]]*hosts:' "$pb"; then
               echo "skip (include-only): $pb"; continue
             fi
-            if ansible-playbook "$pb" -i clusters/example-cluster/inventory.yml --syntax-check >/tmp/sx.out 2>&1; then
+            if ansible-playbook "$pb" -i clusters/example-cluster/inventory.yml -e @clusters/example-cluster/cluster.yml --syntax-check >/tmp/sx.out 2>&1; then
               echo "syntax OK: $pb"
             else
               echo "syntax FAIL: $pb"; cat /tmp/sx.out; rc=1

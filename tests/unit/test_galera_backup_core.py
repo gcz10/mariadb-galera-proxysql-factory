@@ -154,6 +154,56 @@ class GaleraBackupCoreTests(unittest.TestCase):
             self.assertEqual(state_data2["last_failure"]["error_code"], "E_STORAGE")
             self.assertEqual(state_data2["last_run"]["status"], "failed")
 
+    def test_corrupt_state_fails_closed_without_overwriting_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            state_file = Path(td) / "state.json"
+            corrupt_content = '{"format_version": 1, "last_success": '
+            state_file.write_text(corrupt_content, encoding="utf-8")
+
+            state_manager = self.mod.StateManager("claude-r10b", state_file)
+            with self.assertRaises(self.mod.BackupError) as ctx:
+                state_manager.read()
+
+            self.assertEqual(ctx.exception.code, "E_STATE")
+            self.assertEqual(state_file.read_text(encoding="utf-8"), corrupt_content)
+
+    def test_file_digest_and_size_are_streamed_correctly(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = Path(td) / "payload.bin"
+            payload.write_bytes((b"0123456789abcdef" * 8192) + b"tail")
+
+            digest, size = self.mod.file_sha256_and_size(payload)
+
+            import hashlib
+
+            expected = hashlib.sha256(payload.read_bytes()).hexdigest()
+            self.assertEqual(digest, expected)
+            self.assertEqual(size, payload.stat().st_size)
+
+    def test_sensitive_workdir_cleanup_failure_is_explicit(self):
+        with tempfile.TemporaryDirectory() as td:
+            work_dir = Path(td) / "staging"
+            work_dir.mkdir()
+            (work_dir / "raw-backup").write_text("plaintext", encoding="utf-8")
+
+            with patch.object(
+                self.mod.shutil,
+                "rmtree",
+                side_effect=PermissionError("cleanup denied"),
+            ):
+                with self.assertRaises(self.mod.BackupError) as ctx:
+                    self.mod.remove_sensitive_work_dir(work_dir, "E_STORAGE")
+
+            self.assertEqual(ctx.exception.code, "E_STORAGE")
+            self.assertIn("sensitive staging directory", ctx.exception.public_message)
+            self.assertTrue(work_dir.exists())
+
+    def test_sql_identifier_quoting_escapes_embedded_backticks(self):
+        self.assertEqual(
+            self.mod.quote_sql_identifier("db`name"),
+            "`db``name`",
+        )
+
     def test_secret_cannot_enter_subprocess_argv(self):
         runner = self.mod.CommandRunner(secret_values={"s3cr3t", "my-pass"})
         with patch.object(runner, "_exec") as mock_exec:
@@ -181,6 +231,34 @@ class GaleraBackupCoreTests(unittest.TestCase):
         val = 'cluster "name"\nwith\\slash'
         escaped = self.mod.escape_metric_label(val)
         self.assertEqual(escaped, 'cluster \\"name\\"\\nwith\\\\slash')
+
+    def test_metrics_restore_default_security_context_after_atomic_publish(self):
+        self.assertTrue(hasattr(self.mod, "restore_default_context"))
+        with tempfile.TemporaryDirectory() as td:
+            metric_path = Path(td) / "backup.prom"
+            manager = self.mod.MetricsManager(metric_path, "pmm-cluster", "logical", "s3")
+            with patch.object(self.mod, "restore_default_context") as restore_context:
+                manager.update(last_run_success=1)
+            restore_context.assert_called_once_with(metric_path)
+
+    def test_metrics_context_restore_failure_is_not_silenced(self):
+        with patch.object(self.mod, "selinux_is_enabled", return_value=True):
+            with patch.object(self.mod.shutil, "which", return_value="/sbin/restorecon"):
+                with patch.object(
+                    self.mod.subprocess,
+                    "run",
+                    return_value=MagicMock(returncode=1, stderr="permission denied", stdout=""),
+                ):
+                    with self.assertRaises(self.mod.BackupError) as ctx:
+                        self.mod.restore_default_context(Path("/tmp/backup.prom"))
+        self.assertEqual(ctx.exception.code, "E_METRICS")
+        self.assertIn("permission denied", ctx.exception.public_message)
+
+    def test_metrics_context_restore_is_skipped_when_selinux_is_disabled(self):
+        with patch.object(self.mod, "selinux_is_enabled", return_value=False):
+            with patch.object(self.mod.subprocess, "run") as run:
+                self.mod.restore_default_context(Path("/tmp/backup.prom"))
+        run.assert_not_called()
 
 
 class TemplateContractTests(unittest.TestCase):
@@ -220,6 +298,14 @@ class TemplateContractTests(unittest.TestCase):
             "galera_backup_encryption_key": "enc_pass_123",
             "galera_backup_s3_access_key": "access_key_456",
             "galera_backup_s3_secret_key": "secret_key_789",
+            "galera_backup_resolved_shared_secrets": {
+                "encryption_key": "enc_pass_123",
+                "s3_access_key": "access_key_456",
+                "s3_secret_key": "secret_key_789",
+                "smb_username": "",
+                "smb_password": "",
+                "smb_domain": "",
+            },
         }
 
         # 1. config.json.j2
@@ -243,7 +329,7 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("CRON_TZ=UTC", rendered_cron)
         self.assertIn("PATH=", rendered_cron)
         self.assertIn("root", rendered_cron)
-        self.assertIn("systemd-cat", rendered_cron)
+        self.assertIn("/usr/bin/systemd-cat -t galera-backup-claude-r10b", rendered_cron)
         self.assertIn("/opt/galera-backup/galera-backup backup claude-r10b", rendered_cron)
         self.assertNotIn("enc_pass_123", rendered_cron)
 
@@ -258,6 +344,14 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("arn:aws:s3:::r10b-galera-backups", resources)
         self.assertIn("arn:aws:s3:::r10b-galera-backups/galera-claude-r10b-*", resources)
         self.assertIn("arn:aws:s3:::r10b-galera-backups/galera-backup-owner.json", resources)
+        owner_arn = "arn:aws:s3:::r10b-galera-backups/galera-backup-owner.json"
+        owner_statements = [
+            statement
+            for statement in policy_dict["Statement"]
+            if owner_arn in statement["Resource"]
+        ]
+        self.assertEqual(len(owner_statements), 1)
+        self.assertEqual(owner_statements[0]["Action"], ["s3:GetObject"])
         for res in resources:
             self.assertNotIn("*/*", res)
             self.assertNotIn("arn:aws:s3:::second-bucket", res)
@@ -270,6 +364,31 @@ class CutoverContractTests(unittest.TestCase):
         self.assertNotIn("s3_object.py", restore_playbook)
         self.assertNotIn("openssl enc", restore_playbook)
         self.assertNotIn("mariadb-backup --copy-back", restore_playbook)
+
+    def test_managed_minio_credentials_are_reused_and_shared(self):
+        backup_playbook = (WORKSPACE_ROOT / "playbooks" / "f10_backup.yml").read_text()
+        role_main = (
+            WORKSPACE_ROOT / "roles" / "galera_backup" / "tasks" / "main.yml"
+        ).read_text()
+        provision = (
+            WORKSPACE_ROOT / "roles" / "galera_backup" / "tasks" / "provision_minio.yml"
+        ).read_text()
+
+        self.assertIn("galera_backup_shared_secrets", backup_playbook)
+        self.assertIn("galera_backup_resolved_shared_secrets", role_main)
+        self.assertIn("galera_backup_existing_s3_access_key", provision)
+        self.assertIn("accesskey\n          - edit", provision)
+        self.assertIn("--env-file", provision)
+        self.assertNotIn('- "MC_HOST_myminio=', provision)
+
+    def test_restore_role_does_not_install_scheduler_cron_package(self):
+        role_main = (
+            WORKSPACE_ROOT / "roles" / "galera_backup" / "tasks" / "main.yml"
+        ).read_text()
+        cron_install_task = role_main.split(
+            "- name: Install cron package if scheduled cron mode enabled", 1
+        )[1].split("\n- name:", 1)[0]
+        self.assertIn("(galera_backup_install_cron | default(true)) | bool", cron_install_task)
 
     def test_no_legacy_backup_references_in_repo(self):
         legacy_terms = [
@@ -307,6 +426,20 @@ class CutoverContractTests(unittest.TestCase):
         ]:
             self.assertIn(metric, pmm_probe)
         self.assertNotIn("isa_backup_last_success_unixtime", pmm_probe)
+        self.assertIn("for metric_name in EXPECTED_GALERA_BACKUP_METRICS:", pmm_probe)
+
+    def test_backup_failure_alert_has_no_pending_delay(self):
+        alerts_playbook = (
+            WORKSPACE_ROOT / "playbooks" / "f15_alerts.yml"
+        ).read_text()
+        failure_rule = alerts_playbook.split(
+            '- uid: "isa-{{ cluster_label }}-backup-failed"', 1
+        )[1].split("\n      - uid:", 1)[0]
+        self.assertIn('pending_for: "0s"', failure_rule)
+        self.assertIn('for: "{{ item.pending_for | default(\'2m\') }}"', alerts_playbook)
+        pmm_probe = (WORKSPACE_ROOT / "tests" / "lab" / "probe-pmm-native.py").read_text()
+        self.assertIn('backup_failure_rule.get("for") == "0s"', pmm_probe)
+
 
     def test_alerts_playbook_includes_galera_backup_rules(self):
         alerts_playbook = (WORKSPACE_ROOT / "playbooks" / "f15_alerts.yml").read_text()
@@ -314,6 +447,8 @@ class CutoverContractTests(unittest.TestCase):
         self.assertIn("galera_backup_last_run_success", alerts_playbook)
         self.assertIn("Backup run failed", alerts_playbook)
         self.assertIn("Backup freshness stale", alerts_playbook)
+        self.assertIn("backup_freshness_sla_hours", alerts_playbook)
+        self.assertNotIn("backup_retention_days", alerts_playbook)
         self.assertNotIn("isa_backup_last_success_unixtime", alerts_playbook)
 if __name__ == "__main__":
     unittest.main()

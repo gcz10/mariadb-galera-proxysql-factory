@@ -58,7 +58,7 @@ Repozytorium Ansible, w którym nowy niezależny klaster Galera+ProxySQL powstaj
 - Endpoint: Keepalived VIP na węzłach ProxySQL (decyzja principal).
 - TLS: tryb `disabled` w v1 z udokumentowanym risk acceptance; `full` zaplanowane w późniejszym feature, pozostawia zależne ISC otwarte.
 - Sekrety: backend dobrany do istniejącego standardu firmy (F0 discovery); brak sekretów w repo, logach, diffach, argv.
-- Backup: off-cluster (zasób SMB teraz, opcja S3 później), szyfrowany, checksum, retencja do ustalenia.
+- Backup: szyfrowany, checksumowany i izolowany per klaster; backend wybierany jawnie spośród S3, zarządzanego SMB albo wcześniej zamontowanego filesystemu; retencja i scheduler są częścią `cluster.yml`.
 - High-blast kryteria (sekrety, dane, produkcja, recovery, upgrade) wymagają deterministycznego probe'a; `manual` niewystarcza.
 - Hierarchia dowodów: pomiar na docelowym systemie > oficjalna dokumentacja przypiętej wersji > release notes/errata > wiedza modelu jako hipoteza.
 
@@ -110,13 +110,13 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - [x] ISC-31: Anti: Żaden playbook nie restartuje wszystkich węzłów Galery jednocześnie.
 
 ### Backup i restore
-- [x] ISC-32: Backup opuszcza klaster (trafia na off-cluster zasób SMB; późniejsza opcja S3).
+- [x] ISC-32: Backup opuszcza hosty Galery do skonfigurowanego S3, SMB albo wcześniej zamontowanego filesystemu.
 - [x] ISC-33: Backup jest zaszyfrowany.
 - [x] ISC-34: Checksum backupu jest poprawna i weryfikowalna.
 - [x] ISC-35: Metadata backupu zawiera wersję MariaDB, czas, cluster name i pozycję wsrep/seqno.
 - [x] ISC-36: Restore na czysty izolowany host przechodzi test integralności (checksum + zapytanie).
-- [x] ISC-37: Restore drill działa według ustalonego harmonogramu.
-- [x] ISC-38: Nieudany backup lub przeterminowany restore test generuje alert.
+- [x] ISC-37: Restore drill jest uruchamiany jawnie i weryfikowany względem `restore_test_schedule`; pole jest SLA świeżości, nie automatycznym cronem restore.
+- [x] ISC-38: Nieudany lub przeterminowany backup generuje fail-closed stan, metrykę i zarządzany alert.
 - [x] ISC-39: Backup nie degraduje aktywnego writera ponad uzgodniony threshold (queue/flow control).
 
 ### Bezpieczeństwo
@@ -162,7 +162,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 
 ## Not yet specified
 
-- ~~fog: retencja backupów~~ ROZSTRZYGNIĘTY 2026-07-22 — SMB teraz, S3 retencja 30d (Decisions); ISC-37 zależy od F10 implementacji.
+- ~~fog: retencja backupów~~ ROZSTRZYGNIĘTY 2026-07-29 — `retention_days` jest ustawiane per klaster i stosowane identycznie przez S3, SMB i filesystem; nie oznacza automatycznie immutability/off-site.
 - ~~fog: PKI/Vault~~ CZĘŚCIOWO ROZSTRZYGNIĘTY 2026-07-22 — secret backend = Ansible Vault (Decisions); PKI dla tls.mode=full pozostaje fog do F0 discovery istniejącego PKI.
 - fog: Czy istnieje korporacyjny PKI do późniejszego `tls.mode=full` (certyfikaty, CA)? — musi rozstrzygnąć F0 discovery; wpłynie na ISC-44 i plan TLS feature.
 - fog: Czy PITR (point-in-time recovery) jest w zakresie v1? — wymaga osobnej decyzji principal i kryteriów; obecnie out of scope domyślnie.
@@ -278,11 +278,11 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - 2026-07-22 — przyjęte założenie: dowody w CI/logach/artefaktach; Verification tylko referencje — ponieważ długie outputy — dowód: MASTER_PROMPT §2.5.
 - 2026-07-22 — przyjęte założenie: `versions.policy: locked` dla produkcji, `candidate` dla testów — ponieważ brak `state: latest` i brak dynamicznej zmiany major — dowód: MASTER_PROMPT §8.
 - 2026-07-22 — Interview odpowiedź: RPO=0, RTO węzeł <2 min, RTO klaster <30 min — ponieważ principal wybór; determinuje gcache, chaos test thresholds, backup window — źródło: Interview 2026-07-22.
-- 2026-07-22 — Interview odpowiedź: backup na zamontowany zasób SMB teraz, opcja S3 później — ponieważ principal wybór; retencja i dostęp TBD (fog) — źródło: Interview 2026-07-22.
+- 2026-07-22 — historyczna odpowiedź Interview: backup na zamontowany zasób SMB teraz, opcja S3 później — zastąpiona uniwersalnym kontraktem backendów 2026-07-29.
 - 2026-07-22 — Interview odpowiedź: endpoint = Keepalived VIP na węzłach ProxySQL — ponieważ principal wybór; wymaga osobnych CIDR i rekomendacji anti-affinity — źródło: Interview 2026-07-22.
 - 2026-07-22 — Interview odpowiedź: TLS `disabled` teraz, `full` zaplanowane w późniejszym feature — ponieważ principal wybór; ZAŁOŻENIE DO POTWIERDZENIA risk acceptance; ISC-44 i TLS ISC pozostają otwarte — źródło: Interview 2026-07-22.
 - 2026-07-22 — refined: BLK-3 rozstrzygnięty — secret backend = Ansible Vault — ponieważ principal wybór; szyfrowane pliki w repo (clusters/<name>/secrets.yml), klucz poza repo; ISC-43 zależy, F6 implementacja — źródło: Interview 2026-07-22.
-- 2026-07-22 — refined: BLK-3 rozstrzygnięty — backup: SMB teraz, migracja S3 z retencją 30d — ponieważ principal wybór; ISC-32/37 zależne, F10 implementacja; S3 wymaga osobnych ISC dla fazy S3 — źródło: Interview 2026-07-22.
+- 2026-07-22 — historyczne rozstrzygnięcie BLK-3: SMB teraz, migracja S3 z retencją 30d — zastąpione implementacją S3/SMB/filesystem i retencją per klaster 2026-07-29.
 - 2026-07-22 — F1 research: MariaDB 11.4.12 LTS wybrana — ponieważ najdłuższe wsparcie (EOL 2029-05), Galera 4, RPM dla RHEL9 — dowód: mariadb.org, endoflife.date (2026-07-22).
 - 2026-07-22 — F1 research: ProxySQL 3.0.9 wybrany — ponieważ Stable Tier, łata CVE-2026-48772/48773 — dowód: proxysql.com (2026-07-22).
 - 2026-07-22 — F1 research: Galera 4 (galera-4, wsrep API 26) — ponieważ jedyny wspierany provider dla MariaDB 11.x; wbudowany w pakiety MariaDB — dowód: mariadb.org (2026-07-22).
@@ -291,7 +291,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - 2026-07-22 — F1 research: odrzucone jako bieżący baseline MariaDB 12.3 (mniejsza dojrzałość), 11.8 (krótszy EOL), 10.11 (starsza), 10.5/10.6 (EOL/przestarzałe) — dowód: mariadb.org (2026-07-22).
 - 2026-07-22 — ADR-001: Keepalived VIP endpoint — ponieważ principal wybór; VRRP <3s spełnia RTO <2min — docs/adr/ADR-001-keepalived-vip-endpoint.md.
 - 2026-07-22 — ADR-002: TLS disabled w v1 + risk acceptance — ponieważ principal wybór; ISC-44 otwarte, ISC-45 aktywne — docs/adr/ADR-002-tls-disabled-risk-acceptance.md.
-- 2026-07-22 — ADR-003: backup SMB teraz -> S3 retencja 30d — ponieważ principal wybór; ISC-32/37 zależne — docs/adr/ADR-003-backup-smb-to-s3.md.
+- 2026-07-22 — ADR-003 (historyczny): backup SMB teraz -> S3 retencja 30d; bieżący kontrakt wielobackendowy i jego ograniczenia są w `docs/runbooks/backup.md`.
 - 2026-07-22 — ADR-004: MariaDB 11.4.12 LTS — ponieważ najdłuższe wsparcie + Galera 4 + RPM RHEL9 — docs/adr/ADR-004-mariadb-11.4-lts-selection.md.
 - 2026-07-22 — przyjęte założenie: gcache.size = write_rate_bytes/s × ist_window_min × 60; minimum 128MB — ponieważ formula z oknem IST; implementacja tests/validation/calc-gcache.py — dowód: Galera docs + ISC-68.
 - 2026-07-22 — F0 discovery: BLK-1/BLK-2 rozblokowane przez OrbStack/Docker lab (5 kontenerów Rocky 9.8); F0 uruchomiony na 5/5 hostów, 29 tasków PASS każdy; raporty w /var/tmp/f0-discovery-*.json na hostach — dowód: ansible-playbook PLAY RECAP ok=29 failed=0.
@@ -310,10 +310,12 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - 2026-07-22 — F5 global_priv crash: po SST mariabackup `mysql/global_priv` był crashed na gnode2 (Aria table); naprawiono REPAIR TABLE + replikacja sst_user z gnode1 — założenie do potwierdzenia: przetestować ponowne SST po fix w F6/F9.
 - 2026-07-22 — F6 hardening: anonimowe konta i baza test usunięte; root localhost-only; sst_user i pmm_monitor least-privilege; hasło SST externalizowane do SST_PASSWORD env var w 5 plikach — dowód: probe-hardening.py PASS, probe-no-secrets-leak.sh PASS, grep = 0.
 - 2026-07-22 — F6 TLS: tls.mode=disabled w lab; f6_hardening.yml odrzuca production+disabled bez ADR; ISC-44 pozostaje otwarte do tls.mode=full.
-- 2026-07-22 — F10 backup transport: lab `backup.destination=s3` (MinIO `172.28.0.60`, przypięty `RELEASE.2025-09-07T16-13-09Z`), produkcja pozostaje `smb`. Powód: kernel OrbStack `7.0.11-orbstack` nie ma modułu `cifs` (`modprobe cifs` FATAL, brak `/lib/modules/.../fs/cifs*`), więc SMB mount jest nietestowalny w labie — jak brak SELinux/systemd. S3 to sankcjonowana opcja off-cluster (ADR-003). Ścieżka SMB udokumentowana w f10_backup.yml, ale niezweryfikowana w labie. Dowód: spike modprobe, probe-backup/probe-restore PASS.
-- 2026-07-22 — F10 backup: szyfrowanie `openssl aes-256-cbc/pbkdf2` (klucz BACKUP_ENCRYPTION_KEY poza repo), sha256 checksum, metadata z wsrep seqno; źródło backupu = galera[1] (nie aktywny writer) chroni writera; restore drill na dedykowanym `rnode1` (czysty izolowany host, standalone bez wsrep). Nowe kontenery: minio (172.28.0.60) + rnode1 (172.28.0.50). Dowód: playbooki F10, backup-impact.py flow_control=0.
+- 2026-07-22 — historyczny F10 transport: lab używał wyłącznie S3, ponieważ kernel OrbStack nie udostępniał CIFS; zastąpione rzeczywistym dowodem SMB na Rocky Linux 10 z kernelem CIFS 2026-07-29.
+- 2026-07-22 — historyczny F10 runner wybierał `galera[1]` i używał `BACKUP_ENCRYPTION_KEY`; zastąpione schedulerem per klaster, `GALERA_BACKUP_*`, jednym runnerem backup/restore i trzema backendami 2026-07-29.
+- 2026-07-29 — F10 uniwersalny backup: jeden runner obsługuje S3, zarządzany SMB i wcześniej zamontowany filesystem; konfiguracja i artefakty są izolowane per klaster, owner marker blokuje przejęcie cudzego storage, a lock obejmuje backup i restore. Zarządzany MinIO tworzy scoped konto usługowe i rozprowadza tę samą parę na scheduler/restore bez sekretów w argv. Dowód: unit/static suite oraz live Rocky 10 S3, SMB/CIFS i pre-mounted filesystem backup/restore.
+- 2026-07-29 — F10 fail-closed: backend preflight poprzedza `mariadb-backup`; błędne S3 credentials zapisują `E_STORAGE_AUTH` bez metadata i stagingu, SMB nie zapisuje sukcesu przed poprawnym unmount, pre-mounted filesystem blokuje zmianę tożsamości mountu. Repozytoryjny MinIO jest off-cluster, ale bez niezależnej ochrony storage nie jest immutable ani off-site.
 - 2026-07-23 — F11 ProxySQL metrics: `admin-restapi_enabled=true` (LOAD+SAVE = trwałe) wystawia `proxysql_*` na `:6070/metrics`; `f11_proxysql_metrics.yml` rejestruje 2 external services (group=proxysql) + external_exporter agents (port 6070) w PMM, reużywając generic nodes z f11_pmm_client. Galera/MariaDB już przez mysqld_exporter+QAN — dowód: PMM Prom `proxysql_servers_table_version_total` 2 series `up=1`, ISC-46 PASS.
-- 2026-07-23 — F11 freshness: `f11_freshness.yml` jest jedynym właścicielem `isa_monitoring_state.prom` — f11_node_exporter baseline ma `force:false`, więc reconverge nie resetuje realnych wartości do 0. `last_${MODE}.json` przechowuje tylko SUKCES; porażki idą do `last_${MODE}_failure.json` (ISC-38), aby nie nadpisać dowodu świeżości. `backup-run.sh` odświeża metryki po udanym run — dowód: epoch 1784763175→1784797158 po backup, ISC-49 PASS.
+- 2026-07-29 — F11 freshness: scheduler publikuje atomowo pięć metryk `galera_backup_*` z per-klastrowego `state.json`; porażka zachowuje timestamp ostatniego sukcesu i ustawia `last_run_success=0`. F15 ma osobne reguły „Backup run failed” i „Backup freshness stale”, obie fail-closed przy braku danych.
 - 2026-07-23 — F12 research upgrade (zaktualizowane 2026-07-25): cel 11.4 LTS → 12.3 LTS, ponieważ 11.8 ma wcześniejszy EOL niż 11.4; strażnik odrzuca regresję wsparcia. Metoda in-place `mariadb-upgrade --skip-write-binlog` (bez dump/restore), Galera 4 (wsrep API 26) wspiera rolling; downgrade datadir NIEWSPARTY ("forward-incompatible") — źródła: mariadb.com/kb/en/upgrading-galera-cluster, mariadb.com/kb/en/downgrading-between-major-mariadb-versions, galeracluster.com/library/documentation/upgrading.html.
 - 2026-07-23 — F12 rolling restart order: non-writer węzły pierwsze, writer ostatni (research galeracluster.com) — minimalizuje churn failoveru; ProxySQL mysql_galera_hostgroups auto-promuje backup-writera. Lab writer=gnode3 (już ostatni w inventory).
 - 2026-07-23 — F12 patch safe-default: domyślna komenda patcha = read-only `dnf check-update` (changed_when:false) — wzorzec canary+health-gate wykonywany bez modyfikacji pakietów w labie; produkcja nadpisuje `f12_patch_command`. ProxySQL: `SAVE ... TO DISK` przed patch (proxysql.com configuration-system).
@@ -1064,13 +1066,13 @@ d
 - ISC-30: PASS — partycja iptables gnode3|(gnode1+gnode2): większość Primary size=2 zapisuje, mniejszość non-Primary size=1 odrzuca zapis; brak dwóch writable Primary; heal do 3 (chaos-split-brain.py) 2026-07-22.
 - ISC-31: PASS — statyczny guard: każdy multi-node Galera lifecycle play ma serial:1 (probe-no-mass-restart.py, falsyfikowalny) 2026-07-22.
 - ISC-64: PASS — chaos-failover i chaos-split-brain odmawiają startu przy environment=production (guard, exit 1 bez destrukcji) 2026-07-22.
-- ISC-32: PASS — backup w s3://galera-backups (MinIO 172.28.0.60, off-cluster); lokalny staging usuwany po transferze; probe-backup PASS 2026-07-22.
-- ISC-33: PASS — openssl aes-256-cbc/pbkdf2 (magic Salted__), odszyfrowywalny do poprawnego tar 2026-07-22.
-- ISC-34: PASS — sha256 backup.tar.enc == zapisany checksum (weryfikacja przy backupie i przed restore) 2026-07-22.
-- ISC-35: PASS — metadata.json: mariadb_version=11.4.12-MariaDB, created_at, cluster_name, wsrep seqno=1482 2026-07-22.
-- ISC-36: PASS — restore na rnode1 (czysty izolowany host, standalone): checksum OK → copy-back → CHECK TABLE OK → 4 wiersze zweryfikowane 2026-07-22.
-- ISC-37: PASS — restore drill zapisuje last_restore.json; probe-restore weryfikuje świeżość wg restore_test_schedule (0 4 * * 0); cron template w roles/backup 2026-07-22.
-- ISC-38: PASS — backup-run.sh przy porażce dostarcza alert (/var/log/mariadb-backup.log + stan failed + logger); symulacja złych creds → rc=2, alert dostarczony 2026-07-22.
+- ISC-32: PASS — Rocky 10: artefakt opublikowany i odtworzony przez S3, zarządzany SMB/CIFS oraz wcześniej zamontowany filesystem; staging usunięty po operacji 2026-07-29.
+- ISC-33: PASS — `openssl aes-256-cbc/pbkdf2`; live payload ma format zaszyfrowany i daje się odtworzyć wyłącznie z kluczem 2026-07-29.
+- ISC-34: PASS — sha256 `backup.tar.enc` jest zgodny z `backup.sha256`; read-back przechodzi na wszystkich trzech backendach 2026-07-29.
+- ISC-35: PASS — `metadata.json` zawiera wersję MariaDB, UTC, cluster name, UUID i wsrep seqno; owner marker ma format 1 i właściwy klaster 2026-07-29.
+- ISC-36: PASS — confirmation-gated restore na izolowanym `rnode1` przechodzi checksum, bezpieczny tar, copy-back, `mariadb-check` i dodatnią liczbę wierszy 2026-07-29.
+- ISC-37: PASS — restore zapisuje sukces w per-klastrowym `state.json`; probe porównuje świeżość z `restore_test_schedule`, bez automatycznego crona restore 2026-07-29.
+- ISC-38: PASS — błędne scoped S3 credentials kończą preflight kodem `E_STORAGE_AUTH`, bez nowych obiektów i stagingu; metryka porażki jest natychmiastowa, a F15 zarządza regułami failure/stale 2026-07-29.
 - ISC-39: PASS — backup pod obciążeniem (284 commity przez VIP): flow control 0 ns, max write stall 0.07s — writer niezdegradowany (backup-impact.py) 2026-07-22.
 - ISC-50: PASS — `f12_rolling_restart.yml`: play Galera `serial:1`; restart gnode1→gnode2→gnode3 każdy po kolei; probe-rolling-restart PASS (static serial:1 + runtime) 2026-07-23.
 - ISC-51: PASS — brama zdrowia (until: wsrep_local_state=4 + Primary + size=3 + ready=ON) po każdym węźle przed kolejnym; każdy węzeł rejoined Synced; probe-rolling-restart PASS 2026-07-23.
@@ -1095,7 +1097,7 @@ d
 
 - ~~BLK-1~~ ROZBLOKOWANY 2026-07-22 — 5 kontenerów Rocky Linux 9.8 (OrbStack/Docker): 3 Galera + 2 ProxySQL; SSH + sudo NOPASSWD; tests/lab/docker-compose.yml.
 - ~~BLK-2~~ ROZBLOKOWANY 2026-07-22 — inventory lab-cluster (clusters/lab-cluster/inventory.yml) z SSH key (tests/lab/ssh_key); Ansible połączenie PASS na 5/5 hostów.
-- ~~BLK-3~~ ROZSTRZYGNIĘTY 2026-07-22 — secret backend = Ansible Vault; backup = SMB teraz, S3 retencja 30d później (Decisions).
+- ~~BLK-3~~ ROZSTRZYGNIĘTY 2026-07-29 — sekrety pozostają poza repo; backup ma backend S3, SMB lub filesystem, scoped credentials per klaster i retencję z `cluster.yml` (Decisions).
 - ~~BLK-4~~ ROZSTRZYGNIĘTY 2026-07-22 — internet dostępny; F1 research wykonany z oficjalnych źródeł.
 - ~~BLK-5~~ ROZSTRZYGNIĘTY 2026-07-24 — alert delivery = Email (SMTP). Lab: maildev SMTP catcher (172.28.0.70:1025) + GF_SMTP_* na pmm-server; contact point "ISA Email Alerts" + notification policy (managed_by=ansible → email). Dowód: node-loss alert → 1 email dostarczony do maildev.
 

@@ -33,11 +33,14 @@ with open(INVENTORY_PATH, encoding="utf-8") as fh:
 endpoint_text = str(CLUSTER["backup"]["s3"]["endpoint"])
 configured_endpoint = urlparse(endpoint_text if "://" in endpoint_text else f"//{endpoint_text}")
 configured_host = configured_endpoint.hostname or ""
-inventory_addresses = {
-    host: values.get("ansible_host", host)
-    for group in INVENTORY["all"]["children"].values()
-    for host, values in group.get("hosts", {}).items()
-}
+inventory_addresses = {}
+for group in INVENTORY["all"]["children"].values():
+    for host, values in group.get("hosts", {}).items():
+        host_vars = values or {}
+        if host_vars.get("ansible_host"):
+            inventory_addresses[host] = host_vars["ansible_host"]
+        else:
+            inventory_addresses.setdefault(host, host)
 probe_host = inventory_addresses.get(configured_host, configured_host)
 PROBE_SECURE = bool(CLUSTER["backup"]["s3"].get("secure", configured_endpoint.scheme == "https"))
 probe_port = configured_endpoint.port or (443 if PROBE_SECURE else 80)

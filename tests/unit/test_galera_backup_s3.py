@@ -84,12 +84,11 @@ class GaleraBackupS3Tests(unittest.TestCase):
             client=self.client,
         )
 
-    def test_owner_marker_created_on_empty_bucket(self):
-        self.backend.preflight()
-        self.assertIn("galera-backup-owner.json", self.client.objects)
-        owner_data = json.loads(self.client.objects["galera-backup-owner.json"].decode())
-        self.assertEqual(owner_data["format_version"], 1)
-        self.assertEqual(owner_data["cluster_name"], "claude-r10b")
+    def test_missing_owner_marker_fails_closed(self):
+        with self.assertRaises(self.mod.BackupError) as ctx:
+            self.backend.preflight()
+        self.assertEqual(ctx.exception.code, "E_OWNER_CONFLICT")
+        self.assertIn("storage administrator", ctx.exception.public_message)
 
     def test_owner_marker_matching_is_idempotent(self):
         self.client.objects["galera-backup-owner.json"] = json.dumps(
@@ -141,13 +140,20 @@ class GaleraBackupS3Tests(unittest.TestCase):
                 metadata_path=metadata_file,
             )
 
-            # Record call sequence
             call_sequence = []
-            orig_put = self.client.fput_object
-            def record_fput(b, name, path):
-                call_sequence.append(name)
-                orig_put(b, name, path)
+            original_put = self.client.fput_object
+            original_get = self.client.fget_object
+
+            def record_fput(bucket, name, path):
+                call_sequence.append(("put", name))
+                original_put(bucket, name, path)
+
+            def record_fget(bucket, name, path):
+                call_sequence.append(("get", name))
+                original_get(bucket, name, path)
+
             self.client.fput_object = record_fput
+            self.client.fget_object = record_fget
 
             self.backend.publish(art)
 
@@ -155,11 +161,97 @@ class GaleraBackupS3Tests(unittest.TestCase):
             self.assertEqual(
                 call_sequence,
                 [
-                    f"{prefix}backup.tar.enc",
-                    f"{prefix}backup.sha256",
-                    f"{prefix}metadata.json",
-                ]
+                    ("put", f"{prefix}backup.tar.enc"),
+                    ("put", f"{prefix}backup.sha256"),
+                    ("get", f"{prefix}backup.tar.enc"),
+                    ("put", f"{prefix}metadata.json"),
+                ],
             )
+
+            original_remote_payload = self.client.objects[
+                f"{prefix}backup.tar.enc"
+            ]
+            payload_file.write_bytes(b"different encrypted payload")
+            with self.assertRaises(self.mod.BackupError) as duplicate_ctx:
+                self.backend.publish(art)
+            self.assertEqual(duplicate_ctx.exception.code, "E_STORAGE")
+            self.assertEqual(
+                self.client.objects[f"{prefix}backup.tar.enc"],
+                original_remote_payload,
+            )
+
+    def test_failed_publication_removes_incomplete_prefix(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            payload = root / "backup.tar.enc"
+            checksum = root / "backup.sha256"
+            metadata = root / "metadata.json"
+            payload_content = b"encrypted-payload"
+            payload.write_bytes(payload_content)
+
+            import hashlib
+
+            digest = hashlib.sha256(payload_content).hexdigest()
+            checksum.write_text(
+                f"{digest}  backup.tar.enc\n",
+                encoding="utf-8",
+            )
+            backup_name = "galera-claude-r10b-20260729-120001"
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "format_version": 1,
+                        "cluster_name": "claude-r10b",
+                        "backup_name": backup_name,
+                        "created_unixtime": 1785240001,
+                        "encrypted_sha256": digest,
+                        "encrypted_size_bytes": len(payload_content),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            artifact = self.mod.ArtifactSet(
+                backup_name=backup_name,
+                payload_path=payload,
+                checksum_path=checksum,
+                metadata_path=metadata,
+            )
+
+            original_put = self.client.fput_object
+
+            def fail_checksum(bucket, name, path):
+                original_put(bucket, name, path)
+                if name.endswith("/backup.sha256"):
+                    raise OSError("checksum upload interrupted after write")
+
+            self.client.fput_object = fail_checksum
+            with self.assertRaises(self.mod.BackupError) as ctx:
+                self.backend.publish(artifact)
+
+            self.assertEqual(ctx.exception.code, "E_STORAGE")
+            prefix = f"{backup_name}/"
+            self.assertEqual(
+                [
+                    key
+                    for key in self.client.objects
+                    if key.startswith(prefix)
+                ],
+                [],
+            )
+
+            def refuse_cleanup(bucket, name):
+                raise OSError("cleanup denied")
+
+            self.client.remove_object = refuse_cleanup
+            with self.assertRaises(self.mod.BackupError) as cleanup_ctx:
+                self.backend.publish(artifact)
+
+            self.assertEqual(cleanup_ctx.exception.code, "E_STORAGE")
+            self.assertIn(
+                "checksum upload interrupted after write",
+                cleanup_ctx.exception.public_message,
+            )
+            self.assertIn("cleanup denied", cleanup_ctx.exception.public_message)
 
     def test_retention_prunes_only_own_expired_backups(self):
         # Create expired backup metadata and payload

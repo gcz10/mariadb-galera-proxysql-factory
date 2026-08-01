@@ -752,7 +752,7 @@ Extend `test_galera_backup_core.py` to render templates with Jinja and assert:
 
 - config contains no secret values;
 - secrets file contains exactly the backend-required `GALERA_BACKUP_*` keys;
-- cron contains `CRON_TZ=UTC`, explicit PATH, user `root`, `systemd-cat`, one absolute runner invocation, and no secrets;
+- cron contains `CRON_TZ=UTC`, explicit PATH, user `root`, one absolute runner invocation, no `systemd-cat` dependency, and no secrets;
 - policy grants `GetBucketLocation` and full key-name `ListBucket` on exactly the configured bucket so legacy foreign objects cannot be hidden by a prefix filter;
 - policy grants get/put/delete/multipart object actions only for `galera-<cluster>-*` and `galera-backup-owner.json`;
 - policy contains no wildcard bucket resource and no access to a second bucket.

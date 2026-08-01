@@ -92,4 +92,7 @@
       vars:
         galera_backup_local_role: restore
         galera_backup_install_cron: false
+        galera_backup_provision_s3: false
+        galera_backup_inherited_shared_secrets: >-
+          {{ hostvars[backup.scheduler.host].galera_backup_shared_secrets | default({}) }}
       when: galera_backup_action == 'configure'

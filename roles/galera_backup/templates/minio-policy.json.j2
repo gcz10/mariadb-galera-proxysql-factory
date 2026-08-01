@@ -21,7 +21,15 @@
         "s3:ListMultipartUploadParts"
       ],
       "Resource": [
-        "arn:aws:s3:::{{ backup.s3.bucket }}/galera-{{ cluster.name }}-*",
+        "arn:aws:s3:::{{ backup.s3.bucket }}/galera-{{ cluster.name }}-*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
         "arn:aws:s3:::{{ backup.s3.bucket }}/galera-backup-owner.json"
       ]
     }

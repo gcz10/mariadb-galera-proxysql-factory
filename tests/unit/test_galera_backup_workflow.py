@@ -94,6 +94,30 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                         with self.assertRaises(self.mod.BackupError) as ctx:
                             self.mod.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
                         self.assertEqual(ctx.exception.code, "E_GALERA")
+                        fake_backend.close.side_effect = self.mod.BackupError(
+                            "E_STORAGE",
+                            "SMB cleanup failed: unmount failed",
+                        )
+                        with self.assertRaises(self.mod.BackupError) as cleanup_ctx:
+                            self.mod.run_backup(
+                                config_path=cfg_path,
+                                secrets_path=env_path,
+                                cluster_name="claude-r10b",
+                            )
+                        self.assertEqual(cleanup_ctx.exception.code, "E_GALERA")
+                        self.assertIn("not fully healthy", cleanup_ctx.exception.public_message)
+                        self.assertIn("unmount failed", cleanup_ctx.exception.public_message)
+                        state = json.loads(
+                            (Path(cfg_data["paths"]["cluster_dir"]) / "state.json").read_text()
+                        )
+                        self.assertIn(
+                            "unmount failed",
+                            state["last_failure"]["error_message"],
+                        )
+                        self.assertIn(
+                            "not fully healthy",
+                            state["last_failure"]["error_message"],
+                        )
     def test_run_backup_flow_control_excess_fails(self):
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -253,6 +277,103 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
 
             self.assertLess(events.index("backend.preflight"), events.index("mariadb-backup.backup"))
             self.assertLess(events.index("backend.verify"), events.index("state.success"))
+
+    def test_run_backup_records_failure_when_backend_close_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            cfg_path = td_path / "config.json"
+            env_path = td_path / "secrets.env"
+            cluster_dir = td_path / "clusters" / "claude-r10b"
+            cfg_path.write_text(
+                json.dumps(
+                    {
+                        "format_version": 1,
+                        "cluster_name": "claude-r10b",
+                        "metric_cluster_label": "r10b-galera",
+                        "local_role": "scheduler",
+                        "scheduler_system_hostname": "gnode4",
+                        "galera_nodes_expected": 3,
+                        "mariadb_version": "11.4.12",
+                        "retention_days": 14,
+                        "flow_control_threshold_ns": 1000000000,
+                        "backend": {
+                            "type": "s3",
+                            "endpoint": "192.168.1.47:9000",
+                            "bucket": "r10b-galera-backups",
+                            "secure": False,
+                        },
+                        "paths": {
+                            "install_root": str(td_path),
+                            "cluster_dir": str(cluster_dir),
+                            "staging_root": str(td_path / "staging"),
+                            "datadir": str(td_path / "datadir"),
+                            "socket": str(td_path / "mysql.sock"),
+                            "metric_file": str(td_path / "metrics.prom"),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env_path.write_text(
+                'GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\n'
+                'GALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\n'
+                'GALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\n',
+                encoding="utf-8",
+            )
+            os.chmod(env_path, 0o600)
+
+            galera_vars = {
+                "wsrep_local_state_comment": "Synced",
+                "wsrep_cluster_status": "Primary",
+                "wsrep_ready": "ON",
+                "wsrep_connected": "ON",
+                "wsrep_cluster_size": "3",
+                "wsrep_flow_control_paused_ns": "1000",
+            }
+            fake_backend = MagicMock()
+            fake_backend.publish.return_value = self.mod.PublishedArtifact(
+                backup_name="galera-claude-r10b-20260729-120000",
+                prefix="p",
+                encrypted_sha256="sha",
+                encrypted_size=10,
+                unixtime=1000,
+            )
+            fake_backend.close.side_effect = self.mod.BackupError(
+                "E_STORAGE",
+                "SMB unmount failed",
+            )
+
+            def fake_exec(cmd, env=None, cwd=None, timeout=None):
+                for index, argument in enumerate(cmd):
+                    if argument == "-out" and index + 1 < len(cmd):
+                        Path(cmd[index + 1]).write_bytes(b"dummy-encrypted-payload")
+                return (0, "", "")
+
+            with patch("socket.gethostname", return_value="gnode4"):
+                with patch.object(self.mod, "query_galera_vars", return_value=galera_vars):
+                    with patch.object(self.mod, "get_storage_backend", return_value=fake_backend):
+                        with patch.object(self.mod, "perform_physical_backup", return_value=("uuid-1", "100")):
+                            with patch.object(self.mod.CommandRunner, "_exec", side_effect=fake_exec):
+                                with patch("subprocess.Popen") as mock_popen:
+                                    mock_proc = MagicMock()
+                                    mock_proc.stdout.read.side_effect = [b"tar-data", b""]
+                                    mock_proc.returncode = 0
+                                    mock_popen.return_value = mock_proc
+
+                                    with self.assertRaises(self.mod.BackupError) as raised:
+                                        self.mod.run_backup(
+                                            config_path=cfg_path,
+                                            secrets_path=env_path,
+                                            cluster_name="claude-r10b",
+                                        )
+
+            self.assertEqual(raised.exception.code, "E_STORAGE")
+            events = [
+                json.loads(line)["event"]
+                for line in (cluster_dir / "events.jsonl").read_text().splitlines()
+            ]
+            self.assertIn("state.failure", events)
+            self.assertNotIn("state.success", events)
 
 if __name__ == "__main__":
     unittest.main()
