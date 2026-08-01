@@ -1,7 +1,8 @@
 # Stan infrastruktury
 
-**Snapshot:** 2026-08-01 23:32 UTC
-**Zebrany z:** `qm list` + `pvesm status` na hoście PVE, `terraform.tfstate` per moduł, PMM API, `clusters/*/`.
+**Snapshot:** 2026-08-01 23:50 UTC
+**Zebrany z:** `qm list`, `pvesm status`, `zpool list`, `zfs get` na hoście PVE,
+`terraform.tfstate` per moduł, PMM API, MinIO, `clusters/*/`.
 
 > Ten plik jest **datowanym zdjęciem**, nie źródłem prawdy. Źródłem prawdy dla
 > zamiaru są `clusters/<name>/` i `terraform/<name>/`; dla rzeczywistości —
@@ -13,18 +14,53 @@
 | | |
 |---|---|
 | Host | `pve` — 192.168.1.181 (Proxmox VE 9.2.2) |
-| CPU / RAM | 16 rdzeni, 93 GB (66 GB w użyciu), load 6.8 |
+| CPU / RAM | 16 rdzeni, 93 GB (68 GB w użyciu), load 3.7 |
 | Uptime | 4 dni |
-| `local-zfs` | 449 GB, **15.6%** zajęte |
+| `rpool` (= `local-zfs`) | 472 GB, 78.5 GB zaalokowane — **16%** |
 | `local` (dir) | 385 GB, 1.6% zajęte |
-| `data1` | 922 GB, **98.2% zajęte — 16 GB wolnego** |
+| `data1` | 952 GB, 162 GB zaalokowane — **16%** fizycznie, ale **98.2% zarezerwowane** |
 
-`data1` to zagrożenie pojemnościowe: tam leżą dyski klastrów `claude-r9g`
-i `claude-r9t`, które są wyłączone, ale zajmują miejsce.
+### `data1`: wyczerpana rezerwacja, nie miejsce
 
-Na hoście stoją **34 VM**, z czego **18 należy do tego repozytorium**. Pozostałe
-(RKE2 lab `9201-9235`, GitLab `9301`, stack `qoder-*` `9501-9999`) nie są przez
-nie zarządzane — nie ruszaj ich playbookami ani modułami Terraform stąd.
+`pvesm status` pokazuje `data1` jako 98.23% zajęte (16.4 GB wolnego), a
+`zpool list` — 162 GB z 952 GB, 790 GB wolnego. Oba są prawdziwe i mówią
+o czym innym. Zvole utworzono jako **grube** (thick), więc ZFS rezerwuje pełny
+`volsize` niezależnie od tego, ile faktycznie zapisano:
+
+```
+data1/vm-9150-disk-0  volsize         42949672960   (40 GiB)
+data1/vm-9150-disk-0  refreservation  43623645184   (40.6 GiB — zarezerwowane)
+data1/vm-9150-disk-0  referenced       2072633344   (1.9 GiB — faktycznie zapisane)
+```
+
+Praktyczny skutek: **Proxmox odmówi utworzenia nowego wolumenu na `data1`**,
+bo nie ma z czego zarezerwować. Nie jest to natomiast zbliżająca się awaria
+z braku miejsca — fizycznie pool jest w 16%.
+
+Rezerwację `data1` trzymają w 36% nasze wyłączone klastry: 8 dysków `claude-r9g`
+i `claude-r9t` po 40.6 GiB = 325 GiB rezerwacji przy ~15 GiB realnych danych.
+Reszta to RKE2 lab, GitLab i `qoder-*`.
+
+Zwolnienie rezerwacji **nie wymaga kasowania niczego**: `zfs set
+refreservation=none <zvol>` zamienia wolumen na cienki i natychmiast oddaje
+rezerwację. Kosztem jest to, że cienki wolumen może trafić na `ENOSPC` przy
+zapisie, gdy pool faktycznie się zapełni — przy 790 GB wolnego ryzyko odległe.
+Kasowanie dysków jest opcją mocniejszą i nieodwracalną.
+
+### Maszyny
+
+Na hoście stoją **43 VM**, z czego **18 należy do tego repozytorium**
+(`9123-9126`, `9130-9132`, `9150-9153`, `9170-9173`, `9193-9195`).
+
+Poza nimi stoi **8 zatrzymanych poprzedników ISA** sprzed tej automatyzacji —
+`galera-01..03` (`9010-9012`), `galera10-01..03` (`9040-9042`),
+`proxysql-01` (`9050`), `monitoring-01` (`9060`). Nie ma ich w żadnym
+`inventory.yml` ani module Terraform; leżą na `rpool` i zajmują ~30 GB.
+Repo ich nie odtworzy i nie skasuje — to ręczna decyzja.
+
+Pozostałe (RKE2 lab `9000`, `9201-9235`, GitLab `9301`, stack `qoder-*`
+`9501-9999`) nie są przez to repo zarządzane — nie ruszaj ich playbookami
+ani modułami Terraform stąd.
 
 ## Klastry ISA
 
@@ -110,8 +146,12 @@ uruchamiany jako dziecko `systemd-cat` (kod wyjścia dociera do crona).
    numerami. Rozjazd powstał przy rozdzielaniu adresacji `claude-r10t`
    i `claude-r9t`. Wyjścia: przenumerować żywe maszyny albo cofnąć kod — oba
    destrukcyjne, wymagają decyzji operatora.
-2. **`data1` na 98%.** Zwolnienie miejsca oznacza usunięcie dysków wyłączonych
-   klastrów, czyli utratę możliwości ich wskrzeszenia.
+2. **`data1`: rezerwacja wyczerpana w 98%, pool fizycznie w 16%.** Blokuje
+   tworzenie nowych wolumenów na tym poolu. Opcja pierwsza, nieniszcząca:
+   `zfs set refreservation=none` na zvolach wyłączonych klastrów — oddaje
+   325 GiB rezerwacji, zostawia dane. Opcja druga, nieodwracalna: skasować te
+   dyski, tracąc możliwość wskrzeszenia `claude-r9g` i `claude-r9t`. Patrz
+   sekcja „`data1`: wyczerpana rezerwacja, nie miejsce".
 3. **Trzy moduły z pustym stanem** (`claude-pve`, `claude-r10`, `claude-r10t`) —
    do zachowania jako szablony albo do usunięcia.
 4. **Bucket `r10n-galera-backups` i `decoy-bucket-test`** — pozostałości,
@@ -125,7 +165,16 @@ uruchamiany jako dziecko `systemd-cat` (kod wyjścia dociera do crona).
 ```bash
 # VM i storage na hypervisorze (SSH jako root@192.168.1.181)
 qm list | sort -k1 -n
-pvesm status
+pvesm status                     # widok Proxmoksa: rezerwacja
+zpool list -o name,size,alloc,free,cap    # widok ZFS: fizyczna alokacja
+
+# Dlaczego oba się różnią — grube zvole rezerwują pełny volsize
+zfs get -p volsize,refreservation,referenced data1/vm-9150-disk-0
+
+# Rezerwacja per VM, posortowana
+zfs list -H -p -t volume -o name,used | awk '{split($1,a,"/"); n=a[length(a)];
+  if (match(n,/vm-[0-9]+/)) {id=substr(n,RSTART+3,RLENGTH-3); u[a[1]"|"id]+=$2}}
+  END{for (k in u) printf "%s %.1f GiB\n", k, u[k]/1073741824}' | sort
 
 # Zamiar w repo: co deklaruje każdy klaster
 for c in clusters/*/cluster.yml; do
