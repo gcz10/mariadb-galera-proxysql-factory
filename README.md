@@ -33,7 +33,8 @@ make cluster-validate CLUSTER=lab-cluster
 # Zależności, które ją wymuszają:
 #   F6 asertuje granty pmm_monitor  -> musi być PO F11
 #   F11 rejestruje metryki ProxySQL -> musi być PO F7
-#   F10 restore drill wymaga danych -> musi być PO F9 (workload zasiewa isa_test)
+#   F10 restore drill wymaga danych -> musi być PO F9 (workload zasiewa isa_test);
+#     na klastrze bez testów chaos zasiej je jawnie: make lab-seed-smoke CLUSTER=<name>
 #   lab-monitoring-verify sprawdza świeżość backupu i reguły -> na samym końcu
 
 # F2+F3 — pakiety (wersje z versions.lock.yml) + konfiguracja
@@ -103,7 +104,7 @@ profiles/            — production/staging/laboratory
 playbooks/           — feature po feature
 roles/               — standardowe katalogi, gdy potrzebne
 tests/               — integration/idempotence/failure/recovery/upgrade/validation
-docs/                — architecture, adr, runbooks
+docs/                — architecture, adr, runbooks, stan infrastruktury
 ```
 
 Nowy klaster = nowy katalog `clusters/<name>/`. Kod ról nie zawiera danych klastra.
@@ -111,4 +112,5 @@ Nowy klaster = nowy katalog `clusters/<name>/`. Kod ról nie zawiera danych klas
 ## Kontrakt
 
 Pełny kontrakt pracy, format ISA i wymagania w `MASTER_PROMPT.md`.
-Bieżący stan projektu w `ISA.md`.
+Bieżący stan projektu w `ISA.md` (log decyzji na końcu pliku).
+Stan infrastruktury — maszyny, klastry, rozbieżności — w `docs/infrastructure-state.md`.
