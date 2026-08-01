@@ -1,0 +1,67 @@
+---
+# claude-r9t — 4 NOWE VM Rocky 9 z tls.mode=full (.54-.57, VMID 9170-9173).
+#
+# Klaster samowystarczalny: 3 wezly Galera + wlasny wezel restore.
+# ProxySQL NIE jest wdrazany — grupa proxysql wskazuje na zywe wezly claude-r10b
+# wylacznie po to, by spelnic nodes_expected=2 wymagane przez schema/walidator.
+# NIE uruchamiaj site.yml, f7_proxysql.yml, f8_keepalived.yml z tym inventory —
+# przekonfigurowalyby zywy ProxySQL i VIP claude-r10b.
+#
+# Nazwy hostow sa w SAN certyfikatu (tests/lab/tls/r9t/server-cert.pem).
+
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: tests/lab/ssh_key
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        g9tnode1:
+          ansible_host: "192.168.1.54"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.54"
+        g9tnode2:
+          ansible_host: "192.168.1.55"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.55"
+        g9tnode3:
+          ansible_host: "192.168.1.56"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.56"
+
+    # WSPOLDZIELONE z claude-r10b — deklaracja endpointu, bez wdrozenia.
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        pnode1:
+          ansible_host: "192.168.1.44"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.44"
+        pnode2:
+          ansible_host: "192.168.1.45"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.45"
+
+    # WLASNY wezel EL9 — host restore musi byc z tej samej rodziny OS.
+    restore:
+      vars:
+        restore_role: "restore"
+      hosts:
+        r9tnode1:
+          ansible_host: "192.168.1.57"
+          restore_node_address: "192.168.1.57"
+
+    # WSPOLDZIELONY z claude-r10b — PMM + MinIO.
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        infranode:
+          ansible_host: "192.168.1.47"
+          infra_node_address: "192.168.1.47"
