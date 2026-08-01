@@ -14,12 +14,22 @@
   hosts: proxysql[0]
   become: true
   gather_facts: false
+  vars_files:
+    - vars/proxysql_hostgroups.yml
   vars:
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
-    writer_hg: "{{ proxysql.writer_hostgroup | default(10) }}"
   environment:
     MYSQL_PWD: "{{ proxysql_admin_password }}"
   tasks:
+    - name: "Wymagaj włączonego backupu i destination=s3 (przed jakąkolwiek pracą)"
+      ansible.builtin.assert:
+        that:
+          - backup.enabled | bool
+          - backup.destination == 's3'
+        fail_msg: >-
+          Ten playbook obsługuje wyłącznie destination=s3 przy backup.enabled=true.
+          Konfiguracja klastra: enabled={{ backup.enabled }},
+          destination={{ backup.destination }}.
     - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD (identyfikacja writera)"
       ansible.builtin.assert:
         that:
@@ -29,7 +39,7 @@
     - name: "Pobierz adres aktywnego writera (runtime_mysql_servers)"
       ansible.builtin.shell: >-
         mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
-        "SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id={{ writer_hg }} AND status='ONLINE' ORDER BY hostname LIMIT 1"
+        "SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id={{ galera_writer_hg }} AND status='ONLINE' ORDER BY hostname LIMIT 1"
       register: f10_writer_q
       changed_when: false
       no_log: true
@@ -76,11 +86,6 @@
     backup_name: "galera-{{ cluster.name }}-{{ backup_ts }}"
     writer_flow_threshold_ns: 1000000000
     state_dir: "/var/lib/mariadb-backup-state"
-  environment:
-    S3_ENDPOINT: "{{ backup.s3.endpoint }}"
-    S3_ACCESS_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
-    S3_SECRET_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
-    S3_SECURE: "{{ backup.s3.secure | default(false) | string | lower }}"
 
   pre_tasks:
     # R1/C2: ten playbook nie ladowal lockfile w ogole - wersje mial na sztywno.
@@ -150,6 +155,11 @@
 
     - name: "Zapewnij bucket S3"
       ansible.builtin.command: "python3 /usr/local/bin/s3_object.py ensure-bucket {{ backup.s3.bucket }}"
+      environment:
+        S3_ENDPOINT: "{{ backup.s3.endpoint }}"
+        S3_ACCESS_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
+        S3_SECRET_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
+        S3_SECURE: "{{ backup.s3.secure | default(false) | string | lower }}"
       changed_when: false
 
     - name: "Wymagaj zdrowego Primary Component przed backupem"
@@ -320,6 +330,11 @@
       ansible.builtin.command: >-
         python3 /usr/local/bin/s3_object.py put {{ backup.s3.bucket }}
         {{ backup_name }}/{{ item }} {{ backup_staging }}/{{ item }}
+      environment:
+        S3_ENDPOINT: "{{ backup.s3.endpoint }}"
+        S3_ACCESS_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
+        S3_SECRET_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
+        S3_SECURE: "{{ backup.s3.secure | default(false) | string | lower }}"
       loop:
         - backup.tar.enc
         - backup.sha256
@@ -330,6 +345,11 @@
       ansible.builtin.command: >-
         python3 /usr/local/bin/s3_object.py prune {{ backup.s3.bucket }}
         galera-{{ cluster.name }}- {{ backup.retention_days }}
+      environment:
+        S3_ENDPOINT: "{{ backup.s3.endpoint }}"
+        S3_ACCESS_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
+        S3_SECRET_KEY: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
+        S3_SECURE: "{{ backup.s3.secure | default(false) | string | lower }}"
       register: prune_result
       changed_when: "'pruned:0' not in prune_result.stdout"
 

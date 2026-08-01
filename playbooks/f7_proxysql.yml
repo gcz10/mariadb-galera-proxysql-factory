@@ -47,6 +47,8 @@
   become: true
   serial: 1
   max_fail_percentage: 0
+  vars_files:
+    - vars/proxysql_hostgroups.yml
   vars:
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
     proxysql_monitor_user: "proxysql_monitor"
@@ -59,10 +61,6 @@
       {{ proxysql_monitor_password | replace("'", "''") }}
     app_password_sql: >-
       {{ app_password | replace("'", "''") }}
-    galera_writer_hg: 10
-    galera_backup_hg: 20
-    galera_reader_hg: 30
-    galera_offline_hg: 40
     galera_backends: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | list }}"
     tls_use_ssl: "{{ 1 if (tls | default({})).mode | default('disabled') == 'full' else 0 }}"
     proxysql_admin_cli:

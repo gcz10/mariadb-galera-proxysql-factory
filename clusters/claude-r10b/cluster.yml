@@ -3,8 +3,8 @@
 # Druga platforma obok EL9. Kod playbookow jest wspolny i nie zna platformy —
 # rozniczke niesie wylacznie versions.lock_file ponizej.
 #
-# Adresacja .30-.36 + VIP .40 (lustrzana wobec EL9: .10-.16 + .20).
-# Infra (.36): PMM + MinIO + maildev.
+# Adresacja .44-.47 + .51-.53 + VIP .50.
+# Infra (.47): PMM + MinIO + maildev.
 #
 # UWAGA: warstwa bazodanowa jest wersyjnie IDENTYCZNA z EL9 (MariaDB 11.4.12,
 # galera-4 26.4.27) — to zmiana systemu operacyjnego, nie upgrade bazy.
