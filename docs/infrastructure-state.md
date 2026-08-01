@@ -112,7 +112,10 @@ dockerowe (172.28.0.x / 172.29.0.x), bez modułów Terraform.
 
 PMM 3.8.1 na `192.168.1.47`, jedyny zarejestrowany klaster to `r10c-galera`:
 
-- 5 generic nodes (3 galera + 2 proxysql), 16/16 eksporterów `up`
+- 6 generic nodes w Inventory: `pmm-server` + 3 galera + 2 proxysql
+- 28/28 celów scrape'u `up`, zero down (`count(up==1)` == `sum(up)`); liczba
+  obejmuje eksportery samego `pmm-server`. Zawężone do klastra:
+  `count(up{cluster="r10c-galera"}==1)`
 - `mysql_up=1` na trzech węzłach, `wsrep_cluster_size=3`
 - 8 reguł alertowych `isa-r10c-galera-*` w folderze `isa-alerts-r10c-galera`
 - metryki backupu i świeżości drilla żywe (`galera_backup_last_run_success=1`)
