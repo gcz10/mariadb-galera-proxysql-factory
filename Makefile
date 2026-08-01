@@ -28,11 +28,16 @@ TF_DIR ?= terraform/$(CLUSTER)
 # przy kazdej zmianie w Galerze to 11+ min zmarnowane (Docker CE + pull PMM +
 # zimny start PMM + reinstalacja ProxySQL).
 GALERA_VMS ?= gnode1 gnode2 gnode3 rnode1
+# Provider bpg/proxmox uwierzytelnia sie ALBO tokenem API (PROXMOX_VE_API_TOKEN),
+# ALBO haslem (PROXMOX_VE_PASSWORD). Bramka zadajaca wylacznie hasla odbijala
+# operatora uzywajacego tokena — wystarczy dowolne z dwoch.
+pve_auth_guard = @test -n "$$PROXMOX_VE_API_TOKEN" -o -n "$$PROXMOX_VE_PASSWORD" || { echo "ERROR: ustaw PROXMOX_VE_API_TOKEN albo PROXMOX_VE_PASSWORD" >&2; exit 1; }
+
 
 galera-rebuild:  ## Przebuduj TYLKO wezly Galera+restore (zachowuje PMM i ProxySQL); CONFIRM=yes
 	$(cluster_guard)
 	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
-	@: "$${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_PASSWORD}"
+	$(pve_auth_guard)
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje $(GALERA_VMS) w $(CLUSTER))"; exit 1)
 	@cd $(TF_DIR) && terraform init -input=false >/dev/null
 	terraform/pve-teardown.sh $(TF_DIR) $(GALERA_VMS)
@@ -41,7 +46,7 @@ galera-rebuild:  ## Przebuduj TYLKO wezly Galera+restore (zachowuje PMM i ProxyS
 infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM=yes)
 	$(cluster_guard)
 	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
-	@: "$${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_PASSWORD}"
+	$(pve_auth_guard)
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje WSZYSTKIE VM klastra $(CLUSTER))"; exit 1)
 	@cd $(TF_DIR) && terraform init -input=false >/dev/null
 	terraform/pve-teardown.sh $(TF_DIR)
@@ -49,7 +54,7 @@ infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM
 infra-provision:  ## Utwórz VM klastra (parallelism=1 — równoległość wywala locki ZFS na PVE)
 	$(cluster_guard)
 	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
-	@: "$${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_PASSWORD}"
+	$(pve_auth_guard)
 	cd $(TF_DIR) && terraform init -input=false >/dev/null && terraform apply -auto-approve -parallelism=1
 
 # known_hosts jest git-ignorowany, a inventory wymusza StrictHostKeyChecking=yes.

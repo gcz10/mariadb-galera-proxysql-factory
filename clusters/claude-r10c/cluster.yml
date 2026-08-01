@@ -1,22 +1,23 @@
 ---
-# r10n — trzeci klaster Rocky Linux 10, postawiony od zera na wolnej adresacji.
-# Warstwa bazy jest WLASNA (gnode: galera1-3, VMID 9190-9192, IP .71-.73),
-# natomiast ProxySQL, VIP, restore i infra sa WSPOLDZIELONE z claude-r10b.
+# claude-r10c — TRZECI klaster ISA na Rocky Linux 10 (Proxmox, real VM).
+# Nastepca zdekomisjonowanego `r10n`: ta sama rola (zwykly EL10 bez TLS), ale
+# nazwa zgodna z konwencja floty (`claude-<tag>`), tak jak claude-r10 i claude-r10b.
 #
-# WSPOLDZIELONE Z claude-r10b (nie stawiane przez terraform/r10n/):
+# Adresacja: gnode7-9 na .71-.73 (VMID 9193-9195).
+#
+# WSPOLDZIELONE Z claude-r10b (NIE stawiane przez terraform/claude-r10c/):
 #   ProxySQL pnode1-2 .44/.45, VIP .50, restore rnode1 .46, infra .47 (PMM + MinIO).
 #
 # KONSEKWENCJA OPERACYJNA: f7_proxysql.yml i f8_keepalived.yml uruchomione dla
 # claude-r10b przepna wspoldzielony ProxySQL i VIP z powrotem na wezly .51-.53.
-# Dopoki oba klastry dziela ten sam ProxySQL, tylko JEDEN z nich moze byc
-# wlascicielem konfiguracji warstwy dostepowej — obecnie jest nim r10n.
+# Dopoki oba klastry dziela warstwe dostepowa, tylko JEDEN moze byc jej
+# wlascicielem — obecnie jest nim claude-r10c.
 #
-# Nazwa `r10n` jest CZESCIA TOZSAMOSCI wdrozenia: /opt/galera-backup/clusters/r10n,
-# /etc/cron.d/galera-backup-r10n oraz marker wlasciciela bucketu w MinIO
-# (galera-backup-owner.json). Zmiana nazwy wymaga skasowania markera i rekonfiguracji.
+# UWAGA: warstwa bazodanowa jest wersyjnie IDENTYCZNA z EL9 (MariaDB 11.4.12,
+# galera-4 26.4.27) — rozniczke niesie wylacznie versions.lock_file ponizej.
 
 cluster:
-  name: "r10n"
+  name: "claude-r10c"
   environment: "laboratory"
   profile: "laboratory"
   automation_release: "0.1.0"
@@ -32,7 +33,7 @@ versions:
 galera:
   # Rozlaczna z claude_galera (EL9) i r10b_galera_g2 — wsrep_cluster_name jest
   # czescia tozsamosci Primary Component, wiec kolizja nazw laczy klastry.
-  cluster_name: "r10n_galera"
+  cluster_name: "r10c_galera"
   nodes_expected: 3
 
 proxysql:
@@ -99,11 +100,11 @@ backup:
   scheduler:
     mode: "cron"
     # Nie moze byc aktywnym writerem ProxySQL — runner odrzuca backup z writera (ISC-39).
-    host: "galera1"
+    host: "gnode7"
     timezone: "UTC"
   s3:
     endpoint: "192.168.1.47:9000"    # MinIO na wspoldzielonej infra VM
-    bucket: "r10n-galera-backups"    # rozlaczny z bucketami r10b/r10t/r9g
+    bucket: "r10c-galera-backups"    # rozlaczny z bucketami r10b/r10t/r9g
     secure: false
 
 monitoring:
@@ -112,7 +113,7 @@ monitoring:
     agent_id: "pmm-server"
     # Namespace regul alertow, folderow i contact pointow w PMM — musi byc
     # rozlaczny z r10b-galera, inaczej klastry nadpisza sobie reguly.
-    cluster_name: "r10n-galera"
+    cluster_name: "r10c-galera"
     validate_certs: false
     credentials_revision: 1
   system: "pmm"

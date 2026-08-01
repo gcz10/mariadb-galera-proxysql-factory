@@ -1,7 +1,7 @@
 ---
-# r10n — trzeci klaster ISA na Rocky Linux 10 (Proxmox, real VM).
+# claude-r10c — TRZECI klaster ISA na Rocky Linux 10 (Proxmox, real VM).
 # Logowanie jako root przez klucz cloud-init; become:true jest wtedy no-opem.
-# VM Galera tworzy terraform/r10n/: galera1-3 (VMID 9190-9192, IP .71-.73).
+# VM Galera tworzy terraform/claude-r10c/: gnode7-9 (VMID 9193-9195, IP .71-.73).
 # ProxySQL (.44/.45), restore (.46) i infra (.47) NALEZA do terraform/claude-r10b/
 # i sa tu tylko deklarowane — ten katalog ich nie tworzy ani nie niszczy. VIP .50.
 
@@ -17,15 +17,15 @@ all:
       vars:
         galera_role: "galera"
       hosts:
-        galera1:
+        gnode7:
           ansible_host: "192.168.1.71"
           galera_node_idx: 1
           galera_node_address: "192.168.1.71"
-        galera2:
+        gnode8:
           ansible_host: "192.168.1.72"
           galera_node_idx: 2
           galera_node_address: "192.168.1.72"
-        galera3:
+        gnode9:
           ansible_host: "192.168.1.73"
           galera_node_idx: 3
           galera_node_address: "192.168.1.73"
