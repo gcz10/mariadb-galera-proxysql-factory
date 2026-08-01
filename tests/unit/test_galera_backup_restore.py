@@ -296,5 +296,63 @@ class GaleraBackupRestoreTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "E_INTEGRITY")
             self.assertTrue(blocked_directory.exists())
 
+    # Regression: a restore drill hung for 50 minutes because the teardown asked
+    # `mariadb-admin shutdown` to stop the mariadbd this process owns. That client
+    # waits for the server PID to leave the process table, while the PID stays
+    # <defunct> precisely because the runner is blocked on the client — only the
+    # runner can reap it. The teardown must therefore signal and reap directly.
+    def test_standalone_teardown_signals_and_reaps_without_external_client(self):
+        events = MagicMock()
+        server_proc = MagicMock()
+        server_proc.poll.return_value = None
+        server_proc.wait.return_value = 0
+
+        self.mod.stop_standalone_server(server_proc, events)
+
+        server_proc.terminate.assert_called_once_with()
+        server_proc.wait.assert_called_once_with(timeout=60)
+        server_proc.kill.assert_not_called()
+        events.emit.assert_not_called()
+
+    def test_standalone_teardown_reaps_already_exited_server_without_signalling(self):
+        events = MagicMock()
+        server_proc = MagicMock()
+        server_proc.poll.return_value = 0
+        server_proc.wait.return_value = 0
+
+        self.mod.stop_standalone_server(server_proc, events)
+
+        server_proc.terminate.assert_not_called()
+        server_proc.wait.assert_called_once_with(timeout=60)
+        events.emit.assert_not_called()
+
+    def test_standalone_teardown_kills_and_records_when_sigterm_ignored(self):
+        events = MagicMock()
+        server_proc = MagicMock()
+        server_proc.poll.return_value = None
+        server_proc.wait.side_effect = [
+            self.mod.subprocess.TimeoutExpired(cmd="mariadbd", timeout=60),
+            -9,
+        ]
+
+        self.mod.stop_standalone_server(server_proc, events)
+
+        server_proc.terminate.assert_called_once_with()
+        server_proc.kill.assert_called_once_with()
+        emitted = [call.args[0] for call in events.emit.call_args_list]
+        self.assertEqual(emitted, ["restore.shutdown_failure"])
+
+    def test_standalone_teardown_records_nonzero_exit_without_raising(self):
+        events = MagicMock()
+        server_proc = MagicMock()
+        server_proc.poll.return_value = None
+        server_proc.wait.return_value = 3
+
+        self.mod.stop_standalone_server(server_proc, events)
+
+        events.emit.assert_called_once()
+        self.assertEqual(events.emit.call_args.args[0], "restore.shutdown_failure")
+        self.assertIn("exit 3", events.emit.call_args.args[1]["message"])
+
 if __name__ == "__main__":
     unittest.main()

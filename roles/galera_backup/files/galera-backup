@@ -24,6 +24,45 @@ from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+# Values that gate argv. Identifiers MUST NOT be here: enrolling the ProxySQL
+# admin username made the guard reject the writer guard's own `-u <user>`.
+SENSITIVE_SECRET_KEYS = frozenset({
+    "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD",
+    "GALERA_BACKUP_ENCRYPTION_KEY",
+    "GALERA_BACKUP_S3_SECRET_KEY",
+    "GALERA_BACKUP_SMB_PASSWORD",
+})
+
+# Additionally masked in output. Credential halves worth hiding from logs, but
+# never allowed to gate argv. GALERA_BACKUP_PROXYSQL_ADMIN_USER is deliberately
+# absent from BOTH sets: it is an identifier, and short identity strings are
+# substrings of real argv/output tokens (`admin` occurs in `mariadb-admin`,
+# `admin_host` and `/etc/proxysql/admin-check.cnf`), so guarding or redacting
+# on it breaks legitimate commands and mangles diagnostics.
+REDACT_ONLY_SECRET_KEYS = frozenset({
+    "GALERA_BACKUP_S3_ACCESS_KEY",
+    "GALERA_BACKUP_SMB_USERNAME",
+})
+
+
+def sensitive_secret_values(secrets: dict[str, str]) -> set[str]:
+    """Credential values that gate argv — identifiers must never appear here."""
+    return {v for k, v in secrets.items() if k in SENSITIVE_SECRET_KEYS and v}
+
+
+def redactable_secret_values(secrets: dict[str, str]) -> set[str]:
+    """Values masked in captured output: credentials plus credential halves."""
+    return {
+        v for k, v in secrets.items()
+        if v and (k in SENSITIVE_SECRET_KEYS or k in REDACT_ONLY_SECRET_KEYS)
+    }
+
+
+# Installed by run_backup/run_restore once secrets are loaded, so main() can
+# redact unexpected exceptions before they reach journald. None until then —
+# main() prints unchanged when no redactor has been installed yet.
+_module_redactor: Optional["SecretRedactor"] = None
+
 
 class BackupError(Exception):
     def __init__(self, code: str, public_message: str):
@@ -219,6 +258,7 @@ class RunConfig:
     scheduler_system_hostname: str
     scheduler_system_address: str
     galera_nodes_expected: int
+    galera_nodes: list[str]
     mariadb_version: str
     retention_days: int
     flow_control_threshold_ns: int
@@ -255,6 +295,7 @@ def load_run_config(config_path: Path, expected_cluster_name: str) -> RunConfig:
             scheduler_system_hostname=data.get("scheduler_system_hostname", ""),
             scheduler_system_address=data.get("scheduler_system_address", ""),
             galera_nodes_expected=int(data.get("galera_nodes_expected", 3)),
+            galera_nodes=list(data.get("galera_nodes", [])),
             mariadb_version=str(data.get("mariadb_version", "")),
             retention_days=int(data.get("retention_days", 14)),
             flow_control_threshold_ns=int(data.get("flow_control_threshold_ns", 1000000000)),
@@ -378,9 +419,16 @@ class SecretRedactor:
 
 
 class CommandRunner:
-    def __init__(self, secret_values: Sequence[str] | set[str]):
+    def __init__(
+        self,
+        secret_values: Sequence[str] | set[str],
+        redactor: Optional["SecretRedactor"] = None,
+    ):
         self.secret_values = set(s for s in secret_values if s)
-        self.redactor = SecretRedactor(self.secret_values)
+        # The argv guard gates on secret_values only. Output redaction may use a
+        # wider set (credential halves) passed in explicitly; default to the
+        # guard set when no redactor is supplied.
+        self.redactor = redactor if redactor is not None else SecretRedactor(self.secret_values)
 
     def run(
         self,
@@ -491,6 +539,16 @@ def assert_scheduler_is_not_writer(
             f"Expected exactly one ONLINE ProxySQL writer, found {len(writers)}",
         )
 
+    # The writer guard is only meaningful against this cluster's own ProxySQL.
+    # If the configured node list is known, a writer outside it means we are
+    # querying a foreign ProxySQL and the guard cannot be enforced.
+    if cfg.galera_nodes and writers[0] not in cfg.galera_nodes:
+        raise BackupError(
+            "E_PROXYSQL",
+            f"ProxySQL writer '{writers[0]}' is not one of this cluster's Galera nodes "
+            f"{sorted(cfg.galera_nodes)}; the writer guard cannot be enforced against a foreign ProxySQL",
+        )
+
     scheduler_identities = {
         value.strip()
         for value in (
@@ -584,11 +642,19 @@ class EventManager:
 
 
 class MetricsManager:
-    def __init__(self, metric_path: Path, cluster_label: str, logical_cluster: str, backend_label: str):
+    def __init__(
+        self,
+        metric_path: Path,
+        cluster_label: str,
+        logical_cluster: str,
+        backend_label: str,
+        metric_prefix: str = "galera_backup",
+    ):
         self.metric_path = metric_path
         self.c_label = escape_metric_label(cluster_label)
         self.lc_label = escape_metric_label(logical_cluster)
         self.b_label = escape_metric_label(backend_label)
+        self.prefix = metric_prefix
 
     def update(
         self,
@@ -600,11 +666,11 @@ class MetricsManager:
     ) -> None:
         labels = f'cluster="{self.c_label}",logical_cluster="{self.lc_label}",backend="{self.b_label}"'
         content = (
-            f"galera_backup_last_success_unixtime{{{labels}}} {last_success_unixtime}\n"
-            f"galera_backup_last_failure_unixtime{{{labels}}} {last_failure_unixtime}\n"
-            f"galera_backup_last_run_success{{{labels}}} {last_run_success}\n"
-            f"galera_backup_last_size_bytes{{{labels}}} {last_size_bytes}\n"
-            f"galera_backup_last_duration_seconds{{{labels}}} {last_duration_seconds:.3f}\n"
+            f"{self.prefix}_last_success_unixtime{{{labels}}} {last_success_unixtime}\n"
+            f"{self.prefix}_last_failure_unixtime{{{labels}}} {last_failure_unixtime}\n"
+            f"{self.prefix}_last_run_success{{{labels}}} {last_run_success}\n"
+            f"{self.prefix}_last_size_bytes{{{labels}}} {last_size_bytes}\n"
+            f"{self.prefix}_last_duration_seconds{{{labels}}} {last_duration_seconds:.3f}\n"
         )
         atomic_write(self.metric_path, content, mode=0o644)
         restore_default_context(self.metric_path)
@@ -937,8 +1003,11 @@ class S3Backend:
                         candidates.append((metadata_unixtime(meta, meta_key), b_prefix, meta))
                 except BackupError:
                     raise
-                except Exception:
-                    continue
+                except Exception as exc:
+                    raise BackupError(
+                        "E_STORAGE",
+                        f"Unreadable metadata in '{meta_key}'; refusing to silently fall back to an older backup: {exc}",
+                    )
 
         if not candidates:
             raise BackupError("E_STORAGE", f"No complete backups found in S3 bucket '{self.bucket}' for cluster '{self.cluster_name}'")
@@ -1214,8 +1283,11 @@ class FilesystemBackend:
                             candidates.append((metadata_unixtime(meta, str(metadata)), child, meta))
                     except BackupError:
                         raise
-                    except Exception:
-                        continue
+                    except Exception as exc:
+                        raise BackupError(
+                            "E_STORAGE",
+                            f"Unreadable metadata in '{metadata}'; refusing to silently fall back to an older backup: {exc}",
+                        )
 
         if not candidates:
             raise BackupError("E_STORAGE", f"No complete backups found in filesystem mount '{self.mount_point}' for cluster '{self.cluster_name}'")
@@ -1283,6 +1355,7 @@ class SMBBackend:
         password: str,
         domain: Optional[str],
         cluster_name: str,
+        runner: Optional["CommandRunner"] = None,
     ):
         self.source = source
         self.mount_point = Path(mount_point).resolve()
@@ -1295,6 +1368,11 @@ class SMBBackend:
         self._credentials_file: Optional[Path] = None
         self._is_mounted = False
         self._cifs_unavailable_reason = ""
+        # Mount/umount go through the shared CommandRunner so the argv guard and
+        # redactor cover them; credentials stay in the 0600 credentials file and
+        # never enter argv. Tests construct SMBBackend without a runner, in which
+        # case the raw subprocess fallback preserves the historical behaviour.
+        self._runner = runner
 
     def _check_cifs_available(self) -> tuple[bool, str, str]:
         running_k = ""
@@ -1411,10 +1489,14 @@ class SMBBackend:
             raise BackupError("E_STORAGE", message) from exc
 
     def _exec_mount(self, cmd: list[str]) -> tuple[int, str, str]:
+        if self._runner is not None:
+            return self._runner.run(cmd)
         proc = subprocess.run(cmd, capture_output=True, text=True)
         return proc.returncode, proc.stdout, proc.stderr
 
     def _exec_umount(self) -> tuple[int, str, str]:
+        if self._runner is not None:
+            return self._runner.run(["umount", str(self.mount_point)])
         proc = subprocess.run(["umount", str(self.mount_point)], capture_output=True, text=True)
         return proc.returncode, proc.stdout, proc.stderr
 
@@ -1544,7 +1626,10 @@ class SMBBackend:
         try:
             code, out, err = self._exec_mount(cmd)
             if code != 0:
-                raise BackupError("E_STORAGE", f"SMB mount command failed: {err or out}")
+                detail = err or out
+                if self._runner is not None:
+                    detail = self._runner.redactor.redact(detail)
+                raise BackupError("E_STORAGE", f"SMB mount command failed: {detail}")
             self._is_mounted = True
         except Exception as exc:
             self._reraise_after_cleanup(exc)
@@ -1593,7 +1678,7 @@ def query_galera_vars(socket_path: Path, runner: CommandRunner) -> dict[str, str
     return vars_dict
 
 
-def get_storage_backend(cfg: RunConfig, secrets: dict[str, str]) -> Any:
+def get_storage_backend(cfg: RunConfig, secrets: dict[str, str], runner: Optional["CommandRunner"] = None) -> Any:
     b_type = str(cfg.backend.get("type", cfg.backend.get("destination", ""))).lower()
     if b_type == "s3":
         return S3Backend(
@@ -1613,6 +1698,7 @@ def get_storage_backend(cfg: RunConfig, secrets: dict[str, str]) -> Any:
             password=secrets["GALERA_BACKUP_SMB_PASSWORD"],
             domain=secrets.get("GALERA_BACKUP_SMB_DOMAIN"),
             cluster_name=cfg.cluster_name,
+            runner=runner,
         )
     elif b_type == "filesystem":
         return FilesystemBackend(
@@ -1661,11 +1747,61 @@ def perform_physical_backup(work_dir: Path, datadir: Path, socket: Path, runner:
     return wsrep_uuid, wsrep_seqno
 
 
+def _record_pre_lock_failure(
+    cluster_dir: Path,
+    cluster_name: str,
+    command: str,
+    exc: Exception,
+    redactor: SecretRedactor,
+    metrics_mgr: Optional["MetricsManager"] = None,
+) -> None:
+    """Best-effort state/event/metric sink for failures raised before the lock.
+
+    Without this, an E_CONFIG/E_SECRETS/E_SECRETS_PERM abort leaves the previous
+    night's last_run_success=1 in the textfile and every dashboard stays green.
+    A sink failure must never replace the original error, so every write is
+    guarded and the caller re-raises the original exception.
+    """
+    err_code = exc.code if isinstance(exc, BackupError) else "E_STORAGE"
+    err_msg = exc.public_message if isinstance(exc, BackupError) else str(exc)
+    now_ts = int(time.time())
+    try:
+        StateManager(cluster_name, cluster_dir / "state.json").update_failure(
+            command, now_ts, err_code, redactor.redact(err_msg)
+        )
+    except OSError:
+        pass
+    try:
+        EventManager(cluster_dir / "events.jsonl", redactor).emit(
+            "state.failure",
+            {"error_code": err_code, "error_message": redactor.redact(err_msg)},
+        )
+    except OSError:
+        pass
+    if metrics_mgr is not None:
+        try:
+            last_succ_time = 0
+            try:
+                last_succ = StateManager(cluster_name, cluster_dir / "state.json").read().get("last_success")
+                last_succ_time = last_succ.get("unixtime", 0) if last_succ else 0
+            except BackupError:
+                pass
+            metrics_mgr.update(
+                last_success_unixtime=last_succ_time,
+                last_failure_unixtime=now_ts,
+                last_run_success=0,
+            )
+        except OSError:
+            pass
+
 def run_backup(
     config_path: Optional[Path] = None,
     secrets_path: Optional[Path] = None,
     cluster_name: str = "",
 ) -> None:
+    global _module_redactor
+    # The cluster name is untrusted input; there is no safe path to write state
+    # before it validates, so a failure here stays unrecorded by design.
     cluster_name = sanitize_cluster_name(cluster_name)
 
     if config_path is None:
@@ -1673,18 +1809,38 @@ def run_backup(
     if secrets_path is None:
         secrets_path = Path("/opt/galera-backup/clusters") / cluster_name / "secrets.env"
 
-    cfg = load_run_config(config_path, cluster_name)
-    b_type = str(cfg.backend.get("type", cfg.backend.get("destination", ""))).lower()
-    secrets = load_secrets(
-        secrets_path,
-        backend_type=b_type,
-        enforce_permissions=True,
-        require_writer_credentials=bool(cfg.proxysql),
-    )
+    try:
+        cfg = load_run_config(config_path, cluster_name)
+    except Exception as exc:
+        # metric_cluster_label is unknown without the config, so no metric is
+        # written here; the textfile-freeze alert covers this case.
+        _record_pre_lock_failure(
+            config_path.parent, cluster_name, "backup", exc, SecretRedactor([])
+        )
+        raise
 
-    secret_values = set(secrets.values())
-    redactor = SecretRedactor(secret_values)
-    runner = CommandRunner(secret_values)
+    b_type = str(cfg.backend.get("type", cfg.backend.get("destination", ""))).lower()
+    try:
+        secrets = load_secrets(
+            secrets_path,
+            backend_type=b_type,
+            enforce_permissions=True,
+            require_writer_credentials=bool(cfg.proxysql),
+        )
+    except Exception as exc:
+        _record_pre_lock_failure(
+            cfg.paths.cluster_dir,
+            cluster_name,
+            "backup",
+            exc,
+            SecretRedactor([]),
+            MetricsManager(cfg.paths.metric_file, cfg.metric_cluster_label, cluster_name, b_type),
+        )
+        raise
+
+    redactor = SecretRedactor(redactable_secret_values(secrets))
+    runner = CommandRunner(sensitive_secret_values(secrets), redactor=redactor)
+    _module_redactor = redactor
 
     state_mgr = StateManager(cluster_name, cfg.paths.cluster_dir / "state.json")
     event_mgr = EventManager(cfg.paths.cluster_dir / "events.jsonl", redactor)
@@ -1717,7 +1873,7 @@ def run_backup(
             )
         assert_scheduler_is_not_writer(cfg, secrets, runner, curr_host)
 
-        backend = get_storage_backend(cfg, secrets)
+        backend = get_storage_backend(cfg, secrets, runner)
         event_mgr.emit("backend.preflight", {"backend": b_type})
         backend.preflight()
 
@@ -1763,7 +1919,10 @@ def run_backup(
         checksum_file = work_dir / "backup.sha256"
         metadata_file = work_dir / "metadata.json"
 
-        # Create tar and compute plaintext sha
+        # Create tar and compute plaintext sha. stdout is streamed to disk so the
+        # archive is never buffered in memory; stderr must still be drained or a
+        # full 64 KiB pipe buffer deadlocks tar while we hold the flock, failing
+        # every later cron run with E_LOCKED.
         tar_proc = subprocess.Popen(
             ["tar", "-cf", "-", "-C", str(raw_dir), "."],
             stdout=subprocess.PIPE,
@@ -1777,9 +1936,18 @@ def run_backup(
                     break
                 hasher.update(chunk)
                 f_tar.write(chunk)
-        tar_proc.wait()
+        tar_proc.stdout.close()
+        try:
+            _, tar_err = tar_proc.communicate(timeout=300)
+        except subprocess.TimeoutExpired:
+            tar_proc.kill()
+            tar_proc.communicate()
+            raise BackupError("E_STORAGE", "tar compression timed out draining stderr")
         if tar_proc.returncode != 0:
-            raise BackupError("E_STORAGE", "tar compression failed")
+            raise BackupError(
+                "E_STORAGE",
+                f"tar compression failed: {redactor.redact((tar_err or b'').decode('utf-8', 'replace'))}",
+            )
 
         plaintext_sha = hasher.hexdigest()
 
@@ -1849,14 +2017,9 @@ def run_backup(
         pub_art = backend.publish(art_set)
         event_mgr.emit("backend.verify", {"backup_name": backup_name})
 
-        # Prune
-        backend.prune(datetime.now(timezone.utc), cfg.retention_days)
-        completed_backend = backend
-        backend = None
-        completed_backend.close()
-        remove_sensitive_work_dir(work_dir, "E_STORAGE")
-        work_dir = None
-
+        # The backup is published and verified at this point: record success
+        # BEFORE retention. A prune failure (e.g. one corrupt metadata.json)
+        # must not downgrade a verified, published backup to failed.
         duration = time.time() - start_time
         state_mgr.update_success("backup", int(time.time()), artifact=backup_name)
         event_mgr.emit("state.success", {"backup_name": backup_name, "duration_seconds": duration, "size_bytes": enc_size})
@@ -1867,6 +2030,27 @@ def run_backup(
             last_size_bytes=enc_size,
             last_duration_seconds=duration,
         )
+
+        # Prune — retention housekeeping; failures are reported but never
+        # downgrade the successful run recorded above.
+        try:
+            backend.prune(datetime.now(timezone.utc), cfg.retention_days)
+        except BackupError as prune_exc:
+            event_mgr.emit(
+                "retention.failure",
+                {"error_code": prune_exc.code, "message": prune_exc.public_message},
+            )
+        except Exception as prune_exc:
+            event_mgr.emit(
+                "retention.failure",
+                {"error_code": "E_STORAGE", "message": str(prune_exc)},
+            )
+
+        completed_backend = backend
+        backend = None
+        completed_backend.close()
+        remove_sensitive_work_dir(work_dir, "E_STORAGE")
+        work_dir = None
         print(f"galera-backup backup for {cluster_name} completed successfully ({backup_name}, {enc_size} bytes)")
     except Exception as exc:
         duration = time.time() - start_time
@@ -1905,13 +2089,21 @@ def run_backup(
 
         last_succ = state_mgr.read().get("last_success", {})
         last_succ_time = last_succ.get("unixtime", 0) if last_succ else 0
-        metrics_mgr.update(
-            last_success_unixtime=last_succ_time,
-            last_failure_unixtime=int(time.time()),
-            last_run_success=0,
-            last_size_bytes=0,
-            last_duration_seconds=duration,
-        )
+        try:
+            metrics_mgr.update(
+                last_success_unixtime=last_succ_time,
+                last_failure_unixtime=int(time.time()),
+                last_run_success=0,
+                last_size_bytes=0,
+                last_duration_seconds=duration,
+            )
+        except Exception as metrics_exc:
+            # A metric write failure (e.g. restorecon E_METRICS) must not replace
+            # the real diagnostic: record it and re-raise the ORIGINAL failure.
+            event_mgr.emit(
+                "metrics.write_failure",
+                {"error_code": "E_METRICS", "message": str(metrics_exc)},
+            )
         if failure is exc:
             raise
         raise failure
@@ -2066,15 +2258,61 @@ def verify_restored_database(socket_path: Path, runner: CommandRunner) -> tuple[
     return len(user_databases), table_count, row_count
 
 
+def stop_standalone_server(server_proc: Any, event_mgr: "EventManager") -> None:
+    """Stop the verification-only mariadbd that this process started.
+
+    SIGNAL it; never delegate the stop to `mariadb-admin shutdown`. mariadbd
+    treats SIGTERM as a normal, InnoDB-consistent shutdown, and only this
+    process can reap the child. Asking an external client to stop it deadlocks:
+    mariadb-admin waits for the server PID to leave the process table, while the
+    PID stays <defunct> precisely because we are blocked on mariadb-admin —
+    observed in the field as a restore drill hung for 50 minutes.
+
+    A teardown problem must never replace an in-flight error (for example
+    E_INTEGRITY raised by verification), so every outcome is recorded as a
+    `restore.shutdown_failure` event and swallowed.
+    """
+    try:
+        if server_proc.poll() is None:
+            server_proc.terminate()
+        shutdown_code = server_proc.wait(timeout=60)
+        if shutdown_code not in (0, -signal.SIGTERM):
+            event_mgr.emit(
+                "restore.shutdown_failure",
+                {"error_code": "E_INTEGRITY", "message": f"standalone mariadbd exit {shutdown_code}"},
+            )
+    except subprocess.TimeoutExpired:
+        event_mgr.emit(
+            "restore.shutdown_failure",
+            {"error_code": "E_INTEGRITY", "message": "standalone mariadbd ignored SIGTERM within 60s; killed"},
+        )
+        try:
+            server_proc.kill()
+            server_proc.wait(timeout=10)
+        except Exception as kill_exc:
+            event_mgr.emit(
+                "restore.shutdown_failure",
+                {"error_code": "E_INTEGRITY", "message": f"kill failed: {kill_exc}"},
+            )
+    except Exception as shutdown_exc:
+        event_mgr.emit(
+            "restore.shutdown_failure",
+            {"error_code": "E_INTEGRITY", "message": str(shutdown_exc)},
+        )
+
+
 def run_restore(
     config_path: Optional[Path] = None,
     secrets_path: Optional[Path] = None,
     cluster_name: str = "",
     confirm: bool = False,
 ) -> None:
+    global _module_redactor
     if not confirm:
         raise BackupError("E_RESTORE_CONFIRM", "Restore operation requires --confirm flag")
 
+    # The cluster name is untrusted input; there is no safe path to write state
+    # before it validates, so a failure here stays unrecorded by design.
     cluster_name = sanitize_cluster_name(cluster_name)
 
     if config_path is None:
@@ -2082,7 +2320,15 @@ def run_restore(
     if secrets_path is None:
         secrets_path = Path("/opt/galera-backup/clusters") / cluster_name / "secrets.env"
 
-    cfg = load_run_config(config_path, cluster_name)
+    try:
+        cfg = load_run_config(config_path, cluster_name)
+    except Exception as exc:
+        # metric_cluster_label is unknown without the config, so no metric is
+        # written here; the textfile-freeze alert covers this case.
+        _record_pre_lock_failure(
+            config_path.parent, cluster_name, "restore", exc, SecretRedactor([])
+        )
+        raise
 
     # Validate local_role and hostname disjointness
     if cfg.local_role != "restore":
@@ -2095,14 +2341,32 @@ def run_restore(
 
 
     b_type = str(cfg.backend.get("type", cfg.backend.get("destination", ""))).lower()
-    secrets = load_secrets(secrets_path, backend_type=b_type, enforce_permissions=False)
+    try:
+        secrets = load_secrets(secrets_path, backend_type=b_type, enforce_permissions=True)
+    except Exception as exc:
+        _record_pre_lock_failure(
+            cfg.paths.cluster_dir,
+            cluster_name,
+            "restore",
+            exc,
+            SecretRedactor([]),
+            MetricsManager(cfg.paths.metric_file, cfg.metric_cluster_label, cluster_name, b_type),
+        )
+        raise
 
-    secret_values = set(secrets.values())
-    redactor = SecretRedactor(secret_values)
-    runner = CommandRunner(secret_values)
+    redactor = SecretRedactor(redactable_secret_values(secrets))
+    runner = CommandRunner(sensitive_secret_values(secrets), redactor=redactor)
+    _module_redactor = redactor
 
     state_mgr = StateManager(cluster_name, cfg.paths.cluster_dir / "state.json")
     event_mgr = EventManager(cfg.paths.cluster_dir / "events.jsonl", redactor)
+    metrics_mgr = MetricsManager(
+        cfg.paths.metric_file.parent / f"galera_restore-{cluster_name}.prom",
+        cfg.metric_cluster_label,
+        cluster_name,
+        b_type,
+        metric_prefix="galera_restore",
+    )
 
     lock_mgr = LockManager(resolve_lock_path(cluster_name, cfg.paths.cluster_dir))
     now_ts = int(time.time())
@@ -2117,7 +2381,7 @@ def run_restore(
     work_dir: Optional[Path] = None
     try:
         state_mgr.read()
-        backend = get_storage_backend(cfg, secrets)
+        backend = get_storage_backend(cfg, secrets, runner)
         event_mgr.emit("restore.preflight", {"backend": b_type})
         backend.preflight()
 
@@ -2191,7 +2455,15 @@ def run_restore(
             for member in tf.getmembers():
                 if not is_safe_tar_member(member):
                     raise BackupError("E_INTEGRITY", f"Unsafe tar member '{member.name}' rejected")
-            tf.extractall(extracted_dir)
+            if sys.version_info >= (3, 12):
+                tf.extractall(extracted_dir, filter="data")
+            else:
+                tf.extractall(extracted_dir)
+
+        # The plaintext archive has served its purpose; remove it immediately,
+        # mirroring the backup path, so decrypted data never lingers on disk.
+        if tar_path.exists():
+            tar_path.unlink()
 
         # 6. Clear datadir & copy-back
         clear_datadir(cfg.paths.datadir)
@@ -2222,11 +2494,17 @@ def run_restore(
 
         if os.geteuid() == 0:
             try:
-                shutil.chown(work_dir, user="mysql", group="mysql")
+                # Grant mysql traverse-only access to the work directory (it
+                # must reach the pid/log files below) without handing over the
+                # whole directory, then own just those two files.
+                os.chmod(work_dir, 0o711)
+                for standalone_file in (standalone_log, standalone_pid_file):
+                    standalone_file.touch()
+                    shutil.chown(standalone_file, user="mysql", group="mysql")
             except Exception as exc:
                 raise BackupError(
                     "E_INTEGRITY",
-                    f"Failed to set mysql ownership on restore work directory '{work_dir}': {exc}",
+                    f"Failed to prepare mysql-owned standalone files in '{work_dir}': {exc}",
                 ) from exc
         server_bin = "mariadbd"
         if not shutil.which("mariadbd") and shutil.which("mysqld"):
@@ -2273,16 +2551,7 @@ def run_restore(
 
         finally:
             if server_proc:
-                # Shutdown standalone MariaDB
-                runner.run(["mariadb-admin", f"--socket={cfg.paths.socket}", "-u", "root", "shutdown"])
-                try:
-                    server_proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    server_proc.terminate()
-                    try:
-                        server_proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        server_proc.kill()
+                stop_standalone_server(server_proc, event_mgr)
 
         completed_backend = backend
         backend = None
@@ -2308,6 +2577,10 @@ def run_restore(
                 "tables_verified": table_count,
                 "rows_verified": total_rows,
             },
+        )
+        metrics_mgr.update(
+            last_success_unixtime=int(time.time()),
+            last_run_success=1,
         )
         print(
             f"galera-backup restore for {cluster_name} completed successfully "
@@ -2348,6 +2621,21 @@ def run_restore(
 
         state_mgr.update_failure("restore", int(time.time()), err_code, redactor.redact(err_msg))
         event_mgr.emit("state.restore_failure", {"error_code": err_code, "error_message": redactor.redact(err_msg)})
+        last_succ = state_mgr.read().get("last_success", {})
+        last_succ_time = last_succ.get("unixtime", 0) if last_succ else 0
+        try:
+            metrics_mgr.update(
+                last_success_unixtime=last_succ_time,
+                last_failure_unixtime=int(time.time()),
+                last_run_success=0,
+            )
+        except Exception as metrics_exc:
+            # A metric write failure must not replace the real diagnostic:
+            # record it and re-raise the ORIGINAL failure below.
+            event_mgr.emit(
+                "metrics.write_failure",
+                {"error_code": "E_METRICS", "message": str(metrics_exc)},
+            )
         if failure is exc:
             raise
         raise failure
@@ -2379,7 +2667,8 @@ def main() -> int:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
         except Exception as exc:
-            print(f"ERROR: Unexpected error: {exc}", file=sys.stderr)
+            detail = _module_redactor.redact(str(exc)) if _module_redactor is not None else str(exc)
+            print(f"ERROR: Unexpected error: {detail}", file=sys.stderr)
             return 1
     elif args.command == "restore":
         try:
@@ -2389,7 +2678,8 @@ def main() -> int:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
         except Exception as exc:
-            print(f"ERROR: Unexpected error: {exc}", file=sys.stderr)
+            detail = _module_redactor.redact(str(exc)) if _module_redactor is not None else str(exc)
+            print(f"ERROR: Unexpected error: {detail}", file=sys.stderr)
             return 1
     return 0
 

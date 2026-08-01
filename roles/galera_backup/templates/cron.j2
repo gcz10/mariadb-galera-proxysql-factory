@@ -2,4 +2,4 @@
 CRON_TZ={{ backup.scheduler.timezone | default('UTC') }}
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-{{ backup.full_backup_schedule }} root /opt/galera-backup/galera-backup backup {{ cluster.name }} 2>&1 | /usr/bin/systemd-cat -t galera-backup-{{ cluster.name }}
+{{ backup.full_backup_schedule }} root /usr/bin/systemd-cat -t galera-backup-{{ cluster.name }} /opt/galera-backup/galera-backup backup {{ cluster.name }}

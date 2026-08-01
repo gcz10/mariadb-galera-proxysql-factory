@@ -161,6 +161,36 @@
       when: proxysql_pw_check.rc != 0
       changed_when: true
 
+    # ProxySQL odrzuca uzytkownika `admin` spoza loopbacku ("ERROR 1040: User
+    # 'admin' can only connect locally"), a runner backupu na wezle Galera musi
+    # odpytac writer hostgroup przez siec (ISC-39). admin-admin_credentials
+    # przyjmuje liste `user:pass;user:pass` — dokladamy druga tozsamosc o innej
+    # nazwie, z tym samym poziomem uprawnien i tym samym sekretem, i zostawiamy
+    # lokalne `admin` nietkniete.
+    - name: "Sprawdź zdalną tożsamość administracyjną ProxySQL"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: >-
+          SELECT COUNT(*) FROM global_variables
+          WHERE variable_name='admin-admin_credentials'
+            AND variable_value='admin:{{ proxysql_admin_password_sql }};{{ proxysql_remote_admin_user }}:{{ proxysql_admin_password_sql }}';
+      register: proxysql_remote_admin_check
+      changed_when: false
+      no_log: true
+
+    - name: "Ustaw zdalną tożsamość administracyjną ProxySQL (dla strażnika writera)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          UPDATE global_variables
+          SET variable_value='admin:{{ proxysql_admin_password_sql }};{{ proxysql_remote_admin_user }}:{{ proxysql_admin_password_sql }}'
+          WHERE variable_name='admin-admin_credentials';
+          LOAD ADMIN VARIABLES TO RUNTIME;
+          SAVE ADMIN VARIABLES TO DISK;
+      when: proxysql_remote_admin_check.stdout | trim != '1'
+      no_log: true
+      changed_when: true
+
 
     # tls_file_owner MUSI byc uzytkownikiem uslugi, a nie rootem: proxysql dziala
     # jako uzytkownik `proxysql` i sam czyta CA, zeby zweryfikowac certyfikat

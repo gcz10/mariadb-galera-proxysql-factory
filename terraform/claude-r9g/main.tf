@@ -47,9 +47,12 @@ locals {
   # takiego RPM-a nie ma w repo i restore konczy sie bledem "No package
   # ... available". Host restore nie moze wiec byc dzielony miedzy rodziny OS.
   vms = {
-    g9node1 = { id = 9150, ip = 17, role = "galera", cpu = 2, ram = 2560, disk = 40 }
-    g9node2 = { id = 9151, ip = 18, role = "galera", cpu = 2, ram = 2560, disk = 40 }
-    g9node3 = { id = 9152, ip = 19, role = "galera", cpu = 2, ram = 2560, disk = 40 }
+    # started=false: wezly Galera sa CELOWO wylaczone (zatrzymane 2026-08-01, dyski
+    # zachowane). Bez tego `terraform apply` po cichu wystartowalby caly klaster.
+    # Przywrocenie do pracy = skasowanie tej flagi (lub started = true) + apply.
+    g9node1 = { id = 9150, ip = 17, role = "galera", cpu = 2, ram = 2560, disk = 40, started = false }
+    g9node2 = { id = 9151, ip = 18, role = "galera", cpu = 2, ram = 2560, disk = 40, started = false }
+    g9node3 = { id = 9152, ip = 19, role = "galera", cpu = 2, ram = 2560, disk = 40, started = false }
     r9node1 = { id = 9153, ip = 39, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
@@ -74,6 +77,8 @@ resource "proxmox_virtual_environment_vm" "node" {
     }
   }
   stop_on_destroy = true
+  # Domyslnie VM ma dzialac; mapa `vms` moze to nadpisac dla wezlow trzymanych w spoczynku.
+  started = try(each.value.started, true)
   operating_system { type = "l26" }
 
   cpu {

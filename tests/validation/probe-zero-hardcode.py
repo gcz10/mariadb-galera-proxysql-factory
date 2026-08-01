@@ -20,8 +20,11 @@ SCAN_DIRS = ["playbooks", "roles"]
 SKIP_DIRS = {"clusters", "tests", "docs", "versions", ".git", "node_modules"}
 
 HARDCODE_PATTERNS = [
-    (re.compile(r"172\.28\.0\.(11|12|13|21|22|30|50|60)"), "lab IP"),
-    (re.compile(r"\b(gnode[123]|pnode[12]|rnode1)\b"), "lab node name"),
+    (re.compile(r"172\.(28|29)\.0\.\d+"), "lab IP"),
+    (re.compile(
+        r"\b(gnode\d+|g9t?node\d+|pnode\d+|rnode\d+|r9t?node\d+"
+        r"|galera\d+|infranode)\b"
+    ), "lab node name"),
     (re.compile(r"\b(lab_galera|lab-galera|lab-cluster)\b"), "lab cluster name"),
 ]
 

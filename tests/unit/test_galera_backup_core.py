@@ -305,6 +305,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
             },
             scheduler_system_address="192.168.1.51",
             scheduler_system_hostname="gnode4",
+            galera_nodes=["192.168.1.51", "192.168.1.52", "192.168.1.53"],
         )
         runner = MagicMock()
         runner.run.return_value = (0, "192.168.1.51\n", "")
@@ -329,6 +330,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
             proxysql={"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
             scheduler_system_address="192.168.1.51",
             scheduler_system_hostname="gnode4",
+            galera_nodes=["192.168.1.51", "192.168.1.52", "192.168.1.53"],
         )
         runner = MagicMock()
         runner.run.return_value = (1, "", "connection refused")
@@ -343,6 +345,216 @@ class GaleraBackupCoreTests(unittest.TestCase):
             )
 
         self.assertEqual(ctx.exception.code, "E_PROXYSQL")
+
+    def test_writer_guard_survives_real_argv_guard_with_full_secrets(self):
+        # Regression for the shipped bug: run_backup built CommandRunner from
+        # set(secrets.values()), which enrolled the ProxySQL ADMIN USER ("admin")
+        # into the argv guard. The writer guard's own argv contains `-u admin`,
+        # so the guard rejected its own command with E_SECRET_IN_ARGV and every
+        # backup run aborted before creating a process. Building the runner from
+        # sensitive_secret_values() (credentials only) must let `-u admin` through.
+        # Against the pre-fix set(secrets.values()) construction this test fails:
+        # sensitive_secret_values does not exist (AttributeError), and even if the
+        # runner were built from all values the `-u admin` argv would be rejected.
+        secrets = {
+            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql_pass_999",
+            "GALERA_BACKUP_ENCRYPTION_KEY": "enc_key_999",
+            "GALERA_BACKUP_S3_ACCESS_KEY": "s3_access_888",
+            "GALERA_BACKUP_S3_SECRET_KEY": "s3_secret_777",
+        }
+        runner = self.mod.CommandRunner(self.mod.sensitive_secret_values(secrets))
+        cfg = MagicMock(
+            proxysql={"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+            scheduler_system_address="192.168.1.51",
+            scheduler_system_hostname="gnode4",
+            galera_nodes=["192.168.1.51", "192.168.1.52", "192.168.1.53"],
+        )
+        with patch.object(
+            self.mod.CommandRunner, "_exec", return_value=(0, "192.168.1.52\n", "")
+        ) as mock_exec:
+            # Writer .52 is a cluster node but not the scheduler -> no raise.
+            self.mod.assert_scheduler_is_not_writer(
+                cfg, secrets, runner, current_hostname="gnode4"
+            )
+
+        argv = mock_exec.call_args.args[0]
+        u_idx = argv.index("-u")
+        self.assertEqual(argv[u_idx + 1], "admin")
+
+    def test_sensitive_secret_values_includes_only_credentials(self):
+        secrets = {
+            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql_pass_999",
+            "GALERA_BACKUP_ENCRYPTION_KEY": "enc_key_999",
+            "GALERA_BACKUP_S3_ACCESS_KEY": "s3_access_888",
+            "GALERA_BACKUP_S3_SECRET_KEY": "s3_secret_777",
+            "GALERA_BACKUP_SMB_USERNAME": "smbuser",
+            "GALERA_BACKUP_SMB_PASSWORD": "smb_pass_111",
+        }
+        values = self.mod.sensitive_secret_values(secrets)
+        self.assertEqual(
+            values,
+            {"proxysql_pass_999", "enc_key_999", "s3_secret_777", "smb_pass_111"},
+        )
+        # Identifiers must never gate argv.
+        self.assertNotIn("admin", values)
+        self.assertNotIn("smbuser", values)
+        self.assertNotIn("s3_access_888", values)
+
+    def test_sensitive_secret_values_drops_empty_credentials(self):
+        secrets = {
+            "GALERA_BACKUP_ENCRYPTION_KEY": "enc_key_999",
+            "GALERA_BACKUP_S3_SECRET_KEY": "",
+            "GALERA_BACKUP_SMB_PASSWORD": "",
+        }
+        self.assertEqual(self.mod.sensitive_secret_values(secrets), {"enc_key_999"})
+
+    def test_redactable_secret_values_adds_identifier_halves_but_not_admin_user(self):
+        secrets = {
+            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql_pass_999",
+            "GALERA_BACKUP_ENCRYPTION_KEY": "enc_key_999",
+            "GALERA_BACKUP_S3_ACCESS_KEY": "s3_access_888",
+            "GALERA_BACKUP_S3_SECRET_KEY": "s3_secret_777",
+            "GALERA_BACKUP_SMB_USERNAME": "smbuser",
+        }
+        values = self.mod.redactable_secret_values(secrets)
+        for expected in (
+            "proxysql_pass_999",
+            "enc_key_999",
+            "s3_secret_777",
+            "s3_access_888",
+            "smbuser",
+        ):
+            self.assertIn(expected, values)
+        # The ProxySQL admin user is a substring of mariadb-admin / admin_host /
+        # admin-check.cnf, so redacting it would mangle diagnostics -> excluded.
+        self.assertNotIn("admin", values)
+
+    def test_redactor_from_redactable_values_spares_admin_user(self):
+        secrets = {
+            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
+            "GALERA_BACKUP_ENCRYPTION_KEY": "enc_key_999",
+            "GALERA_BACKUP_S3_SECRET_KEY": "s3_secret_777",
+        }
+        redactor = self.mod.SecretRedactor(self.mod.redactable_secret_values(secrets))
+        # The admin username survives redaction...
+        self.assertEqual(
+            redactor.redact("connecting as admin to mariadb-admin"),
+            "connecting as admin to mariadb-admin",
+        )
+        # ...while real credentials are still masked.
+        self.assertNotIn("s3_secret_777", redactor.redact("key=s3_secret_777"))
+        self.assertNotIn("enc_key_999", redactor.redact("pass enc_key_999"))
+
+    def test_writer_guard_rejects_foreign_cluster_writer(self):
+        # C3: with a known node list, an ONLINE writer outside it means we are
+        # querying a foreign ProxySQL and the guard cannot be enforced -> fail closed.
+        cfg = MagicMock(
+            proxysql={"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+            scheduler_system_address="192.168.1.51",
+            scheduler_system_hostname="gnode4",
+            galera_nodes=["192.168.1.51", "192.168.1.52", "192.168.1.53"],
+        )
+        runner = MagicMock()
+        runner.run.return_value = (0, "192.168.1.71\n", "")
+        secrets = {
+            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
+        }
+        with self.assertRaises(self.mod.BackupError) as ctx:
+            self.mod.assert_scheduler_is_not_writer(
+                cfg, secrets, runner, current_hostname="gnode4"
+            )
+        self.assertEqual(ctx.exception.code, "E_PROXYSQL")
+
+    def test_writer_guard_empty_galera_nodes_preserves_legacy_behaviour(self):
+        # C3 backward compat: an empty node list keeps today's behaviour and does
+        # not reject a foreign writer.
+        cfg = MagicMock(
+            proxysql={"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+            scheduler_system_address="192.168.1.51",
+            scheduler_system_hostname="gnode4",
+            galera_nodes=[],
+        )
+        runner = MagicMock()
+        runner.run.return_value = (0, "192.168.1.71\n", "")
+        secrets = {
+            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
+        }
+        # No raise: a foreign writer is tolerated when the node list is unknown.
+        self.mod.assert_scheduler_is_not_writer(
+            cfg, secrets, runner, current_hostname="gnode4"
+        )
+
+    def test_pre_lock_secret_failure_records_state_and_metric(self):
+        # R2: a load_secrets failure with a VALID config must still leave observable
+        # failure evidence (state.json last_run.status=failed and a frozen metric),
+        # not vanish before the lock is ever taken.
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            cluster_dir = td_path / "clusters" / "claude-r10b"
+            cfg_path = td_path / "config.json"
+            env_path = td_path / "secrets.env"
+            cfg_data = {
+                "format_version": 1,
+                "cluster_name": "claude-r10b",
+                "metric_cluster_label": "r10b-galera",
+                "local_role": "scheduler",
+                "scheduler_system_hostname": "gnode4",
+                "galera_nodes_expected": 3,
+                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
+                "mariadb_version": "11.4.12",
+                "retention_days": 14,
+                "flow_control_threshold_ns": 1000000000,
+                "backend": {"type": "s3", "endpoint": "192.168.1.47:9000", "bucket": "r10b-galera-backups", "secure": False},
+                "paths": {
+                    "install_root": str(td_path),
+                    "cluster_dir": str(cluster_dir),
+                    "staging_root": str(td_path / "staging"),
+                    "datadir": str(td_path / "datadir"),
+                    "socket": str(td_path / "mysql.sock"),
+                    "metric_file": str(td_path / "metrics.prom"),
+                },
+            }
+            cfg_path.write_text(json.dumps(cfg_data))
+            # Missing GALERA_BACKUP_ENCRYPTION_KEY -> load_secrets fails.
+            env_path.write_text('GALERA_BACKUP_S3_ACCESS_KEY="a"\nGALERA_BACKUP_S3_SECRET_KEY="s"\n')
+            os.chmod(env_path, 0o600)
+
+            with self.assertRaises(self.mod.BackupError) as ctx:
+                self.mod.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
+            self.assertEqual(ctx.exception.code, "E_SECRETS")
+
+            state = json.loads((cluster_dir / "state.json").read_text())
+            self.assertEqual(state["last_run"]["status"], "failed")
+            metric = (td_path / "metrics.prom").read_text()
+            self.assertRegex(metric, r"galera_backup_last_run_success\{[^}]*\} 0")
+
+    def test_pre_lock_config_failure_appends_state_failure_event(self):
+        # R2: a load_run_config failure must still append a state.failure line to
+        # events.jsonl (derived from config_path.parent) so the failure is visible.
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            cfg_path = td_path / "config.json"
+            # format_version != 1 -> load_run_config fails before any paths exist.
+            cfg_path.write_text(json.dumps({"format_version": 2, "cluster_name": "claude-r10b"}))
+
+            with self.assertRaises(self.mod.BackupError) as ctx:
+                self.mod.run_backup(
+                    config_path=cfg_path,
+                    secrets_path=td_path / "secrets.env",
+                    cluster_name="claude-r10b",
+                )
+            self.assertEqual(ctx.exception.code, "E_CONFIG")
+
+            events_file = td_path / "events.jsonl"
+            self.assertTrue(events_file.exists())
+            events = [json.loads(line)["event"] for line in events_file.read_text().splitlines()]
+            self.assertIn("state.failure", events)
 
 class TemplateContractTests(unittest.TestCase):
     def setUp(self):
@@ -360,6 +572,12 @@ class TemplateContractTests(unittest.TestCase):
         )
         self.env.filters["to_json"] = lambda v: json.dumps(v)
         self.env.filters["regex_replace"] = lambda s, p, r: re.sub(p, r, str(s))
+        def _extract(item, container, *keys):
+            value = container[item]
+            for key in keys:
+                value = value[key]
+            return value
+        self.env.filters["extract"] = _extract
 
     def test_templates_rendered_contract(self):
         ctx = {
@@ -376,7 +594,7 @@ class TemplateContractTests(unittest.TestCase):
                 "s3": {"endpoint": "192.168.1.47:9000", "bucket": "r10b-galera-backups", "secure": False},
             },
             "galera": {"nodes_expected": 3},
-            "groups": {"proxysql": ["pnode1"], "galera": ["gnode4"]},
+            "groups": {"proxysql": ["pnode1"], "galera": ["gnode4", "gnode5", "gnode6"]},
             "hostvars": {
                 "pnode1": {
                     "ansible_host": "127.0.0.1",
@@ -385,6 +603,14 @@ class TemplateContractTests(unittest.TestCase):
                 "gnode4": {
                     "ansible_host": "127.0.0.1",
                     "galera_node_address": "172.28.0.11",
+                },
+                "gnode5": {
+                    "ansible_host": "127.0.0.1",
+                    "galera_node_address": "172.28.0.12",
+                },
+                "gnode6": {
+                    "ansible_host": "127.0.0.1",
+                    "galera_node_address": "172.28.0.13",
                 },
             },
             "galera_writer_hg": 10,
@@ -418,6 +644,10 @@ class TemplateContractTests(unittest.TestCase):
             "writer_hostgroup": 10,
         })
         self.assertEqual(cfg_dict["scheduler_system_address"], "172.28.0.11")
+        self.assertEqual(
+            cfg_dict["galera_nodes"],
+            ["172.28.0.11", "172.28.0.12", "172.28.0.13"],
+        )
 
         # 2. secrets.env.j2
         tmpl_secrets = self.env.get_template("secrets.env.j2")

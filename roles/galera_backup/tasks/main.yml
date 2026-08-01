@@ -190,6 +190,19 @@
         or not galera_backup_secrets_stat.stat.exists
       }}
 
+- name: Require inherited secrets when a non-scheduler host writes secrets.env
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == backup.scheduler.host or (galera_backup_inherited_shared_secrets | default({}) | length) > 0
+    fail_msg: >-
+      This restore host would write secrets.env from empty environment lookups:
+      the scheduler's resolved secrets are not present in hostvars.
+      Run: make cluster-backup-configure CLUSTER={{ cluster.name }}
+      (it pre-positions scoped secrets on the restore host), then re-run the drill.
+    quiet: true
+  when: galera_backup_write_secrets
+  no_log: true
+
 - name: Validate resolved backup secrets before deployment
   ansible.builtin.assert:
     that:

@@ -12,8 +12,8 @@
   vars:
     mariadb_version: "{{ lock.mariadb.version.split('.')[:2] | join('.') }}"
     galera_backup_encryption_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_ENCRYPTION_KEY') | default(lookup('ansible.builtin.env', 'BACKUP_ENCRYPTION_KEY'), true) }}"
-    galera_backup_s3_access_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_ACCESS_KEY') | default(lookup('ansible.builtin.env', 'MINIO_ROOT_USER'), true) }}"
-    galera_backup_s3_secret_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_SECRET_KEY') | default(lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD'), true) }}"
+    galera_backup_s3_access_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_ACCESS_KEY') | default('', true) }}"
+    galera_backup_s3_secret_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_SECRET_KEY') | default('', true) }}"
     galera_backup_smb_username: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_USERNAME') | default('', true) }}"
     galera_backup_smb_password: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_PASSWORD') | default('', true) }}"
     galera_backup_smb_domain: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_DOMAIN') | default('', true) }}"
@@ -46,6 +46,8 @@
         galera_backup_local_role: restore
         galera_backup_install_cron: false
         galera_backup_provision_s3: false
+        galera_backup_inherited_shared_secrets: >-
+          {{ hostvars[backup.scheduler.host].galera_backup_shared_secrets | default({}) }}
   tasks:
     - name: "MariaDB repo - pobierz setup (audit#6: weryfikacja sha256)"
       ansible.builtin.get_url:

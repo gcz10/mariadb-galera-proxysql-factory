@@ -211,7 +211,7 @@
           generic:
             node_name: "{{ pmm_cluster_name_effective }}-{{ item }}"
             address: "{{ hostvars[item].get('galera_node_address', hostvars[item].get('proxysql_node_address', hostvars[item].ansible_host)) }}"
-            distro: "rocky-9"
+            distro: "rocky-{{ platform.rocky_linux_major }}"
             custom_labels:
               cluster: "{{ pmm_cluster_name_effective }}"
               environment: "{{ pmm_environment_effective }}"

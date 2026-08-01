@@ -38,12 +38,14 @@
   vars:
     galera_backup_action: "{{ action | default('configure') }}"
     galera_backup_encryption_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_ENCRYPTION_KEY') | default(lookup('ansible.builtin.env', 'BACKUP_ENCRYPTION_KEY'), true) }}"
-    galera_backup_s3_access_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_ACCESS_KEY') | default(lookup('ansible.builtin.env', 'MINIO_ROOT_USER'), true) }}"
-    galera_backup_s3_secret_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_SECRET_KEY') | default(lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD'), true) }}"
+    galera_backup_s3_access_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_ACCESS_KEY') | default('', true) }}"
+    galera_backup_s3_secret_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_SECRET_KEY') | default('', true) }}"
     galera_backup_smb_username: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_USERNAME') | default('', true) }}"
     galera_backup_smb_password: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_PASSWORD') | default('', true) }}"
     galera_backup_smb_domain: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_DOMAIN') | default('', true) }}"
-    galera_backup_proxysql_admin_user: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_PROXYSQL_ADMIN_USER') | default('admin', true) }}"
+    # Domyslnie zdalna tozsamosc z vars/proxysql_hostgroups.yml — ProxySQL nie
+    # wpuszcza uzytkownika `admin` spoza loopbacku, a runner laczy sie po sieci.
+    galera_backup_proxysql_admin_user: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_PROXYSQL_ADMIN_USER') | default(proxysql_remote_admin_user, true) }}"
     galera_backup_proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
   pre_tasks:
     - name: Load platform lockfile
@@ -91,8 +93,8 @@
   vars:
     galera_backup_action: "{{ action | default('configure') }}"
     galera_backup_encryption_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_ENCRYPTION_KEY') | default(lookup('ansible.builtin.env', 'BACKUP_ENCRYPTION_KEY'), true) }}"
-    galera_backup_s3_access_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_ACCESS_KEY') | default(lookup('ansible.builtin.env', 'MINIO_ROOT_USER'), true) }}"
-    galera_backup_s3_secret_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_SECRET_KEY') | default(lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD'), true) }}"
+    galera_backup_s3_access_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_ACCESS_KEY') | default('', true) }}"
+    galera_backup_s3_secret_key: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_S3_SECRET_KEY') | default('', true) }}"
     galera_backup_smb_username: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_USERNAME') | default('', true) }}"
     galera_backup_smb_password: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_PASSWORD') | default('', true) }}"
     galera_backup_smb_domain: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_SMB_DOMAIN') | default('', true) }}"

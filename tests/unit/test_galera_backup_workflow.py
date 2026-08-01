@@ -23,7 +23,16 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             self.skipTest("galera-backup executable not implemented yet")
         self.writer_guard = patch.object(self.mod, "assert_scheduler_is_not_writer")
         self.writer_guard.start()
-        self.addCleanup(self.writer_guard.stop)
+
+        def _stop_writer_guard():
+            # Idempotent: the happy-path test stops this patch itself, and a
+            # double stop() on the same patcher raises RuntimeError at teardown.
+            try:
+                self.writer_guard.stop()
+            except RuntimeError:
+                pass
+
+        self.addCleanup(_stop_writer_guard)
     def test_run_backup_hostname_mismatch_fails(self):
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -37,6 +46,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "local_role": "scheduler",
                 "scheduler_system_hostname": "different-host",
                 "galera_nodes_expected": 3,
+                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
                 "mariadb_version": "11.4.12",
                 "retention_days": 14,
                 "flow_control_threshold_ns": 1000000000,
@@ -51,7 +62,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 },
             }
             cfg_path.write_text(json.dumps(cfg_data))
-            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\n')
+            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\nGALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"\n')
             os.chmod(env_path, 0o600)
 
             with patch("socket.gethostname", return_value="current-host"):
@@ -72,6 +83,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "local_role": "scheduler",
                 "scheduler_system_hostname": "gnode4",
                 "galera_nodes_expected": 3,
+                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
                 "mariadb_version": "11.4.12",
                 "retention_days": 14,
                 "flow_control_threshold_ns": 1000000000,
@@ -86,7 +99,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 },
             }
             cfg_path.write_text(json.dumps(cfg_data))
-            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\n')
+            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\nGALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"\n')
             os.chmod(env_path, 0o600)
 
             with patch("socket.gethostname", return_value="gnode4"):
@@ -133,6 +146,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "local_role": "scheduler",
                 "scheduler_system_hostname": "gnode4",
                 "galera_nodes_expected": 3,
+                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
                 "mariadb_version": "11.4.12",
                 "retention_days": 14,
                 "flow_control_threshold_ns": 100,  # low threshold
@@ -147,7 +162,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 },
             }
             cfg_path.write_text(json.dumps(cfg_data))
-            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\n')
+            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\nGALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"\n')
             os.chmod(env_path, 0o600)
 
             galera_vars_seq = [
@@ -190,6 +205,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                                     mock_proc = MagicMock()
                                     mock_proc.stdout.read.side_effect = [b"tar-data", b""]
                                     mock_proc.returncode = 0
+                                    mock_proc.communicate.return_value = (b"", b"")
                                     mock_popen.return_value = mock_proc
 
                                     with self.assertRaises(self.mod.BackupError) as ctx:
@@ -212,6 +228,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "local_role": "scheduler",
                 "scheduler_system_hostname": "gnode4",
                 "galera_nodes_expected": 3,
+                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
                 "mariadb_version": "11.4.12",
                 "retention_days": 14,
                 "flow_control_threshold_ns": 1000000000,
@@ -226,7 +244,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 },
             }
             cfg_path.write_text(json.dumps(cfg_data))
-            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\n')
+            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\nGALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"\n')
             os.chmod(env_path, 0o600)
 
             galera_vars = {
@@ -247,25 +265,51 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 unixtime=1000,
             )
 
-            # Mock tar and openssl execution
+            # Mock tar and openssl execution. The writer guard is NOT patched in
+            # this test, so its real `mariadb ... SELECT hostname` argv flows
+            # through this same _exec patch and must be answered with a writer
+            # that is not the scheduler (else the guard raises E_PROXYSQL).
             def fake_exec(cmd, env=None, cwd=None, timeout=None):
                 for i, arg in enumerate(cmd):
                     if arg == "-out" and i + 1 < len(cmd):
                         Path(cmd[i+1]).write_bytes(b"dummy-encrypted-payload")
+                        return (0, "", "")
+                if cmd[:1] == ["mariadb"]:
+                    return (0, "192.168.1.52\n", "")
                 return (0, "", "")
+
+            # Happy path exercises the REAL writer guard: stop the setUp patch so
+            # assert_scheduler_is_not_writer runs and its argv reaches _exec.
+            self.writer_guard.stop()
             with patch("socket.gethostname", return_value="gnode4"):
                 with patch.object(self.mod, "query_galera_vars", return_value=galera_vars):
                     with patch.object(self.mod, "get_storage_backend", return_value=fake_backend):
                         with patch.object(self.mod, "perform_physical_backup", return_value=("uuid-1", "100")):
-                            with patch.object(self.mod.CommandRunner, "_exec", side_effect=fake_exec):
+                            with patch.object(self.mod.CommandRunner, "_exec", side_effect=fake_exec) as mock_exec:
                                 # Mock tar file creation
                                 with patch("subprocess.Popen") as mock_popen:
                                     mock_proc = MagicMock()
                                     mock_proc.stdout.read.side_effect = [b"tar-data", b""]
                                     mock_proc.returncode = 0
+                                    mock_proc.communicate.return_value = (b"", b"")
                                     mock_popen.return_value = mock_proc
 
                                     self.mod.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
+
+            # The writer guard's mariadb argv must have actually reached _exec.
+            guard_calls = [
+                c.args[0]
+                for c in mock_exec.call_args_list
+                if c.args and c.args[0][:1] == ["mariadb"]
+            ]
+            self.assertTrue(
+                guard_calls,
+                "writer guard mariadb argv never reached CommandRunner._exec",
+            )
+            guard_argv = guard_calls[0]
+            self.assertIn("SELECT hostname FROM runtime_mysql_servers", " ".join(guard_argv))
+            u_idx = guard_argv.index("-u")
+            self.assertEqual(guard_argv[u_idx + 1], "admin")
 
             events_file = cluster_dir / "events.jsonl"
             self.assertTrue(events_file.exists())
@@ -295,6 +339,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                         "local_role": "scheduler",
                         "scheduler_system_hostname": "gnode4",
                         "galera_nodes_expected": 3,
+                        "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                        "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
                         "mariadb_version": "11.4.12",
                         "retention_days": 14,
                         "flow_control_threshold_ns": 1000000000,
@@ -319,7 +365,9 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             env_path.write_text(
                 'GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\n'
                 'GALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\n'
-                'GALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\n',
+                'GALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\n'
+                'GALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\n'
+                'GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"\n',
                 encoding="utf-8",
             )
             os.chmod(env_path, 0o600)
@@ -360,6 +408,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                                     mock_proc = MagicMock()
                                     mock_proc.stdout.read.side_effect = [b"tar-data", b""]
                                     mock_proc.returncode = 0
+                                    mock_proc.communicate.return_value = (b"", b"")
                                     mock_popen.return_value = mock_proc
 
                                     with self.assertRaises(self.mod.BackupError) as raised:
@@ -374,8 +423,14 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 json.loads(line)["event"]
                 for line in (cluster_dir / "events.jsonl").read_text().splitlines()
             ]
+            # Success is recorded as soon as the backup is published and verified,
+            # BEFORE backend close (the runner records success pre-prune/close so a
+            # cleanup failure cannot downgrade a verified backup). A close failure
+            # therefore appends state.failure AFTER the recorded state.success: the
+            # run is both a verified success and a cleanup failure.
             self.assertIn("state.failure", events)
-            self.assertNotIn("state.success", events)
+            self.assertIn("state.success", events)
+            self.assertLess(events.index("state.success"), events.index("state.failure"))
 
 if __name__ == "__main__":
     unittest.main()

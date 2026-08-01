@@ -41,6 +41,10 @@
     # BRAK metryk => `or vector(...)` daje wartość awaryjną => 1 (wykrywa utratę monitoringu).
     # noDataState=Alerting zostaje jako ostatnia linia obrony (padnięta datasource).
     # audit#14: UID-y/folder/contact point namespacowane cluster_name.
+    # restore-drill-stale i backup-metrics-frozen mierzą ŚWIEŻOŚĆ metryk, nie ich brak:
+    # `or vector(0)` NIE widzi .prom, które node_exporter podaje bez zmian (zamrożony
+    # plik textfile po padniętym runnerze/kolektorze), więc mtime/last_success
+    # porównujemy z time() jawnie — to jedyny sygnał tego trybu awarii.
     f15_rules:
       - uid: "isa-{{ cluster_label }}-node-loss"
         title: "Galera node loss (cluster size < expected)"
@@ -80,6 +84,21 @@
         title: "Backup freshness stale"
         expr: "(time() - (max(galera_backup_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool ({{ backup_freshness_sla_hours }} * 3600)"
         summary: "Last successful backup older than {{ backup_freshness_sla_hours }} hours (or freshness metric missing)"
+        severity: "critical"
+        noDataState: "Alerting"
+      - uid: "isa-{{ cluster_label }}-restore-drill-stale"
+        title: "Restore drill stale (no successful drill in 8 days)"
+        expr: "(time() - (max(isa_restore_test_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool (8 * 24 * 3600)"
+        summary: "Last successful restore drill older than 8 days (schedule: {{ backup.restore_test_schedule }}) or drill metric missing"
+        severity: "critical"
+        noDataState: "Alerting"
+      - uid: "isa-{{ cluster_label }}-backup-metrics-frozen"
+        title: "Backup metrics file frozen (node_exporter serves stale .prom)"
+        # PromQL kotwiczy `=~` z OBU stron, a etykieta `file` niesie pelna sciezke
+        # (/var/lib/node_exporter/textfile_collector/...), wiec bez wiodacego `.*`
+        # regex nie trafia w nic i regula alarmuje bez przerwy (zweryfikowane na PMM).
+        expr: "(time() - (max(node_textfile_mtime_seconds{file=~\".*galera_backup-.*[.]prom\"}) or vector(0))) > bool ({{ backup_freshness_sla_hours }} * 3600)"
+        summary: "galera_backup textfile mtime older than {{ backup_freshness_sla_hours }} hours — runner stopped rewriting metrics"
         severity: "critical"
         noDataState: "Alerting"
 

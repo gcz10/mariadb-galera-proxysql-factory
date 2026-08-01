@@ -25,7 +25,7 @@
         set -o pipefail;
         f=/opt/galera-backup/clusters/{{ cluster.name }}/state.json;
         if [ -f "$f" ]; then
-          python3 -c "import json,sys; d=json.load(open('$f')); ls=d.get('last_success',{}); print(ls.get('unixtime', 0) if ls.get('command') == 'restore' else 0)";
+          python3 -c "import json,sys; d=json.load(open('$f')); ls=d.get('last_success') or {}; print(ls.get('unixtime', 0) if ls.get('command') == 'restore' else 0)";
         else echo 0; fi
       register: restore_epoch
       delegate_to: "{{ restore_host }}"
@@ -37,8 +37,8 @@
         set -o pipefail;
         {% if (tls | default({})).mode | default('disabled') == 'full' %}
         if [ -f "{{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }}" ]; then
-          openssl x509 -in "{{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }}" -noout -enddate 2>/dev/null \
-            | cut -d= -f2 | xargs -I{} date -d {} +%s || echo 0;
+          openssl x509 -in "{{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }}" -noout -enddate \
+            | cut -d= -f2 | xargs -I{} date -d {} +%s;
         else echo 0; fi
         {% else %}
         echo 0

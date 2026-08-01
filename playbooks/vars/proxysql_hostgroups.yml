@@ -9,3 +9,11 @@ galera_writer_hg: 10
 galera_backup_hg: 20
 galera_reader_hg: 30
 galera_offline_hg: 40
+
+# Zdalna tozsamosc administracyjna ProxySQL. ProxySQL twardo odrzuca uzytkownika
+# o nazwie `admin` spoza loopbacku ("ERROR 1040: User 'admin' can only connect
+# locally"), a runner backupu (cron na wezle Galera) MUSI odpytac hostgroup
+# writera przez siec, zeby nie robic backupu z aktywnego writera (ISC-39).
+# Dlatego f7_proxysql.yml ZAPISUJE druga pozycje w admin-admin_credentials pod
+# ta nazwa, a f10_backup.yml ja CZYTA. Nazwa musi byc rozna od `admin`.
+proxysql_remote_admin_user: "isa_admin"

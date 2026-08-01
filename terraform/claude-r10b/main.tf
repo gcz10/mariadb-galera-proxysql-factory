@@ -32,9 +32,13 @@ locals {
   vms = {
     # Druga generacja wezlow Galera: nowe VMID/IP/hostname. ProxySQL, restore i infra
     # zostaja NIETKNIETE (te same VMID/IP) — wymianie podlega tylko warstwa bazy.
-    gnode4 = { id = 9130, ip = 51, role = "galera", cpu = 2, ram = 4096, disk = 40 }
-    gnode5 = { id = 9131, ip = 52, role = "galera", cpu = 2, ram = 4096, disk = 40 }
-    gnode6 = { id = 9132, ip = 53, role = "galera", cpu = 2, ram = 4096, disk = 40 }
+    # started=false: wezly Galera sa CELOWO wylaczone (zatrzymane 2026-08-01, dyski
+    # zachowane). Warstwe bazy przejal klaster r10n (terraform/r10n/, .71-.73), a
+    # wspoldzielony ProxySQL/VIP/PMM/restore ponizej dziala dalej. Bez tej flagi
+    # `terraform apply` po cichu wystartowalby martwy klaster.
+    gnode4 = { id = 9130, ip = 51, role = "galera", cpu = 2, ram = 4096, disk = 40, started = false }
+    gnode5 = { id = 9131, ip = 52, role = "galera", cpu = 2, ram = 4096, disk = 40, started = false }
+    gnode6 = { id = 9132, ip = 53, role = "galera", cpu = 2, ram = 4096, disk = 40, started = false }
     pnode1 = { id = 9123, ip = 44, role = "proxysql", cpu = 1, ram = 2560, disk = 40 }
     pnode2 = { id = 9124, ip = 45, role = "proxysql", cpu = 1, ram = 2560, disk = 40 }
     rnode1 = { id = 9125, ip = 46, role = "restore", cpu = 1, ram = 2560, disk = 40 }
@@ -62,6 +66,8 @@ resource "proxmox_virtual_environment_vm" "node" {
     }
   }
   stop_on_destroy = true
+  # Domyslnie VM ma dzialac; mapa `vms` moze to nadpisac dla wezlow trzymanych w spoczynku.
+  started = try(each.value.started, true)
   operating_system { type = "l26" }
 
   cpu {
