@@ -42,6 +42,12 @@
     PMM_AGENT_SERVER_PASSWORD: "{{ pmm_admin_password }}"
     PMM_AGENT_SERVER_INSECURE_TLS: "1"
     PMM_AGENT_CONFIG_FILE: /usr/local/percona/pmm/config/pmm-agent.yaml
+    # Wezel zarejestrowany przez `pmm-agent setup` NIE dostaje etykiet klastra —
+    # te ustawia tylko rejestracja przez API (f11_pmm_client.yml). Bez nich PMM
+    # nie przypisze wezla do klastra: znika z dashboardow filtrowanych po `cluster`
+    # i z sondy akceptacyjnej. API nie pozwala ich dodac pozniej (501), wiec MUSZA
+    # byc podane przy rejestracji.
+    PMM_AGENT_SETUP_CUSTOM_LABELS: "cluster={{ monitoring.pmm.cluster_name }},environment={{ cluster.environment }}"
 
   tasks:
     - name: "Pomin hosty spoza monitoring.agent_groups"
@@ -93,7 +99,7 @@
       # Nie wystarczy 'czy zainstalowany': agent moze byc skonfigurowany, ale
       # jego wezel usuniety po stronie serwera — wtedy status zwraca rc=0,
       # a agent nigdy sie nie polaczy. Kryterium jest POLACZENIE.
-      when: pmm_state.rc != 0 or not ((pmm_state.stdout | default('{}') | from_json).pmm_agent_status.connected | default(false))
+      when: pmm_state.rc != 0 or not ((pmm_state.stdout | default('{}') | from_json).pmm_agent_status.connected | default(false)) or (pmm_force_resetup | default(false) | bool)
       changed_when: true
 
     - name: "Wlacz i zrestartuj pmm-agent"
@@ -289,6 +295,22 @@
         not in ((pmm_agents_now.json.proxysql_exporter | default([])) | map(attribute='service_id') | list)
       no_log: true
 
+    # `selectattr | first` bez wartosci domyslnej daje undefined, ktore trafia do
+    # JSON jako null i PMM odrzuca zadanie golym HTTP 400 — bez wskazania przyczyny.
+    # Ta asercja zamienia cichy blad API na komunikat mowiacy, ze usluga nie powstala.
+    - name: "Wymagaj, by uslugi bazodanowe istnialy przed tworzeniem eksporterow"
+      ansible.builtin.assert:
+        that:
+          - >-
+            ((pmm_svcs_now.json.mysql | default([]))
+             | selectattr('service_name', 'equalto', monitoring.pmm.cluster_name ~ '-' ~ item ~ '-mysql-agent')
+             | list | length) == 1
+        fail_msg: >-
+          Brak uslugi {{ monitoring.pmm.cluster_name }}-{{ item }}-mysql-agent w PMM Inventory.
+          Eksporter i QAN nie maja do czego sie podpiac — sprawdz wczesniejszy krok
+          tworzacy usluge zamiast debugowac HTTP 400 z API.
+      loop: "{{ pmm_agent_hosts | select('in', groups.get('galera', [])) | list }}"
+
     - name: "Utworz mysqld_exporter (push) pod lokalnym agentem"
       ansible.builtin.uri:
         url: "{{ pmm_api }}/v1/inventory/agents"
@@ -344,5 +366,5 @@
         ((pmm_svcs_now.json.mysql | default([]))
          | selectattr('service_name', 'equalto', monitoring.pmm.cluster_name ~ '-' ~ item ~ '-mysql-agent')
          | map(attribute='service_id') | first | default('__none__'))
-        not in ((pmm_agents_now.json['qan_mysql_' ~ (monitoring.qan_source | default('perfschema')) ~ '_agent'] | default([])) | map(attribute='service_id') | list)
+        not in ((pmm_agents_now.json | dict2items | selectattr('key', 'equalto', 'qan_mysql_' ~ (monitoring.qan_source | default('perfschema')) ~ '_agent') | map(attribute='value') | flatten) | map(attribute='service_id') | list)
       no_log: true

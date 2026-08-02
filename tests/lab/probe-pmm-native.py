@@ -58,8 +58,17 @@ PROXYSQL_VIA_AGENT = bool(AGENT_GROUPS & {"proxysql"}) and OWNS_SHARED_TIER
 _ALL_MONITORED = (
     {**GALERA_HOSTS, **PROXYSQL_HOSTS} if OWNS_SHARED_TIER else dict(GALERA_HOSTS)
 )
-# Zbior sprawdzany sciezka AGENTLESS (external node-exporter + wersja tarballa).
-MONITORED_HOSTS = {h: v for h, v in _ALL_MONITORED.items() if h not in AGENT_HOSTS}
+# Zbior WEZLOW jest wspolny dla obu trybow: pmm-agent rejestruje wezel generic
+# tak samo jak sciezka agentless, wiec asercja zbioru wezlow i zapytania o metryki
+# (filtrowane po node_name) MUSZA obejmowac wszystkie monitorowane hosty. Zawezenie
+# go do agentless bylo bledem: dla klastra w calosci na pmm-client zbior byl PUSTY,
+# przez co filtry metryk nie trafialy w nic i sonda raportowala brak backupu, ktory
+# w rzeczywistosci dzialal.
+MONITORED_HOSTS = dict(_ALL_MONITORED)
+# Tylko te hosty maja usluge `external` node-exporter i binarke z tarballa —
+# na hostach z pmm-agentem node_exporter pochodzi z paczki i nie ma tam uslugi
+# external ani wersji z lockfile.
+AGENTLESS_HOSTS = {h: v for h, v in _ALL_MONITORED.items() if h not in AGENT_HOSTS}
 EXPECTED_NODES = {}
 for host_name, host_vars in MONITORED_HOSTS.items():
     address = host_vars.get(
@@ -67,11 +76,23 @@ for host_name, host_vars in MONITORED_HOSTS.items():
         host_vars.get("proxysql_node_address", host_vars["ansible_host"]),
     )
     EXPECTED_NODES[f"{CLUSTER}-{host_name}"] = address
+# Nazwa uslugi MySQL zalezy od trybu: sciezka agentless rejestruje
+# "<cluster>-<host>-mysql" (zdalny exporter pod agentem serwera), a host z lokalnym
+# pmm-agentem "<cluster>-<host>-mysql-agent" (f11_pmm_agent.yml) — inaczej obie
+# nazwy kolidowalyby na tym samym wezle.
 EXPECTED_MYSQL = {
-    f"{CLUSTER}-{host_name}-mysql": f"{CLUSTER}-{host_name}"
+    (f"{CLUSTER}-{host_name}-mysql-agent" if host_name in AGENT_HOSTS
+     else f"{CLUSTER}-{host_name}-mysql"): f"{CLUSTER}-{host_name}"
     for host_name in GALERA_HOSTS
 }
-EXPECTED_NODE_EXPORTERS = {f"{name}-node-exporter" for name in EXPECTED_NODES}
+# Typ agenta QAN wynika z monitoring.qan_source (slowlog wymaga lokalnego agenta).
+QAN_AGENT_TYPE = (
+    f"qan_mysql_{(CLUSTER_CONFIG.get('monitoring') or {}).get('qan_source', 'perfschema')}_agent"
+)
+# Usluga external node-exporter istnieje TYLKO dla hostow agentless.
+EXPECTED_NODE_EXPORTERS = {
+    f"{CLUSTER}-{host}-node-exporter" for host in AGENTLESS_HOSTS
+}
 # Pierwszy wezel Galera wg inventory — NIE zaszyte "gnode1".
 FIRST_GALERA_NODE = f"{CLUSTER}-{next(iter(GALERA_HOSTS))}"
 # Nazwa uslugi jest ta sama w obu trybach; rozni sie TYP (external vs native),
@@ -489,7 +510,7 @@ def main():
     for agent in agents.get("mysqld_exporter", []):
         mysql_agents.setdefault(agent.get("service_id"), []).append(agent)
     qan_agents = {}
-    for agent in agents.get("qan_mysql_perfschema_agent", []):
+    for agent in agents.get(QAN_AGENT_TYPE, []):
         qan_agents.setdefault(agent.get("service_id"), []).append(agent)
 
     for service_name, node_name in EXPECTED_MYSQL.items():
