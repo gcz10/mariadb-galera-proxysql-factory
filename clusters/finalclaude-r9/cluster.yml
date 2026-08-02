@@ -145,4 +145,7 @@ mariadb_tuning:
   # lokalnego pmm-agenta czytajacego plik. finalclaude-r10 jest agentless
   # i zostaje przy perfschema; to swiadoma roznica do porownania.
   slow_query_log: "ON"
-  long_query_time: 0
+  # 0 = loguj wszystko (zmierzone: 276 B/zapytanie, ~1 GB/h przy 1000 q/s NA WEZEL).
+  # 0.1 = tylko zapytania >=100 ms. QAN widzi wtedy WYLACZNIE te wolne — szybkie,
+  # ale czeste zapytania znikaja z analizy, a to czesto one sumuja sie w obciazenie.
+  long_query_time: 0.1
