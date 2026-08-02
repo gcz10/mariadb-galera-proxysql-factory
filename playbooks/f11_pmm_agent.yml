@@ -320,7 +320,7 @@
     # QAN to OSOBNY agent od mysqld_exportera. Sciezka agentless dostaje go z
     # f11_pmm_client.yml; hosty z lokalnym agentem musza go dostac tutaj, inaczej
     # maja metryki, ale ZERO analizy zapytan — cicha utrata polowy monitoringu bazy.
-    - name: "Utworz agenta QAN (perfschema) pod lokalnym agentem"
+    - name: "Utworz agenta QAN pod lokalnym agentem (typ wg monitoring.qan_source)"
       ansible.builtin.uri:
         url: "{{ pmm_api }}/v1/inventory/agents"
         method: POST
@@ -330,7 +330,7 @@
         validate_certs: "{{ monitoring.pmm.validate_certs | default(false) }}"
         body_format: json
         body:
-          qan_mysql_perfschema_agent:
+          "qan_mysql_{{ monitoring.qan_source | default('perfschema') }}_agent":
             pmm_agent_id: "{{ hostvars[item].pmm_local_agent_id }}"
             service_id: >-
               {{ (pmm_svcs_now.json.mysql | default([]))
@@ -344,5 +344,5 @@
         ((pmm_svcs_now.json.mysql | default([]))
          | selectattr('service_name', 'equalto', monitoring.pmm.cluster_name ~ '-' ~ item ~ '-mysql-agent')
          | map(attribute='service_id') | first | default('__none__'))
-        not in ((pmm_agents_now.json.qan_mysql_perfschema_agent | default([])) | map(attribute='service_id') | list)
+        not in ((pmm_agents_now.json['qan_mysql_' ~ (monitoring.qan_source | default('perfschema')) ~ '_agent'] | default([])) | map(attribute='service_id') | list)
       no_log: true

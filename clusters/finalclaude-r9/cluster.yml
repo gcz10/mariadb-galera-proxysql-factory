@@ -128,6 +128,9 @@ monitoring:
   # Wezly Galera tego klastra dostaja lokalnego pmm-agenta (porownanie z r10,
   # ktory zostaje agentless). ProxySQL pomijamy — nalezy do ownera (r10).
   agent_groups: ["galera"]
+  # Zrodlo QAN. slowlog mozliwy TYLKO tu (lokalny agent czyta plik);
+  # fc10 jest agentless i musi zostac przy perfschema.
+  qan_source: "slowlog"
   system: "pmm"
   alerts:
     email: "ops@claude.local"

@@ -702,6 +702,14 @@
               "type": "string"
             }
           }
+        },
+        "qan_source": {
+          "type": "string",
+          "enum": [
+            "perfschema",
+            "slowlog"
+          ],
+          "description": "Zrodlo danych QAN. 'slowlog' wymaga LOKALNEGO pmm-agenta (monitoring.agent_groups) czytajacego plik oraz mariadb_tuning.slow_query_log=ON; klaster agentless moze uzyc tylko 'perfschema'. Domyslnie perfschema."
         }
       }
     },
