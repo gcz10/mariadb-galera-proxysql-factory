@@ -52,6 +52,17 @@
         "nodes_expected": { "type": "integer", "minimum": 2 },
         "max_writers": { "type": "integer", "const": 1 },
         "read_write_split_enabled": { "type": "boolean", "const": false },
+        "hostgroup_base": {
+          "type": "integer",
+          "minimum": 10,
+          "multipleOf": 10,
+          "description": "Baza ID hostgroup ProxySQL: writer=base, backup=base+10, reader=base+20, offline=base+30. Domyślnie 10. Klastry dzielące jedną parę ProxySQL MUSZĄ mieć rozłączne bazy — inaczej f7_proxysql.yml drugiego klastra skasuje backendy pierwszego."
+        },
+        "app_user": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Nazwa użytkownika aplikacyjnego. Domyślnie app_user. mysql_users w ProxySQL jest tabelą globalną, a default_hostgroup tego wpisu wybiera klaster — na wspólnej parze ProxySQL nazwy MUSZĄ być rozłączne."
+        },
         "endpoint": {
           "required": ["type", "address", "port"],
           "additionalProperties": false,

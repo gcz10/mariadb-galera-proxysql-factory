@@ -10,7 +10,7 @@
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke \
-        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak \
+        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy \
         infra-teardown infra-provision cluster-trust-hosts
 
 CLUSTER ?= example-cluster
@@ -183,6 +183,10 @@ verify-zero-hardcode:  ## F14 — statyczny guard: brak hardkodowanych danych kl
 
 verify-no-conditional-env:  ## Statyczny guard: play-level environment bez warunkowej konfiguracji backupu
 	python3 tests/validation/probe-no-conditional-env.py
+
+verify-proxysql-tenancy:  ## Statyczny guard: klastry na wspólnym ProxySQL mają rozłączne hostgroupy i app_user
+	python3 tests/validation/probe-proxysql-tenancy.py
+
 verify-no-secrets-leak:  ## Statyczny guard: brak sekretów w repo i argv procesów
 	bash tests/validation/probe-no-secrets-leak.sh
 

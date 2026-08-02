@@ -7,10 +7,15 @@
 - name: "F7 — utwórz konta ProxySQL na klastrze Galera"
   hosts: galera[0]
   become: true
+  # Ten play tworzy konto aplikacyjne NA GALERZE, wiec musi znac te sama nazwe
+  # co play konfigurujacy ProxySQL — inaczej ProxySQL wpuszczalby uzytkownika,
+  # ktorego backend nie zna. Nazwa jest per klaster (wspolna para ProxySQL).
+  vars_files:
+    - vars/proxysql_hostgroups.yml
   vars:
     proxysql_monitor_user: "proxysql_monitor"
     proxysql_monitor_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_PASSWORD') }}"
-    app_user: "app_user"
+    app_user: "{{ galera_app_user }}"
     app_password: "{{ lookup('ansible.builtin.env', 'APP_DB_PASSWORD') }}"
 
   pre_tasks:
@@ -53,7 +58,7 @@
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
     proxysql_monitor_user: "proxysql_monitor"
     proxysql_monitor_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_PASSWORD') }}"
-    app_user: "app_user"
+    app_user: "{{ galera_app_user }}"
     app_password: "{{ lookup('ansible.builtin.env', 'APP_DB_PASSWORD') }}"
     proxysql_admin_password_sql: >-
       {{ proxysql_admin_password | replace("'", "''") }}

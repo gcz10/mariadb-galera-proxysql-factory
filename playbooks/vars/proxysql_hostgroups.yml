@@ -3,12 +3,26 @@
 # f7_proxysql.yml je ZAPISUJE, f10/f12/f13/f15 je CZYTAJĄ. Rozjazd między
 # zapisem a odczytem = playbooki odpytują pusty hostgroup, nie wykrywają
 # aktywnego writera i wybierają go jako źródło backupu (łamie ISC-39).
-# To stała topologii ProxySQL, identyczna dla każdego klastra — celowo NIE
-# jest w clusters/<name>/cluster.yml, bo nie jest parametrem operatora.
-galera_writer_hg: 10
-galera_backup_hg: 20
-galera_reader_hg: 30
-galera_offline_hg: 40
+#
+# ID są wyprowadzane z `proxysql.hostgroup_base` klastra (domyślnie 10), bo
+# JEDNA para ProxySQL obsługuje CAŁĄ flotę. Gdy ID były globalną stałą,
+# `f7_proxysql.yml` drugiego klastra wykonywał
+#   DELETE FROM mysql_servers WHERE hostgroup_id IN (10,20,30,40)
+# i kasował backendy pierwszego — drugi klaster wypychał pierwszego z ProxySQL.
+# Każdy klaster dzielący tę samą parę MUSI mieć rozłączną bazę; pilnuje tego
+# tests/validation/probe-proxysql-tenancy.py.
+galera_hostgroup_base: "{{ proxysql.hostgroup_base | default(10) | int }}"
+galera_writer_hg: "{{ galera_hostgroup_base | int }}"
+galera_backup_hg: "{{ galera_hostgroup_base | int + 10 }}"
+galera_reader_hg: "{{ galera_hostgroup_base | int + 20 }}"
+galera_offline_hg: "{{ galera_hostgroup_base | int + 30 }}"
+
+# Nazwa użytkownika aplikacyjnego. Też musi być rozłączna między klastrami na
+# wspólnym ProxySQL: `mysql_users` jest globalną tabelą, a `default_hostgroup`
+# tego wpisu decyduje, do którego klastra trafia połączenie. Rozdzielenie po
+# użytkowniku (nie po porcie) pozwala obu klastrom dzielić VIP:6033 bez
+# zarządzania `mysql-interfaces` i bez restartu ProxySQL.
+galera_app_user: "{{ proxysql.app_user | default('app_user') }}"
 
 # Zdalna tozsamosc administracyjna ProxySQL. ProxySQL twardo odrzuca uzytkownika
 # o nazwie `admin` spoza loopbacku ("ERROR 1040: User 'admin' can only connect

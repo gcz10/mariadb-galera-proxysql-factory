@@ -116,13 +116,14 @@ jobs:
       - name: python compile (tests + validation)
         run: python3 -m compileall -q tests
 
-      - name: Static guards (mass restart, double bootstrap, zero hardcode, conditional env, secret leak)
+      - name: Static guards (mass restart, double bootstrap, zero hardcode, conditional env, proxysql tenancy, secret leak)
         run: |
           set -e
           python3 tests/validation/probe-no-mass-restart.py
           python3 tests/validation/probe-no-double-bootstrap.py
           python3 tests/validation/probe-zero-hardcode.py
           python3 tests/validation/probe-no-conditional-env.py
+          python3 tests/validation/probe-proxysql-tenancy.py
           bash tests/validation/probe-no-secrets-leak.sh
 
       - name: bash -n (all shell scripts)

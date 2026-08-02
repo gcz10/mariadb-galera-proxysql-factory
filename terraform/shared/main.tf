@@ -42,11 +42,15 @@ locals {
   # `fcinfra` dostaje 5 GB, bo PMM 3.8.1 jest tu jedynym realnym konsumentem:
   # przy ZERZE zarejestrowanych uslug zajmowal juz 1.4 GB z 3 GB, a docelowo
   # dochodzi 5 wezlow z eksporterami i QAN (poprzednia flota dawala mu 8 GB).
-  # ProxySQL jest lekki — 2 GB wystarcza i nie ma powodu tego podnosic.
+  #
+  # ProxySQL ma 3 GB, nie 2 GB: preflight (f2_preflight.yml) wymaga minimum
+  # 2048 MB mierzonych przez `ansible_memtotal_mb`, a to pamiec WIDZIANA przez
+  # system po rezerwach firmware/kernela — przydzial 2048 MB daje 1769 MB i cel
+  # sie wywala. Prog trzeba przebic z zapasem, nie trafic w niego dokladnie.
   vms = {
     fcinfra = { id = 9400, ip = 130, role = "infra", cpu = 4, ram = 5120, disk = 80 }
-    fcp1    = { id = 9401, ip = 131, role = "proxysql", cpu = 1, ram = 2048, disk = 40 }
-    fcp2    = { id = 9402, ip = 132, role = "proxysql", cpu = 1, ram = 2048, disk = 40 }
+    fcp1    = { id = 9401, ip = 131, role = "proxysql", cpu = 1, ram = 3072, disk = 40 }
+    fcp2    = { id = 9402, ip = 132, role = "proxysql", cpu = 1, ram = 3072, disk = 40 }
   }
 }
 
