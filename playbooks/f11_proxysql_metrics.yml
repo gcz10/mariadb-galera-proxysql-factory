@@ -35,7 +35,12 @@
     # tym samym porcie 6070 i rozjechal tozsamosc node w pmm-agent.
     - name: "Konsument warstwy wspolnej — pomin metryki ProxySQL"
       ansible.builtin.meta: end_play
-      when: (proxysql.role | default('owner')) == 'consumer'
+      # Pomijamy takze, gdy wezly ProxySQL maja LOKALNEGO pmm-agenta: metryki
+      # dostarcza wtedy natywny proxysql_exporter (f11_pmm_agent.yml), a ta
+      # sciezka przez restapi:6070 i usluge `external` bylaby duplikatem.
+      when: >-
+        (proxysql.role | default('owner')) == 'consumer'
+        or 'proxysql' in (monitoring.agent_groups | default([]))
 
     - name: "Sprawdź aktualny stan admin-restapi_enabled (runtime)"
       ansible.builtin.shell: >-
@@ -114,7 +119,12 @@
   tasks:
     - name: "Konsument warstwy wspolnej — pomin rejestracje ProxySQL w PMM"
       ansible.builtin.meta: end_play
-      when: (proxysql.role | default('owner')) == 'consumer'
+      # Pomijamy takze, gdy wezly ProxySQL maja LOKALNEGO pmm-agenta: metryki
+      # dostarcza wtedy natywny proxysql_exporter (f11_pmm_agent.yml), a ta
+      # sciezka przez restapi:6070 i usluge `external` bylaby duplikatem.
+      when: >-
+        (proxysql.role | default('owner')) == 'consumer'
+        or 'proxysql' in (monitoring.agent_groups | default([]))
 
     # === Pobierz node IDs dla węzłów ProxySQL ===
     - name: "Pobierz PMM node inventory"

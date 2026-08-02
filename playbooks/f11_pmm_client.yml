@@ -128,6 +128,14 @@
     pmm_mysql_service_names: "{{ pmm_mysql_names | map('regex_replace', '$', '-mysql') | list }}"
 
   pre_tasks:
+    # Gdy CALY klaster jest obslugiwany przez lokalne pmm-agenty
+    # (monitoring.agent_groups), sciezka agentless nie ma tu nic do zrobienia.
+    # Bez tego asercja ponizej wywala sie na pustej liscie wezlow — playbook
+    # zglaszal brak hasel, choc realnym powodem byl brak hostow do rejestracji.
+    - name: "Pomin rejestracje agentless — wszystkie wezly maja lokalnego agenta"
+      ansible.builtin.meta: end_play
+      when: pmm_node_hosts | length == 0
+
     - name: "Wymagaj danych dostępowych poza repozytorium"
       ansible.builtin.assert:
         that:
