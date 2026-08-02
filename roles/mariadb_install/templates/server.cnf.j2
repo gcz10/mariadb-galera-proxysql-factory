@@ -34,8 +34,11 @@ innodb_buffer_pool_size = {{ (mariadb_tuning | default({})).innodb_buffer_pool_s
 # QAN (Query Analytics) w PMM zrodlem danych ma performance_schema. MariaDB — w
 # odroznieniu od MySQL — ma je domyslnie WYLACZONE, wiec agenci QAN dzialali, ale
 # nie mieli czego zbierac: mysql_perf_schema_events_statements_total mial ZERO
-# serii przy dzialajacych metrykach zwyklych. Wlaczamy jawnie; koszt to ~200-400 MB
-# RAM na wezel, dlatego jest to parametr, a nie wartosc zaszyta.
+# serii przy dzialajacych metrykach zwyklych. Wlaczamy jawnie.
+# KOSZT ZMIERZONY, nie szacowany: SHOW ENGINE PERFORMANCE_SCHEMA STATUS raportuje
+# ~105 MB na wezel przy domyslnym sizingu (spojnie na EL9 i EL10, mysqld RSS ~460 MB,
+# ~1.85 GB wolnego z 2.7 GB). Parametrem zostaje, bo przy ciasniejszych wezlach
+# albo recznie podkreconych tabelach P_S koszt rosnie.
 performance_schema = {{ (mariadb_tuning | default({})).performance_schema | default('ON') }}
 innodb_log_file_size = {{ (mariadb_tuning | default({})).innodb_log_file_size | default('128M') }}
 max_connections = {{ (mariadb_tuning | default({})).max_connections | default(50) }}

@@ -783,7 +783,7 @@
             "ON",
             "OFF"
           ],
-          "description": "Zrodlo danych dla QAN w PMM. MariaDB domyslnie ma OFF, przez co QAN jest pusty mimo dzialajacych agentow. Domyslnie ON; koszt ~200-400 MB RAM na wezel."
+          "description": "Zrodlo danych dla QAN w PMM. MariaDB domyslnie ma OFF, przez co QAN jest pusty mimo dzialajacych agentow. Domyslnie ON; zmierzony koszt ~105 MB RAM na wezel przy domyslnym sizingu."
         }
       }
     }
