@@ -1,6 +1,13 @@
 # Plan: rewalidacja kodu od zera (teardown + odbudowa)
 
-**Status:** propozycja, przed akceptacją operatora
+**Status:** ✅ WYKONANY 2026-08-02. Flota `finalclaude` stoi i przeszła wszystkie
+kryteria z Fazy 5. Bieżący obraz: `docs/infrastructure-state.md`.
+Rezultat ćwiczenia — pięć defektów, które mogły ujawnić się WYŁĄCZNIE przy
+budowie od zera: `svcaccs: null` na świeżym MinIO, zaszyty `rnode1` w sondzie
+restore, nieaktualna lista reguł alertowych, przydział RAM trafiający dokładnie
+w próg preflightu, oraz brak pojęcia własności warstwy współdzielonej
+w f2/f11 (commity `7e1429e`, `9eed120`, `a9ab24a`).
+
 **Data sporządzenia:** 2026-08-02
 
 ## Cel
