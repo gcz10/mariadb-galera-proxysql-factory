@@ -784,6 +784,19 @@
             "OFF"
           ],
           "description": "Zrodlo danych dla QAN w PMM. MariaDB domyslnie ma OFF, przez co QAN jest pusty mimo dzialajacych agentow. Domyslnie ON; zmierzony koszt ~105 MB RAM na wezel przy domyslnym sizingu."
+        },
+        "slow_query_log": {
+          "type": "string",
+          "enum": [
+            "ON",
+            "OFF"
+          ],
+          "description": "Zrodlo QAN typu slowlog. Wymaga LOKALNEGO pmm-agenta (monitoring.agent_groups) — klaster agentless nie ma dostepu do pliku. Domyslnie OFF."
+        },
+        "long_query_time": {
+          "type": "number",
+          "minimum": 0,
+          "description": "0 = loguj wszystkie zapytania (wymagane przez QAN slowlog). Domyslnie 10."
         }
       }
     }

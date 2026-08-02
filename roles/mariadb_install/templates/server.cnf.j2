@@ -45,7 +45,13 @@ max_connections = {{ (mariadb_tuning | default({})).max_connections | default(50
 
 # === Logi ===
 log_error = /var/log/mariadb/mariadb.log
-slow_query_log = OFF
+# Slow log jako ZRODLO DANYCH dla QAN (alternatywa dla performance_schema).
+# `pmm-admin add mysql --query-source` domyslnie uzywa `slowlog`, ale wymaga to
+# LOKALNEGO agenta czytajacego plik — klaster agentless tej opcji nie ma.
+# long_query_time=0 = "loguj wszystko"; celowe dla QAN, ale generuje ruch dyskowy
+# (pmm-agent rotuje plik przez --size-slow-logs).
+slow_query_log = {{ (mariadb_tuning | default({})).slow_query_log | default('OFF') }}
+long_query_time = {{ (mariadb_tuning | default({})).long_query_time | default(10) }}
 
 # === TLS (opcjonalne, per-klaster: tls.mode=full) ===
 {% if (tls | default({})).mode | default('disabled') == 'full' %}

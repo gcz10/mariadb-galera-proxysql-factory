@@ -141,3 +141,8 @@ mariadb_tuning:
   max_connections: 100
   innodb_flush_log_at_trx_commit: 0
   gcache_size: "256M"
+  # QAN ze slowloga zamiast perfschema — mozliwe TYLKO tu, bo ten klaster ma
+  # lokalnego pmm-agenta czytajacego plik. finalclaude-r10 jest agentless
+  # i zostaje przy perfschema; to swiadoma roznica do porownania.
+  slow_query_log: "ON"
+  long_query_time: 0
