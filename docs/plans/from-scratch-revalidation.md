@@ -207,20 +207,27 @@ Osierocone wolumeny są jedynym realnym ryzykiem teardownu: blokują późniejsz
 `apply` komunikatem `dataset already exists` i utrzymują grubą rezerwację,
 którą ta operacja ma zwolnić.
 
-## Faza 3 — Nowy układ Terraform
+## Faza 3 — Układ Terraform ✅ zrobione
 
-Praca w kodzie, przed dotknięciem PVE:
+Zrealizowany kształt (inny niż pierwotnie szkicowany — flota nazywa się
+`finalclaude`, a warstwa wspólna `shared`, nie `infra`):
 
-1. `terraform/infra/` — nowy moduł, jedna VM `.47` (wzorzec: wpis `infra`
-   z usuwanego `claude-r10b`).
-2. `terraform/claude-r10c/` — mapa `vms` rozszerzona o `pnode1 .44`,
-   `pnode2 .45`, `rnode1 .46`; zasoby czytają `each.value.cpu/ram/disk`
-   zamiast zaszytych wartości (wzorzec: `claude-r9t`).
-3. `terraform/claude-r9t/` — bez zmian funkcjonalnych; weryfikacja, że
-   deklaruje `9180-9185` / `.61-.66` spójnie z inventarzem.
+| Moduł | Zawartość | VMID | IP |
+|---|---|---|---|
+| `terraform/shared/` | `fcinfra` (PMM+MinIO+maildev), `fcp1`, `fcp2` (ProxySQL HA) | 9400-9402 | .130-.132, VIP .133 |
+| `terraform/finalclaude-r10/` | `f10g1-3` (galera), `f10r1` (restore) | 9410-9413 | .140-.143 |
+| `terraform/finalclaude-r9/` | `f9g1-3` (galera), `f9r1` (restore) | 9420-9423 | .150-.153 |
 
-Bramka: `terraform fmt -check` i `terraform validate` w każdym module, plus
-pełna statyka repo. Dopiero potem cokolwiek się stawia.
+`make infra-provision CLUSTER=shared` działa bez zmian w Makefile: `TF_DIR`
+domyślnie to `terraform/$(CLUSTER)`, a cel nie czyta `clusters/`.
+
+RAM — limit operatora 5 GB, podnoszony wyłącznie na dowód:
+
+- `fcinfra` 5 GB — PMM zajmował 1.4 GB z 3 GB przy **zerze** usług.
+- `fcp1`/`fcp2` 3 GB — preflight wymaga `ansible_memtotal_mb >= 2048`, a
+  przydział 2048 MB daje 1769 MB widzianych przez OS. W próg trzeba uderzyć
+  z zapasem, nie trafić w niego dokładnie.
+- Galera 3 GB, `innodb_buffer_pool_size: 768M` — zapas na `mariabackup` w SST.
 
 ## Faza 4 — Odbudowa
 
@@ -228,27 +235,39 @@ Wyłącznie skodyfikowanymi celami. **Zero ręcznego `terraform apply`** —
 `make infra-provision` wymusza `-parallelism=1`, a jego ominięcie już raz
 wywaliło locki ZFS na PVE (`HTTP 596 Broken pipe` i VM utworzona poza stanem).
 
-Kolejność kroków jest wymuszona zależnościami z `README.md`: F6 asertuje granty
-`pmm_monitor`, więc idzie po F11; F11 rejestruje metryki ProxySQL, więc idzie po
-F7; drill restore wymaga danych, więc idzie po zasiewie.
+### Etap 1 — warstwa wspólna ✅
 
 ```bash
-# Etap 1 — infra
-make infra-provision CLUSTER=infra
+make infra-provision CLUSTER=shared
+make infra-provision CLUSTER=finalclaude-r10   # VM klastra muszą istnieć...
+make cluster-trust-hosts CLUSTER=finalclaude-r10  # ...bo trust-hosts skanuje CAŁE inventory
+make cluster-infra CLUSTER=finalclaude-r10 ANSIBLE_OPTS='-e allow_kernel_reboot=yes'
+```
 
-# Etap 2 — claude-r10c (Etap 3 dla claude-r9t: identycznie, bez cluster-infra)
-C=claude-r10c
-make infra-provision   CLUSTER=$C
-make cluster-trust-hosts CLUSTER=$C          # po WSZYSTKICH provision — klucze hostów są nowe
+`cluster-trust-hosts` kończy się `[ "$ok" = "$total" ] || exit 1`, więc wymaga,
+by **wszystkie** hosty z inventarza odpowiadały — inventory klastra obejmuje
+dwa moduły Terraform, więc oba muszą być postawione wcześniej.
+
+`allow_kernel_reboot=yes` jest konieczne przy świeżym obrazie: VM bootuje
+starszy kernel niż zainstalowany, brakuje modułów `xtables` i filtr ingress
+Dockera by nie powstał. Strażnik odmawia — słusznie.
+
+### Etap 2 — klaster
+
+Kolejność wymuszona zależnościami z `README.md:32-37` (sekwencja zweryfikowana
+od zera): **F7 przed F11**, bo F11 asertuje niezerową liczbę metryk ProxySQL;
+**F11 przed F6**, bo hardening asertuje granty `pmm_monitor`.
+
+```bash
+C=finalclaude-r10
 make cluster-validate  CLUSTER=$C
 make cluster-deploy    CLUSTER=$C            # F2+F3
-make cluster-infra     CLUSTER=$C            # PMM + MinIO + maildev — JEDEN RAZ w całym planie
 make cluster-bootstrap CLUSTER=$C CONFIRM=yes
-make cluster-join      CLUSTER=$C
-make cluster-monitoring CLUSTER=$C           # F11 przed F6
-make cluster-harden    CLUSTER=$C            # F6
+make cluster-join      CLUSTER=$C            # F5
+make cluster-proxysql  CLUSTER=$C            # F7 — MUSI poprzedzać F11
+make cluster-monitoring CLUSTER=$C           # F11
+make cluster-harden    CLUSTER=$C            # F6 — MUSI następować po F11
 make cluster-firewall  CLUSTER=$C
-make cluster-proxysql  CLUSTER=$C            # F7
 make cluster-endpoint  CLUSTER=$C            # F8 — VIP
 make lab-seed-smoke    CLUSTER=$C            # dane, bez których drill pada
 make cluster-backup-configure CLUSTER=$C
@@ -258,14 +277,20 @@ make cluster-alerts    CLUSTER=$C            # F15
 make cluster-monitoring-refresh CLUSTER=$C
 ```
 
-`make infra-provision CLUSTER=infra` wymaga, by `TF_DIR` odwzorowywał nazwę na
-`terraform/infra/`, a `cluster_guard` nie blokował celu bez katalogu
-`clusters/infra/`. Do sprawdzenia w Fazie 3 — jeśli bramka odbije, moduł infra
-stawiamy osobnym celem `infra-provision-shared`.
+### Etap 3 — wielodostęp ProxySQL (wymagany przed drugim klastrem)
 
-Etap 3 (`claude-r9t`) to ta sama sekwencja bez `cluster-infra`. `tls.mode: full`
-jest już w `cluster.yml`; certy rozprowadza `playbooks/tls_certs.yml` włączany
-przez site/bootstrap/join/f7 — nie ma dodatkowego celu.
+Obecny kod **nie obsługuje** dwóch klastrów na jednej parze ProxySQL:
+`playbooks/f7_proxysql.yml:271` robi
+`DELETE FROM mysql_servers WHERE hostgroup_id IN (10,20,30,40)`, a te ID są
+globalnymi stałymi z `playbooks/vars/proxysql_hostgroups.yml`. Drugi klaster
+skasowałby backendy pierwszego.
+
+Potrzebne: baza hostgroup per klaster (`10`, `110`, …) plus osobny port na
+wspólnym VIP (`proxysql.endpoint.port` już istnieje w `cluster.yml`).
+
+### Etap 4 — `finalclaude-r9`
+
+Ta sama sekwencja co Etap 2, bez `cluster-infra` (infra stoi).
 
 ## Faza 5 — Kryteria akceptacji
 

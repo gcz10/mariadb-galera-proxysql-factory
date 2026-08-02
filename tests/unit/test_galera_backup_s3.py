@@ -357,6 +357,24 @@ class GaleraBackupS3Tests(unittest.TestCase):
 
         self.assertEqual(list_keys(output), ["matching-key-1", "other-key"])
 
+    def test_minio_service_account_list_accepts_null_svcaccs_on_fresh_server(self):
+        # Regresja: swieze MinIO zwraca dokladnie ta linie dla principala bez
+        # kont serwisowych. Filtr traktowal `null` jak uszkodzone wyjscie i
+        # wywalal `cluster-backup-configure` na kazdej nowej instancji.
+        list_keys, _ = self.load_minio_access_key_filters()
+        output = '{"status":"success","user":"4aqtYG964aX9","stsKeys":null,"svcaccs":null}'
+
+        self.assertEqual(list_keys(output), [])
+
+    def test_minio_service_account_list_rejects_wrong_typed_svcaccs(self):
+        # `null` jest legalnym "zero kont", ale wartosc OBECNA i zlego typu
+        # oznacza zmiane kontraktu `mc` — cicha akceptacja gubilaby klucze.
+        list_keys, _ = self.load_minio_access_key_filters()
+        output = json.dumps({"status": "success", "user": "root", "svcaccs": "not-a-list"})
+
+        with self.assertRaises(ValueError):
+            list_keys(output)
+
     def test_minio_service_account_info_selects_keys_by_exact_name(self):
         _, select_keys = self.load_minio_access_key_filters()
         info_outputs = [

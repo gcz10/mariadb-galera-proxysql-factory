@@ -151,14 +151,29 @@ def main():
     # UID-y sa namespace'owane etykieta klastra (f15_alerts.yml), inaczej drugi klaster
     # nadpisalby reguly pierwszego we wspolnym PMM.
     _cl = CLUSTER_CONFIG["monitoring"]["pmm"]["cluster_name"]
-    expected_alert_rules = {
-        f"isa-{_cl}-node-loss",
-        f"isa-{_cl}-quorum-loss",
-        f"isa-{_cl}-not-synced",
-        f"isa-{_cl}-no-writer",
-        f"isa-{_cl}-backup-failed",
-        f"isa-{_cl}-backup-stale",
-    }
+    # Zbior oczekiwanych regul wyprowadzamy z JEDYNEGO zrodla — playbooks/f15_alerts.yml —
+    # zamiast go tu przepisywac. Wczesniej byla tu lista 6 UID-ow; prace nad backupem
+    # dolozyly `backup-metrics-frozen` i `restore-drill-stale`, sonda nie nadgonila
+    # i zaczela oblewac poprawnie zaprowizjonowany klaster. Parsowanie zrodla sprawia,
+    # ze kazda kolejna regula jest uwzgledniona automatycznie.
+    #
+    # ZALOZENIE: liczymy wylacznie reguly SCOPE'OWANE klastrem, czyli takie, ktorych
+    # uid zawiera `{{ cluster_label }}`. Regula floty (uid bez tej zmiennej) zostanie
+    # tu celowo pominieta — tak samo jak legacy UID-y z listy sprzatajacej f15.
+    alerts_playbook = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "playbooks", "f15_alerts.yml",
+    )
+    with open(alerts_playbook, encoding="utf-8") as alerts_file:
+        alerts_source = alerts_file.read()
+    rule_suffixes = re.findall(
+        r'^\s*-\s*uid:\s*"isa-\{\{\s*cluster_label\s*\}\}-([a-z0-9-]+)"',
+        alerts_source,
+        re.M,
+    )
+    if not rule_suffixes:
+        raise SystemExit(f"FAIL: nie odczytano zadnej reguly z {alerts_playbook}")
+    expected_alert_rules = {f"isa-{_cl}-{suffix}" for suffix in rule_suffixes}
     managed_alert_rules = [
         rule
         for rule in alert_rules

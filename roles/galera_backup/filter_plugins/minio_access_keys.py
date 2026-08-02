@@ -30,6 +30,14 @@ def minio_service_account_keys(output: str) -> list[str]:
             continue
         record = _json_object(raw_line, f"line {line_number}")
         accounts = record.get("svcaccs")
+        if accounts is None:
+            # Swiezo postawione MinIO zwraca dla principala bez kont serwisowych:
+            #   {"status":"success","user":"...","stsKeys":null,"svcaccs":null}
+            # `null` to legalne "zero kont", nie uszkodzone wyjscie — inaczej
+            # pierwszy backup na nowej instancji nie moze przejsc. Wartosc
+            # OBECNA, ale zlego typu nadal jest bledem: to znak, ze `mc`
+            # zmienil kontrakt i cicha akceptacja gubilaby istniejace klucze.
+            continue
         if not isinstance(accounts, list):
             raise ValueError(f"line {line_number} svcaccs must be a list")
         for account in accounts:

@@ -23,8 +23,16 @@ ANSIBLE = os.environ.get("ANSIBLE", "ansible")
 
 with open(CONFIG_PATH, encoding="utf-8") as fh:
     CLUSTER = yaml.safe_load(fh)
+with open(INVENTORY, encoding="utf-8") as fh:
+    INVENTORY_DATA = yaml.safe_load(fh)
 
 CLUSTER_NAME = CLUSTER["cluster"]["name"]
+# Nazwa hosta restore wg inventory — NIE zaszyte "rnode1". Klaster moze miec
+# wezel nazwany inaczej (tu: f10r1); wtedy regex w body() nie trafial w naglowek
+# ansible, funkcja zwracala CALE wyjscie razem z "host | CHANGED | rc=0 >>",
+# a json.loads padal na pierwszym znaku. Ta sama klasa bledu byla juz naprawiana
+# w chaos-split-brain.py — patrz komentarz przy MINORITY.
+RESTORE_HOST = next(iter(INVENTORY_DATA["all"]["children"]["restore"]["hosts"]))
 STATE_FILE = f"/opt/galera-backup/clusters/{CLUSTER_NAME}/state.json"
 RESTORE_SCHEDULE = str(CLUSTER["backup"].get("restore_test_schedule", "0 4 * * 0"))
 
@@ -60,7 +68,7 @@ def main():
         return 1
 
     try:
-        state = json.loads(body("rnode1", r.stdout))
+        state = json.loads(body(RESTORE_HOST, r.stdout))
     except (json.JSONDecodeError, ValueError) as exc:
         print(f"FAIL: cannot parse restore state: {exc}")
         return 1
