@@ -111,9 +111,16 @@
     # Konsument wspolnej pary rejestruje w PMM tylko WLASNE wezly. Wezly ProxySQL
     # sa juz zarejestrowane przez ownera pod jego etykieta, a pmm-agent ma jedna
     # tozsamosc node per host — druga rejestracja to konflikt, nie duplikat.
+    # Hosty obslugiwane przez lokalnego pmm-agenta (monitoring.agent_groups) sa
+    # rejestrowane przez f11_pmm_agent.yml jako wezly NATYWNE. Rejestracja ich tu
+    # jako generic + external node-exporter dalaby dwa wpisy dla jednego hosta.
+    pmm_agent_managed_hosts: >-
+      {{ (monitoring.agent_groups | default([])) | map('extract', groups) | select('defined')
+         | map('list') | flatten | unique | list }}
     pmm_node_hosts: >-
-      {{ (groups.get('galera', []) if (proxysql.role | default('owner')) == 'consumer'
-          else groups.get('galera', []) + groups.get('proxysql', [])) | unique | list }}
+      {{ ((groups.get('galera', []) if (proxysql.role | default('owner')) == 'consumer'
+          else groups.get('galera', []) + groups.get('proxysql', []))
+          | difference(pmm_agent_managed_hosts)) | unique | list }}
     pmm_node_names: "{{ pmm_node_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
     pmm_mysql_hosts: "{{ groups.get('galera', []) }}"
     pmm_mysql_names: "{{ pmm_mysql_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"

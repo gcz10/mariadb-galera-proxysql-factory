@@ -8,7 +8,9 @@
   # Konsument wspolnej pary ProxySQL nie rejestruje jej wezlow: pmm-agent ma
   # JEDNA tozsamosc node per host, wiec druga rejestracja pod etykieta drugiego
   # klastra to konflikt, nie duplikat. Wezly ProxySQL nalezą do ownera.
-  hosts: "{{ 'galera' if (proxysql.role | default('owner')) == 'consumer' else 'galera:proxysql' }}"
+  # Hosty z pmm-agentem maja node_exporter Z PACZKI — tarball dublowalby
+  # eksporter na 9100 i rejestracje tego samego wezla. Patrz f11_pmm_agent.yml.
+  hosts: "{{ (('galera' if (proxysql.role | default('owner')) == 'consumer' else 'galera:proxysql') ~ ('' if (monitoring.agent_groups | default([])) | length == 0 else ':!' ~ ((monitoring.agent_groups | default([])) | join(':!')))) }}"
   become: true
   serial: 1
   vars_files:

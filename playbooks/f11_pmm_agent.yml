@@ -1,0 +1,318 @@
+---
+# F11 — pmm-client (pmm-agent) na wybranych hostach.
+#
+# DLACZEGO ISTNIEJE: domyslna sciezka repo jest AGENTLESS — PMM Server sam laczy
+# sie do baz, a node_exporter jest tarballem z GitHuba. Dziala, ale:
+#   * stockowe dashboardy ProxySQL sa MARTWE (0/40 metryk) — oczekuja namespace'u
+#     Perconowego proxysql_exportera, a restapi ProxySQL emituje inne nazwy,
+#   * tarball nie ma kanalu aktualizacji (brak dnf, brak cyklu zycia pakietu),
+#   * konto monitorujace musi byc otwarte na siec (pmm_monitor@%).
+# pmm-client rozwiazuje wszystkie trzy — kosztem paczki na hoscie.
+#
+# ZAKRES: host dostaje agenta, gdy jego grupa jest w `monitoring.agent_groups`
+# danego klastra. Konsument wspolnej pary ProxySQL nie rusza jej wezlow (naleza
+# do ownera) — patrz proxysql.role.
+#
+# TRYB METRYK: zawsze `push`. Domyslka `pmm-admin add` to `auto`, ktore w tym
+# srodowisku wybiera `pull`, a pull wymaga otwarcia 42000-51999 przychodzaco —
+# czego minimalna polityka firewalld (ISC-5) nie dopuszcza. Zweryfikowane:
+# przy `auto` eksporter startowal, ale `up=0` i curl z PMM zwracal 000.
+#
+# SEKRETY: haslo PMM idzie przez PMM_AGENT_SERVER_PASSWORD (env), haslo bazy/
+# ProxySQL przez body zadania API. `pmm-admin add` przyjmuje je tylko jako
+# --password w argv, co lamie ISC-43 — dlatego uslugi tworzymy przez API.
+
+- name: "F11 — zainstaluj i zarejestruj pmm-agent"
+  hosts: all
+  become: true
+  serial: 1
+  vars_files:
+    - "../{{ versions.lock_file }}"
+  vars:
+    pmm_agent_target: >-
+      {{ (group_names | intersect(monitoring.agent_groups | default([])) | length > 0)
+         and not ((proxysql.role | default('owner')) == 'consumer'
+                  and (group_names | intersect(['proxysql', 'infra']) | length > 0)) }}
+    pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    pmm_server_host: "{{ monitoring.pmm.server_url | regex_replace('^https?://', '') | regex_replace('/$', '') }}"
+    pmm_node_name: "{{ monitoring.pmm.cluster_name }}-{{ inventory_hostname }}"
+  environment:
+    PMM_AGENT_SERVER_ADDRESS: "{{ pmm_server_host }}:443"
+    PMM_AGENT_SERVER_USERNAME: admin
+    PMM_AGENT_SERVER_PASSWORD: "{{ pmm_admin_password }}"
+    PMM_AGENT_SERVER_INSECURE_TLS: "1"
+    PMM_AGENT_CONFIG_FILE: /usr/local/percona/pmm/config/pmm-agent.yaml
+
+  tasks:
+    - name: "Pomin hosty spoza monitoring.agent_groups"
+      ansible.builtin.meta: end_host
+      when: not (pmm_agent_target | bool)
+
+    - name: "Wymagaj hasla PMM poza repozytorium"
+      ansible.builtin.assert:
+        that: pmm_admin_password | length > 0
+        fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium."
+
+    - name: "Repozytorium Percony"
+      ansible.builtin.dnf:
+        name: "{{ pmm_client.release_rpm }}"
+        state: present
+        disable_gpg_check: true
+      register: pmm_release_rpm
+      changed_when: pmm_release_rpm.changed
+
+    - name: "Wlacz komponent pmm3-client"
+      ansible.builtin.command:
+        argv: [percona-release, enable, "{{ pmm_client.repo_component }}"]
+      args:
+        creates: "/etc/yum.repos.d/percona-{{ pmm_client.repo_component }}.repo"
+
+    - name: "Zainstaluj PRZYPIETA wersje pmm-client"
+      ansible.builtin.dnf:
+        name: "{{ pmm_client.package }}"
+        state: present
+        allow_downgrade: true
+
+    - name: "Sprawdz, czy agent jest juz skonfigurowany"
+      ansible.builtin.command:
+        argv: [pmm-admin, status, --json]
+      register: pmm_state
+      changed_when: false
+      failed_when: false
+
+    - name: "Zarejestruj wezel (haslo przez env, nie argv)"
+      ansible.builtin.command:
+        argv:
+          - pmm-agent
+          - setup
+          - --force
+          - --server-insecure-tls
+          - "{{ ansible_host }}"
+          - generic
+          - "{{ pmm_node_name }}"
+      # Nie wystarczy 'czy zainstalowany': agent moze byc skonfigurowany, ale
+      # jego wezel usuniety po stronie serwera — wtedy status zwraca rc=0,
+      # a agent nigdy sie nie polaczy. Kryterium jest POLACZENIE.
+      when: pmm_state.rc != 0 or not ((pmm_state.stdout | default('{}') | from_json).pmm_agent_status.connected | default(false))
+      changed_when: true
+
+    - name: "Wlacz i zrestartuj pmm-agent"
+      ansible.builtin.systemd_service:
+        name: pmm-agent
+        state: restarted
+        enabled: true
+      when: pmm_state.rc != 0 or not ((pmm_state.stdout | default('{}') | from_json).pmm_agent_status.connected | default(false))
+
+    - name: "Poczekaj na polaczenie agenta"
+      ansible.builtin.command:
+        argv: [pmm-admin, status, --json]
+      register: pmm_ready
+      until: pmm_ready.rc == 0 and (pmm_ready.stdout | from_json).pmm_agent_status.connected | default(false)
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: "Zapamietaj identyfikatory agenta"
+      ansible.builtin.set_fact:
+        pmm_local_agent_id: "{{ (pmm_ready.stdout | from_json).pmm_agent_status.agent_id }}"
+        pmm_local_node_id: "{{ (pmm_ready.stdout | from_json).pmm_agent_status.node_id }}"
+
+    # node_exporter niesie teraz pmm-agent. Tarballowy standalone zostawiony
+    # dzialalby rownolegle na 9100 i dublowal metryki tego samego hosta.
+    - name: "Zatrzymaj samodzielny node_exporter (zastapiony przez agenta)"
+      ansible.builtin.systemd_service:
+        name: node_exporter
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    # KRYTYCZNE: runner backupu pisze metryki do /var/lib/node_exporter/textfile_collector
+    # (roles/galera_backup/templates/config.json.j2). Ten katalog obslugiwal tarballowy
+    # node_exporter, ktory wlasnie zatrzymalismy — node_exporter Z PACZKI czyta wlasne
+    # katalogi. Bez tego kroku runner dalej PISZE pliki, ale nikt ich nie czyta:
+    # galera_backup_* i isa_restore_test_* znikaja, a alerty backup-failed/backup-stale/
+    # restore-drill-stale CICHO przestaja dzialac. To wygaszenie alertowania backupu,
+    # nie kosmetyka.
+    #
+    # Podpinamy KATALOG, nie pliki: runner podmienia pliki atomowym rename (nowy inode),
+    # wiec symlink do pliku wskazywalby po pierwszym backupie na usuniety inode.
+    # Zweryfikowane: po swiezym backupie unixtime metryki faktycznie rosnie.
+    - name: "Sprawdz domyslny katalog textfile PMM"
+      ansible.builtin.stat:
+        path: /usr/local/percona/pmm/collectors/textfile-collector/medium-resolution
+      register: pmm_textfile_stat
+
+    - name: "Podepnij katalog textfile runnera pod node_exporter z paczki"
+      block:
+        - name: "Usun domyslny katalog textfile PMM (jesli nie jest juz symlinkiem)"
+          ansible.builtin.file:
+            path: "{{ pmm_textfile_dir }}"
+            state: absent
+          when: pmm_textfile_stat.stat.islnk is not defined or not pmm_textfile_stat.stat.islnk
+
+        - name: "Symlink na katalog metryk runnera"
+          ansible.builtin.file:
+            src: /var/lib/node_exporter/textfile_collector
+            dest: "{{ pmm_textfile_dir }}"
+            state: link
+      vars:
+        pmm_textfile_dir: /usr/local/percona/pmm/collectors/textfile-collector/medium-resolution
+
+- name: "F11 — zarejestruj uslugi bazodanowe pod lokalnym agentem"
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+  vars_files:
+    - "../{{ versions.lock_file }}"
+  vars:
+    pmm_api: "{{ monitoring.pmm.server_url | regex_replace('/$', '') }}"
+    pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    pmm_monitor_password: "{{ lookup('ansible.builtin.env', 'PMM_MONITOR_PASSWORD') }}"
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    pmm_agent_hosts: >-
+      {{ hostvars | dict2items
+         | selectattr('value.pmm_local_agent_id', 'defined')
+         | map(attribute='key') | list }}
+
+  tasks:
+    - name: "Nic do zrobienia, gdy zaden host nie ma agenta"
+      ansible.builtin.meta: end_play
+      when: pmm_agent_hosts | length == 0
+
+    - name: "Pobierz aktualne uslugi"
+      ansible.builtin.uri:
+        url: "{{ pmm_api }}/v1/inventory/services"
+        method: GET
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ monitoring.pmm.validate_certs | default(false) }}"
+      register: pmm_svcs
+      no_log: true
+
+    - name: "Utworz usluge ProxySQL pod lokalnym agentem"
+      ansible.builtin.uri:
+        url: "{{ pmm_api }}/v1/inventory/services"
+        method: POST
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ monitoring.pmm.validate_certs | default(false) }}"
+        body_format: json
+        body:
+          proxysql:
+            node_id: "{{ hostvars[item].pmm_local_node_id }}"
+            service_name: "{{ monitoring.pmm.cluster_name }}-{{ item }}-proxysql"
+            address: 127.0.0.1
+            port: 6032
+            cluster: "{{ monitoring.pmm.cluster_name }}"
+            environment: "{{ cluster.environment }}"
+        status_code: [200, 409]
+      loop: "{{ pmm_agent_hosts | select('in', groups.get('proxysql', [])) | list }}"
+      register: pmm_new_proxysql
+      when: (monitoring.pmm.cluster_name ~ '-' ~ item ~ '-proxysql')
+            not in (pmm_svcs.json.proxysql | default([]) | map(attribute='service_name') | list)
+
+    - name: "Utworz usluge MySQL pod lokalnym agentem"
+      ansible.builtin.uri:
+        url: "{{ pmm_api }}/v1/inventory/services"
+        method: POST
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ monitoring.pmm.validate_certs | default(false) }}"
+        body_format: json
+        body:
+          mysql:
+            node_id: "{{ hostvars[item].pmm_local_node_id }}"
+            service_name: "{{ monitoring.pmm.cluster_name }}-{{ item }}-mysql-agent"
+            address: 127.0.0.1
+            port: 3306
+            cluster: "{{ monitoring.pmm.cluster_name }}"
+            environment: "{{ cluster.environment }}"
+        status_code: [200, 409]
+      loop: "{{ pmm_agent_hosts | select('in', groups.get('galera', [])) | list }}"
+      register: pmm_new_mysql
+      when: (monitoring.pmm.cluster_name ~ '-' ~ item ~ '-mysql-agent')
+            not in (pmm_svcs.json.mysql | default([]) | map(attribute='service_name') | list)
+
+    - name: "Odswiez liste uslug po utworzeniu"
+      ansible.builtin.uri:
+        url: "{{ pmm_api }}/v1/inventory/services"
+        method: GET
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ monitoring.pmm.validate_certs | default(false) }}"
+      register: pmm_svcs_now
+      no_log: true
+
+    - name: "Pobierz istniejacych agentow"
+      ansible.builtin.uri:
+        url: "{{ pmm_api }}/v1/inventory/agents"
+        method: GET
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ monitoring.pmm.validate_certs | default(false) }}"
+      register: pmm_agents_now
+      no_log: true
+
+    # push_metrics: true jest OBOWIAZKOWE — bez niego PMM wybiera 'auto', ktore
+    # tu konczy sie trybem pull i cichym up=0 (firewall nie przepuszcza 42000+).
+    - name: "Utworz proxysql_exporter (push) pod lokalnym agentem"
+      ansible.builtin.uri:
+        url: "{{ pmm_api }}/v1/inventory/agents"
+        method: POST
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ monitoring.pmm.validate_certs | default(false) }}"
+        body_format: json
+        body:
+          proxysql_exporter:
+            pmm_agent_id: "{{ hostvars[item].pmm_local_agent_id }}"
+            service_id: >-
+              {{ (pmm_svcs_now.json.proxysql | default([]))
+                 | selectattr('service_name', 'equalto', monitoring.pmm.cluster_name ~ '-' ~ item ~ '-proxysql')
+                 | map(attribute='service_id') | first }}
+            username: "{{ proxysql_remote_admin_user | default('isa_admin') }}"
+            password: "{{ proxysql_admin_password }}"
+            push_metrics: true
+        status_code: [200, 409]
+      loop: "{{ pmm_agent_hosts | select('in', groups.get('proxysql', [])) | list }}"
+      when: >-
+        ((pmm_svcs_now.json.proxysql | default([]))
+         | selectattr('service_name', 'equalto', monitoring.pmm.cluster_name ~ '-' ~ item ~ '-proxysql')
+         | map(attribute='service_id') | first | default('__none__'))
+        not in ((pmm_agents_now.json.proxysql_exporter | default([])) | map(attribute='service_id') | list)
+      no_log: true
+
+    - name: "Utworz mysqld_exporter (push) pod lokalnym agentem"
+      ansible.builtin.uri:
+        url: "{{ pmm_api }}/v1/inventory/agents"
+        method: POST
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ monitoring.pmm.validate_certs | default(false) }}"
+        body_format: json
+        body:
+          mysqld_exporter:
+            pmm_agent_id: "{{ hostvars[item].pmm_local_agent_id }}"
+            service_id: >-
+              {{ (pmm_svcs_now.json.mysql | default([]))
+                 | selectattr('service_name', 'equalto', monitoring.pmm.cluster_name ~ '-' ~ item ~ '-mysql-agent')
+                 | map(attribute='service_id') | first }}
+            username: pmm_monitor
+            password: "{{ pmm_monitor_password }}"
+            push_metrics: true
+        status_code: [200, 409]
+      loop: "{{ pmm_agent_hosts | select('in', groups.get('galera', [])) | list }}"
+      when: >-
+        ((pmm_svcs_now.json.mysql | default([]))
+         | selectattr('service_name', 'equalto', monitoring.pmm.cluster_name ~ '-' ~ item ~ '-mysql-agent')
+         | map(attribute='service_id') | first | default('__none__'))
+        not in ((pmm_agents_now.json.mysqld_exporter | default([])) | map(attribute='service_id') | list)
+      no_log: true

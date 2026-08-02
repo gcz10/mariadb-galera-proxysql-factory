@@ -42,9 +42,24 @@ PROXYSQL_HOSTS = INVENTORY_GROUPS["proxysql"]["hosts"]
 OWNS_SHARED_TIER = (
     (CLUSTER_CONFIG.get("proxysql") or {}).get("role", "owner") == "owner"
 )
-MONITORED_HOSTS = (
+# Hosty z LOKALNYM pmm-agentem (monitoring.agent_groups) sa w PMM wezlami
+# NATYWNYMI: node_exporter pochodzi z paczki pmm-client, nie z tarballa, i nie
+# ma dla nich uslugi `external`. Kontrakt jest wiec dwutrybowy — mieszanie go
+# dawaloby falszywe FAIL na kazdym zmigrowanym hoscie.
+AGENT_GROUPS = set((CLUSTER_CONFIG.get("monitoring") or {}).get("agent_groups") or [])
+_GROUPS = {"galera": GALERA_HOSTS, "proxysql": PROXYSQL_HOSTS}
+AGENT_HOSTS = {
+    host
+    for group in AGENT_GROUPS
+    for host in _GROUPS.get(group, {})
+    if OWNS_SHARED_TIER or group != "proxysql"
+}
+PROXYSQL_VIA_AGENT = bool(AGENT_GROUPS & {"proxysql"}) and OWNS_SHARED_TIER
+_ALL_MONITORED = (
     {**GALERA_HOSTS, **PROXYSQL_HOSTS} if OWNS_SHARED_TIER else dict(GALERA_HOSTS)
 )
+# Zbior sprawdzany sciezka AGENTLESS (external node-exporter + wersja tarballa).
+MONITORED_HOSTS = {h: v for h, v in _ALL_MONITORED.items() if h not in AGENT_HOSTS}
 EXPECTED_NODES = {}
 for host_name, host_vars in MONITORED_HOSTS.items():
     address = host_vars.get(
@@ -59,6 +74,8 @@ EXPECTED_MYSQL = {
 EXPECTED_NODE_EXPORTERS = {f"{name}-node-exporter" for name in EXPECTED_NODES}
 # Pierwszy wezel Galera wg inventory — NIE zaszyte "gnode1".
 FIRST_GALERA_NODE = f"{CLUSTER}-{next(iter(GALERA_HOSTS))}"
+# Nazwa uslugi jest ta sama w obu trybach; rozni sie TYP (external vs native),
+# wiec sprawdzenie ponizej wybiera odpowiednia liste uslug.
 EXPECTED_PROXYSQL = (
     {f"{CLUSTER}-{host_name}-proxysql" for host_name in PROXYSQL_HOSTS}
     if OWNS_SHARED_TIER
@@ -395,10 +412,16 @@ def main():
             )
 
     # ISC-46: ProxySQL metrics — external services (group=proxysql) + agents (port 6070).
+    # Tryb per host: wezel z lokalnym agentem ma usluge NATYWNA typu `proxysql`,
+    # agentless — usluge `external` (grupa proxysql, restapi na 6070).
     managed_proxysql_services = [
         service
         for service in services.get("external", [])
         if service.get("cluster") == CLUSTER and service.get("group") == "proxysql"
+    ] + [
+        service
+        for service in services.get("proxysql", [])
+        if service.get("cluster") == CLUSTER
     ]
     check(
         sorted(service["service_name"] for service in managed_proxysql_services)

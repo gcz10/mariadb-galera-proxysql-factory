@@ -116,6 +116,9 @@ monitoring:
     cluster_name: "fc10-galera"
     validate_certs: false
     credentials_revision: 1
+  # Owner wspolnej pary: to on instaluje pmm-agenta na fcp1/fcp2.
+  # Wlasne wezly Galera zostaja AGENTLESS — punkt odniesienia do porownania z r9.
+  agent_groups: ["proxysql"]
   system: "pmm"
   alerts:
     email: "ops@claude.local"

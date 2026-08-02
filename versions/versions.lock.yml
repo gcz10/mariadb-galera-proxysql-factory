@@ -120,3 +120,19 @@ repositories:
     integrity_control: "sha256-pinned-rpm"   # proxysql.rpm_sha256
 
 # Status: LOCKED — promowany z candidate.lock.yml 2026-07-22 (F0 PASS na lab-cluster).
+
+pmm_client:
+  # Agent PMM instalowany z repozytorium Percony (pmm3-client), NIE tarball.
+  # Wersja MUSI byc <= wersji serwera (pmm.version powyzej) — dokumentacja Percony
+  # wymaga kolejnosci: najpierw serwer, potem klient. Repo oferuje juz 3.9.0;
+  # przypinamy 3.8.1, bo taki jest serwer.
+  version: "3.8.1"
+  rpm_release: "1.el9"
+  package: "pmm-client-3.8.1-1.el9"
+  repo_component: "pmm3-client"
+  release_rpm: "https://repo.percona.com/yum/percona-release-latest.noarch.rpm"
+  # Tryb metryk MUSI byc jawnie 'push'. Domyslka `pmm-admin add` to 'auto', ktore
+  # w tym srodowisku wybiera 'pull' — a pull wymaga otwarcia 42000-51999
+  # przychodzaco, czego minimalna polityka firewalld (ISC-5) nie dopuszcza.
+  metrics_mode: "push"
+  source: "https://docs.percona.com/percona-monitoring-and-management/3/install-pmm/install-pmm-client/package_manager.html"

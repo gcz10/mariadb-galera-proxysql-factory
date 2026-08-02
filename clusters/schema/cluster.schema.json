@@ -256,6 +256,12 @@
             "credentials_revision": { "type": "integer", "minimum": 1 }
           }
         },
+        "agent_groups": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["galera", "proxysql", "restore", "infra"] },
+          "description": "Grupy hostow, ktore dostaja lokalnego pmm-agenta (pakiet pmm-client) zamiast domyslnego trybu agentless. Pusta lista = cala flota agentless: node_exporter z tarballa, a mysqld_exporter/QAN zdalnie z PMM Server. Wezly wspoldzielone obsluguje wylacznie owner pary ProxySQL."
+        },
         "system": { "type": "string" },
         "log_destination": { "type": "string" },
         "alerts": {
