@@ -30,6 +30,13 @@ bind-address = 0.0.0.0
 
 # === Tuning (produkcja: nadpisz przez mariadb_tuning w cluster.yml; lab: minimalne wartości) ===
 innodb_buffer_pool_size = {{ (mariadb_tuning | default({})).innodb_buffer_pool_size | default('256M') }}
+
+# QAN (Query Analytics) w PMM zrodlem danych ma performance_schema. MariaDB — w
+# odroznieniu od MySQL — ma je domyslnie WYLACZONE, wiec agenci QAN dzialali, ale
+# nie mieli czego zbierac: mysql_perf_schema_events_statements_total mial ZERO
+# serii przy dzialajacych metrykach zwyklych. Wlaczamy jawnie; koszt to ~200-400 MB
+# RAM na wezel, dlatego jest to parametr, a nie wartosc zaszyta.
+performance_schema = {{ (mariadb_tuning | default({})).performance_schema | default('ON') }}
 innodb_log_file_size = {{ (mariadb_tuning | default({})).innodb_log_file_size | default('128M') }}
 max_connections = {{ (mariadb_tuning | default({})).max_connections | default(50) }}
 

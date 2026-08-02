@@ -3,55 +3,144 @@
   "title": "cluster.yml schema",
   "description": "Schema konfiguracji klastra. Każda sekcja ma required + additionalProperties:false, żeby puste sekcje (np. proxysql: {}) NIE przechodziły walidacji.",
   "type": "object",
-  "required": ["cluster", "platform", "versions", "galera", "proxysql", "tls", "network", "secrets", "storage", "availability", "backup", "monitoring"],
+  "required": [
+    "cluster",
+    "platform",
+    "versions",
+    "galera",
+    "proxysql",
+    "tls",
+    "network",
+    "secrets",
+    "storage",
+    "availability",
+    "backup",
+    "monitoring"
+  ],
   "additionalProperties": false,
   "properties": {
     "cluster": {
       "type": "object",
-      "required": ["name", "environment", "profile", "automation_release"],
+      "required": [
+        "name",
+        "environment",
+        "profile",
+        "automation_release"
+      ],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "environment": { "type": "string", "enum": ["production", "staging", "laboratory"] },
-        "profile": { "type": "string", "enum": ["production", "staging", "laboratory"] },
-        "automation_release": { "type": "string" }
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "environment": {
+          "type": "string",
+          "enum": [
+            "production",
+            "staging",
+            "laboratory"
+          ]
+        },
+        "profile": {
+          "type": "string",
+          "enum": [
+            "production",
+            "staging",
+            "laboratory"
+          ]
+        },
+        "automation_release": {
+          "type": "string"
+        }
       }
     },
     "platform": {
       "type": "object",
-      "required": ["virtualization", "rocky_linux_major"],
+      "required": [
+        "virtualization",
+        "rocky_linux_major"
+      ],
       "additionalProperties": false,
       "properties": {
-        "virtualization": { "type": "string", "enum": ["vmware_esxi", "proxmox_kvm", "docker_orbstack"] },
-        "rocky_linux_major": { "type": "integer", "enum": [9, 10] }
+        "virtualization": {
+          "type": "string",
+          "enum": [
+            "vmware_esxi",
+            "proxmox_kvm",
+            "docker_orbstack"
+          ]
+        },
+        "rocky_linux_major": {
+          "type": "integer",
+          "enum": [
+            9,
+            10
+          ]
+        }
       }
     },
     "versions": {
       "type": "object",
-      "required": ["policy", "lock_file"],
+      "required": [
+        "policy",
+        "lock_file"
+      ],
       "additionalProperties": false,
       "properties": {
-        "policy": { "type": "string", "enum": ["locked", "candidate", "research-only"] },
-        "lock_file": { "type": "string", "minLength": 1 }
+        "policy": {
+          "type": "string",
+          "enum": [
+            "locked",
+            "candidate",
+            "research-only"
+          ]
+        },
+        "lock_file": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "galera": {
       "type": "object",
-      "required": ["cluster_name", "nodes_expected"],
+      "required": [
+        "cluster_name",
+        "nodes_expected"
+      ],
       "additionalProperties": false,
       "properties": {
-        "cluster_name": { "type": "string", "minLength": 1 },
-        "nodes_expected": { "type": "integer", "minimum": 1 }
+        "cluster_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nodes_expected": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "proxysql": {
       "type": "object",
-      "required": ["nodes_expected", "max_writers", "read_write_split_enabled", "endpoint"],
+      "required": [
+        "nodes_expected",
+        "max_writers",
+        "read_write_split_enabled",
+        "endpoint"
+      ],
       "additionalProperties": false,
       "properties": {
-        "nodes_expected": { "type": "integer", "minimum": 2 },
-        "max_writers": { "type": "integer", "const": 1 },
-        "read_write_split_enabled": { "type": "boolean", "const": false },
+        "nodes_expected": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "max_writers": {
+          "type": "integer",
+          "const": 1
+        },
+        "read_write_split_enabled": {
+          "type": "boolean",
+          "const": false
+        },
         "hostgroup_base": {
           "type": "integer",
           "minimum": 10,
@@ -65,20 +154,49 @@
         },
         "role": {
           "type": "string",
-          "enum": ["owner", "consumer"],
+          "enum": [
+            "owner",
+            "consumer"
+          ],
           "description": "Kto zarządza WĘZŁAMI ProxySQL/infra: 'owner' instaluje i utrzymuje warstwę wspólną, 'consumer' tylko rejestruje w niej swoje hostgroupy przez f7. Domyślnie owner. Na wspólnej parze DOKŁADNIE JEDEN klaster może być ownerem — drugi owner nadpisałby pakiety ProxySQL wersją ze swojego lockfile (inny EL major) i zdublował eksportery w PMM."
         },
         "endpoint": {
-          "required": ["type", "address", "port"],
+          "required": [
+            "type",
+            "address",
+            "port"
+          ],
           "additionalProperties": false,
           "properties": {
-            "type": { "type": "string", "enum": ["external_load_balancer", "keepalived_vip", "dns"] },
-            "address": { "type": "string", "minLength": 1, "not": { "pattern": "PLACEHOLDER" } },
-            "port": { "type": "integer", "default": 6033 }
+            "type": {
+              "type": "string",
+              "enum": [
+                "external_load_balancer",
+                "keepalived_vip",
+                "dns"
+              ]
+            },
+            "address": {
+              "type": "string",
+              "minLength": 1,
+              "not": {
+                "pattern": "PLACEHOLDER"
+              }
+            },
+            "port": {
+              "type": "integer",
+              "default": 6033
+            }
           },
           "allOf": [
             {
-              "if": { "properties": { "type": { "const": "keepalived_vip" } } },
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "keepalived_vip"
+                  }
+                }
+              },
               "then": {
                 "properties": {
                   "address": {
@@ -93,184 +211,496 @@
     },
     "tls": {
       "type": "object",
-      "required": ["mode"],
+      "required": [
+        "mode"
+      ],
       "additionalProperties": false,
       "properties": {
-        "mode": { "type": "string", "enum": ["disabled", "full"] },
-        "certificate_source": { "type": "string" },
-        "ca_reference": { "type": "string" },
-        "certificate_reference": { "type": "string" },
-        "private_key_reference": { "type": "string" },
-        "require_secure_transport": { "type": "boolean" }
+        "mode": {
+          "type": "string",
+          "enum": [
+            "disabled",
+            "full"
+          ]
+        },
+        "certificate_source": {
+          "type": "string"
+        },
+        "ca_reference": {
+          "type": "string"
+        },
+        "certificate_reference": {
+          "type": "string"
+        },
+        "private_key_reference": {
+          "type": "string"
+        },
+        "require_secure_transport": {
+          "type": "boolean"
+        }
       },
       "allOf": [
         {
-          "if": { "properties": { "mode": { "const": "full" } }, "required": ["mode"] },
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "full"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
           "then": {
-            "required": ["certificate_source", "ca_reference", "certificate_reference", "private_key_reference"]
+            "required": [
+              "certificate_source",
+              "ca_reference",
+              "certificate_reference",
+              "private_key_reference"
+            ]
           }
         }
       ]
     },
     "network": {
       "type": "object",
-      "required": ["application_cidrs", "database_cluster_cidrs", "administration_cidrs", "monitoring_cidrs"],
+      "required": [
+        "application_cidrs",
+        "database_cluster_cidrs",
+        "administration_cidrs",
+        "monitoring_cidrs"
+      ],
       "additionalProperties": false,
       "properties": {
-        "application_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
-        "database_cluster_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
-        "administration_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
-        "monitoring_cidrs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+        "application_cidrs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "database_cluster_cidrs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "administration_cidrs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "monitoring_cidrs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "secrets": {
       "type": "object",
-      "required": ["backend"],
+      "required": [
+        "backend"
+      ],
       "additionalProperties": false,
       "description": "UWAGA: aktualna implementacja czyta sekrety wyłącznie ze zmiennych środowiskowych (lookup env). backend=ansible_vault jest zadeklarowany do przyszłej integracji; do czasu jej wdrożenia ustawiaj *_PASSWORD / *_KEY w środowisku operatora / BACKUP_SECRETS_FILE.",
       "properties": {
-        "backend": { "type": "string", "enum": ["ansible_vault", "hashicorp_vault", "external"] }
+        "backend": {
+          "type": "string",
+          "enum": [
+            "ansible_vault",
+            "hashicorp_vault",
+            "external"
+          ]
+        }
       }
     },
     "storage": {
       "type": "object",
-      "required": ["data_directory", "backup_staging_directory", "filesystem", "expected_database_size_gb", "expected_growth_gb_per_month", "available_iops"],
+      "required": [
+        "data_directory",
+        "backup_staging_directory",
+        "filesystem",
+        "expected_database_size_gb",
+        "expected_growth_gb_per_month",
+        "available_iops"
+      ],
       "additionalProperties": false,
       "properties": {
-        "data_directory": { "type": "string" },
-        "backup_staging_directory": { "type": "string" },
-        "filesystem": { "type": "string", "enum": ["xfs", "ext4"] },
-        "expected_database_size_gb": { "type": ["string", "number"] },
-        "expected_growth_gb_per_month": { "type": ["string", "number"] },
-        "available_iops": { "type": ["string", "number"] }
+        "data_directory": {
+          "type": "string"
+        },
+        "backup_staging_directory": {
+          "type": "string"
+        },
+        "filesystem": {
+          "type": "string",
+          "enum": [
+            "xfs",
+            "ext4"
+          ]
+        },
+        "expected_database_size_gb": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "expected_growth_gb_per_month": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "available_iops": {
+          "type": [
+            "string",
+            "number"
+          ]
+        }
       }
     },
     "availability": {
       "type": "object",
-      "required": ["rpo", "rto_node_failure", "rto_full_cluster_failure", "maintenance_window", "allowed_service_interruption"],
+      "required": [
+        "rpo",
+        "rto_node_failure",
+        "rto_full_cluster_failure",
+        "maintenance_window",
+        "allowed_service_interruption"
+      ],
       "additionalProperties": false,
       "properties": {
-        "rpo": { "type": "string" },
-        "rto_node_failure": { "type": "string" },
-        "rto_full_cluster_failure": { "type": "string" },
-        "maintenance_window": { "type": "string" },
-        "allowed_service_interruption": { "type": "string" }
+        "rpo": {
+          "type": "string"
+        },
+        "rto_node_failure": {
+          "type": "string"
+        },
+        "rto_full_cluster_failure": {
+          "type": "string"
+        },
+        "maintenance_window": {
+          "type": "string"
+        },
+        "allowed_service_interruption": {
+          "type": "string"
+        }
       }
     },
     "backup": {
       "type": "object",
-      "required": ["enabled", "destination", "full_backup_schedule", "incremental_backup_schedule", "freshness_sla_hours", "retention_days", "encryption_enabled", "immutable_or_offsite_copy", "restore_test_schedule", "scheduler"],
+      "required": [
+        "enabled",
+        "destination",
+        "full_backup_schedule",
+        "incremental_backup_schedule",
+        "freshness_sla_hours",
+        "retention_days",
+        "encryption_enabled",
+        "immutable_or_offsite_copy",
+        "restore_test_schedule",
+        "scheduler"
+      ],
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "destination": { "type": "string", "enum": ["s3", "smb", "filesystem"] },
-        "full_backup_schedule": { "type": "string" },
-        "incremental_backup_schedule": { "type": "string" },
-        "freshness_sla_hours": { "type": "integer", "minimum": 1 },
-        "retention_days": { "type": ["integer", "string"] },
-        "encryption_enabled": { "type": "boolean" },
-        "immutable_or_offsite_copy": { "type": "boolean" },
-        "restore_test_schedule": { "type": "string" },
+        "enabled": {
+          "type": "boolean"
+        },
+        "destination": {
+          "type": "string",
+          "enum": [
+            "s3",
+            "smb",
+            "filesystem"
+          ]
+        },
+        "full_backup_schedule": {
+          "type": "string"
+        },
+        "incremental_backup_schedule": {
+          "type": "string"
+        },
+        "freshness_sla_hours": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "retention_days": {
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "encryption_enabled": {
+          "type": "boolean"
+        },
+        "immutable_or_offsite_copy": {
+          "type": "boolean"
+        },
+        "restore_test_schedule": {
+          "type": "string"
+        },
         "scheduler": {
           "type": "object",
-          "required": ["mode", "host", "timezone"],
+          "required": [
+            "mode",
+            "host",
+            "timezone"
+          ],
           "additionalProperties": false,
           "properties": {
-            "mode": { "type": "string", "enum": ["cron", "manual"] },
-            "host": { "type": "string", "minLength": 1 },
-            "timezone": { "type": "string", "const": "UTC" }
+            "mode": {
+              "type": "string",
+              "enum": [
+                "cron",
+                "manual"
+              ]
+            },
+            "host": {
+              "type": "string",
+              "minLength": 1
+            },
+            "timezone": {
+              "type": "string",
+              "const": "UTC"
+            }
           }
         },
         "s3": {
           "type": "object",
-          "required": ["endpoint", "bucket"],
+          "required": [
+            "endpoint",
+            "bucket"
+          ],
           "additionalProperties": false,
           "properties": {
-            "endpoint": { "type": "string", "minLength": 1 },
-            "bucket": { "type": "string", "minLength": 1 },
-            "region": { "type": "string" },
-            "secure": { "type": "boolean" }
+            "endpoint": {
+              "type": "string",
+              "minLength": 1
+            },
+            "bucket": {
+              "type": "string",
+              "minLength": 1
+            },
+            "region": {
+              "type": "string"
+            },
+            "secure": {
+              "type": "boolean"
+            }
           }
         },
         "smb": {
           "type": "object",
-          "required": ["source", "mount_point", "options"],
+          "required": [
+            "source",
+            "mount_point",
+            "options"
+          ],
           "additionalProperties": false,
           "properties": {
-            "source": { "type": "string", "pattern": "^//" },
-            "mount_point": { "type": "string", "pattern": "^/" },
+            "source": {
+              "type": "string",
+              "pattern": "^//"
+            },
+            "mount_point": {
+              "type": "string",
+              "pattern": "^/"
+            },
             "options": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             }
           }
         },
         "filesystem": {
           "type": "object",
-          "required": ["mount_point", "expected_fstype"],
+          "required": [
+            "mount_point",
+            "expected_fstype"
+          ],
           "additionalProperties": false,
           "properties": {
-            "mount_point": { "type": "string", "pattern": "^/" },
-            "expected_fstype": { "type": "string", "minLength": 1 }
+            "mount_point": {
+              "type": "string",
+              "pattern": "^/"
+            },
+            "expected_fstype": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       },
       "allOf": [
         {
-          "if": { "properties": { "destination": { "const": "s3" } } },
+          "if": {
+            "properties": {
+              "destination": {
+                "const": "s3"
+              }
+            }
+          },
           "then": {
-            "required": ["s3"],
-            "not": { "anyOf": [{ "required": ["smb"] }, { "required": ["filesystem"] }] }
+            "required": [
+              "s3"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "smb"
+                  ]
+                },
+                {
+                  "required": [
+                    "filesystem"
+                  ]
+                }
+              ]
+            }
           }
         },
         {
-          "if": { "properties": { "destination": { "const": "smb" } } },
+          "if": {
+            "properties": {
+              "destination": {
+                "const": "smb"
+              }
+            }
+          },
           "then": {
-            "required": ["smb"],
-            "not": { "anyOf": [{ "required": ["s3"] }, { "required": ["filesystem"] }] }
+            "required": [
+              "smb"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "s3"
+                  ]
+                },
+                {
+                  "required": [
+                    "filesystem"
+                  ]
+                }
+              ]
+            }
           }
         },
         {
-          "if": { "properties": { "destination": { "const": "filesystem" } } },
+          "if": {
+            "properties": {
+              "destination": {
+                "const": "filesystem"
+              }
+            }
+          },
           "then": {
-            "required": ["filesystem"],
-            "not": { "anyOf": [{ "required": ["s3"] }, { "required": ["smb"] }] }
+            "required": [
+              "filesystem"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "s3"
+                  ]
+                },
+                {
+                  "required": [
+                    "smb"
+                  ]
+                }
+              ]
+            }
           }
         }
       ]
     },
     "monitoring": {
       "type": "object",
-      "required": ["pmm", "system", "log_destination"],
+      "required": [
+        "pmm",
+        "system",
+        "log_destination"
+      ],
       "additionalProperties": false,
       "properties": {
         "pmm": {
           "type": "object",
-          "required": ["server_url", "agent_id", "cluster_name", "validate_certs", "credentials_revision"],
+          "required": [
+            "server_url",
+            "agent_id",
+            "cluster_name",
+            "validate_certs",
+            "credentials_revision"
+          ],
           "additionalProperties": false,
           "properties": {
-            "server_url": { "type": "string", "pattern": "^https://" },
-            "agent_id": { "type": "string", "minLength": 1 },
-            "cluster_name": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$" },
-            "validate_certs": { "type": "boolean" },
-            "credentials_revision": { "type": "integer", "minimum": 1 }
+            "server_url": {
+              "type": "string",
+              "pattern": "^https://"
+            },
+            "agent_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cluster_name": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "validate_certs": {
+              "type": "boolean"
+            },
+            "credentials_revision": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         },
         "agent_groups": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "type": "string", "enum": ["galera", "proxysql", "restore", "infra"] },
+          "items": {
+            "type": "string",
+            "enum": [
+              "galera",
+              "proxysql",
+              "restore",
+              "infra"
+            ]
+          },
           "description": "Grupy hostow, ktore dostaja lokalnego pmm-agenta (pakiet pmm-client) zamiast domyslnego trybu agentless. Pusta lista = cala flota agentless: node_exporter z tarballa, a mysqld_exporter/QAN zdalnie z PMM Server. Wezly wspoldzielone obsluguje wylacznie owner pary ProxySQL."
         },
-        "system": { "type": "string" },
-        "log_destination": { "type": "string" },
+        "system": {
+          "type": "string"
+        },
+        "log_destination": {
+          "type": "string"
+        },
         "alerts": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "email": { "type": "string" },
-            "folder_uid": { "type": "string" },
-            "datasource_uid": { "type": "string" }
+            "email": {
+              "type": "string"
+            },
+            "folder_uid": {
+              "type": "string"
+            },
+            "datasource_uid": {
+              "type": "string"
+            }
           }
         }
       }
@@ -279,12 +709,42 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "peak_qps": { "type": ["string", "number"] },
-        "peak_connections": { "type": ["string", "number"] },
-        "read_write_ratio": { "type": ["string", "number"] },
-        "largest_transaction_mb": { "type": ["string", "number"] },
-        "largest_table_gb": { "type": ["string", "number"] },
-        "expected_write_latency_ms": { "type": ["string", "number"] }
+        "peak_qps": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "peak_connections": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "read_write_ratio": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "largest_transaction_mb": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "largest_table_gb": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "expected_write_latency_ms": {
+          "type": [
+            "string",
+            "number"
+          ]
+        }
       }
     },
     "mariadb_tuning": {
@@ -292,12 +752,39 @@
       "additionalProperties": false,
       "description": "Opcjonalne. gcache.size ustal z calc-gcache.py (ISC-68); pominięcie => bezpieczne 128M.",
       "properties": {
-        "innodb_buffer_pool_size": { "type": "string" },
-        "innodb_log_file_size": { "type": "string" },
-        "max_connections": { "type": ["integer", "string"] },
-        "innodb_flush_log_at_trx_commit": { "type": ["integer", "string"] },
-        "gcache_page_size": { "type": "string" },
-        "gcache_size": { "type": "string", "pattern": "^[0-9]+[MG]$" }
+        "innodb_buffer_pool_size": {
+          "type": "string"
+        },
+        "innodb_log_file_size": {
+          "type": "string"
+        },
+        "max_connections": {
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "innodb_flush_log_at_trx_commit": {
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "gcache_page_size": {
+          "type": "string"
+        },
+        "gcache_size": {
+          "type": "string",
+          "pattern": "^[0-9]+[MG]$"
+        },
+        "performance_schema": {
+          "type": "string",
+          "enum": [
+            "ON",
+            "OFF"
+          ],
+          "description": "Zrodlo danych dla QAN w PMM. MariaDB domyslnie ma OFF, przez co QAN jest pusty mimo dzialajacych agentow. Domyslnie ON; koszt ~200-400 MB RAM na wezel."
+        }
       }
     }
   }
