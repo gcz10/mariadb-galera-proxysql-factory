@@ -67,9 +67,17 @@
       # Metryka ZWERYFIKOWANA na claude-pve: proxysql_mysql_servers_status NIE ISTNIEJE w PMM 3.
       # Właściwa: proxysql_connpool_conns_status (cluster, hostgroup, endpoint, service_name;
       # 1=ONLINE, 2=SHUNNED, 4=OFFLINE_HARD). Zdrowo: >=1 seria ONLINE w writer hostgroup.
+      #
+      # BRAK FILTRA `cluster` JEST CELOWY — nie przywracaj go.
+      # Para ProxySQL jest WSPOLNA dla floty i rejestruje ja w PMM wylacznie owner,
+      # wiec KAZDA seria proxysql_* nosi etykiete cluster= ownera, takze te opisujace
+      # hostgroupy konsumenta. Filtr cluster="<konsument>" nie trafial w nic, `or vector(0)`
+      # dawal 0 i regula palila sie na stale jako critical, mimo dzialajacego writera.
+      # Wlasciwym dyskryminatorem najemcy jest hostgroup: ID sa globalnie rozlaczne na
+      # wspolnej parze, co wymusza tests/validation/probe-proxysql-tenancy.py.
       - uid: "isa-{{ cluster_label }}-no-writer"
         title: "ProxySQL no ONLINE writer (writer hostgroup empty)"
-        expr: "(count(proxysql_connpool_conns_status{cluster=\"{{ cluster_label }}\",hostgroup=\"{{ galera_writer_hg }}\"} == 1) or vector(0)) < bool 1"
+        expr: "(count(proxysql_connpool_conns_status{hostgroup=\"{{ galera_writer_hg }}\"} == 1) or vector(0)) < bool 1"
         summary: "No ONLINE backend in ProxySQL writer hostgroup {{ galera_writer_hg }} — writes will fail"
         severity: "critical"
         noDataState: "Alerting"

@@ -199,6 +199,41 @@ def main():
         f"expected {sorted(expected_alert_rules)}",
         failures,
     )
+
+    # Sonda sprawdzala DOTAD tylko, czy reguly ISTNIEJA — nie czy sa spelnione.
+    # Przez te luke przeszedl falszywie dodatni `no-writer` na klastrze-konsumencie:
+    # regula filtrowala metryki ProxySQL po etykiecie `cluster`, a te nosi wylacznie
+    # owner wspolnej pary, wiec zapytanie nie trafialo w nic i `or vector(0)` palilo
+    # alert na stale przy w pelni sprawnym writerze. Po udanym buildzie ZADNA
+    # zarzadzana regula nie ma prawa sie palic — inaczej albo klaster jest chory,
+    # albo regula jest zla. Oba przypadki musza oblewac.
+    rule_states = get_json("/graph/api/prometheus/grafana/api/v1/rules")
+    state_groups = (rule_states or {}).get("data", {}).get("groups", [])
+    evaluated = [
+        rule
+        for group in state_groups
+        for rule in group.get("rules", [])
+        if rule.get("labels", {}).get("managed_by") == "ansible"
+        and rule.get("labels", {}).get("cluster") == CLUSTER
+    ]
+    # FAIL-CLOSED: pusta odpowiedz (zly endpoint, 404, HTML zamiast JSON) dalaby
+    # `firing == []` i cichy PASS przy ZEROWYM pokryciu. Reguly musza sie znalezc.
+    check(
+        len(evaluated) == len(expected_alert_rules),
+        f"ISC-47 stan regul nieodczytany: API zwrocilo {len(evaluated)} "
+        f"zarzadzanych regul dla {CLUSTER}, oczekiwano {len(expected_alert_rules)}",
+        failures,
+    )
+    firing = sorted(
+        rule.get("name", rule.get("uid", "?"))
+        for rule in evaluated
+        if rule.get("state") == "firing"
+    )
+    check(
+        not firing,
+        f"ISC-47 zarzadzane reguly alertowe sie pala: {firing}",
+        failures,
+    )
     backup_failure_rule = next(
         (
             rule
