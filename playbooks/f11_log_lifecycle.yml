@@ -3,7 +3,9 @@
 # Satisfies: ISC-48.
 
 - name: "F11 - skonfiguruj rotację logów monitoringu i baz"
-  hosts: all
+  # Konsument konfiguruje rotacje tylko na WLASNYCH hostach — wezly ProxySQL
+  # i infra naleza do ownera pary i on nimi zarzadza.
+  hosts: "{{ 'galera:restore' if (proxysql.role | default('owner')) == 'consumer' else 'all' }}"
   become: true
   serial: 1
 

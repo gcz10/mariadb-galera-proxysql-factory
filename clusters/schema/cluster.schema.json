@@ -63,6 +63,11 @@
           "minLength": 1,
           "description": "Nazwa użytkownika aplikacyjnego. Domyślnie app_user. mysql_users w ProxySQL jest tabelą globalną, a default_hostgroup tego wpisu wybiera klaster — na wspólnej parze ProxySQL nazwy MUSZĄ być rozłączne."
         },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "consumer"],
+          "description": "Kto zarządza WĘZŁAMI ProxySQL/infra: 'owner' instaluje i utrzymuje warstwę wspólną, 'consumer' tylko rejestruje w niej swoje hostgroupy przez f7. Domyślnie owner. Na wspólnej parze DOKŁADNIE JEDEN klaster może być ownerem — drugi owner nadpisałby pakiety ProxySQL wersją ze swojego lockfile (inny EL major) i zdublował eksportery w PMM."
+        },
         "endpoint": {
           "required": ["type", "address", "port"],
           "additionalProperties": false,

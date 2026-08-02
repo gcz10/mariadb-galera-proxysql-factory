@@ -30,6 +30,13 @@
         fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
 
   tasks:
+    # Metryki wspolnej pary ProxySQL rejestruje JEJ owner. Konsument, ktory by
+    # je zarejestrowal ponownie pod wlasna etykieta, zdublowalby eksporter na
+    # tym samym porcie 6070 i rozjechal tozsamosc node w pmm-agent.
+    - name: "Konsument warstwy wspolnej — pomin metryki ProxySQL"
+      ansible.builtin.meta: end_play
+      when: (proxysql.role | default('owner')) == 'consumer'
+
     - name: "Sprawdź aktualny stan admin-restapi_enabled (runtime)"
       ansible.builtin.shell: >-
         mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
@@ -105,6 +112,10 @@
         fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium oraz użyj PMM URL z https://."
 
   tasks:
+    - name: "Konsument warstwy wspolnej — pomin rejestracje ProxySQL w PMM"
+      ansible.builtin.meta: end_play
+      when: (proxysql.role | default('owner')) == 'consumer'
+
     # === Pobierz node IDs dla węzłów ProxySQL ===
     - name: "Pobierz PMM node inventory"
       ansible.builtin.uri:

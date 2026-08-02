@@ -35,8 +35,18 @@ CLUSTER = PMM_CONFIG["cluster_name"]
 INVENTORY_GROUPS = INVENTORY["all"]["children"]
 GALERA_HOSTS = INVENTORY_GROUPS["galera"]["hosts"]
 PROXYSQL_HOSTS = INVENTORY_GROUPS["proxysql"]["hosts"]
+# Wezly ProxySQL sa WSPOLNE dla floty i rejestruje je w PMM wylacznie owner pary.
+# Konsument nie ma tam wlasnych eksporterow — pmm-agent ma jedna tozsamosc node
+# per host, wiec oczekiwanie ich pod etykieta konsumenta bylo by zadaniem stanu,
+# ktory NIE POWINIEN istniec (i ktorego f11 celowo nie tworzy).
+OWNS_SHARED_TIER = (
+    (CLUSTER_CONFIG.get("proxysql") or {}).get("role", "owner") == "owner"
+)
+MONITORED_HOSTS = (
+    {**GALERA_HOSTS, **PROXYSQL_HOSTS} if OWNS_SHARED_TIER else dict(GALERA_HOSTS)
+)
 EXPECTED_NODES = {}
-for host_name, host_vars in {**GALERA_HOSTS, **PROXYSQL_HOSTS}.items():
+for host_name, host_vars in MONITORED_HOSTS.items():
     address = host_vars.get(
         "galera_node_address",
         host_vars.get("proxysql_node_address", host_vars["ansible_host"]),
@@ -49,9 +59,11 @@ EXPECTED_MYSQL = {
 EXPECTED_NODE_EXPORTERS = {f"{name}-node-exporter" for name in EXPECTED_NODES}
 # Pierwszy wezel Galera wg inventory — NIE zaszyte "gnode1".
 FIRST_GALERA_NODE = f"{CLUSTER}-{next(iter(GALERA_HOSTS))}"
-EXPECTED_PROXYSQL = {
-    f"{CLUSTER}-{host_name}-proxysql" for host_name in PROXYSQL_HOSTS
-}
+EXPECTED_PROXYSQL = (
+    {f"{CLUSTER}-{host_name}-proxysql" for host_name in PROXYSQL_HOSTS}
+    if OWNS_SHARED_TIER
+    else set()
+)
 EXPECTED_CREDENTIALS_REVISION = str(PMM_CONFIG["credentials_revision"])
 EXPECTED_NODE_EXPORTER_VERSION = str(VERSION_LOCK["node_exporter"]["version"])
 EXPECTED_PMM_VERSION = str(VERSION_LOCK["pmm"]["version"])

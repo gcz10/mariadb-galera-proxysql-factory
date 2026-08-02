@@ -32,6 +32,7 @@ import yaml
 
 DEFAULT_BASE = 10
 DEFAULT_APP_USER = "app_user"
+DEFAULT_ROLE = "owner"
 
 
 def main():
@@ -53,6 +54,7 @@ def main():
                 "path": path,
                 "base": int(proxysql.get("hostgroup_base", DEFAULT_BASE)),
                 "app_user": proxysql.get("app_user", DEFAULT_APP_USER),
+                "role": proxysql.get("role", DEFAULT_ROLE),
             }
         )
 
@@ -60,6 +62,14 @@ def main():
     for endpoint, clusters in sorted(by_endpoint.items()):
         if len(clusters) < 2:
             continue
+        owners = [e["name"] for e in clusters if e["role"] == "owner"]
+        if len(owners) != 1:
+            violations.append(
+                f"{endpoint}: dokladnie JEDEN klaster musi miec proxysql.role=owner, "
+                f"jest {len(owners)} ({owners or 'brak'}). Dwoch ownerow nadpisze sobie "
+                f"pakiety ProxySQL z roznych lockfile i zdubluje eksportery w PMM; "
+                f"zero ownerow oznacza, ze nikt tej warstwy nie instaluje."
+            )
         seen_base = {}
         seen_user = {}
         for entry in clusters:

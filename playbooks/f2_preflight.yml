@@ -9,6 +9,14 @@
   gather_facts: true
   serial: 1
   max_fail_percentage: 0
+  vars:
+    # Hosty warstwy wspolnej (proxysql/infra) naleza do OWNERA pary ProxySQL.
+    # Konsument nie instaluje tam pakietow, wiec jego lockfile nie opisuje ich
+    # systemu — wspolne ProxySQL moze stac na innym EL major niz baza tego
+    # klastra i to jest poprawne, a nie blad konfiguracji.
+    f2_lockfile_applies: >-
+      {{ (proxysql.role | default('owner')) == 'owner'
+         or not ('proxysql' in group_names or 'infra' in group_names) }}
   tasks:
     # R1/A1: lockfile wskazywany per klaster (versions.lock_file z cluster.yml),
     # nie ścieżka wpisana na sztywno. Ten sam wzorzec co f2_install — jedna konwencja w repo.
@@ -25,6 +33,7 @@
         fail_msg: >-
           Host musi byc Rocky Linux {{ lock.rocky_linux.major }} (wg lockfile),
           jest {{ ansible_distribution }} {{ ansible_distribution_major_version }}
+      when: f2_lockfile_applies | bool
 
     # R1/D: allowed_minors bylo martwa dana. compatibility-report.md deklarowal
     # kontrole minora "w F2 preflight", ktorej nie bylo w kodzie. Teraz jest.
@@ -35,6 +44,7 @@
         fail_msg: >-
           Minor {{ ansible_distribution_version }} nie jest w allowed_minors
           {{ lock.rocky_linux.allowed_minors }} - zaktualizuj hosty albo lockfile
+      when: f2_lockfile_applies | bool
 
     # R1: spojnosc wewnetrzna lockfile. `repo_setup_args` i `version` to dwa niezalezne
     # pola opisujace te sama serie MariaDB - rozjechanie sie ich instaluje inna wersje,

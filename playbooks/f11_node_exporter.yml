@@ -5,7 +5,10 @@
 # Satisfies (partial): ISC-46 (metryki trafiają do PMM).
 
 - name: "Monitoring - instaluj node_exporter"
-  hosts: galera:proxysql
+  # Konsument wspolnej pary ProxySQL nie rejestruje jej wezlow: pmm-agent ma
+  # JEDNA tozsamosc node per host, wiec druga rejestracja pod etykieta drugiego
+  # klastra to konflikt, nie duplikat. Wezly ProxySQL nalezą do ownera.
+  hosts: "{{ 'galera' if (proxysql.role | default('owner')) == 'consumer' else 'galera:proxysql' }}"
   become: true
   serial: 1
   vars_files:

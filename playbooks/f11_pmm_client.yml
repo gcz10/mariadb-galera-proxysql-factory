@@ -108,7 +108,12 @@
     pmm_credentials_revision_effective: "{{ monitoring.get('pmm', {}).get('credentials_revision', 1) | string }}"
     pmm_environment_effective: "{{ cluster.environment }}"
     pmm_cluster_name_effective: "{{ monitoring.get('pmm', {}).get('cluster_name', cluster.name) }}"
-    pmm_node_hosts: "{{ (groups.get('galera', []) + groups.get('proxysql', [])) | unique | list }}"
+    # Konsument wspolnej pary rejestruje w PMM tylko WLASNE wezly. Wezly ProxySQL
+    # sa juz zarejestrowane przez ownera pod jego etykieta, a pmm-agent ma jedna
+    # tozsamosc node per host — druga rejestracja to konflikt, nie duplikat.
+    pmm_node_hosts: >-
+      {{ (groups.get('galera', []) if (proxysql.role | default('owner')) == 'consumer'
+          else groups.get('galera', []) + groups.get('proxysql', [])) | unique | list }}
     pmm_node_names: "{{ pmm_node_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
     pmm_mysql_hosts: "{{ groups.get('galera', []) }}"
     pmm_mysql_names: "{{ pmm_mysql_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"

@@ -185,7 +185,9 @@
         fail_msg: >-
           Brak sha256 dla ProxySQL {{ lock.proxysql.version }} arch {{ ansible_architecture }}
           w versions.lock.yml (proxysql.rpm_sha256). Dodaj przed instalacją (audit#6).
-      when: "'proxysql' in group_names"
+      when: >-
+        'proxysql' in group_names
+        and (proxysql.role | default('owner')) == 'owner'
 
     - name: "ProxySQL - pobierz RPM z weryfikacją sha256 (audit#6)"
       ansible.builtin.get_url:
@@ -194,24 +196,32 @@
         checksum: "sha256:{{ (lock.proxysql.rpm_sha256 | default({})).get(ansible_architecture) }}"
         mode: "0644"
       register: proxysql_rpm_dl
-      when: "'proxysql' in group_names"
+      when: >-
+        'proxysql' in group_names
+        and (proxysql.role | default('owner')) == 'owner'
 
     - name: "ProxySQL - usun stary repo file (jesli istnieje)"
       ansible.builtin.file:
         path: /etc/yum.repos.d/proxysql.repo
         state: absent
-      when: "'proxysql' in group_names"
+      when: >-
+        'proxysql' in group_names
+        and (proxysql.role | default('owner')) == 'owner'
     - name: "ProxySQL - instaluj zweryfikowany RPM (sha256 = kontrola integralności)"
       ansible.builtin.dnf:
         name: "{{ proxysql_rpm_dl.dest }}"
         state: present
         disable_gpg_check: true  # klucz binarny nieimportowalny; sha256 zweryfikowane przez get_url
-      when: "'proxysql' in group_names"
+      when: >-
+        'proxysql' in group_names
+        and (proxysql.role | default('owner')) == 'owner'
     - name: "ProxySQL - instaluj klienta mariadb (wymagany do admin port 6032)"
       ansible.builtin.dnf:
         name: mariadb
         state: present
-      when: "'proxysql' in group_names"
+      when: >-
+        'proxysql' in group_names
+        and (proxysql.role | default('owner')) == 'owner'
 
     # === Wspolne: time sync ===
     - name: Instaluj i wlacz chrony
