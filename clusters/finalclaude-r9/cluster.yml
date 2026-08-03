@@ -124,7 +124,7 @@ monitoring:
     # Namespace regul alertow i folderow w PMM — musi byc rozlaczny z fc10-galera.
     cluster_name: "fc9-galera"
     validate_certs: false
-    credentials_revision: 1
+    credentials_revision: 2
   # Wezly Galera tego klastra dostaja lokalnego pmm-agenta (porownanie z r10,
   # ktory zostaje agentless). ProxySQL pomijamy — nalezy do ownera (r10).
   agent_groups: ["galera"]

@@ -417,17 +417,21 @@
         force_basic_auth: true
         validate_certs: "{{ monitoring.pmm.validate_certs | default(false) }}"
         body_format: json
-        body:
-          "qan_mysql_{{ monitoring.qan_source | default('perfschema') }}_agent":
-            pmm_agent_id: "{{ hostvars[item].pmm_local_agent_id }}"
-            service_id: >-
-              {{ (pmm_svcs_now.json.mysql | default([]))
-                 | selectattr('service_name', 'equalto', monitoring.pmm.cluster_name ~ '-' ~ item ~ '-mysql-agent')
-                 | map(attribute='service_id') | first }}
-            username: pmm_monitor
-            password: "{{ pmm_monitor_password }}"
-            custom_labels:
-              credentials_revision: "{{ pmm_credentials_revision_effective }}"
+        # Klucz ciala jest ZMIENNY (typ agenta wynika z monitoring.qan_source), a
+        # templatowany klucz YAML nie rozwiazuje sie w ciele `uri` — PMM dostawal
+        # "invalid agent type <nil>" i odrzucal zadanie golym 400. Cale cialo musi
+        # byc jednym wyrazeniem Jinja. To zadanie nigdy nie utworzylo agenta QAN.
+        body: >-
+          {{ {pmm_qan_agent_key: {
+                'pmm_agent_id': hostvars[item].pmm_local_agent_id,
+                'service_id': ((pmm_svcs_now.json.mysql | default([]))
+                  | selectattr('service_name', 'equalto',
+                               monitoring.pmm.cluster_name ~ '-' ~ item ~ '-mysql-agent')
+                  | map(attribute='service_id') | first),
+                'username': 'pmm_monitor',
+                'password': pmm_monitor_password,
+                'custom_labels': {
+                  'credentials_revision': pmm_credentials_revision_effective}}} }}
         status_code: [200, 409]
       loop: "{{ pmm_agent_hosts | select('in', groups.get('galera', [])) | list }}"
       when: >-
