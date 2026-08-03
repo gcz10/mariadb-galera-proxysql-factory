@@ -5,6 +5,7 @@
 - Uses multiple AI coding assistants/providers (switches between GLM, GPT, Kimi, Claude models). Confidence: 0.75
 - Shares previous session output to maintain context continuity across sessions. Confidence: 0.7
 - Expects code review findings to be verified against the actual code (full files), not just the diff — treats diff-only analysis as unreliable. Confidence: 0.95
+- Prefers strictly read-only code reviews — explicitly instructs the assistant not to modify any files during a review ("nic nie zmieniaj"). Confidence: 0.8
 - Demands empirical verification of claims (e.g., running ansible-playbook to confirm behavior) before accepting a review finding; rejects findings based on untested assumptions ("Premisa zmyślona"). Confidence: 0.95
 - Strongly dislikes when an assistant claims "I checked" but didn't actually verify — considers it the worst type of review error. Confidence: 0.9
 - Requires internal consistency in reviews: if the same pattern appears in multiple places, either all instances are flagged or none are. Confidence: 0.9
@@ -13,3 +14,4 @@
 - Prefers a single source of truth for configuration values (e.g., one canonical variable for hostgroup) rather than scattered `| default()` fallbacks. Confidence: 0.85
 - Prefers wiring existing but unused test probes into CI over creating new validation from scratch. Confidence: 0.8
 - Knows CI tool limitations deeply (e.g., `--syntax-check` doesn't template `environment` blocks) and expects recommendations to account for what the tool actually catches. Confidence: 0.85
+- Asks for the assistant's own qualitative opinion on the code ("co sadzisz o tym kodzie?") after a docs/diff-level review — expects review scope to extend to the actual implementation (probes, playbooks, configs) and include a clear evaluative verdict, not just documentation facts. Confidence: 0.6

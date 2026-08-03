@@ -93,6 +93,11 @@ QAN_AGENT_TYPE = (
 EXPECTED_NODE_EXPORTERS = {
     f"{CLUSTER}-{host}-node-exporter" for host in AGENTLESS_HOSTS
 }
+# Podzial wezlow wg trybu. Asercje SZCZEGOLOWE musza sie rozejsc, bo na hoscie z
+# lokalnym pmm-agentem node_exporter jest AGENTEM pod pmm_agent_id, a nie usluga
+# `external` — zadanie uslugi dawaloby falszywy FAIL na zdrowej instalacji.
+AGENT_NODES = {f"{CLUSTER}-{host}" for host in _ALL_MONITORED if host in AGENT_HOSTS}
+AGENTLESS_NODES = {f"{CLUSTER}-{host}" for host in AGENTLESS_HOSTS}
 # Pierwszy wezel Galera wg inventory — NIE zaszyte "gnode1".
 FIRST_GALERA_NODE = f"{CLUSTER}-{next(iter(GALERA_HOSTS))}"
 # Nazwa uslugi jest ta sama w obu trybach; rozni sie TYP (external vs native),
@@ -150,10 +155,17 @@ def check(condition, message, failures):
         failures.append(message)
 
 def wait_for_fresh_metrics(queries, started_at, timeout=90):
-    """Poll instant queries until every expected series was scraped after this probe."""
+    """Poll instant queries until every expected series was scraped after this probe.
+
+    Kazda runda odpytuje KOMPLET zapytan. Wczesniej petla przerywala sie na pierwszym
+    niespelnionym warunku, wiec wszystkie dalsze zapytania nigdy nie trafialy do
+    wyniku i raportowaly sie jako `[]` — jedna realna usterka produkowala kilkanascie
+    widmowych "brak metryki" dla danych, ktore w rzeczywistosci plynely.
+    """
     deadline = time.monotonic() + timeout
     latest = {}
     while True:
+        pending = False
         for name, (query, expected_count) in queries.items():
             try:
                 response = get_json(f"/prometheus/api/v1/query?query={query}")
@@ -164,10 +176,8 @@ def wait_for_fresh_metrics(queries, started_at, timeout=90):
             if len(results) != expected_count or not all(
                 float(result["value"][0]) >= started_at for result in results
             ):
-                break
-        else:
-            return latest
-        if time.monotonic() >= deadline:
+                pending = True
+        if not pending or time.monotonic() >= deadline:
             return latest
         time.sleep(2)
 
@@ -388,7 +398,7 @@ def main():
     for agent in agents.get("external_exporter", []):
         external_agents.setdefault(agent.get("service_id"), []).append(agent)
 
-    for node_name in EXPECTED_NODES:
+    for node_name in sorted(AGENTLESS_NODES):
         service_name = f"{node_name}-node-exporter"
         service = external_services.get(service_name)
         check(
@@ -432,6 +442,42 @@ def main():
                 failures,
             )
 
+    # Tryb agentowy: node_exporter to agent uruchomiony przez lokalnego pmm-agenta.
+    # Pominiecie tych hostow daloby falszywy PASS przy martwym eksporterze, wiec
+    # sprawdzamy ten sam fakt w ksztalcie, w ktorym on tu wystepuje.
+    local_agent_by_node = {
+        agent.get("runs_on_node_id"): agent for agent in agents.get("pmm_agent", [])
+    }
+    for node_name in sorted(AGENT_NODES):
+        node = generic_nodes.get(node_name)
+        if not node:
+            continue
+        local = local_agent_by_node.get(node.get("node_id"))
+        check(
+            local is not None,
+            f"missing local pmm-agent on node: {node_name}",
+            failures,
+        )
+        if not local:
+            continue
+        matches = [
+            agent
+            for agent in agents.get("node_exporter", [])
+            if agent.get("pmm_agent_id") == local.get("agent_id")
+        ]
+        check(
+            len(matches) == 1,
+            f"expected one node_exporter agent under local pmm-agent for "
+            f"{node_name}, got {len(matches)}",
+            failures,
+        )
+        if len(matches) == 1:
+            check(
+                matches[0].get("status") == "AGENT_STATUS_RUNNING",
+                f"node_exporter agent not running: {node_name}",
+                failures,
+            )
+
     # ISC-46: ProxySQL metrics — external services (group=proxysql) + agents (port 6070).
     # Tryb per host: wezel z lokalnym agentem ma usluge NATYWNA typu `proxysql`,
     # agentless — usluge `external` (grupa proxysql, restapi na 6070).
@@ -469,28 +515,53 @@ def main():
                 f"{node_name} attached to wrong node",
                 failures,
             )
-        agent_matches = [
-            a for a in external_agents.get(service.get("service_id"), [])
-            if a.get("listen_port") == 6070
-        ]
+        # Ksztalt zalezy od trybu hosta: agentless ma agenta `external_exporter`
+        # odpytujacego restapi ProxySQL na 6070, host z lokalnym agentem —
+        # natywnego `proxysql_exporter` pod tym agentem. Sprawdzamy ten, ktory
+        # dla danego hosta jest poprawny, zeby martwy eksporter nadal oblewal.
+        host_node = node_name[: -len("-proxysql")]
+        if host_node in AGENT_NODES:
+            agent_matches = [
+                agent
+                for agent in agents.get("proxysql_exporter", [])
+                if agent.get("service_id") == service.get("service_id")
+            ]
+            kind = "native proxysql_exporter"
+        else:
+            agent_matches = [
+                agent
+                for agent in external_agents.get(service.get("service_id"), [])
+                if agent.get("listen_port") == 6070
+            ]
+            kind = "external-exporter agent (port 6070)"
         check(
             len(agent_matches) == 1,
-            f"expected one external-exporter agent (port 6070) for {node_name}, "
-            f"got {len(agent_matches)}",
+            f"expected one {kind} for {node_name}, got {len(agent_matches)}",
             failures,
         )
         if len(agent_matches) == 1:
             check(
                 agent_matches[0].get("status") == "AGENT_STATUS_RUNNING",
-                f"proxysql external-exporter not running: {node_name}",
+                f"proxysql exporter not running: {node_name}",
                 failures,
             )
-            check(
-                agent_matches[0].get("scheme") == "http"
-                and agent_matches[0].get("metrics_path") == "/metrics",
-                f"proxysql external-exporter target differs: {node_name}",
-                failures,
-            )
+            if host_node in AGENT_NODES:
+                # Bez push metryki cicho nie doplywaja: PMM wybralby tryb pull,
+                # a minimalna polityka firewalld nie przepuszcza portow 42000+.
+                # API PRZYJMUJE `push_metrics`, a ZWRACA `push_metrics_enabled` —
+                # pytanie o nazwe zapisu zawsze dawalo brak pola i falszywy FAIL.
+                check(
+                    bool(agent_matches[0].get("push_metrics_enabled")),
+                    f"proxysql exporter not in push mode: {node_name}",
+                    failures,
+                )
+            else:
+                check(
+                    agent_matches[0].get("scheme") == "http"
+                    and agent_matches[0].get("metrics_path") == "/metrics",
+                    f"proxysql external-exporter target differs: {node_name}",
+                    failures,
+                )
 
     managed_mysql_services = [
         service
@@ -525,10 +596,18 @@ def main():
                 f"{service_name} attached to wrong node",
                 failures,
             )
+        # Lokalny agent laczy sie z baza przez petle zwrotna wezla, na ktorym stoi;
+        # adres wezla widzialby tylko exporter zdalny. Oczekiwanie jednego adresu
+        # dla obu trybow oblewalo poprawna instalacje pmm-client.
+        expected_address = (
+            "127.0.0.1" if node_name in AGENT_NODES else EXPECTED_NODES[node_name]
+        )
         check(
-            service.get("address") == EXPECTED_NODES[node_name]
+            service.get("address") == expected_address
             and service.get("port") == 3306,
-            f"{service_name} targets wrong address or port",
+            f"{service_name} targets wrong address or port "
+            f"(oczekiwano {expected_address}:3306, jest "
+            f"{service.get('address')}:{service.get('port')})",
             failures,
         )
 
@@ -598,8 +677,17 @@ def main():
     node_alt = _alt(EXPECTED_NODES)
     mysql_alt = _alt(EXPECTED_MYSQL)
     galera_service = sorted(EXPECTED_MYSQL)[0]
-    node_query = quote(f'node_load1{{node_name=~"{node_alt}"}}')
-    node_build_query = quote(f'node_exporter_build_info{{node_name=~"{node_alt}"}}')
+    # Agregacja po node_name, NIE filtr po rozdzielczosci: lokalny agent publikuje
+    # kazda metryke w hr/mr/lr, eksporter zewnetrzny tylko w jednej, a ktora — zalezy
+    # od metryki (node_load1 trafia gdzie indziej niz build_info). Kazdy filtr `job`
+    # gubil wiec jeden z trybow; `max by` daje dokladnie jedna serie na wezel w obu.
+    node_query = quote(
+        f'max by (node_name) (node_load1{{node_name=~"{node_alt}"}})'
+    )
+    node_build_query = quote(
+        f'max by (node_name, version) '
+        f'(node_exporter_build_info{{node_name=~"{node_alt}"}})'
+    )
     mysql_query = quote(f'mysql_up{{service_name=~"{mysql_alt}",job=~".*_hr"}}')
     galera_query = quote(
         f'mysql_global_status_wsrep_cluster_size{{service_name="{galera_service}"}}'
@@ -608,9 +696,18 @@ def main():
         name: quote(f'{name}{{cluster="{CLUSTER}"}}')
         for name in ALL_STATE_METRICS
     }
-    proxysql_query = quote(
-        f'proxysql_servers_table_version_total{{cluster="{CLUSTER}",external_group="proxysql"}}'
-    )
+    # Nazwa metryki zalezy od zrodla: eksporter zewnetrzny odpytuje restapi ProxySQL
+    # i emituje `proxysql_servers_table_version_total` z etykieta `external_group`,
+    # natywny proxysql_exporter Percony — `proxysql_up` bez tej etykiety.
+    if PROXYSQL_HOSTS and all(host in AGENT_HOSTS for host in PROXYSQL_HOSTS):
+        proxysql_query = quote(
+            f'max by (service_name, node_name) '
+            f'(proxysql_up{{cluster="{CLUSTER}"}})'
+        )
+    else:
+        proxysql_query = quote(
+            f'proxysql_servers_table_version_total{{cluster="{CLUSTER}",external_group="proxysql"}}'
+        )
     metric_queries = {
         "nodes": (node_query, len(EXPECTED_NODES)),
         "node_build": (node_build_query, len(EXPECTED_NODES)),
@@ -641,10 +738,27 @@ def main():
         result["metric"].get("node_name"): result["metric"].get("version")
         for result in node_build_results
     }
+    # Wersje niosa DWA rozne kontrakty. Agentless pobiera tarball wskazany w
+    # lockfile, wiec musi zgadzac sie co do znaku. Host z pmm-clientem dostaje
+    # eksporter z paczki — jego wersja wynika z PRZYPIETEJ wersji pmm-client i
+    # jest sprawdzana osobno; tutaj wymagamy, by w ogole sie raportowala, bo
+    # brak wpisu oznacza martwy eksporter, a nie inny model wersjonowania.
+    expected_node_versions = {
+        name: EXPECTED_NODE_EXPORTER_VERSION for name in AGENTLESS_NODES
+    }
     check(
-        measured_node_versions
-        == {name: EXPECTED_NODE_EXPORTER_VERSION for name in EXPECTED_NODES},
-        f"node_exporter version set differs: {measured_node_versions}",
+        {k: v for k, v in measured_node_versions.items() if k in AGENTLESS_NODES}
+        == expected_node_versions,
+        f"node_exporter version set differs (agentless): "
+        f"{ {k: v for k, v in measured_node_versions.items() if k in AGENTLESS_NODES} }",
+        failures,
+    )
+    missing_agent_versions = sorted(
+        name for name in AGENT_NODES if not measured_node_versions.get(name)
+    )
+    check(
+        not missing_agent_versions,
+        f"node_exporter build info missing on agent hosts: {missing_agent_versions}",
         failures,
     )
     check(
@@ -757,9 +871,14 @@ def main():
         "no complete post-probe MySQL scrape within 90 seconds",
         failures,
     )
+    # Nazwa uslugi pierwszego wezla zalezy od trybu (-mysql vs -mysql-agent), wiec
+    # bierzemy ja z EXPECTED_MYSQL zamiast doklejac staly sufiks.
+    first_mysql_service = next(
+        name for name, node in EXPECTED_MYSQL.items() if node == FIRST_GALERA_NODE
+    )
     check(
-        measured_mysql.get(f"{FIRST_GALERA_NODE}-mysql") == "1",
-        f"{FIRST_GALERA_NODE}-mysql is not reachable by PMM",
+        measured_mysql.get(first_mysql_service) == "1",
+        f"{first_mysql_service} is not reachable by PMM",
         failures,
     )
 

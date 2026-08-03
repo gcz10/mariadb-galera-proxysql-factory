@@ -93,34 +93,29 @@ Nowa sonda statyczna: `tests/validation/probe-proxysql-tenancy.py` — pilnuje, 
 klastry na wspólnym endpoincie miały rozłączne hostgroupy i użytkowników oraz
 **dokładnie jednego ownera**. Wpięta w Makefile i CI.
 
-## NIEDOKOŃCZONE — `probe-pmm-native.py`
+## Kontrakt dwutrybowy sondy — domknięty
 
-`make lab-monitoring-verify` **oblewa dla obu klastrów**. Dla `r10` to częściowo
-regresja z tej sesji.
+`make lab-monitoring-verify` przechodzi dla obu klastrów, a `make cluster-monitoring`
+jest idempotentny i nie psuje tego stanu (sprawdzone powtórzonymi przebiegami).
 
-Sonda zna wyłącznie kształt agentless. Kontrakt dwutrybowy jest zrobiony w ~40%:
-gotowe są zbiór węzłów (wspólny dla trybów), `AGENTLESS_HOSTS` jako podzbiór dla
-usług `external`, nazwy usług MySQL zależne od trybu i typ agenta QAN z
-`monitoring.qan_source`.
+Dojście tam ujawniło cztery defekty tej samej klasy co reszta sesji — coś
+raportowało poprawność, nie robiąc swojej roboty:
 
-Zostały **dwie grupy**, obie tej samej natury — dla hostów `pmm-client` sonda
-musi asertować **agentów pod lokalnym `pmm_agent_id`**, a nie usługi i agentów
-spod agenta serwera:
+| defekt | skutek |
+|---|---|
+| `pkill -x mysqld_exporter` w sprzątaniu standalone | ubijał eksporter prowadzony przez `pmm-agent` **przy każdym przebiegu** |
+| uzgadnianie etykiet przez `PUT` | PMM nadpisuje cały obiekt — ginął tryb push, potem hasło |
+| `pmm-admin status` bez limitu czasu | zaklinowane API agenta wieszało cały playbook bez komunikatu |
+| pętla oczekiwania na metryki przerywana `break` | jedna realna usterka produkowała ~15 widmowych „brak metryki" |
 
-1. **Węzły i eksportery**
-   - `missing generic node: fc10-galera-fcp1` — węzeł istnieje z etykietami;
-     sonda filtruje po atrybucie, który `pmm-agent` ustawia inaczej
-   - `missing native node-exporter service: <host>-node-exporter` —
-     **`pmm-agent` nie tworzy usługi o tej nazwie**; `node_exporter` jest u niego
-     *agentem*, nie usługą
-2. **Atrybuty eksporterów**
-   - `targets wrong address or port` — lokalny agent celuje w `127.0.0.1`,
-     sonda oczekuje adresu węzła
-   - `wrong credential revision` — etykietę `credentials_revision` ustawia tylko
-     ścieżka API (`f11_pmm_client`)
-
-Dodatkowo: `f11_pmm_agent.yml` nie jest w pełni idempotentny (`changed=1` przy
-powtórce), choć `make cluster-monitoring` kończy się `rc=0` na obu klastrach.
+Wnioski warte zapamiętania:
+- **`PUT` na `/v1/inventory/agents` nadpisuje cały obiekt.** Dryf naprawiamy przez
+  delete + recreate jedną ścieżką POST, nie przez dopisywanie pól.
+- API **przyjmuje** `push_metrics`, a **zwraca** `push_metrics_enabled`.
+- Sufiks rozdzielczości (`hr`/`mr`/`lr`) różni się per metryka **i** per tryb, więc
+  każdy filtr po `job` gubi jedną stronę — agregujemy po `node_name`.
+- `node_exporter` w trybie agentowym to **agent**, nie usługa; ProxySQL ma
+  natywny eksporter zamiast restapi na 6070; MySQL jest osiągane przez pętlę zwrotną.
 
 ## Reguły przyjęte w tej sesji
 

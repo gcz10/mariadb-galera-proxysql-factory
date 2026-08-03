@@ -117,6 +117,9 @@
     pmm_agent_managed_hosts: >-
       {{ (monitoring.agent_groups | default([])) | map('extract', groups) | select('defined')
          | map('list') | flatten | unique | list }}
+    pmm_agent_managed_names: >-
+      {{ pmm_agent_managed_hosts
+         | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}
     pmm_node_hosts: >-
       {{ ((groups.get('galera', []) if (proxysql.role | default('owner')) == 'consumer'
           else groups.get('galera', []) + groups.get('proxysql', []))
@@ -184,6 +187,10 @@
       when:
         - item.custom_labels.get('cluster', '') == pmm_cluster_name_effective
         - item.node_name not in pmm_node_names
+        # Wezly hostow z lokalnym agentem nosza etykiete tego klastra, ale NIE ma ich
+        # w pmm_node_names — bez tego wyjatku sprzatanie kasowalo je przy kazdym
+        # przebiegu, wraz z ich uslugami, i monitoring ProxySQL znikal po cichu.
+        - item.node_name not in pmm_agent_managed_names
         - not (item.is_pmm_server_node | default(false) | bool)
       no_log: true
     - name: "Usuń generic nodes z dryfem adresu lub etykiet"
@@ -648,7 +655,14 @@
   hosts: galera
   gather_facts: false
   become: true
-
+  vars:
+    # Sprzatanie dotyczy STAREGO swiata, gdzie eksporter byl samodzielnym procesem.
+    # Na hoscie z lokalnym pmm-agentem `mysqld_exporter` to proces potomny agenta —
+    # `pkill -x` ubijal go przy kazdym przebiegu, eksporter wracal do `Starting`,
+    # a playbook zglaszal `changed` bez konca.
+    pmm_agent_managed_hosts: >-
+      {{ (monitoring.agent_groups | default([])) | map('extract', groups)
+         | select('defined') | map('list') | flatten | unique | list }}
   tasks:
     - name: "Usuń legacy replikowane konto eksportera"
       ansible.mysql.mysql_user:
@@ -682,6 +696,7 @@
       register: pmm_legacy_exporter_stop
       changed_when: pmm_legacy_exporter_stop.rc == 0
       failed_when: pmm_legacy_exporter_stop.rc not in [0, 1]
+      when: inventory_hostname not in pmm_agent_managed_hosts
 
     - name: "Usuń legacy plik danych dostępowych eksportera"
       ansible.builtin.file:

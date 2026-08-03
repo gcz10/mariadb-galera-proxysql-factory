@@ -71,7 +71,9 @@
       ansible.builtin.command:
         argv: [percona-release, enable, "{{ pmm_client.repo_component }}"]
       args:
-        creates: "/etc/yum.repos.d/percona-{{ pmm_client.repo_component }}.repo"
+        # percona-release dopisuje sufiks `-release` do nazwy pliku; bez niego
+        # `creates` nigdy nie trafial i zadanie raportowalo `changed` co przebieg.
+        creates: "/etc/yum.repos.d/percona-{{ pmm_client.repo_component }}-release.repo"
 
     - name: "Zainstaluj PRZYPIETA wersje pmm-client"
       ansible.builtin.dnf:
@@ -81,7 +83,11 @@
 
     - name: "Sprawdz, czy agent jest juz skonfigurowany"
       ansible.builtin.command:
-        argv: [pmm-admin, status, --json]
+        # Limit czasu jest KONIECZNY: gdy lokalne API agenta sie zaklinuje (zdarza
+        # sie po skasowaniu eksportera przez API), `pmm-admin status` nie wraca
+        # nigdy i caly playbook wisi bez komunikatu. Timeout zamienia zawieszenie
+        # w czytelna porazke zadania.
+        argv: [timeout, "20", pmm-admin, status, --json]
       register: pmm_state
       changed_when: false
       failed_when: false
@@ -176,6 +182,25 @@
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     pmm_monitor_password: "{{ lookup('ansible.builtin.env', 'PMM_MONITOR_PASSWORD') }}"
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    # Ta sama definicja co w f11_pmm_client.yml:108 — obie sciezki musza etykietowac
+    # eksportery ta sama rewizja, inaczej kontrola rotacji hasel widzi tylko polowe floty.
+    pmm_credentials_revision_effective: "{{ monitoring.get('pmm', {}).get('credentials_revision', 1) | string }}"
+    pmm_qan_agent_key: "qan_mysql_{{ monitoring.qan_source | default('perfschema') }}_agent"
+    pmm_local_agent_ids: >-
+      {{ hostvars | dict2items | selectattr('value.pmm_local_agent_id', 'defined')
+         | map(attribute='value.pmm_local_agent_id') | list }}
+    # Splaszczone pary (typ, agent) — `pmm_agents_now` jest rejestrowane w runtime,
+    # a zmienne play'a sa leniwe, wiec odwolanie tutaj rozwiazuje sie po pobraniu.
+    #
+    # Eksportery pod lokalnymi agentami, pogrupowane wg typu. `push` mowi, czy dany
+    # typ w ogole zna tryb push (QAN nie zna) — sluzy do wykrywania dryfu.
+    pmm_local_exporters: >-
+      {{ [{'type': 'mysqld_exporter', 'push': true,
+           'agents': pmm_agents_now.json.mysqld_exporter | default([])},
+          {'type': 'proxysql_exporter', 'push': true,
+           'agents': pmm_agents_now.json.proxysql_exporter | default([])},
+          {'type': pmm_qan_agent_key, 'push': false,
+           'agents': (pmm_agents_now.json | default({})).get(pmm_qan_agent_key, [])}] }}
     pmm_agent_hosts: >-
       {{ hostvars | dict2items
          | selectattr('value.pmm_local_agent_id', 'defined')
@@ -265,6 +290,40 @@
       register: pmm_agents_now
       no_log: true
 
+    # PUT na /v1/inventory/agents NADPISUJE caly obiekt: pole pominiete w ciele
+    # wraca do domyslnej wartosci. Aktualizacja etykiet kasowala wiec haslo, a
+    # eksporter zostawal w `Starting` bez metryk. Zamiast dopisywac pole po polu,
+    # kasujemy rozjechany obiekt i odtwarzamy go ponizej pelnym POST-em — jedna
+    # sciezka tworzenia zamiast dwoch, ktore moga sie rozjechac.
+    - name: "Usun eksportery z dryfem konfiguracji (odtwarzane ponizej)"
+      ansible.builtin.uri:
+        url: "{{ pmm_api }}/v1/inventory/agents/{{ item.1.agent_id }}?force=true"
+        method: DELETE
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ monitoring.pmm.validate_certs | default(false) }}"
+        status_code: 200
+      loop: "{{ pmm_local_exporters | subelements('agents') }}"
+      when:
+        - item.1.pmm_agent_id in pmm_local_agent_ids
+        - >-
+          (item.1.custom_labels | default({})).get('credentials_revision', '')
+          is ne pmm_credentials_revision_effective
+          or (item.0.push and not item.1.get('push_metrics_enabled', false))
+      no_log: true
+
+    - name: "Odswiez liste agentow po usunieciu dryfu"
+      ansible.builtin.uri:
+        url: "{{ pmm_api }}/v1/inventory/agents"
+        method: GET
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ monitoring.pmm.validate_certs | default(false) }}"
+      register: pmm_agents_now
+      no_log: true
+
     # push_metrics: true jest OBOWIAZKOWE — bez niego PMM wybiera 'auto', ktore
     # tu konczy sie trybem pull i cichym up=0 (firewall nie przepuszcza 42000+).
     - name: "Utworz proxysql_exporter (push) pod lokalnym agentem"
@@ -286,6 +345,11 @@
             username: "{{ proxysql_remote_admin_user | default('isa_admin') }}"
             password: "{{ proxysql_admin_password }}"
             push_metrics: true
+            # Etykieta rotacji hasel MUSI byc taka sama w obu trybach: to po niej
+            # wykrywamy eksportery zostawione ze starym haslem po zmianie sekretu.
+            # Bez niej sciezka agentowa byla niewidoczna dla tej kontroli.
+            custom_labels:
+              credentials_revision: "{{ pmm_credentials_revision_effective }}"
         status_code: [200, 409]
       loop: "{{ pmm_agent_hosts | select('in', groups.get('proxysql', [])) | list }}"
       when: >-
@@ -330,6 +394,8 @@
             username: pmm_monitor
             password: "{{ pmm_monitor_password }}"
             push_metrics: true
+            custom_labels:
+              credentials_revision: "{{ pmm_credentials_revision_effective }}"
         status_code: [200, 409]
       loop: "{{ pmm_agent_hosts | select('in', groups.get('galera', [])) | list }}"
       when: >-
@@ -360,6 +426,8 @@
                  | map(attribute='service_id') | first }}
             username: pmm_monitor
             password: "{{ pmm_monitor_password }}"
+            custom_labels:
+              credentials_revision: "{{ pmm_credentials_revision_effective }}"
         status_code: [200, 409]
       loop: "{{ pmm_agent_hosts | select('in', groups.get('galera', [])) | list }}"
       when: >-

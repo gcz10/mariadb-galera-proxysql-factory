@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(git:*)",
+      "Shell(python3 tests/validation/probe-proxysql-tenancy.py)",
+      "Shell(python3 -m py_compile tests/lab/probe-pmm-native.py tests/validation/probe-proxysql-tenancy.py)",
+      "Shell(for:*)",
+      "Shell(do:*)",
+      "Shell(then:*)",
+      "Shell(else:*)",
+      "Shell(fi:*)",
+      "Shell(done:*)",
+      "Shell(awk:*)",
+      "Shell(set:*)",
+      "Shell(python3 tests/validation/probe-no-state-latest.sh 2 >& 1)",
+      "Shell(python3 tests/validation/probe-no-double-bootstrap.py)",
+      "Shell(python3 tests/validation/probe-no-mass-restart.py)",
+      "Shell(python3 tests/validation/probe-zero-hardcode.py)",
+      "Shell(python3 tests/validation/probe-no-conditional-env.py)",
+      "Shell(python3 -m compileall -q tests roles/galera_backup/files/galera-backup)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}
