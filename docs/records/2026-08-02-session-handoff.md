@@ -169,11 +169,22 @@ dopiero `require_secure_transport`.
 
 ### Do sprawdzenia przed oknem serwisowym na SST
 
-**MDEV-26360**: `encrypt=3` psuje walidację certyfikatu przy NAZWACH HOSTÓW — kontrola
-`is_local_ip` wymusza CN `localhost`, czego CA nie wystawi; zalecane `encrypt=4`. Używamy
-nazw hostów, więc to nas dotyczy. **Niezweryfikowane:** czy `encrypt=4` istnieje w
-galera-4 26.4.27 i czy MDEV-26360 jest naprawione w tej wersji — ustalić ze źródła przed
-zmianą szablonu. To jest zapytanie kontrolne w `websearch-model-benchmark.md`.
+Sprawdzone w API Jiry — **żadne z poniższych nas nie dotyczy**, szablon zostaje z `encrypt=3`:
+
+| zgłoszenie | rzecz | naprawione w | dotyczy |
+|---|---|---|---|
+| MDEV-26360 | `encrypt=3` psuje walidację certyfikatu przy nazwach hostów (`is_local_ip` wymusza CN `localhost`) | 10.2.41 … 10.6.5, 10.7.1 | 10.2.40 … 10.6.4 |
+| MDEV-27181 | skrypty SST powinny używać `ssl_capath`, nie `ssl_ca` | 10.2.42 … 10.6.6, 10.7.2 | 10.2.41 … 10.7.1 |
+
+Mamy **11.4.12**, powyżej wszystkich wersji naprawczych.
+
+MDEV-26360 zamknięto **poprawką kodu** w `wsrep_sst_mariabackup.sh` (PR #1902, commit
+`77b11965`), a nie zaleceniem przejścia na `encrypt=4` — komentarz z 2021 mówiący „jedynym
+rozwiązaniem jest encrypt=4" to obejście sprzed naprawy, nie stan docelowy.
+
+Uwaga na przyszłość: `affects` MDEV-27181 to dokładnie `fixVersions` MDEV-26360 — poprawka
+pierwszego wprowadziła drugi błąd. Przy planowaniu aktualizacji nie wystarczy „wersja z
+poprawką"; trzeba sprawdzić, czy nie jest to zarazem wersja z regresją.
 
 ### Drugi klaster z TLS — czego pilnuje sonda
 
