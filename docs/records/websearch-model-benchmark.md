@@ -208,3 +208,78 @@ w MDEV-26360 od razu. Sciezka bezkluczowa jest zdegradowana i nie nadaje sie do 
 Uzasadnienie po pomiarze: Anthropic ma najwieksza szerokosc, Gemini najlepsza synteze przy
 najmniejszym koszcie, Brave i Exa sa tanie i trafiaja w zrodla pierwotne, `public` to
 konsensus czterech darmowych indeksow jako ostatnia deska ratunku.
+
+---
+
+# Runda 2 — trzy pytania roznego typu (2026-08-05)
+
+Pierwsza runda uzyla jednego waskiego pytania z identyfikatorem (`MDEV-26360`), co
+faworyzowalo indeksy slow kluczowych. Ta runda sprawdza trzy typy naraz.
+
+## Pytania
+
+| id | pytanie | gdzie realnie lezy odpowiedz |
+|---|---|---|
+| Q1 | flow control Galery: co powoduje narastanie `wsrep_local_recv_queue`, jak stroic `gcache.size` i `gcs.fc_limit` | docs Codership, blogi Percony |
+| Q2 | dlaczego `Restart=always` nie zadziala po OOM kill i co zmienia `OOMPolicy` pod cgroup v2 | `systemd.service(5)`, kod systemd, lista jadra |
+| Q3 | dlaczego pod StatefulSet zostaje w `Terminating` przy wezle NotReady; co zmienia KEP-2268 | KEP, issues k8s, kubernetes.io |
+
+Q2 i Q3 dobrane tak, ze popularna odpowiedz blogowa jest niepelna — wymagaja specyfikacji.
+
+## Wynik
+
+| # | dostawca | zrodla pierwotne | Q&A | szum | sr. czas | sr. zrodel |
+|---|---|---|---|---|---|---|
+| 1 | **synthetic** | **100%** (6/6) | 0 | 0 | **2,3 s** | 5 |
+| 2 | **anthropic** | 53% (8/15) | 0 | 7 | 22,1 s | 37 |
+| 3 | **exa** | 54% (6/11) | 3 | 2 | 9,9 s | 10 |
+| 4 | **brave** | **25%** (4/16) | 4 | 8 | 2,1 s | 10 |
+| 5 | gemini | **nieocenialne** | — | — | 17,6 s | 14 |
+
+## Najwazniejsze: Brave spadl z 1. na 4. miejsce
+
+W rundzie 1 (waskie pytanie z ID) Brave trafil w 5 zgloszen Jira i wygral. Tutaj zwraca
+`dohost.us`, `devops.aibit.im`, `readme.phys.ethz.ch`, `michal-drozd.com`.
+
+To nie sprzecznosc, tylko dwa zadania:
+- **znajdz konkretny dokument** → indeks slow kluczowych wygrywa → **Brave**
+- **wyjasnij mechanizm** → potrzebna selekcja zrodel → **Synthetic, Anthropic**
+
+## Pozostale ustalenia
+
+**Synthetic** utrzymal 100% na wszystkich trzech: `mariadb.com`; `cdn.kernel.org` +
+`freedesktop.org` + `github.com`; `kubernetes.io` + `github.com`. Zero blogow.
+**Limit nieznany** — API nie zwraca naglowkow, saldo tylko w panelu. Pozycja 1 jedzie
+na niezweryfikowanym limicie.
+
+**Anthropic** ma najglebszy zasieg — jako jedyny dotarl do `lkml.iu.edu` (archiwum listy
+jadra). Cena: 37 zrodel, polowa to forum nvidii i przypadkowe wpisy, 22 s, limit uzytkownika.
+
+**Gemini maskuje wszystkie domeny** za `vertexaisearch.cloud.google.com`. Nie da sie ocenic
+doboru zrodel bez rozwijania kazdego przekierowania. Przy pracy opartej na weryfikacji
+zrodel to dyskwalifikuje go z pierwszej pozycji, niezaleznie od jakosci syntezy.
+
+## Dostawcy wykluczeni
+
+| dostawca | powod |
+|---|---|
+| `codex` | **wisi pelne 60 s** i nie zwraca nic; stoi na pozycji 4 domyslnego lancucha |
+| `zai` | `MCP error -429: Weekly/Monthly Limit Exhausted`, reset 2026-08-07 |
+| `public` | timeout > 120 s (startuje headless Chromium mimo obiecanego limitu 30 s) |
+
+## Konfiguracja koncowa
+
+```
+providers.webSearchOrder   ["synthetic","brave","exa","anthropic","gemini"]
+providers.webSearchExclude ["codex","zai","public"]
+```
+
+Zweryfikowane na zywo: zapytanie bez wymuszania dostawcy trafia do Synthetic w 3,4 s.
+
+## Zastrzezenia
+
+- **n = 3 pytania.** Kierunek wyrazny, ale to nie proba statystyczna.
+- **Ocena po domenie, nie po tresci** — link do `github.com` moze byc repozytorium systemd
+  albo czyims gistem.
+- **Nie weryfikowano poprawnosci odpowiedzi** na tych trzech pytaniach. Mierzony jest
+  **dobor zrodel**, nie trafnosc. W rundzie 1 trafnosc sprawdzano wobec API Jiry.
