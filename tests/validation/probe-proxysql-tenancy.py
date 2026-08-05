@@ -55,6 +55,7 @@ def main():
                 "base": int(proxysql.get("hostgroup_base", DEFAULT_BASE)),
                 "app_user": proxysql.get("app_user", DEFAULT_APP_USER),
                 "role": proxysql.get("role", DEFAULT_ROLE),
+                "tls_mode": ((cfg or {}).get("tls") or {}).get("mode", "disabled"),
             }
         )
 
@@ -92,6 +93,26 @@ def main():
                 )
             else:
                 seen_user[entry["app_user"]] = entry["name"]
+
+        # f7_proxysql.yml zapisuje CA backendu do GLOBALNEJ zmiennej
+        # `mysql-ssl_p2s_ca`, pod STALA sciezka /etc/mysql/tls/ca.pem. Przy dwoch
+        # klastrach z tls.mode=full drugi przebieg nadpisuje CA pierwszego i jego
+        # backendy przestaja przechodzic weryfikacje — znowu bez zadnego bledu.
+        #
+        # ProxySQL 3.x (od 2.6.0) ma na to tabele `mysql_servers_ssl_params` z
+        # kolumna ssl_ca per (hostname, port, username), ktora nadpisuje zmienna
+        # globalna — patrz include/ProxySQL_Admin_Tables_Definitions.h. Dopoki f7
+        # z niej nie korzysta, TLS na wspolnym endpoincie ma tylko JEDEN klaster.
+        tls_clusters = [e["name"] for e in clusters if e["tls_mode"] == "full"]
+        if len(tls_clusters) > 1:
+            violations.append(
+                f"{endpoint}: {len(tls_clusters)} klastry maja tls.mode=full "
+                f"({', '.join(sorted(tls_clusters))}), a f7_proxysql.yml zapisuje CA "
+                f"do globalnej zmiennej mysql-ssl_p2s_ca pod stala sciezka "
+                f"/etc/mysql/tls/ca.pem — drugi nadpisze CA pierwszego. Zanim wlaczysz "
+                f"TLS na drugim kliencie wspolnego ProxySQL, przenies konfiguracje CA "
+                f"do tabeli mysql_servers_ssl_params (ssl_ca per serwer, ProxySQL >= 2.6.0)."
+            )
 
     if violations:
         print("FAIL: klastry na wspolnym ProxySQL nie sa rozlaczne:")

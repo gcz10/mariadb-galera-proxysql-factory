@@ -47,6 +47,9 @@ Repozytorium Ansible, w którym nowy niezależny klaster Galera+ProxySQL powstaj
 - `site.yml`/`converge.yml` nigdy nie bootstrapuje, nie czyści datadir, nie resetuje kont ani nie obraca sekretów.
 - Nie wyłączaj SELinux ani firewalld.
 - Każdy tuning ma pomiar, hipotezę i probe.
+- Zachowanie cudzego oprogramowania ustalaj z jego dokumentacji lub kodu źródłowego, nie z pamięci ani z rozumowania przez analogię. Twierdzenie o API, formacie pliku czy semantyce parametru bez cytatu ze źródła jest hipotezą, nie faktem — i jako hipotezę należy je oznaczyć.
+- Test musi wykonywać dokładnie to, co robi kod produkcyjny. Ręczne wywołanie uproszczone względem produkcyjnego (inne argumenty, zaszyta wartość zamiast szablonu) nie jest dowodem poprawności.
+- Ścieżka, której nigdy nie uruchomiono, jest niesprawna do czasu przećwiczenia. Dotyczy to zwłaszcza gałęzi warunkowych odpalanych rzadko: rotacji sekretów, odtwarzania po awarii, migracji.
 - Konfiguracja usług generowana z repo i porównywalna z runtime.
 
 ## Constraints
