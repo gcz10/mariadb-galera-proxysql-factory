@@ -29,7 +29,7 @@ i jest na tyle wąska, że słaby grounding od razu widać.
 |---|---|---|---|---|---|
 | `gemini-3.6-flash-high` | **Gemini** | 12 | mieszane | **tak** | 8 podzapytan; wersje naprawcze 5/6 poprawnie |
 | `gemini-3.6-flash-medium` | | | | | |
-| `gemini-3.6-flash-low` | | | | | |
+| `gemini-3.6-flash-low` | **Gemini** | 9 | mieszane | tak | 5 podzapytan; **zmyslony tytul zgloszenia + bledny przyklad configu** |
 | `gemini-3-flash` | | | | | goły ID, bez obejścia wire-id |
 | `gemini-2.5-flash` | | | | | domyślny, grupa kontrolna |
 
@@ -70,3 +70,42 @@ API Jiry niz po synteze.
 
 **Wniosek merytoryczny dla floty:** MDEV-26360 dotyczy 10.2.40-10.6.4. Mamy **11.4.12**,
 wiec nas nie obejmuje — `encrypt=3` w szablonie zostaje, `encrypt=4` niepotrzebne.
+
+## Przebieg 2 — `gemini-3.6-flash-low` (2026-08-05)
+
+**Dostawca:** Gemini (redirecty obecne). **Wynik:** 9 zrodel, 5 podzapytan.
+
+Oba czlony pytania trafione, wersje naprawcze te same co przy `-high` (5/6, tez bez 10.7.1).
+
+### Dwa bledy, ktorych `-high` nie popelnil
+
+**1. Zmyslony tytul zgloszenia.** `-low` podal:
+
+> *"MariaDB Enterprise Cluster joiner node incorrectly uses localhost for TLS certificate
+> verification and fails to join cluster when wsrep_sst_method=mariadb-backup..."*
+
+Faktyczny tytul z API Jiry: **"Using hostnames for MariaBackup SSTs breaks certificate
+validation with encrypt=3"**. Parafraza brzmi jak cytat i jest podana w cudzyslowie —
+najgorszy wariant, bo wyglada na weryfikowalna.
+
+**2. Bledny przyklad konfiguracji.** `-low` wygenerowal blok dla `encrypt=4` z parametrami
+`tcert`/`tkey`/`tca` — a to sa parametry `encrypt=3`. `encrypt=4` uzywa `ssl-cert`/`ssl-key`/
+`ssl-ca`. Sam sobie zaprzeczyl w tym samym akapicie ("standard server SSL options
+(`ssl-key`, `ssl-cert`, `ssl-ca`)" w opisie trybu, a `tcert/tkey/tca` w przykladzie).
+Ktos, kto skopiowalby ten blok, dostalby niedzialajaca konfiguracje.
+
+## Werdykt
+
+| | `-high` | `-low` |
+|---|---|---|
+| podzapytania | 8 | 5 |
+| zrodla | 12 | 9 |
+| trafnosc merytoryczna | poprawna | poprawna |
+| **konfabulacje** | **brak** | **tytul zgloszenia + przyklad configu** |
+
+Roznica nie jest kosmetyczna. Przy `-low` wiecej twierdzen powstaje z modelu zamiast ze
+zrodel — a wygladaja identycznie wiarygodnie. Przy pracy, gdzie kopiuje sie konfiguracje
+z odpowiedzi, to realne ryzyko.
+
+**Rekomendacja: `-high`.** `-medium` nietestowany — roznica high/low jest na tyle wyrazna,
+ze schodzenie ponizej `-high` nie ma uzasadnienia przy naszym zastosowaniu.
