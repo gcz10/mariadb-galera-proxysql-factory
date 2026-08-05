@@ -17,9 +17,16 @@
 # Warstwa bazodanowa jest wersyjnie IDENTYCZNA z EL10 (MariaDB 11.4.12,
 # galera-4 26.4.27) — rozniczke niesie wylacznie versions.lock_file ponizej.
 #
-# TLS zostaje wylaczone tak jak w finalclaude-r10: ProxySQL trzyma CA backendow
-# w GLOBALNEJ zmiennej `mysql-ssl_p2s_ca`, wiec dwa klastry z roznymi CA nie
-# zmieszcza sie na jednej parze. Wlaczenie TLS dla floty wymaga wspolnego CA.
+# TLS jest WLACZONY na tym klastrze, a finalclaude-r10 zostaje plaintextem.
+# Jest to mozliwe, bo `use_ssl` to kolumna PER SERWER w `mysql_servers`, a kazde
+# zadanie TLS w f7_proxysql jest bramkowane wlasnym `tls.mode` klastra — klaster
+# bez TLS nie czyta ani nie czysci globalnego CA.
+#
+# Ograniczenie dotyczy dopiero DRUGIEGO klastra z TLS: f7 zapisuje CA do globalnej
+# `mysql-ssl_p2s_ca` pod stala sciezka, wiec nadpisalby CA pierwszego. Pilnuje tego
+# probe-proxysql-tenancy.py. To NIE jest wymog wspolnego CA — ProxySQL >= 2.6.0 ma
+# tabele `mysql_servers_ssl_params` z ssl_ca per serwer (dopasowanie: hostname+port+
+# user, potem hostname+port, na koncu zmienne globalne); f7 z niej nie korzysta.
 
 cluster:
   name: "finalclaude-r9"
