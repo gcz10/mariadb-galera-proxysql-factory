@@ -83,10 +83,11 @@
 
     - name: "Sprawdz, czy agent jest juz skonfigurowany"
       ansible.builtin.command:
-        # Limit czasu jest KONIECZNY: gdy lokalne API agenta sie zaklinuje (zdarza
-        # sie po skasowaniu eksportera przez API), `pmm-admin status` nie wraca
-        # nigdy i caly playbook wisi bez komunikatu. Timeout zamienia zawieszenie
-        # w czytelna porazke zadania.
+        # Limit czasu jest KONIECZNY: gdy lokalne API agenta sie zaklinuje,
+        # `pmm-admin status` nie wraca nigdy i caly playbook wisi bez zadnego
+        # komunikatu. Obserwowane zaklinowania mialy zrodlo w eksporterach z
+        # wyczyszczonym haslem (patrz uzgadnianie ponizej) — samo DELETE przez API
+        # sprawdzono i agenta NIE wiesza. Timeout zamienia zwis w czytelna porazke.
         argv: [timeout, "20", pmm-admin, status, --json]
       register: pmm_state
       changed_when: false
