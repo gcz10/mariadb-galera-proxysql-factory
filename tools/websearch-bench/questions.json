@@ -1,0 +1,53 @@
+[
+  {
+    "id": "galera-flow",
+    "kategoria": "identyfikator",
+    "jezyk": "en",
+    "pytanie": "MariaDB Galera: which parameter controls how large the write-set cache (gcache) can grow, and what gcs.fc_limit does",
+    "kluczowe_fakty": ["gcache.size", "gcs.fc_limit", "flow control"],
+    "typ": "konkretny-parametr"
+  },
+  {
+    "id": "systemd-oom",
+    "kategoria": "mechanizm",
+    "jezyk": "en",
+    "pytanie": "Under cgroup v2, why does systemd's Restart=always sometimes not restart a service after the OOM killer, and what does OOMPolicy do",
+    "kluczowe_fakty": ["OOMPolicy", "Restart", "cgroup", "memory.oom"],
+    "typ": "gleboki-mechanizm",
+    "uwaga": "poprawna odpowiedz jest oficjalnie nieudokumentowana (systemd/systemd#39187)"
+  },
+  {
+    "id": "k8s-terminating",
+    "kategoria": "mechanizm",
+    "jezyk": "en",
+    "pytanie": "Why does a StatefulSet pod stay Terminating on a NotReady node, and what KEP-2268 changes for volume detach",
+    "kluczowe_fakty": ["KEP-2268", "out-of-service", "taint", "detach"],
+    "typ": "gleboki-mechanizm"
+  },
+  {
+    "id": "dns-ttl",
+    "kategoria": "koncepcja",
+    "jezyk": "en",
+    "pytanie": "Why do DNS TTL changes often take longer than the TTL value itself to propagate",
+    "kluczowe_fakty": ["resolver", "cache", "negative caching"],
+    "typ": "koncepcja-powszechna"
+  },
+  {
+    "id": "mercury",
+    "kategoria": "wieloznacznosc",
+    "jezyk": "en",
+    "pytanie": "What is the atomic mass of mercury",
+    "kluczowe_fakty": ["200.59"],
+    "typ": "rozwiazanie-wieloznacznosci",
+    "uwaga": "mercury = planeta / metal / mitologia / marka; silnik musi wybrac wlasciwy sens"
+  },
+  {
+    "id": "eu-vat",
+    "kategoria": "regionalne",
+    "jezyk": "pl",
+    "pytanie": "Jaka jest podstawowa stawka VAT w Niemczech po zmianach z 2021 roku",
+    "kluczowe_fakty": ["19%"],
+    "typ": "fakt-regionalny",
+    "uwaga": "tymczasowa obnizka do 16% w 2020 mogla wprowadzic w blad; poprawna to 19%"
+  }
+]
