@@ -29,6 +29,12 @@ PRIMARY = {'mariadb.com','percona.com','cdn.kernel.org','freedesktop.org','githu
 QA = {'stackoverflow.com','serverfault.com','unix.stackexchange.com','reddit.com'}
 # reszta = nieznane, nie 'szum'
 
+def unicode_digits_to_ascii(s):
+    """Gemini uzywa cyfr matematycznych Unicode (U+1D7EC...). Normalizuj do ASCII."""
+    for code in range(0x1D7CE, 0x1D800):  # math digits 0-9 x4 style
+        s = s.replace(chr(code), chr(0x30 + (code - 0x1D7CE) % 10))
+    return s
+
 def run_provider(prov, question, limit=8):
     cmd = ['omp','search','--provider',prov,'--compact','-l',str(limit),question]
     try:
@@ -37,7 +43,7 @@ def run_provider(prov, question, limit=8):
         sec = round(time.time()-t0,1)
     except subprocess.TimeoutExpired:
         return {'error':'timeout'}
-    txt = re.sub(r'\x1b\[[0-9;]*m|\x07', '', r.stdout)
+    txt = unicode_digits_to_ascii(re.sub(r'\x1b\[[0-9;]*m|\x07', '', r.stdout))
     err_m = re.search(r'✘.*?(?:\n│\s*Error:)?\s*(?:Error:\s*)?(.{5,120})', txt)
     err = None
     if 'Error:' in txt or '✘' in txt:
@@ -57,8 +63,26 @@ def run_provider(prov, question, limit=8):
     srcs = list(dict.fromkeys(srcs))  # deduplikacja, zachowuje kolejnosc
     doms = [urlparse(u).netloc.replace('www.','') for u in srcs]
     m = re.search(r'Provider:\s*(\S+)', txt)
-    ans_m = re.search(r'Answer\s*─+\n(.*?)(?=───|\Z)', txt, re.DOTALL)
-    answer = re.sub(r'\s+',' ', ans_m.group(1) if ans_m else '').strip()[:2000]
+    # ekstrakcja odpowiedzi liniowa — odporna na znaki ramki box-drawing
+    lines = txt.split('\n')
+    ans_lines = []
+    in_ans = False
+    for ln in lines:
+        if 'Answer' in ln:
+            in_ans = True
+            continue
+        if in_ans:
+            if 'Sources' in ln:
+                break
+            ans_lines.append(ln)
+    answer = re.sub(r'\s+',' ', ' '.join(ans_lines)).strip()[:2000]
+    answer = re.sub(r'[│╭╰├─┤]', '', answer)
+    answer = re.sub(r'\s+', ' ', answer).strip()
+    # gemini podaje zrodla jako gole domeny: "ciaaw.org (vertexaisearch...)"
+    dom_m = re.findall(r'├─\s*([a-z0-9.-]+\.[a-z]{2,})\s*\(', txt)
+    for d in dom_m:
+        if d not in doms:
+            doms.append(d)
     return {'sec':sec, 'n_src':len(srcs), 'urls':srcs[:5], 'doms':doms, 'answer':answer,
             'raw':txt[:8000], 'engine':m.group(1) if m else prov,
             'error':None if r.returncode==0 else f'rc={r.returncode}'}

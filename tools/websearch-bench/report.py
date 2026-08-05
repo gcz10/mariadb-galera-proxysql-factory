@@ -25,3 +25,27 @@ for (prov, day), rs in sorted(by.items()):
     prim = round(100*sum(r['prim'] for r in ok)/sum(r['n_src'] or 1 for r in ok))
     sec  = round(sum(r.get('sec',0) for r in ok)/len(ok),1)
     print(f"{prov:11s} {day:12s} {len(ok):>3d} {fpct:>6d}% {prim:>8d}% {sec:>6g}s")
+
+# --- warstwa LLM-as-judge ---
+J = Path(__file__).parent/'results/judged.jsonl'
+if J.exists() and J.read_text().strip():
+    jrows = [json.loads(l) for l in J.read_text().strip().split('\n') if l]
+    from collections import Counter
+    print()
+    print("Warstwa LLM-as-judge (merytoryczna poprawnosc):")
+    print(f"{'dostawca':11s} {'typ':12s} {'CORRECT':>8s} {'INCORRECT':>9s} {'UNSUP':>7s} {'decided%':>9s}")
+    print('-'*62)
+    for p, typ in [('synthetic','indeks'),('brave','indeks'),('exa','indeks'),
+                   ('gemini','synteza'),('anthropic','synteza')]:
+        c = Counter(r['werdykt'] for r in jrows if r['provider']==p)
+        if not c: continue
+        tot = sum(c.values())
+        decided = c['CORRECT'] + c['INCORRECT']
+        d = 100*decided/tot if tot else 0
+        print(f"{p:11s} {typ:12s} {c['CORRECT']:>8d} {c['INCORRECT']:>9d} {c['UNSUPPORTED']:>7d} {d:>8.0f}%")
+    print("  indeks = mierzy czy zrodla wystarcza do odpowiedzi; synteza = mierzy poprawnosc prozy")
+    bad = [r for r in jrows if r['werdykt']=='INCORRECT']
+    if bad:
+        print('\nINCORRECT:')
+        for r in bad:
+            print(f"  {r['provider']:10s} {r['question_id']:16s} {r['uzasadnienie'][:80]}")
