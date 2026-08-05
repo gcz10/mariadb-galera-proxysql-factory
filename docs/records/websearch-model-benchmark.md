@@ -284,7 +284,17 @@ Zweryfikowane na zywo: zapytanie bez wymuszania dostawcy trafia do Synthetic w 3
 - **Nie weryfikowano poprawnosci odpowiedzi** na tych trzech pytaniach. Mierzony jest
   **dobor zrodel**, nie trafnosc. W rundzie 1 trafnosc sprawdzano wobec API Jiry.
 
-## Weryfikacja trafnosci odpowiedzi (zwyciezca)
+## Weryfikacja tematycznosci cytowan (zwyciezca)
+
+> **Poprawka.** Ponizsza sekcja w pierwotnej wersji nosila tytul "Weryfikacja trafnosci
+> odpowiedzi" i raportowala "3/3". To bylo mylace. Sprawdzono, czy dostawca wskazal zrodlo
+> **o wlasciwym temacie**, nie czy **odpowiedz jest poprawna**. To dwie rozne rzeczy:
+> Q2 prowadzi do otwartego zgloszenia `systemd/systemd#39187`, gdzie opiekun odpowiada
+> "Feel free to submit a PR to clarify this" — czyli interakcja OOMPolicy z Restart jest
+> oficjalnie nieudokumentowana. Synthetic wskazal dokument **tematyczny, nie autorytatywny**.
+> Poprawnosc merytoryczna odpowiedzi pozostaje niesprawdzona i jest glownym celem
+> ulepszonej wersji benchmarku.
+
 
 Ranking mierzyl dobor zrodel po domenie, nie trafnosc. Sprawdzono po jednym kluczowym
 fakcie z kazdego pytania wobec zrodel pierwotnych wskazanych przez Synthetic:
@@ -296,5 +306,5 @@ fakcie z kazdego pytania wobec zrodel pierwotnych wskazanych przez Synthetic:
 - **Q3 KEP-2268** → wskazal kubernetes.io; fakt potwierdzony: taint out-of-service wymusza
   usuniecie podow i natychmiastowe odlaczenie wolumenow — trafne.
 
-**3/3.** Dla Synthetic dobor zrodel i trafnosc sa w tym teście zgodne. Nie weryfikowano
-trafnosci pozostalych dostawcow.
+**3/3 tematycznie, 0/3 merytorycznie.** Dla Synthetic cytowania sa o wlasciwym temacie.
+Poprawnosci odpowiedzi nie zweryfikowano u zadnego dostawcy.
