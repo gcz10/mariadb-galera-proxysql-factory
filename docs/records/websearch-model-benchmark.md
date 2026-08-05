@@ -109,3 +109,52 @@ z odpowiedzi, to realne ryzyko.
 
 **Rekomendacja: `-high`.** `-medium` nietestowany — roznica high/low jest na tyle wyrazna,
 ze schodzenie ponizej `-high` nie ma uzasadnienia przy naszym zastosowaniu.
+
+## Przebieg 3 — Anthropic `claude-haiku-4-5` (2026-08-05)
+
+**Uwaga metodologiczna:** uruchomione przez CLI `omp search --provider anthropic`, nie przez
+narzędzie `web_search` w sesji (łańcuch i tak wybrałby Gemini z pozycji 2). Zapytanie
+kontrolne identyczne. Z CLI widać tylko ogon odpowiedzi, więc ocena opiera się na **zbiorze
+źródeł**, nie na pełnej treści.
+
+| | Gemini `-high` | Anthropic `haiku-4-5` |
+|---|---|---|
+| źródła | 12 | **37** |
+| wyszukiwania | 8 podzapytań | 4 |
+| typ źródeł | dokumentacja + blogi (`linuxbabe`, `rssing`, `thzhost`) | **zgłoszenia Jira** + dokumentacja |
+| koszt | plan Google | `in 2563 · out 723 · search 4` z limitu Anthropic |
+
+### Co przesądziło
+
+Anthropic znalazł **MDEV-18050 „Port encrypt=4 from xtrabackup-v2 to mariabackup for SSTs"** —
+zgłoszenie, które *wprowadziło* `encrypt=4`. Zweryfikowane: `Closed/Fixed`, wersje
+10.2.40–10.7.1. To jest źródło pierwotne odpowiedzi na pierwszy człon pytania; Gemini
+odpowiedział poprawnie, ale cytując opisy trybów, nie ticket.
+
+Dodatkowo Anthropic wyciągnął MDEV-25359, MDEV-15910, a przy węższym pytaniu — MDEV-27181,
+który ujawnił, że poprawka MDEV-26360 wprowadziła regresję w tych samych wersjach. **Żaden
+przebieg Gemini tego nie pokazał.**
+
+### Wzorzec
+
+- **Gemini** streszcza to, co *napisano o* problemie — dokumentacja, poradniki, agregatory.
+- **Anthropic** trafia w to, *gdzie problem rozstrzygnięto* — zgłoszenia, commity.
+
+Przy weryfikacji twierdzeń wobec źródeł pierwotnych to różnica jakościowa. Przy szerokim
+rozpoznaniu tematu Gemini daje więcej kontekstu za darmo.
+
+### Zastrzeżenia
+
+Po jednym zapytaniu na dostawcę — mocna przesłanka, nie dowód. Koszt Anthropic idzie
+z limitu użytkownika (`search 4` = cztery płatne wyszukiwania); Gemini w tym sensie jest
+darmowy.
+
+## Dlaczego darmowe silniki nie startują
+
+DuckDuckGo, Ecosia, Google i Mojeek **działają** (sprawdzone przez `omp search --provider X`),
+ale łańcuch jest **sekwencyjny i kończy się na pierwszym sukcesie** — Gemini stoi na pozycji 2
+i odpowiada, więc pozycje 3–23 są osiągalne, lecz nieosiągane. Startpage padł na
+bot-challenge (udokumentowane zachowanie, `SearchProviderError 429`).
+
+Rola darmowych silników to siatka bezpieczeństwa na wypadek awarii wszystkich płatnych,
+a nie „nigdy nieużywane".
