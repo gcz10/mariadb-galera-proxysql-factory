@@ -58,11 +58,19 @@ proxysql:
     port: 6033
 
 tls:
-  mode: "disabled"
-  certificate_source: ""
-  ca_reference: ""
-  certificate_reference: ""
-  private_key_reference: ""
+  mode: "full"
+  # RUNDA 2/3: fallback wciaz wlaczony. Zdjecie go WLACZA takze szyfrowanie SST,
+  # a tego nie da sie przeprowadzic rolling — patrz komentarz przy [sst] w szablonie.
+  socket_dynamic: true
+  certificate_source: "file"
+  ca_reference: "tests/lab/tls/fc9/ca.pem"
+  certificate_reference: "tests/lab/tls/fc9/server-cert.pem"
+  private_key_reference: "tests/lab/tls/fc9/server-key.pem"
+  # Wymuszanie TLS na WSZYSTKICH polaczeniach TCP to osobny krok, nie czesc tej
+  # migracji: ProxySQL laczy sie do backendow z use_ssl=0, a mysqld_exporter i
+  # agent QAN ida TCP na 127.0.0.1:3306 (nie socketem, wiec wyjatek dla socketa
+  # unixowego ich nie obejmuje). Wlaczenie tego przed przelaczeniem tamtych
+  # zshunnowaloby backendy i wygasilo metryki.
   require_secure_transport: false
 
 network:

@@ -235,6 +235,10 @@
         "private_key_reference": {
           "type": "string"
         },
+        "socket_dynamic": {
+          "type": "boolean",
+          "description": "Galera socket.dynamic — wezel przyjmuje jednoczesnie polaczenia szyfrowane i nieszyfrowane. Potrzebne WYLACZNIE na czas migracji dzialajacego klastra na TLS: bez niego wezel z socket.ssl nie polaczy sie z wezlami bez TLS. Procedura wymaga trzech rund rolling restartu (wlacz dynamic -> wlacz TLS -> wylacz dynamic). Zrodlo: mariadb.com/kb/en/wsrep_provider_options/#socketdynamic"
+        },
         "require_secure_transport": {
           "type": "boolean"
         }

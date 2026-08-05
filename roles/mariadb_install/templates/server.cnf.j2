@@ -64,18 +64,29 @@ require_secure_transport = ON
 {% endif %}
 
 # === gcache (+ szyfrowanie replikacji Galera gdy tls.mode=full) ===
-{% if (tls | default({})).mode | default('disabled') == 'full' %}
-wsrep_provider_options = "gcache.size={{ gcache_size }};gcache.page_size={{ (mariadb_tuning | default({})).gcache_page_size | default('128M') }};socket.ssl_ca={{ tls_ca_path | default('/etc/mysql/tls/ca.pem') }};socket.ssl_cert={{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }};socket.ssl_key={{ tls_key_path | default('/etc/mysql/tls/server-key.pem') }}"
-{% else %}
-wsrep_provider_options = "gcache.size={{ gcache_size }};gcache.page_size={{ (mariadb_tuning | default({})).gcache_page_size | default('128M') }}"
-{% endif %}
+{#
+  socket.dynamic pozwala wezlowi przyjmowac ROWNOCZESNIE polaczenia szyfrowane i
+  nieszyfrowane. Bez niego wezel z socket.ssl NIE polaczy sie z wezlami bez TLS,
+  wiec wlaczenie szyfrowania na dzialajacym klastrze wymagaloby pelnego postoju.
+  Musi dac sie ustawic takze przy tls.mode=disabled — to pierwsza z trzech rund
+  migracji. Zrodlo: mariadb.com/kb/en/wsrep_provider_options/#socketdynamic
+#}
+{% set _tls_full = (tls | default({})).mode | default('disabled') == 'full' %}
+wsrep_provider_options = "gcache.size={{ gcache_size }};gcache.page_size={{ (mariadb_tuning | default({})).gcache_page_size | default('128M') }}{% if (tls | default({})).socket_dynamic | default(false) %};socket.dynamic=true{% endif %}{% if _tls_full %};socket.ssl_ca={{ tls_ca_path | default('/etc/mysql/tls/ca.pem') }};socket.ssl_cert={{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }};socket.ssl_key={{ tls_key_path | default('/etc/mysql/tls/server-key.pem') }}{% endif %}"
 
 [client]
 socket = /var/lib/mysql/mysql.sock
 
 [sst]
 streamfmt = mbstream
-{% if (tls | default({})).mode | default('disabled') == 'full' %}
+{#
+  SST nie ma odpowiednika socket.dynamic: dawca i przyjmujacy MUSZA zgadzac sie co
+  do szyfrowania, inaczej transfer konczy sie "Broken pipe" i wezel nie wstaje.
+  Dlatego szyfrowanie SST wlaczamy dopiero, gdy caly klaster jest juz na TLS —
+  czyli gdy socket_dynamic zostalo zdjete (runda 3). W trakcie migracji SST leci
+  plaintextem, tak jak u pozostalych wezlow.
+#}
+{% if _tls_full and not ((tls | default({})).socket_dynamic | default(false)) %}
 # audit#7: encrypt=3 WŁĄCZA szyfrowanie strumienia SST (domyślnie 0=plaintext).
 # Samo tca/tcert/tkey bez encrypt= zostaje zignorowane — SST leciało czystym tekstem.
 encrypt=3
