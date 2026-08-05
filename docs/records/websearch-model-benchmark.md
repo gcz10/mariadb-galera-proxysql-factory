@@ -283,3 +283,18 @@ Zweryfikowane na zywo: zapytanie bez wymuszania dostawcy trafia do Synthetic w 3
   albo czyims gistem.
 - **Nie weryfikowano poprawnosci odpowiedzi** na tych trzech pytaniach. Mierzony jest
   **dobor zrodel**, nie trafnosc. W rundzie 1 trafnosc sprawdzano wobec API Jiry.
+
+## Weryfikacja trafnosci odpowiedzi (zwyciezca)
+
+Ranking mierzyl dobor zrodel po domenie, nie trafnosc. Sprawdzono po jednym kluczowym
+fakcie z kazdego pytania wobec zrodel pierwotnych wskazanych przez Synthetic:
+
+- **Q1 Galera** → wskazal `wsrep_provider_options`, gdzie zyja `gcs.fc_limit` i
+  `gcache.size` — trafne.
+- **Q2 systemd** → wskazal `systemd/systemd#39187`, zgloszenie dokumentujace dokladnie
+  interakcje OOMPolicy z Restart — trafne.
+- **Q3 KEP-2268** → wskazal kubernetes.io; fakt potwierdzony: taint out-of-service wymusza
+  usuniecie podow i natychmiastowe odlaczenie wolumenow — trafne.
+
+**3/3.** Dla Synthetic dobor zrodel i trafnosc sa w tym teście zgodne. Nie weryfikowano
+trafnosci pozostalych dostawcow.
