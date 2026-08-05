@@ -158,3 +158,53 @@ bot-challenge (udokumentowane zachowanie, `SearchProviderError 429`).
 
 Rola darmowych silników to siatka bezpieczeństwa na wypadek awarii wszystkich płatnych,
 a nie „nigdy nieużywane".
+
+## Przebiegi 4-5 — Exa i Brave (2026-08-05)
+
+Zapytanie kontrolne identyczne, przez `omp search --provider <x>`.
+
+### Zbiorcze porownanie wszystkich dostawcow
+
+| dostawca | zrodla | trafione zgloszenia Jira | unikalne znalezisko |
+|---|---|---|---|
+| Gemini `-high` | 12 | **0** | — |
+| Gemini `-low` | 9 | **0** | *(zmyslony tytul + zly config)* |
+| Anthropic haiku-4-5 | 37 | 18050, 25359, 15910 | szerokosc |
+| Anthropic sonnet-5 | 37 | te same | nic ponadto, 3,5x koszt wyjscia |
+| **Exa** (z kluczem) | 10 | 26360, 18050, **30402** | **plik zrodlowy** `wsrep_sst_mariabackup.sh` |
+| **Brave** | 10 | 18050, 26360, 25359, 15910, **27181** | regresja MDEV-27181 |
+
+### Wniosek
+
+Liczba zrodel nie przewiduje jakosci. Exa i Brave przy 10 pozycjach trafily w wiecej
+zgloszen niz Gemini przy 12 — Gemini **nie dotknal ani jednego ticketu** w zadnym z dwoch
+przebiegow, cytujac dokumentacje i blogi opisujace problem.
+
+Kazdy z trzech dobrych dostawcow znalazl cos, czego nie znalazl zaden inny. Pelny obraz dala
+dopiero **suma**:
+
+| zgloszenie | rzecz | naprawione | znalazl |
+|---|---|---|---|
+| MDEV-18050 | wprowadzil `encrypt=4` | 10.2.40+ | Anthropic, Exa, Brave |
+| MDEV-26360 | `encrypt=3` + nazwy hostow | 10.6.5 | Exa, Brave |
+| MDEV-27181 | regresja z poprawki 26360 | 10.6.6 | **tylko Brave** |
+| MDEV-30402 | socat 1.7.4 SNI psuje `encrypt=4` | 11.1.1 | **tylko Exa** |
+
+Wszystkie ponizej naszego 11.4.12.
+
+### Uwaga o Exa bez klucza
+
+Pierwszy test Exa poszedl bez klucza, przez publiczny MCP (`mcp.exa.ai`), i zwrocil dwa
+ogolne dokumenty bez zadnego zgloszenia. Wyciagnalem z tego wniosek, ze semantyka nie nadaje
+sie do wyszukiwania po identyfikatorach — **bledny**. Z kluczem (`api.exa.ai`) Exa trafila
+w MDEV-26360 od razu. Sciezka bezkluczowa jest zdegradowana i nie nadaje sie do oceny.
+
+### Ustawiona kolejnosc
+
+```
+["anthropic","gemini","brave","exa","public"]
+```
+
+Uzasadnienie po pomiarze: Anthropic ma najwieksza szerokosc, Gemini najlepsza synteze przy
+najmniejszym koszcie, Brave i Exa sa tanie i trafiaja w zrodla pierwotne, `public` to
+konsensus czterech darmowych indeksow jako ostatnia deska ratunku.
