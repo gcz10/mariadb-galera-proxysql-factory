@@ -70,3 +70,38 @@ sa pomijane — brak wzorca, sedzia nie ma czym rozstrzygnac.
   czy zrodla wystarczaja.
 - Sedzia (ollama-cloud) to ten sam model co sesja robocza — mozliwa stromicza
   ocena na korzysc zrodel podobnych do wlasnej wiedzy modelu.
+
+## multi.py — kilka silnikow naraz
+
+omp **nie potrafi** odpytac kilku dostawcow rownolegle. `providers.webSearchOrder`
+to kolejka AWARYJNA: zwraca wynik pierwszego dostawcy, ktory cokolwiek odda.
+Z dokumentacji (`omp://tools/web_search.md`, krok 8 sekcji Flow):
+
+> There is no provider-level parallel fan-out; fallback is sequential.
+
+Jedyny wbudowany agregator to `public`, ale obejmuje wylacznie darmowe skrobaczki
+(startpage/google/duckduckgo/ecosia/mojeek) i wymaga headless Chromium — u nas
+przekracza 120 s mimo dokumentowanego limitu 30 s.
+
+`multi.py` robi to samo co `public`, ale nad dostawcami, ktore dzialaja:
+
+```bash
+python3 multi.py "galera gcache sizing"
+python3 multi.py "pytanie" --providers synthetic,brave,exa,gemini
+python3 multi.py "pytanie" --limit 15 --json
+```
+
+Algorytm scalania skopiowany z `public.ts`: dedup po kluczu kanonicznym
+(host bez `www`, bez fragmentu, znormalizowany ukosnik), ranking po **zgodzie
+miedzysilnikowej** (ile silnikow zwrocilo ten sam URL), remis rozstrzyga najlepsza
+pozycja. Gwiazdki w wyjsciu = liczba silnikow, ktore potwierdzily zrodlo.
+
+Typowy przebieg: 3 silniki, ~2 s, 18 surowych zrodel -> 9 unikalnych.
+
+### Dlaczego nie ma `--compact`
+
+Renderer condensed **obcina dlugie URL-e wielokropkiem**, przez co linki sa
+nieuzywalne. Pelny renderer zwraca komplet. Dodatkowo omp drukuje kazdy URL
+dwa razy (tekst + cel hiperlacza) i doklej ogon przy zawijaniu wiersza —
+`heal_url()` w run.py to naprawia, wykrywajac ze doklejony ogon jest sufiksem
+tego, co juz jest w napisie.

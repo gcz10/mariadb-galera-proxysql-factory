@@ -29,6 +29,27 @@ PRIMARY = {'mariadb.com','percona.com','cdn.kernel.org','freedesktop.org','githu
 QA = {'stackoverflow.com','serverfault.com','unix.stackexchange.com','reddit.com'}
 # reszta = nieznane, nie 'szum'
 
+def heal_url(u):
+    """Napraw URL zepsuty przez renderer terminala.
+
+    omp zawija dlugie URL-e i doklej ogon, albo drukuje link dwa razy
+    (tekst + cel hiperlacza). Wspolna cecha: doklejony ogon jest sufiksem
+    tego, co juz jest w napisie. Przyklady:
+      .../flow-control-in-galera-cluster + era-cluster
+      .../llms.txt + llms.txt
+    """
+    u = u.rstrip('.,;:)]}>("\'')
+    for _ in range(3):  # zawijanie moze zajsc kilka razy
+        zmiana = False
+        for k in range(min(len(u)//2, 80), 3, -1):
+            if u[:-k].endswith(u[-k:]):
+                u = u[:-k]
+                zmiana = True
+                break
+        if not zmiana:
+            break
+    return u
+
 def unicode_digits_to_ascii(s):
     """Gemini uzywa cyfr matematycznych Unicode (U+1D7EC...). Normalizuj do ASCII."""
     for code in range(0x1D7CE, 0x1D800):  # math digits 0-9 x4 style
@@ -36,7 +57,8 @@ def unicode_digits_to_ascii(s):
     return s
 
 def run_provider(prov, question, limit=8):
-    cmd = ['omp','search','--provider',prov,'--compact','-l',str(limit),question]
+    # bez --compact: renderer condensed obcina dlugie URL-e wielokropkiem
+    cmd = ['omp','search','--provider',prov,'-l',str(limit),question]
     try:
         t0 = time.time()
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
@@ -59,7 +81,9 @@ def run_provider(prov, question, limit=8):
         idx = u.find('https://', 8)
         if idx > 0:
             u = u[:idx]
-        srcs.append(u.rstrip('.,;:)]}>'))
+        if '\u2026' in u:   # renderer skrocil URL wielokropkiem — nieuzywalny
+            continue
+        srcs.append(heal_url(u))
     srcs = list(dict.fromkeys(srcs))  # deduplikacja, zachowuje kolejnosc
     doms = [urlparse(u).netloc.replace('www.','') for u in srcs]
     m = re.search(r'Provider:\s*(\S+)', txt)

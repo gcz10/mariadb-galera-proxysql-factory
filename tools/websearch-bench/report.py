@@ -22,7 +22,8 @@ for (prov, day), rs in sorted(by.items()):
         continue
     fh = [tuple(map(int, r['fact_hits'].split('/'))) for r in ok if '/' in r.get('fact_hits','')]
     fpct = round(100*sum(a for a,b in fh)/sum(b for a,b in fh)) if fh else 0
-    prim = round(100*sum(r['prim'] for r in ok)/sum(r['n_src'] or 1 for r in ok))
+    # mianownik to liczba DOMEN, nie URL-i: gemini maskuje linki, ma domeny bez url
+    prim = round(100*sum(r['prim'] for r in ok)/max(1, sum(len(r.get('doms',[])) for r in ok)))
     sec  = round(sum(r.get('sec',0) for r in ok)/len(ok),1)
     print(f"{prov:11s} {day:12s} {len(ok):>3d} {fpct:>6d}% {prim:>8d}% {sec:>6g}s")
 
