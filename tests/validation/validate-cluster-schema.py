@@ -100,6 +100,20 @@ def main():
     if pnodes is not None and pnodes != 2:
         errors.append(f"proxysql.nodes_expected={pnodes} — v1 scope requires 2")
 
+    # Check: wlaczony slow log musi miec WLASCICIELA rotacji.
+    # MariaDB pisze slow log do datadir jako `<host>-slow.log`, a logrotate z
+    # f11_log_lifecycle.yml obejmuje wylacznie /var/log/mariadb/*.log — ten plik
+    # sie tam nie lapie. Jedyne, co go rotuje, to pmm-agent w trybie slowlog
+    # (`--size-slow-logs`, przy pominieciu pola serwer uzywa swojej domyslnej
+    # wartosci). Bez tej pary plik rosnie bez ograniczen na partycji bazy.
+    slow_log = str(cluster.get("mariadb_tuning", {}).get("slow_query_log", "OFF")).upper()
+    qan_source = cluster.get("monitoring", {}).get("qan_source", "perfschema")
+    if slow_log == "ON" and qan_source != "slowlog":
+        errors.append(
+            f"mariadb_tuning.slow_query_log=ON wymaga monitoring.qan_source=slowlog "
+            f"(jest '{qan_source}') — inaczej slow log w datadir nie ma czym byc rotowany"
+        )
+
     # Check: endpoint.type must match Interview decision (keepalived_vip)
     ep_type = cluster.get("proxysql", {}).get("endpoint", {}).get("type", "")
     if ep_type and ep_type != "keepalived_vip":
