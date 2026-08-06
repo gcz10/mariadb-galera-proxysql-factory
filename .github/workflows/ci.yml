@@ -25,7 +25,10 @@ jobs:
           python-version: '3.11'
 
       - name: Install Python deps
-        run: pip install ansible-core jsonschema pyyaml
+        # minio: importowane przez tests/lab/probe-backup.py, ktore laduje
+        # test jednostkowy test_probe_backup.py. Bez tego job pada na
+        # ModuleNotFoundError, a cala bramka jakosci przestaje blokowac merge.
+        run: pip install ansible-core jsonschema pyyaml minio
 
       - name: Install Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
