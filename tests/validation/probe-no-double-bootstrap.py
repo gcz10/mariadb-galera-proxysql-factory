@@ -21,7 +21,11 @@ import sys
 
 import yaml
 
-BOOTSTRAP = re.compile(r"--wsrep-new-cluster")
+# Dwa sposoby na wystawienie nowego Primary Component: surowa flaga mariadbd
+# i wrapper systemd. Produkcyjna sciezka w bootstrap.yml uzywa wrappera, wiec
+# sonda znajaca tylko flage przepuscilaby nowy playbook bootstrapujacy bez
+# guardow — czyli dokladnie to, przed czym ISC-65 ma chronic.
+BOOTSTRAP = re.compile(r"--wsrep-new-cluster|\bgalera_new_cluster\b")
 COMMAND_MODULES = {
     "ansible.builtin.shell", "ansible.builtin.command", "shell", "command",
     "ansible.builtin.script", "script",

@@ -23,12 +23,18 @@ LIFECYCLE = re.compile(
     r"|pkill[^\n]*\bmariadbd\b"
     r"|kill\s+-\d+[^\n]*\bmariadbd\b"
     r"|mariadb-admin\s+shutdown"
-    r"|mysqladmin\s+shutdown",
+    r"|mysqladmin\s+shutdown"
+    # Restart/stop przez powloke omija modul systemd, wiec SERVICE_STATE go
+    # nie widzi. Bez tego `shell: systemctl restart mariadb` na calej grupie
+    # przechodzi bez serial:1 i kladzie klaster.
+    r"|systemctl\s+(?:restart|stop)\s+maria\w*",
     re.IGNORECASE,
 )
 # systemd/service restart or stop of a mariadb/galera unit
 SERVICE_STATE = re.compile(r"state:\s*(restarted|stopped)", re.IGNORECASE)
-MARIADB_UNIT = re.compile(r"name:\s*[\"']?maria", re.IGNORECASE)
+# Moduly systemd/service przyjmuja `name:` oraz alias `service:` — sonda musi
+# znac oba, inaczej `service: mariadb` jest dla niej niewidoczne.
+MARIADB_UNIT = re.compile(r"(?:name|service):\s*[\"']?maria", re.IGNORECASE)
 
 
 def targets_multiple_galera(hosts):
