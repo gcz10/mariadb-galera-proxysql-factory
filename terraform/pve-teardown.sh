@@ -20,6 +20,20 @@ TF_DIR="${1:?Uzycie: pve-teardown.sh <katalog-terraform>}"
 : "${PROXMOX_VE_USERNAME:?Ustaw PROXMOX_VE_USERNAME}"
 : "${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_PASSWORD}"
 
+# --- Zabezpieczenie 1: katalog musi byc konfiguracja terraform Z TEGO repo ---
+# Skrypt kasuje maszyny bezpowrotnie. Bez tej walidacji `pve-teardown.sh /`
+# albo literowka w nazwie konczy sie `terraform destroy` w przypadkowym miejscu.
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+TF_ABS=$(cd "$TF_DIR" && pwd)
+case "$TF_ABS" in
+  "$REPO_ROOT"/terraform/*) ;;
+  *) echo "ODMOWA: $TF_DIR jest poza $REPO_ROOT/terraform/" >&2; exit 1 ;;
+esac
+if ! ls "$TF_ABS"/*.tf >/dev/null 2>&1; then
+  echo "ODMOWA: $TF_DIR nie zawiera zadnego pliku .tf — to nie jest konfiguracja terraform" >&2
+  exit 1
+fi
+
 PVE_NODE="${PVE_NODE:-pve}"
 PVE_STORAGE="${PVE_STORAGE:-local-zfs}"
 
@@ -52,6 +66,56 @@ if [ "${#VMIDS[@]}" -eq 0 ]; then
   echo "UWAGA: nie odczytano VMID z terraform output — sprzatanie sierot pominiete." >&2
 fi
 
+# --- Zabezpieczenie 2: potwierdzenie musi POWTORZYC cel ---
+# `CONFIRM_DESTROY=1` nie chroni przed niczym: wpisuje sie odruchowo i przenosi
+# miedzy poleceniami. Zadamy dokladnej nazwy katalogu, wiec ani literowka w $1,
+# ani skopiowana komenda dla innego klastra nie przejdzie.
+DESTROY_WHAT=$( [ "${#NODES[@]}" -gt 0 ] && echo "wezly: ${NODES[*]}" || echo "CALY katalog" )
+
+# Maszyny wspoldzielone: nazwa wystepujaca w inwentarzu wiecej niz jednego
+# klastra oznacza, ze destroy odetnie tez te pozostale (ProxySQL, VIP, PMM).
+# Wyliczane z repo, nie z listy nazw wpisanej na sztywno.
+if [ -d "$REPO_ROOT/clusters" ]; then
+  SHARED_WARN=$(
+    TF_ABS="$TF_ABS" REPO_ROOT="$REPO_ROOT" NODE_FILTER="$NODE_FILTER" python3 - <<'PY' 2>/dev/null || true
+import json, os, pathlib, subprocess, collections
+tf, root = os.environ["TF_ABS"], pathlib.Path(os.environ["REPO_ROOT"])
+want = [n for n in os.environ.get("NODE_FILTER", "").split(",") if n]
+try:
+    vms = json.loads(subprocess.run(["terraform", "output", "-json", "vms"],
+                                    cwd=tf, capture_output=True, text=True).stdout)
+except Exception:
+    raise SystemExit
+doomed = {n for n in vms if not want or n in want}
+users = collections.defaultdict(set)
+for inv in root.glob("clusters/*/inventory.yml"):
+    text = inv.read_text()
+    for host in doomed:
+        if f"{host}:" in text:
+            users[host].add(inv.parent.name)
+shared = {h: c for h, c in users.items() if len(c) > 1}
+if shared:
+    for host, clusters in sorted(shared.items()):
+        print(f"  {host} -> uzywany przez: {', '.join(sorted(clusters))}")
+PY
+  )
+  if [ -n "$SHARED_WARN" ]; then
+    echo "!!! WARSTWA WSPOLDZIELONA — destroy odetnie WIECEJ NIZ JEDEN klaster:" >&2
+    echo "$SHARED_WARN" >&2
+  fi
+fi
+
+if [ "${CONFIRM_DESTROY:-}" != "$TF_DIR" ]; then
+  cat >&2 <<EOF
+ODMOWA: brak potwierdzenia.
+  cel:   $TF_DIR ($DESTROY_WHAT)
+  VMID:  ${VMIDS[*]:-brak odczytu}
+Aby wykonac, powtorz cel w zmiennej:
+  CONFIRM_DESTROY=$TF_DIR $0 $TF_DIR${NODES[*]:+ ${NODES[*]}}
+EOF
+  exit 1
+fi
+
 if [ "${#NODES[@]}" -gt 0 ]; then
   echo "=== terraform destroy — TYLKO: ${NODES[*]} ==="
   TARGETS=()
@@ -70,7 +134,14 @@ echo "=== sprzatanie sierot ZFS dla VMID: ${VMIDS[*]} ==="
 AUTH=$(curl -sk --max-time 20 -X POST "${PROXMOX_VE_ENDPOINT}/api2/json/access/ticket" \
   --data-urlencode "username=${PROXMOX_VE_USERNAME}" \
   --data-urlencode "password=${PROXMOX_VE_PASSWORD}")
-TICKET=$(printf '%s' "$AUTH" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["ticket"])')
+# Bez sprawdzenia bilet bywa pusty (zle haslo, API nieosiagalne), a skrypt
+# leci dalej z pustym cookie i sypie kaskada nieczytelnych 401.
+if ! TICKET=$(printf '%s' "$AUTH" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["ticket"])' 2>/dev/null) \
+   || [ -z "$TICKET" ]; then
+  echo "BLAD: uwierzytelnianie w PVE API nie powiodlo sie (sprawdz PROXMOX_VE_*)." >&2
+  echo "Maszyny zostaly usuniete, ale sieroty ZFS dla VMID ${VMIDS[*]} trzeba sprzatnac recznie." >&2
+  exit 1
+fi
 CSRF=$(printf '%s' "$AUTH" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["CSRFPreventionToken"])')
 
 CONTENT=$(curl -sk --max-time 30 -b "PVEAuthCookie=${TICKET}" \
