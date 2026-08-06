@@ -36,11 +36,16 @@
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     pmm_server_host: "{{ monitoring.pmm.server_url | regex_replace('^https?://', '') | regex_replace('/$', '') }}"
     pmm_node_name: "{{ monitoring.pmm.cluster_name }}-{{ inventory_hostname }}"
+    # Ten sam przelacznik, ktory steruje wywolaniami API nizej i cala rejestracja
+    # w f11_pmm_client.yml. Wczesniej `pmm-agent setup` mial pominiecie weryfikacji
+    # TLS wpisane na sztywno, wiec `validate_certs: true` nie mialo zadnego
+    # przelozenia na kanal agent -> serwer PMM.
+    pmm_validate_certs_effective: "{{ monitoring.get('pmm', {}).get('validate_certs', false) | bool }}"
   environment:
     PMM_AGENT_SERVER_ADDRESS: "{{ pmm_server_host }}:443"
     PMM_AGENT_SERVER_USERNAME: admin
     PMM_AGENT_SERVER_PASSWORD: "{{ pmm_admin_password }}"
-    PMM_AGENT_SERVER_INSECURE_TLS: "1"
+    PMM_AGENT_SERVER_INSECURE_TLS: "{{ '0' if pmm_validate_certs_effective else '1' }}"
     PMM_AGENT_CONFIG_FILE: /usr/local/percona/pmm/config/pmm-agent.yaml
     # Wezel zarejestrowany przez `pmm-agent setup` NIE dostaje etykiet klastra —
     # te ustawia tylko rejestracja przez API (f11_pmm_client.yml). Bez nich PMM
@@ -95,14 +100,14 @@
 
     - name: "Zarejestruj wezel (haslo przez env, nie argv)"
       ansible.builtin.command:
-        argv:
-          - pmm-agent
-          - setup
-          - --force
-          - --server-insecure-tls
-          - "{{ ansible_host }}"
-          - generic
-          - "{{ pmm_node_name }}"
+        # Flaga pomijajaca weryfikacje TLS musi znikac z argv, gdy klaster ma
+        # validate_certs=true — inaczej `pmm-agent setup` i tak zestawi kanal
+        # bez sprawdzenia certyfikatu serwera PMM. Lista sklejana warunkowo,
+        # bo `argv` nie przyjmuje `when` na pojedynczym elemencie.
+        argv: >-
+          {{ ['pmm-agent', 'setup', '--force']
+             + ([] if pmm_validate_certs_effective else ['--server-insecure-tls'])
+             + [ansible_host, 'generic', pmm_node_name] }}
       # Nie wystarczy 'czy zainstalowany': agent moze byc skonfigurowany, ale
       # jego wezel usuniety po stronie serwera — wtedy status zwraca rc=0,
       # a agent nigdy sie nie polaczy. Kryterium jest POLACZENIE.
