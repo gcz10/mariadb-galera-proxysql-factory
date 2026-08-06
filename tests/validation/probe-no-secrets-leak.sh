@@ -32,6 +32,14 @@ placeholder = re.compile(
     re.IGNORECASE,
 )
 jinja_expression = re.compile(r"\{\{.*\}\}", re.DOTALL)
+# Goly identyfikator bez cudzyslowow to referencja do zmiennej, nie literal.
+# Literalny sekret w YAML jest cytowany (tak wygladaja fixture'y w tescie);
+# odwolanie do zmiennej wewnatrz wielolinijkowego wyrazenia Jinja nie jest,
+# bo cudzyslowy obejmuja tam caly slownik, nie pojedyncza wartosc.
+# Zwalniamy wylacznie nazwy ZDEFINIOWANE w tym samym pliku — inaczej goly
+# literal bez cudzyslowow przeszedlby niezauwazony.
+bare_identifier = re.compile(r"[a-z_][a-z0-9_]*", re.IGNORECASE)
+variable_definition = re.compile(r"^\s*([a-z_][a-z0-9_]*)\s*:", re.IGNORECASE | re.MULTILINE)
 environment_reference = re.compile(
     r"(?:\$\{[A-Z_][A-Z0-9_]*(?::\?[^}]*)?\}|\$[A-Z_][A-Z0-9_]*)"
 )
@@ -48,6 +56,7 @@ for name in filter(None, paths):
         text = path.read_text()
     except (OSError, UnicodeDecodeError):
         continue
+    defined_variables = set(variable_definition.findall(text))
     for line_number, line in enumerate(text.splitlines(), start=1):
         for match in assignment.finditer(line):
             if (
@@ -71,6 +80,11 @@ for name in filter(None, paths):
                 jinja_expression.fullmatch(value)
                 or environment_reference.fullmatch(value)
                 or placeholder.fullmatch(value)
+                or (
+                    not match.group("value_quote")
+                    and bare_identifier.fullmatch(value)
+                    and value in defined_variables
+                )
             ):
                 continue
             findings.append(f"{path}:{line_number}:{line.strip()}")
