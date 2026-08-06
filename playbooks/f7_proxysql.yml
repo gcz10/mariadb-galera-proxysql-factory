@@ -384,19 +384,28 @@
           app_user loguje się przez ProxySQL (6033) — hasło zsynchronizowane backend↔ProxySQL.
           Rotacja APP_DB_PASSWORD nie rozłącza już aplikacji.
 
-    - name: "ISC-23: sprawdź reguły read/write split"
+    # `mysql_query_rules` jest tabela GLOBALNA instancji ProxySQL, a jedna para
+    # obsluguje cala flote. Bezzakresowe `DELETE FROM mysql_query_rules` z tego
+    # playbooka skasowaloby reguly KAZDEGO klastra na wspoldzielonym ProxySQL —
+    # dokladnie ten sam blad, ktory naprawiono juz dla `mysql_servers` przez
+    # hostgroup_base. Ograniczamy sie do wlasnych hostgroup; reguly bez
+    # destination_hostgroup (np. przepisywanie SQL) nie sa nasze i zostaja.
+    - name: "ISC-23: sprawdź reguły read/write split (tylko hostgroupy tego klastra)"
       ansible.builtin.command:
         argv: "{{ proxysql_admin_cli }}"
-        stdin: "SELECT COUNT(*) FROM mysql_query_rules;"
+        stdin: >-
+          SELECT COUNT(*) FROM mysql_query_rules WHERE destination_hostgroup IN
+          ({{ galera_writer_hg }},{{ galera_backup_hg }},{{ galera_reader_hg }},{{ galera_offline_hg }});
       register: current_query_rules
       no_log: true
       changed_when: false
 
-    - name: "ISC-23: wyłącz read/write split"
+    - name: "ISC-23: wyłącz read/write split (tylko hostgroupy tego klastra)"
       ansible.builtin.command:
         argv: "{{ proxysql_admin_cli }}"
         stdin: |
-          DELETE FROM mysql_query_rules;
+          DELETE FROM mysql_query_rules WHERE destination_hostgroup IN
+          ({{ galera_writer_hg }},{{ galera_backup_hg }},{{ galera_reader_hg }},{{ galera_offline_hg }});
           LOAD MYSQL QUERY RULES TO RUNTIME;
           SAVE MYSQL QUERY RULES TO DISK;
       when: current_query_rules.stdout | trim != '0'
