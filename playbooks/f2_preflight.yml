@@ -65,16 +65,46 @@
           - ansible_memtotal_mb >= 2048
         fail_msg: "Minimum 2GB RAM required, got {{ ansible_memtotal_mb }}MB"
 
-    - name: "Preflight - wolne miejsce na dysku (minimum 5GB)"
-      ansible.builtin.shell: df -B1 / | awk 'NR==2{print $4}'
+    # Mierzymy filesystem, na ktorym LEZY datadir, nie `/`. Przy osobnej
+    # partycji na katalog danych sprawdzanie roota mowilo o zupelnie innym
+    # dysku. `df` schodzi do najblizszego istniejacego rodzica, wiec dziala
+    # takze przed utworzeniem katalogu.
+    - name: "Preflight - wolne miejsce na filesystemie datadir"
+      ansible.builtin.shell: |
+        set -o pipefail
+        d="{{ (storage | default({})).data_directory | default('/var/lib/mysql') }}"
+        while [ ! -d "$d" ] && [ "$d" != "/" ]; do d=$(dirname "$d"); done
+        df -B1 "$d" | awk 'NR==2{print $4}'
+      args:
+        executable: /bin/bash
       changed_when: false
       register: disk_free
 
+    # 5 GB wystarcza na pakiety i pusty datadir — to prog instalacyjny.
+    # SST metoda mariabackup potrzebuje dodatkowo mniej wiecej tyle, ile
+    # wazy baza, wiec gdy klaster zna swoj rozmiar (storage.expected_database_size_gb
+    # jako liczba, nie "unknown"), podnosimy prog o te wartosc z zapasem 20%.
     - name: "Preflight - waliduj wolne miejsce"
       ansible.builtin.assert:
         that:
-          - disk_free.stdout | int >= 5368709120
-        fail_msg: "Minimum 5GB free space required, got {{ disk_free.stdout }} bytes"
+          - disk_free.stdout | int >= (preflight_required_bytes | int)
+        fail_msg: >-
+          Wolne miejsce na filesystemie datadir:
+          {{ (disk_free.stdout | int / 1073741824) | round(1) }}GB, wymagane
+          {{ (preflight_required_bytes | int / 1073741824) | round(1) }}GB.
+          {{ 'Prog podniesiony o rozmiar bazy — SST mariabackup kopiuje caly datadir.'
+             if preflight_db_size_known
+             else 'Uwaga: storage.expected_database_size_gb = "unknown", wiec sprawdzony
+                   jest tylko prog instalacyjny. Przy SST zabraknie miejsca, jesli baza
+                   przekracza wolna przestrzen.' }}
+      vars:
+        preflight_db_size_known: >-
+          {{ ((storage | default({})).expected_database_size_gb | default('unknown'))
+             is match('^[0-9]+(\.[0-9]+)?$') }}
+        preflight_required_bytes: >-
+          {{ 5368709120 if not preflight_db_size_known
+             else (5368709120 +
+                   ((storage.expected_database_size_gb | float) * 1073741824 * 1.2) | int) }}
       when: "'galera' in group_names"
 
     - name: "Preflight — wykryj istniejące pakiety MariaDB/Galera (audit#3)"
