@@ -32,13 +32,22 @@ proxysql:
     port: 6033
 
 # TLS full (demonstracja: TLS jest opcjonalne per-klaster — lab1 disabled, lab2 full).
-# Certy lab są gitignored (tests/lab/tls/) i host-specyficzne. Regeneracja na innym hoście:
-#   openssl genrsa -out ca-key.pem 2048; openssl req -x509 -new -nodes -key ca-key.pem \
-#     -days 3650 -out ca.pem -subj /CN=isa-lab2-CA
-#   openssl genrsa -out server-key.pem 2048; openssl req -new -key server-key.pem -out s.csr \
-#     -config san.cnf; openssl x509 -req -in s.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial \
-#     -out server-cert.pem -extensions v3_req -extfile san.cnf   (SAN=IP wszystkich węzłów+VIP)
-# Następnie zaktualizuj *_reference poniżej. Produkcja: użyj korporacyjnego PKI.
+# Certy lab są gitignored (tests/lab/tls/lab2/) i host-specyficzne; obok nich lezy
+# san.cnf z lista SAN (DNS wezlow + IP 172.29.0.x + VIP). Regeneracja na innym
+# hoscie, skladnia OpenSSL 3.x (genrsa i -nodes sa tam deprecowane):
+#   cd tests/lab/tls/lab2
+#   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out ca-key.pem
+#   openssl req -x509 -new -noenc -key ca-key.pem -days 3650 -out ca.pem \
+#     -subj /CN=isa-lab2-CA \
+#     -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+#     -addext "keyUsage=critical,keyCertSign,cRLSign"
+#   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out server-key.pem
+#   openssl req -new -key server-key.pem -out server.csr -config san.cnf
+#   openssl x509 -req -in server.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial \
+#     -days 3650 -out server-cert.pem -extensions v3_req -extfile san.cnf
+# basicConstraints/keyUsage na CA sa wymagane przez RFC 5280 — obecny certyfikat
+# lab2 nie ma zadnych rozszerzen X509v3 i przejdzie tylko przez lagodne stosy TLS.
+# Nastepnie zaktualizuj *_reference ponizej. Produkcja: uzyj korporacyjnego PKI.
 tls:
   mode: "full"
   certificate_source: "file"
