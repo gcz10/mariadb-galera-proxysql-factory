@@ -29,11 +29,17 @@
       Realny patch: -e f12_patch_packages='[pkg1,pkg2]' (dnf update) lub f12_patch_command='...'.
   when: not (f12_real_patch | bool)
 
+# Moduł ansible.builtin.dnf wymaga `state: latest` żeby zaktualizować
+# zainstalowany pakiet — a ISC-63 bezwzględnie zabrania `state: latest`.
+# `dnf update` przez command omija ten zakaz, bo lista pakietów jest jawna
+# i kontrolowana (operator podaje -e f12_patch_packages='[...]'), a nie
+# "zaktualizuj wszystko co możliwe". Moduł dnf traci idempotencję, ale
+# patching z natury nie jest idempotentny — drugi przebieg nic nie zmienia.
 - name: "audit#11: real patch — dnf update wskazanych pakietów"
-  ansible.builtin.dnf:
-    name: "{{ f12_patch_packages }}"
-    state: latest
+  ansible.builtin.command:
+    argv: "{{ ['dnf', 'update', '-y'] + (f12_patch_packages | list) }}"
   register: f12_dnf_result
+  changed_when: true
   when:
     - f12_real_patch | bool
     - (f12_patch_packages | default([]) | length) > 0
@@ -56,13 +62,20 @@
   ansible.builtin.systemd:
     name: "{{ f12_service }}"
     state: restarted
-  when:
-    - f12_real_patch | bool
-    - f12_ver_before.stdout != f12_ver_after.stdout
+  # Restart gdy cokolwiek realnie sie zmienilo — nie tylko gdy string
+  # `--version` sie roznil. dnf update galera-4, mariadb-backup albo
+  # bibliotek systemowych nie rusza `mariadbd --version`, ale proces w
+  # pamieci nadal wykonuje stary kod. changed_when: true na dnf/command
+  # jest tu wlasciwe: patching z definicji zmienia stan.
+  when: >-
+    f12_real_patch | bool
+    and ((f12_dnf_result.changed | default(false))
+         or (f12_cmd_result.changed | default(false))
+         or (f12_ver_before.stdout != f12_ver_after.stdout))
 
 - name: "audit#11: raport wersji (przed/po) + decyzja restart"
   ansible.builtin.debug:
     msg: >-
       {{ inventory_hostname }} [{{ f12_role }}]
       przed={{ f12_ver_before.stdout }} | po={{ f12_ver_after.stdout }}
-      {{ ' | RESTART ' ~ f12_service if ((f12_real_patch | bool) and f12_ver_before.stdout != f12_ver_after.stdout) else (' | bez restartu (binarium niezmieniony)' if (f12_real_patch | bool) else ' | DRY-RUN') }}
+      {{ ' | RESTART ' ~ f12_service if ((f12_real_patch | bool) and ((f12_dnf_result.changed | default(false)) or (f12_cmd_result.changed | default(false)) or (f12_ver_before.stdout != f12_ver_after.stdout))) else (' | bez restartu (binarium niezmieniony)' if (f12_real_patch | bool) else ' | DRY-RUN') }}

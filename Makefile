@@ -10,7 +10,7 @@
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke \
-        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy \
+        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest \
         infra-teardown infra-provision cluster-trust-hosts
 
 CLUSTER ?= example-cluster
@@ -189,6 +189,9 @@ verify-proxysql-tenancy:  ## Statyczny guard: klastry na wspólnym ProxySQL maj�
 
 verify-no-secrets-leak:  ## Statyczny guard: brak sekretów w repo i argv procesów
 	bash tests/validation/probe-no-secrets-leak.sh
+
+verify-no-state-latest:  ## Statyczny guard: brak state: latest w rolach i playbookach (ISC-63)
+	bash tests/validation/probe-no-state-latest.sh
 
 cluster-backup-configure:  ## F10 — skonfiguruj runner, minio identity i cron dla klastra
 	$(cluster_guard)
