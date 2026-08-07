@@ -93,13 +93,22 @@
       "12.3": "2029-06-30"
     f12_target_lts_eol: "{{ f12_eol_map[f12_target_version] | default('nieznany') }}"
     # EOL wersji OBECNEJ bierzemy z lockfile — to jedyne zrodlo prawdy dla tego,
-    # co faktycznie stoi na wezlach. Mapa sluzy tylko jako zapas dla serii, ktorej
+    # co faktycznie stoi na wezlach. Mapa sluzy jako zapas dla serii, ktorej
     # lockfile nie opisuje (np. plan liczony dla innego klastra niz zaladowany).
-    f12_current_eol: >-
+    f12_current_eol_raw: >-
       {{ (lock.mariadb.eol | default(''))
          if ((lock.mariadb.series | default('')) == f12_current_major_minor
               and (lock.mariadb.eol | default('')) | length > 0)
          else (f12_eol_map[f12_current_major_minor] | default('nieznany')) }}
+    # Porownanie EOL nizej jest LEKSYKALNE, a lockfile podaje sama miesiac
+    # ("2029-05") tam gdzie mapa ma pelna date ("2029-05-29"). Bez wyrownania
+    # "2029-05-15" >= "2029-05" wychodzi prawda i straznik przepuszcza upgrade
+    # SKRACAJACY wsparcie — dokladnie to, przed czym ma chronic. Miesiac bez dnia
+    # domykamy do konca miesiaca: przy watpliwosci wolimy zablokowac.
+    f12_current_eol: >-
+      {{ f12_current_eol_raw ~ '-31'
+         if f12_current_eol_raw is match('^[0-9]{4}-[0-9]{2}$')
+         else f12_current_eol_raw }}
     f12_gcache: "{{ hostvars[groups['galera'][0]].f12_gcache_size.stdout | default('nieustawiony') }}"
 
   pre_tasks:
