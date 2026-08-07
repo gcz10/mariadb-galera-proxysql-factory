@@ -79,6 +79,9 @@
     f12_current_major_minor: "{{ f12_current_version | regex_replace('^(\\d+\\.\\d+)\\..*$', '\\1') }}"
     # Cel upgrade jest KONFIGUROWALNY (-e f12_target_version=...). Domyślnie 12.3 LTS,
     # bo to jedyny LTS z EOL późniejszym niż obecna 11.4 (2029-06-30 vs 2029-05-29).
+    # Cel NIE moze pochodzic z versions.lock.yml — lockfile przypina wersje OBECNA,
+    # a nie miejsce docelowe upgrade'u. Mapa EOL dotyczy serii PRZYSZLYCH, ktorych
+    # w lockfile z tego samego powodu nie ma.
     # EOL wg endoflife.date/api/mariadb.json (zweryfikowane 2026-07-25):
     #   11.4 -> 2029-05-29 | 11.8 -> 2028-06-04 | 12.3 -> 2029-06-30
     # UWAGA: 11.8 ma EOL WCZEŚNIEJSZY niż 11.4 — upgrade 11.4->11.8 SKRACA wsparcie o ~12 mies.
@@ -89,8 +92,21 @@
       "11.8": "2028-06-04"
       "12.3": "2029-06-30"
     f12_target_lts_eol: "{{ f12_eol_map[f12_target_version] | default('nieznany') }}"
-    f12_current_eol: "{{ f12_eol_map[f12_current_major_minor] | default('nieznany') }}"
+    # EOL wersji OBECNEJ bierzemy z lockfile — to jedyne zrodlo prawdy dla tego,
+    # co faktycznie stoi na wezlach. Mapa sluzy tylko jako zapas dla serii, ktorej
+    # lockfile nie opisuje (np. plan liczony dla innego klastra niz zaladowany).
+    f12_current_eol: >-
+      {{ (lock.mariadb.eol | default(''))
+         if ((lock.mariadb.series | default('')) == f12_current_major_minor
+              and (lock.mariadb.eol | default('')) | length > 0)
+         else (f12_eol_map[f12_current_major_minor] | default('nieznany')) }}
     f12_gcache: "{{ hostvars[groups['galera'][0]].f12_gcache_size.stdout | default('nieustawiony') }}"
+
+  pre_tasks:
+    - name: Load platform lockfile
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
 
   tasks:
     - name: "ISC-56: strażnik anti-downgrade — odmów jeśli obecna wersja >= docelowa"
