@@ -41,7 +41,10 @@ Hostgroupy ProxySQL **10/20/30/40**, użytkownik `app_user`.
 
 ### `finalclaude-r9` — Rocky 9, konsument warstwy wspólnej
 
-MariaDB 11.4.12 (`el9`), `wsrep_cluster_name: fc9_galera`, `tls=disabled`.
+MariaDB 11.4.12 (`el9`), `wsrep_cluster_name: fc9_galera`.
+**Korekta 2026-08-05:** replikacja Galera jest szyfrowana — `tls.mode: full`
+(commit `607871d`), a nie `disabled` jak w zdjeciu z 2026-08-02 powyzej.
+Szczegoly w `docs/records/2026-08-02-session-handoff.md`.
 Hostgroupy ProxySQL **110/120/130/140**, użytkownik `app_user_fc9`.
 
 | Host | VMID | IP | Rola | RAM |

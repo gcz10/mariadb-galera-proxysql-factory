@@ -13,8 +13,12 @@ Wymiana uszkodzonego węzła Galera lub ProxySQL na nowy host.
 # 1. Plan usunięcia starego węzła (read-only: quorum guard, writer-detection)
 make cluster-remove-node-plan CLUSTER=<name> NODE=<old_node>
 
-# 2. Usuń stary węzeł (confirm-gated, quorum-guarded)
-make cluster-remove-node CLUSTER=<name> NODE=<old_node> CONFIRM=yes
+# 2. Usuń stary węzeł (confirm-gated, quorum-guarded).
+#    Usuniecie z klastra 3-wezlowego zmienia topologie na 2 wezly, wiec
+#    playbook wymaga jawnej zgody (audit#18). Przy wymianie wezla stan
+#    2-wezlowy jest przejsciowy — krok 4 przywraca 3.
+make cluster-remove-node CLUSTER=<name> NODE=<old_node> CONFIRM=yes \
+  ANSIBLE_OPTS="-e accept_topology_change=yes"
 
 # 3. Przygotuj nowy host (Rocky 9, F2 preflight), dodaj do inventory.yml
 

@@ -13,7 +13,8 @@ Odtwarzanie bazy z backupu na izolowany host + okresowy restore drill.
 # Restore drill odtwarza najnowszy backup na czysty izolowany host (rnode1),
 # weryfikuje checksum (ISC-34), integralność CHECK TABLE (ISC-36) i liczbę wierszy.
 # ISC-37: drill według restore_test_schedule (0 4 * * 0).
-make cluster-restore-drill CLUSTER=<name>
+# CONFIRM=yes jest wymagane przez Makefile — drill kasuje datadir hosta restore.
+make cluster-restore-drill CLUSTER=<name> CONFIRM=yes
 ```
 
 ## Wymagania (ISC)
@@ -27,7 +28,7 @@ make cluster-restore-drill CLUSTER=<name>
 ```bash
 # Uruchamia restore na izolowanym hoście (rnode1), weryfikuje integralność, raportuje PASS/FAIL
 # Nieudany drill → alert do monitorowanego kanału (ISC-38)
-make cluster-restore-drill CLUSTER=<name>
+make cluster-restore-drill CLUSTER=<name> CONFIRM=yes
 
 # Zweryfikuj stan restore drill (ISC-36/37)
 make lab-restore-verify CLUSTER=<name>

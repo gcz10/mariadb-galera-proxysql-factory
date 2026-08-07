@@ -52,8 +52,10 @@ To poprawne zachowanie — Galera odmawia zgadywania, który węzeł ma najświe
    ```
 5. **Dołącz pozostałe:** `make cluster-join CLUSTER=<name>`.
 6. **Odtwórz warstwy zależne.** `cluster-join` przywraca węzły do Galery, ale NIE do
-   ProxySQL ani PMM. Po recovery uruchom `make cluster-proxysql` i `make cluster-monitoring`,
-   inaczej `lab-proxysql-verify` zgłosi za mało backendów, a metryki wsrep nie wrócą.
+   ProxySQL ani PMM. Po recovery uruchom `make cluster-proxysql CLUSTER=<name>` i
+   `make cluster-monitoring CLUSTER=<name>` — bez jawnego `CLUSTER=` obie komendy
+   zatrzyma straznik Makefile. Inaczej `lab-proxysql-verify` zgłosi za mało
+   backendów, a metryki wsrep nie wrócą.
 
 ## Anti-criteria
 

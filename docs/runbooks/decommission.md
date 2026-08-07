@@ -14,8 +14,12 @@ Bezpieczne usunięcie węzła z klastra Galera lub ProxySQL.
 make cluster-remove-node-plan CLUSTER=<name> NODE=<node>
 
 # 2. Usuń węzeł (confirm-gated; wymaga zdrowego klastra, drain na obu ProxySQL,
-#    usuwa wszystkie typy usług z PMM, zatrzymuje i wyłącza mariadbd)
-make cluster-remove-node CLUSTER=<name> NODE=<node> CONFIRM=yes
+#    usuwa wszystkie typy usług z PMM, zatrzymuje i wyłącza mariadbd).
+#    Gdy operacja zmienia liczebnosc klastra (np. 3 -> 2), playbook wymaga
+#    dodatkowo jawnej zgody na zmiane topologii (audit#18) — klaster
+#    2-wezlowy bez arbitra nie przetrwa awarii jednego wezla.
+make cluster-remove-node CLUSTER=<name> NODE=<node> CONFIRM=yes \
+  ANSIBLE_OPTS="-e accept_topology_change=yes"
 
 # 3. Natychmiast usuń <node> z clusters/<name>/inventory.yml.
 #    Inaczej kolejny converge odtworzy konfigurację usuniętego węzła.

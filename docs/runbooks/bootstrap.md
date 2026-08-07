@@ -19,14 +19,18 @@ Uruchomienie nowego klastra Galera od zera — pierwszy Primary Component.
 ## Procedura
 
 ```bash
-# 1. Wybierz JEDEN węzeł do bootstrap (zwykle gnode1)
-# 2. Uruchom bootstrap playbook z jawnym potwierdzeniem
-make cluster-bootstrap CLUSTER=<name> BOOTSTRAP_NODE=gnode1
-# ansible-playbook playbooks/bootstrap.yml -l gnode1 -e confirm=yes
-
-# 3. Po sukcesie bootstrap, dołącz pozostałe węzły
+# 1. Instalacja pakietow i konfiguracja (idempotentny converge; NIE bootstrapuje)
 make cluster-deploy CLUSTER=<name>
-# ansible-playbook playbooks/site.yml --skip-tags bootstrap
+
+# 2. Bootstrap JEDNEGO wezla. Domyslnie galera[0]; inny wezel wskazuje sie
+#    przez ANSIBLE_OPTS, bo Makefile nie zna zmiennej BOOTSTRAP_NODE.
+make cluster-bootstrap CLUSTER=<name> CONFIRM=yes
+#   inny wezel niz galera[0]:
+#   make cluster-bootstrap CLUSTER=<name> CONFIRM=yes ANSIBLE_OPTS="-e bootstrap_node=gnode2"
+
+# 3. Dolacz pozostale wezly (SST mariabackup, serial:1).
+#    site.yml tego NIE robi — dolaczanie ma wlasny playbook f5_join.yml.
+make cluster-join CLUSTER=<name>
 ```
 
 ## Anti-criteria (ISC-13, ISC-65)

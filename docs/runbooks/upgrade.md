@@ -26,7 +26,8 @@ make lab-patch-verify CLUSTER=<name>
 make cluster-upgrade-plan CLUSTER=<name>
 
 # 2. Warunki wstępne:
-#    - świeży backup (make cluster-backup) + udany restore test (make cluster-restore-drill)
+#    - świeży backup (make cluster-backup) + udany restore test
+#      (make cluster-restore-drill CLUSTER=<name> CONFIRM=yes)
 #    - zatwierdzony maintenance window
 #    - warunki stopu zapisane przed wykonaniem (ISC-55)
 
