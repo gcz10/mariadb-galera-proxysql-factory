@@ -175,9 +175,12 @@
         - "'galera' in group_names"
         - ansible_facts['service_mgr'] == 'systemd'
 
-    # === ProxySQL nodes: RPM zweryfikowany sha256 (audit#6) ===
-    # Klucz repo_pub_key.gpg jest binarny → rpm --import odrzuca ("not an armored public key").
-    # Kontrolą integralności jest przypięty sha256 RPM-u w versions.lock.yml (get_url weryfikuje).
+    # === ProxySQL nodes: RPM z realna weryfikacja podpisu wydawcy (audit#6) ===
+    # Wczesniej stalo tu `disable_gpg_check: true` z komentarzem, ze klucz jest
+    # binarny i nieimportowalny. To bylo nieprawda: `repo_pub_key.gpg` faktycznie
+    # jest binarny, ale `repo_pub_key` (bez rozszerzenia) to ASCII-armored blok,
+    # ktory `rpm --import` przyjmuje bez problemu. sha256 z lockfile chroni tylko
+    # przed bledem pobierania — podmiana pliku na serwerze wydawcy przechodzila.
     - name: "ProxySQL - wymagaj sha256 RPM dla aktualnej arch w lockfile"
       ansible.builtin.assert:
         that:
@@ -207,11 +210,19 @@
       when: >-
         'proxysql' in group_names
         and (proxysql.role | default('owner')) == 'owner'
-    - name: "ProxySQL - instaluj zweryfikowany RPM (sha256 = kontrola integralności)"
+
+    - name: "ProxySQL - zaimportuj klucz GPG wydawcy (ASCII-armored)"
+      ansible.builtin.rpm_key:
+        key: "{{ proxysql_gpg_key_url | default('https://repo.proxysql.com/ProxySQL/proxysql-' ~ lock.proxysql.series ~ '.x/repo_pub_key') }}"
+        fingerprint: "{{ proxysql_gpg_fingerprint | default('653F85BB38256DF8A96206C3E8CA2E8D8217C97E') }}"
+        state: present
+      when: >-
+        'proxysql' in group_names
+        and (proxysql.role | default('owner')) == 'owner'
+    - name: "ProxySQL - instaluj RPM (sha256 z lockfile + podpis GPG wydawcy)"
       ansible.builtin.dnf:
         name: "{{ proxysql_rpm_dl.dest }}"
         state: present
-        disable_gpg_check: true  # klucz binarny nieimportowalny; sha256 zweryfikowane przez get_url
       when: >-
         'proxysql' in group_names
         and (proxysql.role | default('owner')) == 'owner'
