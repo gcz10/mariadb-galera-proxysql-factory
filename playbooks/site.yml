@@ -180,8 +180,12 @@
       ansible.builtin.wait_for:
         port: 3306
         timeout: 60
-      ignore_errors: true
       register: mariadb_ready
+      # Bez `ignore_errors`. Warunek ponizej juz odsiewa przypadek sprzed
+      # bootstrapu (mariadbd nie dziala -> task pominiety w calosci). Gdy
+      # mariadbd JEST aktywny, a port 3306 nie wstaje przez 60 s, to awaria:
+      # wyciszenie jej sprawialo, ze playbook przewracal sie dopiero na
+      # kolejnym zadaniu, z mylacym bledem o braku gniazda zamiast o timeoucie.
       when: (mariadb_active | default({})).rc | default(1) == 0
 
     - name: "Utworz SST user (tylko na pierwszym węźle, jeśli nie istnieje)"
