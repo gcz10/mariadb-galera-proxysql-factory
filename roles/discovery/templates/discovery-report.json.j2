@@ -1,54 +1,61 @@
+{#
+  Kazda wartosc niebedaca stringiem MUSI przejsc przez `| to_json`.
+  Bez tego Jinja renderuje repr Pythona — `['a', 'b']` i `{'k': 'v'}` z
+  pojedynczymi cudzyslowami — co RFC 8259 odrzuca, a `json.load()` wywala
+  z JSONDecodeError. Raport byl przez to nieparsowalny maszynowo.
+  `default(...)` idzie PRZED `to_json`, bo filtr na undefined sam by padl.
+#}
 {
-  "host": "{{ inventory_hostname }}",
-  "collected_at": "{{ ansible_facts['date_time']['iso8601'] }}",
+  "host": {{ inventory_hostname | to_json }},
+  "collected_at": {{ ansible_facts['date_time']['iso8601'] | to_json }},
   "ansible_managed": "F0 Discovery — read-only",
   "os": {
-    "rocky_release": "{{ rocky_release.stdout | default('') }}",
-    "distribution": "{{ ansible_distribution | default('') }}",
-    "distribution_version": "{{ ansible_distribution_version | default('') }}",
-    "kernel": "{{ ansible_kernel | default('') }}"
+    "rocky_release": {{ rocky_release.stdout | default('') | to_json }},
+    "distribution": {{ ansible_distribution | default('') | to_json }},
+    "distribution_version": {{ ansible_distribution_version | default('') | to_json }},
+    "kernel": {{ ansible_kernel | default('') | to_json }}
   },
   "hardware": {
-    "cpu_cores": "{{ ansible_processor_vcpus | default('') }}",
-    "cpu_model": "{{ ansible_processor[0] | default('') }}",
-    "ram_mb": "{{ ansible_memtotal_mb | default('') }}",
-    "numa": {{ numa_hw.stdout | to_nice_json | default('null') }}
+    "cpu_cores": {{ ansible_processor_vcpus | default(0) | to_json }},
+    "cpu_model": {{ ansible_processor[0] | default('') | to_json }},
+    "ram_mb": {{ ansible_memtotal_mb | default(0) | to_json }},
+    "numa": {{ numa_hw.stdout_lines | default([]) | to_json }}
   },
   "storage": {
-    "block_devices": {{ lsblk_out.stdout | from_json | default({}) }},
-    "mounts": {{ findmnt_out.stdout | from_json | default({}) }}
+    "block_devices": {{ (lsblk_out.stdout | default('{}') | from_json) | to_json }},
+    "mounts": {{ (findmnt_out.stdout | default('{}') | from_json) | to_json }}
   },
   "network": {
-    "interfaces": {{ ip_addr.stdout | from_json | default([]) }},
-    "routes": {{ ip_route.stdout | from_json | default([]) }},
-    "resolv_conf": {{ resolv_conf.stdout_lines | default([]) }},
-    "port_probe": {{ port_probe.stdout_lines | default([]) }}
+    "interfaces": {{ (ip_addr.stdout | default('[]') | from_json) | to_json }},
+    "routes": {{ (ip_route.stdout | default('[]') | from_json) | to_json }},
+    "resolv_conf": {{ resolv_conf.stdout_lines | default([]) | to_json }},
+    "port_probe": {{ port_probe.stdout_lines | default([]) | to_json }}
   },
   "time_sync": {
-    "chronyc_tracking": "{{ chronyc_tracking.stdout | default('') }}"
+    "chronyc_tracking": {{ chronyc_tracking.stdout | default('') | to_json }}
   },
   "security": {
-    "selinux": "{{ selinux_status.stdout | default('') }}",
-    "firewalld_state": "{{ firewalld_state.stdout | default('') }}",
-    "firewalld_list": "{{ firewalld_list.stdout | default('') }}"
+    "selinux": {{ selinux_status.stdout | default('') | to_json }},
+    "firewalld_state": {{ firewalld_state.stdout | default('') | to_json }},
+    "firewalld_list": {{ firewalld_list.stdout | default('') | to_json }}
   },
   "packages": {
-    "existing_db_packages": {{ existing_db_pkgs.stdout_lines | default([]) }},
-    "dnf_repolist": {{ dnf_repolist.stdout_lines | default([]) }}
+    "existing_db_packages": {{ existing_db_pkgs.stdout_lines | default([]) | to_json }},
+    "dnf_repolist": {{ dnf_repolist.stdout_lines | default([]) | to_json }}
   },
   "existing_services": {
-    "db_services": {{ existing_db_services.stdout_lines | default([]) }}
+    "db_services": {{ existing_db_services.stdout_lines | default([]) | to_json }}
   },
   "monitoring": {
-    "processes": {{ monitoring_procs.stdout_lines | default([]) }},
-    "log_shipping": {{ log_shipping.stdout_lines | default([]) }}
+    "processes": {{ monitoring_procs.stdout_lines | default([]) | to_json }},
+    "log_shipping": {{ log_shipping.stdout_lines | default([]) | to_json }}
   },
   "database": {
-    "missing_primary_keys": {{ missing_pk.query_result | default([]) }},
-    "wsrep_received": {{ wsrep_received.query_result | default([]) }}
+    "missing_primary_keys": {{ missing_pk.query_result | default([]) | to_json }},
+    "wsrep_received": {{ wsrep_received.query_result | default([]) | to_json }}
   },
   "gcache": {
-    "ist_window_minutes": {{ ist_window_minutes }},
+    "ist_window_minutes": {{ ist_window_minutes | to_json }},
     "note": "gcache.size = measured_write_rate_bytes_per_sec * ist_window_minutes * 60; filled after write-rate measurement"
   }
 }
