@@ -97,6 +97,7 @@
         name: proxysql
         state: started
         enabled: true
+        daemon_reload: true
       when: proxysql_systemd.stat.exists
 
     - name: "Sprawdź proces ProxySQL bez systemd"

@@ -282,7 +282,15 @@
       when:
         - "'proxysql' in group_names"
         - ansible_facts['service_mgr'] == 'systemd'
+      register: proxysql_limits_conf
 
+    - name: "ProxySQL - daemon-reload po zmianie limitów systemd"
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when:
+        - "'proxysql' in group_names"
+        - ansible_facts['service_mgr'] == 'systemd'
+        - proxysql_limits_conf.changed
     # === Tuning jądra OS (sysctl) dla baz danych i load balancerów ===
     - name: "Wdróż konfigurację sysctl dla baz danych i ProxySQL"
       ansible.builtin.copy:
