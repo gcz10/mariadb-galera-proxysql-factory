@@ -4,10 +4,10 @@ slug: "20260722-172704_galera-proxysql-cluster-factory"
 effort: comprehensive
 effort_source: explicit
 phase: build
-progress: 5/68
+progress: 68/68
 mode: iterate
 started: "2026-07-22T15:27:04Z"
-updated: "2026-07-22T23:34:56Z"
+updated: "2026-08-14T23:10:00Z"
 principal_stated_goal: "Zbuduj powtarzalną, idempotentną i operacyjnie bezpieczną fabrykę produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących maszynach Rocky Linux 9, tak aby nowy niezależny klaster powstawał przez dodanie inventory i konfiguracji klastra, a każdy stan wysokiej dostępności, bezpieczeństwa, backupu i odtwarzania był potwierdzony wykonywalnym testem oraz dowodem."
 principal_stated_goal_source: prompt
 principal_stated_goal_signal: 4
@@ -75,8 +75,8 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - [x] ISC-1: Deployment na czystych hostach Rocky Linux 9 kończy się sukcesem (site.yml exit 0, wszystkie taski PASS).
 - [x] ISC-2: Drugi uruchomiony converge na niezmiennym klastrze raportuje `changed=0` na wszystkich hostach.
 - [x] ISC-3: Wersje MariaDB, mariadb-backup, Galera provider, ProxySQL i kolekcji Ansible są dokładnie zgodne z `versions.lock.yml`.
-- [ ] ISC-4: SELinux pozostaje w trybie Enforcing po pełnym deploy.
-- [ ] ISC-5: Firewalld działa i dopuszcza wyłącznie zadeklarowany ruch (Galera, ProxySQL, admin, monitoring) na wszystkich hostach.
+- [x] ISC-4: SELinux pozostaje w trybie Enforcing po pełnym deploy.
+- [x] ISC-5: Firewalld działa i dopuszcza wyłącznie zadeklarowany ruch (Galera, ProxySQL, admin, monitoring) na wszystkich hostach.
 - [x] ISC-6: Anti: Nieudany preflight nie zostawia częściowych zmian — konfiguracja hostów pozostaje niezmieniona, gdy preflight FAIL.
 
 ### Galera
