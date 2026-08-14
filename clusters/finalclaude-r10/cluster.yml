@@ -115,7 +115,7 @@ monitoring:
     # rozlaczny miedzy klastrami, inaczej nadpisza sobie reguly.
     cluster_name: "fc10-galera"
     validate_certs: false
-    credentials_revision: 2
+    credentials_revision: 3
   # Owner wspolnej pary: to on instaluje pmm-agenta na fcp1/fcp2.
   # Wlasne wezly Galera zostaja AGENTLESS — punkt odniesienia do porownania z r9.
   agent_groups: ["proxysql"]
