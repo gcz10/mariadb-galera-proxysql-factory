@@ -50,7 +50,7 @@
             bootstrap_node_probe.results
             | selectattr('stdout', 'defined')
             | map(attribute='stdout')
-            | select('search', 'Primary')
+            | select('search', '(?m)^wsrep_cluster_status\tPrimary$')
             | list
           }}
         bootstrap_unreachable: >-

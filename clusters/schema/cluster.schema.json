@@ -809,6 +809,10 @@
           "type": "number",
           "minimum": 0,
           "description": "0 = loguj wszystkie zapytania (wymagane przez QAN slowlog). Domyslnie 10."
+        },
+        "wsrep_provider_options_extra": {
+          "type": "string",
+          "description": "Dodatkowe opcje wsrep providera (np. 'evs.suspect_timeout=PT5S;pc.weight=2;pc.recovery=1')."
         }
       }
     }

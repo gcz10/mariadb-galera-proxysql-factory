@@ -44,7 +44,6 @@
   environment:
     PMM_AGENT_SERVER_ADDRESS: "{{ pmm_server_host }}:443"
     PMM_AGENT_SERVER_USERNAME: admin
-    PMM_AGENT_SERVER_PASSWORD: "{{ pmm_admin_password }}"
     PMM_AGENT_SERVER_INSECURE_TLS: "{{ '0' if pmm_validate_certs_effective else '1' }}"
     PMM_AGENT_CONFIG_FILE: /usr/local/percona/pmm/config/pmm-agent.yaml
     # Wezel zarejestrowany przez `pmm-agent setup` NIE dostaje etykiet klastra —
@@ -108,12 +107,14 @@
           {{ ['pmm-agent', 'setup', '--force']
              + ([] if pmm_validate_certs_effective else ['--server-insecure-tls'])
              + [ansible_host, 'generic', pmm_node_name] }}
+      environment:
+        PMM_AGENT_SERVER_PASSWORD: "{{ pmm_admin_password }}"
       # Nie wystarczy 'czy zainstalowany': agent moze byc skonfigurowany, ale
       # jego wezel usuniety po stronie serwera — wtedy status zwraca rc=0,
       # a agent nigdy sie nie polaczy. Kryterium jest POLACZENIE.
       when: pmm_state.rc != 0 or not ((pmm_state.stdout | default('{}') | from_json).pmm_agent_status.connected | default(false)) or (pmm_force_resetup | default(false) | bool)
       changed_when: true
-
+      no_log: true
     - name: "Wlacz i zrestartuj pmm-agent"
       ansible.builtin.systemd_service:
         name: pmm-agent

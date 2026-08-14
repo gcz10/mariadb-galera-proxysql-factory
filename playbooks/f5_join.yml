@@ -52,7 +52,7 @@
         owner: root
         group: mysql
         mode: "0640"
-
+      no_log: true
     - name: "Dystrybuuj certyfikaty TLS (gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
       when: (tls | default({})).mode | default('disabled') == 'full'
@@ -199,38 +199,63 @@
       changed_when: true
       when: not use_systemd
 
+    - name: "Katalog drop-in mariadb.service"
+      ansible.builtin.file:
+        path: /etc/systemd/system/mariadb.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: use_systemd
+
+    - name: "SST bywa dłuższy niż domyślny TimeoutStartSec — drop-in zapobiega zabiciu mariadbd przez systemd"
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          TimeoutStartSec=infinity
+          LimitNOFILE=1048576
+        dest: /etc/systemd/system/mariadb.service.d/timeoutstartsec.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: use_systemd
+
     - name: "Uruchom MariaDB jako węzeł dołączający — produkcja (systemctl start → SST/IST)"
       ansible.builtin.systemd:
         name: mariadb
         state: started
         enabled: true
+        daemon_reload: true
       when: use_systemd
 
-    - name: "Czekaj na osiągnięcie stanu Synced"
+    - name: "Czekaj na osiągnięcie stanu Synced (SST dużej bazy trwa od minut do godzin)"
       ansible.builtin.shell: >
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
         "SHOW STATUS WHERE Variable_name='wsrep_local_state'" 2>/dev/null
       register: join_state
       until: "'4' in (join_state.stdout | default(''))"
-      retries: 30
+      retries: "{{ galera_join_wait_retries | default(360) | int }}"
       delay: 5
       changed_when: false
 
-    - name: "Weryfikuj rozmiar klastra po dołączeniu"
+    - name: "Weryfikuj rozmiar i stan klastra po dołączeniu"
       ansible.builtin.shell: >
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name='wsrep_cluster_size'" 2>/dev/null
-      register: cluster_size_after
+        "SHOW STATUS WHERE Variable_name IN
+        ('wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')" 2>/dev/null
+      register: cluster_state_after
       changed_when: false
 
-    - name: "Potwierdź dołączenie"
+    - name: "Potwierdź dołączenie (Synced + Primary + ready + rozmiar)"
       ansible.builtin.assert:
         that:
           - "'4' in (join_state.stdout | default(''))"
-          - cluster_size_after.stdout | regex_search('\d+') | int >= galera_node_idx | int
+          - cluster_state_after.stdout is search('wsrep_cluster_status\tPrimary')
+          - cluster_state_after.stdout is search('wsrep_ready\tON')
+          - cluster_state_after.stdout | regex_search('wsrep_cluster_size\t(\d+)', '\\1') | first | int >= galera_node_idx | int
         fail_msg: >
-          {{ inventory_hostname }} nie osiągnął stanu Synced lub rozmiar klastra
-          jest niepoprawny: state={{ join_state.stdout }}, size={{ cluster_size_after.stdout }}
-        success_msg: "{{ inventory_hostname }} dołączył do klastra (Synced, size={{ cluster_size_after.stdout | regex_search('\\d+') }})"
+          {{ inventory_hostname }} nie osiągnął stanu Synced/Primary/ready lub rozmiar klastra
+          jest niepoprawny: state={{ join_state.stdout }}, cluster={{ cluster_state_after.stdout }}
+        success_msg: "{{ inventory_hostname }} dołączył do klastra (Synced, Primary, ready, size={{ cluster_state_after.stdout | regex_search('wsrep_cluster_size\t(\\d+)', '\\1') | first }})"
 
   handlers: []

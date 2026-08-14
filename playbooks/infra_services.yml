@@ -300,30 +300,33 @@
 
     # PMM 3.8.1 nie stosuje GF_SECURITY_ADMIN_PASSWORD przy pierwszym starcie kontenera —
     # Grafana zwraca 401 na haslo z compose. change-admin-password wymusza je idempotentnie.
-    - name: "PMM — sprawdz czy haslo admina z compose dziala"
-      ansible.builtin.command:
-        argv:
-          - curl
-          - -sSk
-          - -o
-          - /dev/null
-          - -w
-          - "%{http_code}"
-          - -u
-          - "{{ pmm_admin_user | default('admin') }}:{{ pmm_admin_password }}"
-          - "https://{{ ansible_host }}:443/graph/api/user"
+    - name: "PMM — sprawdz czy haslo admina z compose dziala (uri, bez wycieku w argv)"
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}:443/graph/api/user"
+        user: "{{ pmm_admin_user | default('admin') }}"
+        password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code:
+          - 200
+          - 401
       register: pmm_admin_auth
-      changed_when: false
-      failed_when: false
       no_log: true
 
-    - name: "PMM — wymus haslo admina (gdy compose go nie zastosowal)"
-      ansible.builtin.command:
-        argv:
-          - docker
-          - exec
-          - pmm-server
-          - change-admin-password
-          - "{{ pmm_admin_password }}"
-      when: pmm_admin_auth.stdout | default('') != '200'
+    - name: "PMM — zmien domyslne haslo admina przez Grafana User API (uri, bez wycieku w argv)"
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}:443/graph/api/user/password"
+        method: PUT
+        user: "{{ pmm_admin_user | default('admin') }}"
+        password: "{{ pmm_default_bootstrap_password | default('admin') }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          oldPassword: "{{ pmm_default_bootstrap_password | default('admin') }}"
+          newPassword: "{{ pmm_admin_password }}"
+          confirmNew: "{{ pmm_admin_password }}"
+        status_code:
+          - 200
+      when: pmm_admin_auth.status == 401
       no_log: true

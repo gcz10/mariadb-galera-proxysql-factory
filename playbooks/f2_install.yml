@@ -167,14 +167,39 @@
           (mariadb_galera_policy_active.stat.checksum | default(''))
 
 
-    - name: "Włącz mariadb.service na starcie (produkcja: boot persistence; start przez bootstrap/join)"
-      ansible.builtin.systemd:
-        name: mariadb
-        enabled: true
+    - name: "Katalog drop-in mariadb.service"
+      ansible.builtin.file:
+        path: /etc/systemd/system/mariadb.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
       when:
         - "'galera' in group_names"
         - ansible_facts['service_mgr'] == 'systemd'
 
+    - name: "SST bywa dłuższy niż domyślny TimeoutStartSec — drop-in zapobiega zabiciu mariadbd przez systemd"
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          TimeoutStartSec=infinity
+          LimitNOFILE=1048576
+        dest: /etc/systemd/system/mariadb.service.d/timeoutstartsec.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when:
+        - "'galera' in group_names"
+        - ansible_facts['service_mgr'] == 'systemd'
+
+    - name: "Włącz mariadb.service na starcie (produkcja: boot persistence; start przez bootstrap/join)"
+      ansible.builtin.systemd:
+        name: mariadb
+        enabled: true
+        daemon_reload: true
+      when:
+        - "'galera' in group_names"
+        - ansible_facts['service_mgr'] == 'systemd'
     # === ProxySQL nodes: RPM z realna weryfikacja podpisu wydawcy (audit#6) ===
     # Wczesniej stalo tu `disable_gpg_check: true` z komentarzem, ze klucz jest
     # binarny i nieimportowalny. To bylo nieprawda: `repo_pub_key.gpg` faktycznie
@@ -234,6 +259,60 @@
         'proxysql' in group_names
         and (proxysql.role | default('owner')) == 'owner'
 
+    - name: "Katalog drop-in proxysql.service"
+      ansible.builtin.file:
+        path: /etc/systemd/system/proxysql.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when:
+        - "'proxysql' in group_names"
+        - ansible_facts['service_mgr'] == 'systemd'
+
+    - name: "ProxySQL - drop-in LimitNOFILE"
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          LimitNOFILE=1048576
+        dest: /etc/systemd/system/proxysql.service.d/limits.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when:
+        - "'proxysql' in group_names"
+        - ansible_facts['service_mgr'] == 'systemd'
+      register: proxysql_limits_conf
+
+    - name: "ProxySQL - daemon-reload po zmianie limitów systemd"
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when:
+        - "'proxysql' in group_names"
+        - ansible_facts['service_mgr'] == 'systemd'
+        - proxysql_limits_conf.changed
+    # === Tuning jądra OS (sysctl) dla baz danych i load balancerów ===
+    - name: "Wdróż konfigurację sysctl dla baz danych i ProxySQL"
+      ansible.builtin.copy:
+        content: |
+          # ISA Database & ProxySQL sysctl tuning
+          vm.swappiness = 10
+          net.core.somaxconn = 4096
+          net.ipv4.tcp_max_syn_backlog = 4096
+          fs.file-max = 2097152
+        dest: /etc/sysctl.d/90-database-tuning.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: ansible_facts['service_mgr'] == 'systemd'
+      register: db_sysctl_conf
+
+    - name: "Zastosuj parametry sysctl"
+      ansible.builtin.command: sysctl --system
+      when:
+        - ansible_facts['service_mgr'] == 'systemd'
+        - db_sysctl_conf.changed
+      changed_when: true
     # === Wspolne: time sync ===
     - name: Instaluj i wlacz chrony
       ansible.builtin.dnf:

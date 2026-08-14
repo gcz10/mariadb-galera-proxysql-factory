@@ -35,8 +35,8 @@ def main():
 
     canary_found = False
     health_gates = 0
+    proxysql_serial = False
     proxysql_save = False
-
     for play in plays:
         if not isinstance(play, dict):
             continue

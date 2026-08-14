@@ -133,14 +133,32 @@
         that: [proxysql_admin_password | length > 0]
         fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
 
-    - name: "Drain + usuń backend usuwanego węzła z ProxySQL"
+    - name: "Drain: przestaw backend w stan OFFLINE_SOFT (brak nowych połączeń)"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
+        "UPDATE mysql_servers SET status='OFFLINE_SOFT' WHERE hostname='{{ hostvars[node].galera_node_address }}';
+         LOAD MYSQL SERVERS TO RUNTIME;"
+      changed_when: true
+      no_log: true
+
+    - name: "Drain: czekaj na zakończenie aktywnych połączeń do usuwanego węzła"
+      ansible.builtin.shell: >-
+        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
+        "SELECT COALESCE(SUM(ConnUsed), 0) FROM stats_mysql_connection_pool WHERE srv_host='{{ hostvars[node].galera_node_address }}'"
+      register: f13_drain_conns
+      until: (f13_drain_conns.stdout | trim | int) == 0
+      retries: "{{ f13_drain_retries | default(30) | int }}"
+      delay: 2
+      changed_when: false
+      no_log: true
+
+    - name: "Usuń backend usuwanego węzła z ProxySQL"
       ansible.builtin.shell: >-
         mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
         "DELETE FROM mysql_servers WHERE hostname='{{ hostvars[node].galera_node_address }}';
          LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;"
       changed_when: true
       no_log: true
-
 # === Play 2: usuń usługi węzła z PMM Inventory (uri, nie curl z hasłem w argv) ===
 - name: "F13 — usuń usługi węzła z PMM Inventory"
   hosts: localhost
