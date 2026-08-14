@@ -140,8 +140,8 @@
       ansible.builtin.file:
         path: /etc/proxysql.cnf
         owner: root
-        group: root
-        mode: "0600"
+        group: proxysql
+        mode: "0640"
     - name: "Wdróż prywatny profil klienta administratora ProxySQL"
       ansible.builtin.copy:
         content: |
