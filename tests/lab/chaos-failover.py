@@ -68,11 +68,11 @@ def galera_ip_to_host():
 
 
 def active_writer_ip():
+    writer_hg = int(CLUSTER.get("proxysql", {}).get("hostgroup_base", 10))
     q = ("SELECT hostname FROM runtime_mysql_servers "
-         "WHERE hostgroup_id=10 AND status='ONLINE'")
+         f"WHERE hostgroup_id={writer_hg} AND status='ONLINE'")
     r = sh(PROXYSQL_NODE, f'mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf -h127.0.0.1 -P6032 -uadmin -N -B -e "{q}"')
     return body(PROXYSQL_NODE, r).strip()
-
 
 def present_seqs(exclude=None):
     """Set of seqs present on a Galera node that SURVIVED the failover.

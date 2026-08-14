@@ -169,9 +169,8 @@
       changed_when: false
       when:
         - use_systemd
-        - config_result.changed or ((tls_deploy_result | default({})).changed | default(false))
+        - config_result.changed or ((tls_files_changed | default(false)) | bool)
         - (mariadb_active | default({})).rc | default(1) == 0
-
 
     # Czekamy TYLKO gdy mariadbd faktycznie dziala. Na swiezym klastrze (przed bootstrapem)
     # port 3306 nigdy nie wstanie - nie ma Primary Component do dolaczenia - a bezwarunkowe
