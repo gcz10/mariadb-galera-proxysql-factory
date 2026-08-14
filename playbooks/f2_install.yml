@@ -259,6 +259,52 @@
         'proxysql' in group_names
         and (proxysql.role | default('owner')) == 'owner'
 
+    - name: "Katalog drop-in proxysql.service"
+      ansible.builtin.file:
+        path: /etc/systemd/system/proxysql.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when:
+        - "'proxysql' in group_names"
+        - ansible_facts['service_mgr'] == 'systemd'
+
+    - name: "ProxySQL - drop-in LimitNOFILE"
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          LimitNOFILE=1048576
+        dest: /etc/systemd/system/proxysql.service.d/limits.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when:
+        - "'proxysql' in group_names"
+        - ansible_facts['service_mgr'] == 'systemd'
+
+    # === Tuning jądra OS (sysctl) dla baz danych i load balancerów ===
+    - name: "Wdróż konfigurację sysctl dla baz danych i ProxySQL"
+      ansible.builtin.copy:
+        content: |
+          # ISA Database & ProxySQL sysctl tuning
+          vm.swappiness = 10
+          net.core.somaxconn = 4096
+          net.ipv4.tcp_max_syn_backlog = 4096
+          fs.file-max = 2097152
+        dest: /etc/sysctl.d/90-database-tuning.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: ansible_facts['service_mgr'] == 'systemd'
+      register: db_sysctl_conf
+
+    - name: "Zastosuj parametry sysctl"
+      ansible.builtin.command: sysctl --system
+      when:
+        - ansible_facts['service_mgr'] == 'systemd'
+        - db_sysctl_conf.changed
+      changed_when: true
     # === Wspolne: time sync ===
     - name: Instaluj i wlacz chrony
       ansible.builtin.dnf:

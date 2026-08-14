@@ -72,8 +72,8 @@ require_secure_transport = ON
   migracji. Zrodlo: mariadb.com/kb/en/wsrep_provider_options/#socketdynamic
 #}
 {% set _tls_full = (tls | default({})).mode | default('disabled') == 'full' %}
-wsrep_provider_options = "gcache.size={{ gcache_size }};gcache.page_size={{ (mariadb_tuning | default({})).gcache_page_size | default('128M') }}{% if (tls | default({})).socket_dynamic | default(false) %};socket.dynamic=true{% endif %}{% if _tls_full %};socket.ssl_ca={{ tls_ca_path | default('/etc/mysql/tls/ca.pem') }};socket.ssl_cert={{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }};socket.ssl_key={{ tls_key_path | default('/etc/mysql/tls/server-key.pem') }}{% endif %}"
-
+{% set _wsrep_extra = (mariadb_tuning | default({})).wsrep_provider_options_extra | default('') %}
+wsrep_provider_options = "gcache.size={{ gcache_size }};gcache.page_size={{ (mariadb_tuning | default({})).gcache_page_size | default('128M') }}{% if (tls | default({})).socket_dynamic | default(false) %};socket.dynamic=true{% endif %}{% if _tls_full %};socket.ssl_ca={{ tls_ca_path | default('/etc/mysql/tls/ca.pem') }};socket.ssl_cert={{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }};socket.ssl_key={{ tls_key_path | default('/etc/mysql/tls/server-key.pem') }}{% endif %}{% if _wsrep_extra | length > 0 %};{{ _wsrep_extra }}{% endif %}"
 [client]
 socket = /var/lib/mysql/mysql.sock
 
