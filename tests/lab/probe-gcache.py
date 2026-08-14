@@ -45,11 +45,13 @@ def body(node, result):
 
 
 def find_writer():
+    cfg = yaml.safe_load(open(CONFIG_PATH, encoding="utf-8"))
+    writer_hg = int(cfg.get("proxysql", {}).get("hostgroup_base", 10))
     r = sh(
         PROXYSQL_NODE,
         "mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf "
-        "-h127.0.0.1 -P6032 -uadmin -N -B -e "
-        "\"SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id=10 AND status='ONLINE'\"",
+        f"-h127.0.0.1 -P6032 -uadmin -N -B -e "
+        f"\"SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id={writer_hg} AND status='ONLINE'\"",
     )
     ip = body(PROXYSQL_NODE, r).strip()
     inv = yaml.safe_load(open(INVENTORY))

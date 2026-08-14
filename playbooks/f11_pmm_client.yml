@@ -125,7 +125,7 @@
           else groups.get('galera', []) + groups.get('proxysql', []))
           | difference(pmm_agent_managed_hosts)) | unique | list }}
     pmm_node_names: "{{ pmm_node_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
-    pmm_mysql_hosts: "{{ groups.get('galera', []) }}"
+    pmm_mysql_hosts: "{{ (groups.get('galera', []) | difference(pmm_agent_managed_hosts)) | list }}"
     pmm_mysql_names: "{{ pmm_mysql_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
     pmm_external_service_names: "{{ pmm_node_names | map('regex_replace', '$', '-node-exporter') | list }}"
     pmm_mysql_service_names: "{{ pmm_mysql_names | map('regex_replace', '$', '-mysql') | list }}"

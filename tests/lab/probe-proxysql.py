@@ -23,10 +23,11 @@ with open(CONFIG_PATH, encoding="utf-8") as fh:
     CLUSTER_CONFIG = yaml.safe_load(fh)
 
 EXPECTED_BACKENDS = int(CLUSTER_CONFIG["galera"]["nodes_expected"])
-WRITER_HG = 10
-BACKUP_HG = 20
-READER_HG = 30
-OFFLINE_HG = 40
+HG_BASE = int(CLUSTER_CONFIG.get("proxysql", {}).get("hostgroup_base", 10))
+WRITER_HG = HG_BASE + 0
+BACKUP_HG = HG_BASE + 10
+READER_HG = HG_BASE + 20
+OFFLINE_HG = HG_BASE + 30
 # ProxySQL factory-default admin credential — asserted to be REJECTED (ISC-22).
 
 
