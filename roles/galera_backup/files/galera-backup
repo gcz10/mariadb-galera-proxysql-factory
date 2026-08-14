@@ -1678,6 +1678,46 @@ def query_galera_vars(socket_path: Path, runner: CommandRunner) -> dict[str, str
     return vars_dict
 
 
+def set_wsrep_desync(socket_path: Path, runner: CommandRunner, enable: bool) -> bool:
+    """Przelacz wsrep_desync. Zwraca True TYLKO gdy stan zmienilo TO wywolanie.
+
+    Wezel w stanie innym niz Synced (4) juz jest odsynchronizowany — przez SST
+    do innego wezla albo przez operatora. Ustawienie desync=OFF w `finally`
+    zdjeloby wtedy CUDZY desync i wciagnelo dawce z powrotem do przesylania
+    zapisow w srodku transferu. Dlatego wlaczamy wylacznie ze stanu Synced,
+    a wylaczamy wylacznie to, co sami wlaczylismy.
+    """
+    if enable:
+        state = query_galera_vars(socket_path, runner).get("wsrep_local_state", "")
+        if state != "4":
+            return False
+    value = "ON" if enable else "OFF"
+    code, out, err = runner.run(
+        ["mariadb", f"--socket={socket_path}", "-u", "root", "-e", f"SET GLOBAL wsrep_desync = {value};"]
+    )
+    if code != 0:
+        raise BackupError("E_GALERA", f"SET GLOBAL wsrep_desync={value} failed: {err or out}")
+    return True
+
+
+def wait_until_synced(socket_path: Path, runner: CommandRunner, timeout_s: int = 900) -> None:
+    """Czekaj az wezel wroci do Synced po wsrep_desync=OFF.
+
+    Powrot nie jest natychmiastowy: wezel musi nadrobic kolejke zapisow
+    zgromadzona w czasie backupu. Bez tego oczekiwania runner konczy sie
+    sukcesem, zostawiajac wezel w Donor/Desynced — ProxySQL trzyma go poza
+    ruchem, a nastepna brama zdrowia odrzuca caly klaster.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        state = query_galera_vars(socket_path, runner).get("wsrep_local_state_comment", "")
+        if state == "Synced":
+            return
+        if time.monotonic() >= deadline:
+            raise BackupError("E_GALERA", f"wezel utknal w stanie '{state}' po wsrep_desync=OFF (limit {timeout_s}s)")
+        time.sleep(5)
+
+
 def get_storage_backend(cfg: RunConfig, secrets: dict[str, str], runner: Optional["CommandRunner"] = None) -> Any:
     b_type = str(cfg.backend.get("type", cfg.backend.get("destination", ""))).lower()
     if b_type == "s3":
@@ -1911,7 +1951,20 @@ def run_backup(
         os.chmod(work_dir, 0o700)
 
         event_mgr.emit("mariadb-backup.backup", {"backup_name": backup_name})
-        wsrep_uuid, wsrep_seqno = perform_physical_backup(work_dir, cfg.paths.datadir, cfg.paths.socket, runner)
+        # Odsynchronizowanie na czas zrzutu fizycznego. Bez tego mariadb-backup
+        # nasyca dysk wezla, kolejka aplikacyjna rosnie i Galera wlacza flow
+        # control dla CALEGO klastra — writer stojacy na innym wezle przestaje
+        # commitowac. Runner widzial ten skutek dopiero po fakcie (fc_delta
+        # nizej) i odrzucal gotowa kopie: luka RPO zamiast zapobiegania.
+        desynced = set_wsrep_desync(cfg.paths.socket, runner, True)
+        event_mgr.emit("galera.desync", {"applied": desynced})
+        try:
+            wsrep_uuid, wsrep_seqno = perform_physical_backup(work_dir, cfg.paths.datadir, cfg.paths.socket, runner)
+        finally:
+            if desynced:
+                set_wsrep_desync(cfg.paths.socket, runner, False)
+                wait_until_synced(cfg.paths.socket, runner)
+                event_mgr.emit("galera.resync", {"state": "Synced"})
 
         raw_dir = work_dir / "raw"
         tar_file = work_dir / "backup.tar"
