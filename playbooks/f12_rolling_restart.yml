@@ -105,8 +105,15 @@
         state: restarted
       when: use_systemd
 
-    - name: "ISC-50: zatrzymaj mariadbd (lab: brak systemd)"
-      ansible.builtin.shell: "pkill -x mariadbd; sleep 3; true"
+    - name: "ISC-50: zatrzymaj mariadbd i czekaj na zakończenie procesu (lab: brak systemd)"
+      ansible.builtin.shell: |
+        pkill -x mariadbd || true
+        for _ in $(seq 1 60); do
+          pgrep -x mariadbd >/dev/null || exit 0
+          sleep 1
+        done
+        echo "mariadbd nie zakończył się w 60 s" >&2
+        exit 1
       changed_when: true
       when: not use_systemd
 
@@ -118,10 +125,10 @@
       changed_when: true
       when: not use_systemd
 
-    - name: "ISC-51: czekaj na socket MariaDB"
+    - name: "ISC-51: czekaj na socket MariaDB (wydłużony timeout na wypadek SST/IST)"
       ansible.builtin.wait_for:
         path: /var/lib/mysql/mysql.sock
-        timeout: 60
+        timeout: "{{ galera_socket_wait_timeout | default(300) | int }}"
 
     - name: "ISC-51: brama zdrowia — Synced + Primary + pełny size (przed kolejnym węzłem)"
       ansible.builtin.shell: >-
@@ -180,8 +187,15 @@
         state: restarted
       when: use_systemd
 
-    - name: "ISC-50: zatrzymaj mariadbd writera (lab: brak systemd)"
-      ansible.builtin.shell: "pkill -x mariadbd; sleep 3; true"
+    - name: "ISC-50: zatrzymaj mariadbd writera i czekaj na zakończenie procesu (lab: brak systemd)"
+      ansible.builtin.shell: |
+        pkill -x mariadbd || true
+        for _ in $(seq 1 60); do
+          pgrep -x mariadbd >/dev/null || exit 0
+          sleep 1
+        done
+        echo "mariadbd writera nie zakończył się w 60 s" >&2
+        exit 1
       changed_when: true
       when: not use_systemd
 
@@ -193,10 +207,10 @@
       changed_when: true
       when: not use_systemd
 
-    - name: "ISC-51: czekaj na socket MariaDB writera"
+    - name: "ISC-51: czekaj na socket MariaDB writera (wydłużony timeout na wypadek SST/IST)"
       ansible.builtin.wait_for:
         path: /var/lib/mysql/mysql.sock
-        timeout: 60
+        timeout: "{{ galera_socket_wait_timeout | default(300) | int }}"
 
     - name: "ISC-51: brama zdrowia writera — Synced + Primary + pełny size"
       ansible.builtin.shell: >-
