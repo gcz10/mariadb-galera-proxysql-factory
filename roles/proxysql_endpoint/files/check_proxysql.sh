@@ -12,12 +12,17 @@ set -o pipefail
 # 1. Client port (6033) must accept TCP connections.
 timeout 2 bash -c 'true </dev/tcp/127.0.0.1/6033' 2>/dev/null || exit 1
 
-# 2. At least one ONLINE backend (skip if admin-check.cnf absent → port-only fallback).
+# 2. Aktywna grupa Galera musi miec ONLINE writera (skip if admin-check.cnf absent → port-only fallback).
+# Samo status='ONLINE' bez zakresu hostgroup liczylo tez wezly PRZENIESIONE do offline_hostgroup
+# oraz backendy innych klastrow na wspolnej parze ProxySQL.
 if [ -f /etc/proxysql/admin-check.cnf ]; then
-  online=$(mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf \
-    -h127.0.0.1 -P6032 -uadmin -N -B -e \
-    "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status='ONLINE'" 2>/dev/null) || exit 1
-  [ "${online:-0}" -ge 1 ] || exit 1
+  dead=$(timeout 2 mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf \
+    --connect-timeout=1 -h127.0.0.1 -P6032 -uadmin -N -B -e \
+    "SELECT COUNT(*) FROM runtime_mysql_galera_hostgroups g
+      WHERE g.active=1 AND NOT EXISTS (
+        SELECT 1 FROM runtime_mysql_servers s
+         WHERE s.hostgroup_id=g.writer_hostgroup AND s.status='ONLINE')" 2>/dev/null) || exit 1
+  [ "${dead:-1}" -eq 0 ] || exit 1
 fi
 
 exit 0

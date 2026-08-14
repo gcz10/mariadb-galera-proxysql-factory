@@ -27,7 +27,8 @@ vrrp_instance PROXYSQL_VIP {
     virtual_router_id {{ keepalived_virtual_router_id }}
     priority {{ 150 if proxysql_node_idx | int == 1 else 100 }}
     advert_int 1
-
+    # Powrót MASTERA nie może ściągać VIP natychmiast, aby zapobiec flappingowi przy awariach.
+    preempt_delay {{ proxysql_endpoint_preempt_delay | default(30) }}
     unicast_src_ip {{ proxysql_node_address }}
     unicast_peer {
 {% for peer in groups['proxysql'] if peer != inventory_hostname %}
