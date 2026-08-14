@@ -459,7 +459,12 @@ class CommandRunner:
         if env:
             proc_env.update(env)
 
+        p: Optional[subprocess.Popen] = None
         try:
+            # start_new_session=True JEST WYMAGANE przez os.killpg ponizej: bez
+            # wlasnej grupy procesow `os.getpgid(p.pid)` zwraca grupe RODZICA,
+            # wiec killpg zabija runnera (a pod cronem cala grupe zadania).
+            # Zweryfikowane: usuniecie tej flagi konczy proces testowy rc=137.
             p = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -467,15 +472,32 @@ class CommandRunner:
                 text=True,
                 cwd=str(cwd) if cwd else None,
                 env=proc_env,
+                start_new_session=True,
             )
             stdout, stderr = p.communicate(timeout=timeout)
             return p.returncode, self.redactor.redact(stdout), self.redactor.redact(stderr)
         except subprocess.TimeoutExpired:
-            p.kill()
-            p.communicate()
+            if p is not None:
+                try:
+                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                except Exception:
+                    p.kill()
+                p.communicate()
             raise BackupError("E_SUBPROCESS", f"Command '{cmd[0]}' timed out after {timeout}s")
-        except Exception as exc:
-            raise BackupError("E_SUBPROCESS", f"Failed to execute command '{cmd[0]}': {exc}")
+        except BaseException as exc:
+            if p is not None and p.poll() is None:
+                try:
+                    os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+                    p.wait(timeout=5)
+                except Exception:
+                    try:
+                        os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                    except Exception:
+                        p.kill()
+                    p.wait()
+            if isinstance(exc, BackupError):
+                raise
+            raise BackupError("E_SUBPROCESS", f"Failed to execute command '{cmd[0]}': {exc}") from exc
 
 
 def assert_scheduler_is_not_writer(
@@ -1857,11 +1879,15 @@ def run_backup(
         last_succ_ts = (state_mgr.read().get("last_success") or {}).get("unixtime", 0)
         metrics_mgr.update(last_success_unixtime=last_succ_ts, last_failure_unixtime=now_ts, last_run_success=0)
         raise
-
     start_time = time.time()
     work_dir: Optional[Path] = None
     backend = None
 
+    def _sig_handler(signum: int, frame: Any) -> None:
+        raise BackupError("E_STORAGE", f"Backup process interrupted by signal {signum}")
+
+    old_term = signal.signal(signal.SIGTERM, _sig_handler)
+    old_int = signal.signal(signal.SIGINT, _sig_handler)
     try:
         state_mgr.read()
         # Check hostname
@@ -1924,32 +1950,45 @@ def run_backup(
         # archive is never buffered in memory; stderr must still be drained or a
         # full 64 KiB pipe buffer deadlocks tar while we hold the flock, failing
         # every later cron run with E_LOCKED.
-        tar_proc = subprocess.Popen(
-            ["tar", "-cf", "-", "-C", str(raw_dir), "."],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        hasher = hashlib.sha256()
+        # Create tar: stream stdout directly to disk, drain stderr in communicate()
         with open(tar_file, "wb") as f_tar:
+            tar_proc: Optional[subprocess.Popen] = None
+            try:
+                tar_proc = subprocess.Popen(
+                    ["tar", "-cf", "-", "-C", str(raw_dir), "."],
+                    stdout=f_tar,
+                    stderr=subprocess.PIPE,
+                    start_new_session=True,
+                )
+                _, tar_err = tar_proc.communicate(timeout=1800)
+                if tar_proc.returncode != 0:
+                    raise BackupError(
+                        "E_STORAGE",
+                        f"tar compression failed: {redactor.redact((tar_err or b'').decode('utf-8', 'replace'))}",
+                    )
+            except subprocess.TimeoutExpired:
+                if tar_proc is not None:
+                    try:
+                        os.killpg(os.getpgid(tar_proc.pid), signal.SIGKILL)
+                    except Exception:
+                        tar_proc.kill()
+                    tar_proc.communicate()
+                raise BackupError("E_STORAGE", "tar archiving timed out after 1800s")
+            except BaseException:
+                if tar_proc is not None and tar_proc.poll() is None:
+                    try:
+                        os.killpg(os.getpgid(tar_proc.pid), signal.SIGKILL)
+                    except Exception:
+                        tar_proc.kill()
+                    tar_proc.wait()
+                raise
+        hasher = hashlib.sha256()
+        with open(tar_file, "rb") as f_tar:
             while True:
-                chunk = tar_proc.stdout.read(65536)
+                chunk = f_tar.read(65536)
                 if not chunk:
                     break
                 hasher.update(chunk)
-                f_tar.write(chunk)
-        tar_proc.stdout.close()
-        try:
-            _, tar_err = tar_proc.communicate(timeout=300)
-        except subprocess.TimeoutExpired:
-            tar_proc.kill()
-            tar_proc.communicate()
-            raise BackupError("E_STORAGE", "tar compression timed out draining stderr")
-        if tar_proc.returncode != 0:
-            raise BackupError(
-                "E_STORAGE",
-                f"tar compression failed: {redactor.redact((tar_err or b'').decode('utf-8', 'replace'))}",
-            )
-
         plaintext_sha = hasher.hexdigest()
 
         # Encrypt with OpenSSL
@@ -2111,6 +2150,11 @@ def run_backup(
             raise
         raise failure
     finally:
+        try:
+            signal.signal(signal.SIGTERM, old_term)
+            signal.signal(signal.SIGINT, old_int)
+        except Exception:
+            pass
         try:
             if backend:
                 backend.close()
