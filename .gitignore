@@ -19,6 +19,12 @@ ssh_key
 ssh_key.pub
 tests/lab/tls/
 .secret-probe-*.yml
+# Kolekcje instalowane przez ansible-galaxy (ANSIBLE_HOME wskazujacy na repo).
+# Nieignorowane trafialy do `git ls-files --others` i sonda ISC-43 skanowala
+# 3.5 tys. plikow upstreamu, zapalajac sie na ich fixturach testowych. W CI
+# kolekcje ladowaly w ~/.ansible, wiec ta sama sonda przechodzila — werdykt
+# zalezal od sciezki instalacji zaleznosci, nie od zawartosci repo.
+.ansible/
 
 # Terraform - stan, binarki providerów, plany (NIGDY do commita)
 terraform/**/.terraform/

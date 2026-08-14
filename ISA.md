@@ -4,10 +4,13 @@ slug: "20260722-172704_galera-proxysql-cluster-factory"
 effort: comprehensive
 effort_source: explicit
 phase: build
-progress: 5/68
+progress: 68/68
+# 66 kryteriow zweryfikowanych na biezacym drzewie; ISC-1 i ISC-2 opieraja sie na
+# dowodzie historycznym z odbudowy od zera 2026-08-02 (patrz Verification) — swieza
+# rewalidacja po zmianach tej sesji wymaga okna serwisowego na pelny converge.
 mode: iterate
 started: "2026-07-22T15:27:04Z"
-updated: "2026-07-22T23:34:56Z"
+updated: "2026-08-14T23:10:00Z"
 principal_stated_goal: "Zbuduj powtarzalną, idempotentną i operacyjnie bezpieczną fabrykę produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących maszynach Rocky Linux 9, tak aby nowy niezależny klaster powstawał przez dodanie inventory i konfiguracji klastra, a każdy stan wysokiej dostępności, bezpieczeństwa, backupu i odtwarzania był potwierdzony wykonywalnym testem oraz dowodem."
 principal_stated_goal_source: prompt
 principal_stated_goal_signal: 4
@@ -75,8 +78,8 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - [x] ISC-1: Deployment na czystych hostach Rocky Linux 9 kończy się sukcesem (site.yml exit 0, wszystkie taski PASS).
 - [x] ISC-2: Drugi uruchomiony converge na niezmiennym klastrze raportuje `changed=0` na wszystkich hostach.
 - [x] ISC-3: Wersje MariaDB, mariadb-backup, Galera provider, ProxySQL i kolekcji Ansible są dokładnie zgodne z `versions.lock.yml`.
-- [ ] ISC-4: SELinux pozostaje w trybie Enforcing po pełnym deploy.
-- [ ] ISC-5: Firewalld działa i dopuszcza wyłącznie zadeklarowany ruch (Galera, ProxySQL, admin, monitoring) na wszystkich hostach.
+- [x] ISC-4: SELinux pozostaje w trybie Enforcing po pełnym deploy.
+- [x] ISC-5: Firewalld działa i dopuszcza wyłącznie zadeklarowany ruch (Galera, ProxySQL, admin, monitoring) na wszystkich hostach.
 - [x] ISC-6: Anti: Nieudany preflight nie zostawia częściowych zmian — konfiguracja hostów pozostaje niezmieniona, gdy preflight FAIL.
 
 ### Galera
@@ -1103,6 +1106,14 @@ d
 - ISC-65: PASS — `probe-no-double-bootstrap.py`: jedyny bootstrap play (bootstrap.yml) jest single-host-safe (serial:1 + assert ansible_play_hosts==1) + confirm-gated; 0 innych playbooków z --wsrep-new-cluster w shell/command. 2026-07-23.
 - F13 node lifecycle: PASS — `f13_remove_node_plan.yml` read-only (quorum guard 3→2 OK, writer-detection: gnode2=nie, gnode3=TAK+warn); `f13_remove_node.yml` confirm-gated (odmawia bez confirm=yes). Plan + guard zweryfikowane; destruktywne usunięcie nie testowane w labie (3→2). 2026-07-23.
 - ISC-68: PASS — `probe-gcache.py`: write_rate=55666 B/s (zmierzony workload RPAD('x',1024), delta wsrep_replicated_bytes); gcache.size=128M pokrywa wymóg (55000×30min×60≈96MB → floored 128M). deployed=128M=required. calc-gcache.py + probe-gcache.py. 2026-07-24.
+- ISC-4: PASS — `probe-selinux.sh` uruchomiona przez `ansible ... -m script` na KAŻDYM hoście obu klastrów produkcyjnych: `getenforce` = `Enforcing` na 14/14 (finalclaude-r9: f9g1-3, fcp1-2, fcinfra, f9r1; finalclaude-r10: f10g1-3, fcp1-2, fcinfra, f10r1). 2026-08-14.
+- ISC-5: PASS — dwa niezależne dowody. (1) `probe-firewalld.sh` z allowlistą per rola na 14/14 hostów: galera 7 portów (22,3306,4444,4567,4568/tcp, 4567/udp, 9100), proxysql 5 (22,6032,6033,6070,9100), infra 6 (22,80,443,8025,9000,9001), restore 1 (22) — żadnego portu spoza allowlisty, żadnej usługi poza `dhcpv6-client`, żadnej aktywnej strefy z przypisaniem `sources:` (taka wyprzedza public i ominęłaby allowlistę). (2) `firewall.yml --check --diff` na obu klastrach: `changed=0` na 14/14 → żywa strefa jest bajt w bajt wyrenderowanym `public.xml.j2`, brak dryfu runtime; w tym samym przebiegu przeszły bramki playbooka (`--state`=running, target=`default`, każdy zarządzany interfejs w `public`). Kontrola negatywna na żywym hoście: `firewall-cmd --add-port=9999/tcp` (runtime) → sonda FAIL „port poza allowlistą: 9999/tcp"; po `--reload` → PASS. 2026-08-14.
+- `probe-firewalld.sh` — naprawa sondy przy okazji ISC-5. Poprzednia wersja czytała wyłącznie linie `ports:` z `--list-all-zones`, a cała polityka tego projektu to rich-rule powiązane ze źródłowym CIDR: zbiór otwartych portów wychodził PUSTY i sonda meldowała PASS nie zmierzywszy niczego (próżny zielony). Dodatkowo skanowała strefy nieaktywne (`home`, `internal`), zapalając się na domyślnych usługach dystrybucji (`cockpit`, `dhcp`, `dns`, `mdns`), których nikt nie wystawia. Po zmianie: czyta rich-rule i porty proste wyłącznie ze stref AKTYWNYCH, odrzuca strefy źródłowe, wymaga allowlisty jako argumentu (wariant bezargumentowy dawał PASS bez pomiaru — usunięty, `rc=2`) i traktuje „allowlista podana, zero wykrytych portów" jako FAIL, nie sukces. 2026-08-14.
+- ISC-12 / ISC-13: PASS — `probe-no-double-bootstrap.py`: jedyny play wykonujący bootstrap to `playbooks/bootstrap.yml`, jest single-host-safe (`serial: 1` + assert `ansible_play_hosts == 1`) i confirm-gated; żaden inny playbook nie wywołuje `--wsrep-new-cluster` w `shell`/`command`, więc `site.yml` nie może go uruchomić ubocznie. Sonda uruchomiona 2026-08-14.
+- ISC-44: PASS — na `finalclaude-r9` (`tls.mode=full`) połączenie klienta z obcym CA jest odrzucane przez serwer: `mariadb --ssl-ca=<rogue> --ssl-verify-server-cert -h 192.168.1.150` → `ERROR 2026 (HY000): TLS/SSL error: self-signed certificate in certificate chain`. Certyfikat rogue generowany jednorazowo na hoście i kasowany. Zweryfikowana jest klauzula „niezaufany certyfikat"; wariant „nieważny (wygasły)" wymagałby podmiany certyfikatu serwera i nie był testowany. 2026-08-14.
+- ISC-1: PASS (dowód historyczny) — flota `finalclaude` została zbudowana OD ZERA na czystych VM Rocky 9 i Rocky 10 i przeszła komplet 8 kryteriów akceptacji Fazy 5 bez ręcznej interwencji: `docs/plans/from-scratch-revalidation.md:3-4` („✅ WYKONANY 2026-08-02"). Że był to realny przebieg, a nie papier, dowodzi 5 defektów możliwych do wykrycia WYŁĄCZNIE przy budowie od zera (`svcaccs: null` na świeżym MinIO, zaszyty `rnode1` w sondzie restore, nieaktualna lista reguł alertowych, RAM trafiający w próg preflightu, brak pojęcia własności warstwy współdzielonej w f2/f11) — commity `7e1429e`, `9eed120`, `a9ab24a`. 2026-08-02.
+- ISC-2: PASS (dowód historyczny) — `docs/plans/rocky10-dual-platform-plan.md:222`: „`f2_install`/`site`/`firewall` changed=0 na 7/7 EL9"; tamże `:286`: „idempotencja — drugi `cluster-deploy`: `changed=0` na 7/7". 2026-08-02.
+- OTWARTE (nie luka dowodowa, lecz świeżość) — ISC-1 i ISC-2 opierają się na przebiegu z 2026-08-02, sprzed zmian tej sesji (PR #3 drop-iny systemd + `LimitNOFILE`/`TimeoutStartSec`, PR #6 `wsrep_desync` w runnerze backupu, PR #7 sonda firewalld). Świeża rewalidacja na bieżącym drzewie nie została wykonana. Trybu `--check` NIE da się użyć jako substytutu i to jest zmierzone, nie założone: 2026-08-14 na `finalclaude-r9` brama zdrowia Galery przerywa play w check mode komunikatem `Command would have run if not in check mode` (`failed=1`), więc check mode nie orzeka o idempotencji. Do zamknięcia potrzebny pełny converge obu klastrów w oknie serwisowym.
 
 
 ## Blockers
