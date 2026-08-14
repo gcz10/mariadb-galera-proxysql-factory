@@ -53,14 +53,28 @@ def has_bootstrap_action(play):
 
 def has_existing_primary_guard(play):
     """True when pre-tasks probe wsrep state and reject an existing Primary."""
-    pre_tasks = yaml.safe_dump(play.get("pre_tasks", []) or [])
-    return (
-        "wsrep_cluster_status" in pre_tasks
-        and "Primary" in pre_tasks
-        and "assert" in pre_tasks
-    )
+    has_probe = False
+    has_anchored_classification = False
+    has_assert = False
 
+    for task in play.get("pre_tasks", []) or []:
+        if not isinstance(task, dict):
+            continue
+        cmd = task.get("ansible.builtin.command") or task.get("command") or {}
+        if "wsrep_cluster_status" in str(cmd):
+            has_probe = True
 
+        set_fact = task.get("ansible.builtin.set_fact") or task.get("set_fact") or {}
+        live_primary = set_fact.get("bootstrap_live_primary", "")
+        if "(?m)^wsrep_cluster_status" in live_primary and "Primary$" in live_primary:
+            has_anchored_classification = True
+
+        assert_task = task.get("ansible.builtin.assert") or task.get("assert") or {}
+        that_list = str(assert_task.get("that", []))
+        if "bootstrap_live_primary" in that_list and "== 0" in that_list:
+            has_assert = True
+
+    return has_probe and has_anchored_classification and has_assert
 def is_single_host(hosts):
     s = str(hosts).strip()
     return bool(re.match(r"^(galera\[\d+\]|localhost|[a-z]+node\d+)$", s))
