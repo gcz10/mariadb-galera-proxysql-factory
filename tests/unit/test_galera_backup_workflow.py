@@ -175,6 +175,11 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                     "wsrep_cluster_size": "3",
                     "wsrep_flow_control_paused_ns": "1000",
                 },
+                # set_wsrep_desync(ON) sonduje wsrep_local_state — musi byc 4 (Synced),
+                # inaczej runner NIE odsynchronizuje wezla (cudzy desync).
+                {"wsrep_local_state": "4", "wsrep_local_state_comment": "Synced"},
+                # wait_until_synced() po desync=OFF czeka na powrot do Synced.
+                {"wsrep_local_state": "4", "wsrep_local_state_comment": "Synced"},
                 # Final check after backup: flow control paused ns jumped by 500 (threshold was 100)
                 {
                     "wsrep_local_state_comment": "Synced",
