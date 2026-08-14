@@ -113,7 +113,7 @@
       # a agent nigdy sie nie polaczy. Kryterium jest POLACZENIE.
       when: pmm_state.rc != 0 or not ((pmm_state.stdout | default('{}') | from_json).pmm_agent_status.connected | default(false)) or (pmm_force_resetup | default(false) | bool)
       changed_when: true
-
+      no_log: true
     - name: "Wlacz i zrestartuj pmm-agent"
       ansible.builtin.systemd_service:
         name: pmm-agent

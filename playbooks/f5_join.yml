@@ -52,7 +52,7 @@
         owner: root
         group: mysql
         mode: "0640"
-
+      no_log: true
     - name: "Dystrybuuj certyfikaty TLS (gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
       when: (tls | default({})).mode | default('disabled') == 'full'

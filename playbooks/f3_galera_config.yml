@@ -55,6 +55,7 @@
         group: mysql
         mode: "0640"
       register: config_result
+      no_log: true
 
     - name: "Inicjalizuj datadir (mariadb-install-db)"
       ansible.builtin.command: >

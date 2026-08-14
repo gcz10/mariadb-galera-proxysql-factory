@@ -128,6 +128,20 @@
         group: root
         mode: "0750"
 
+    - name: "Zabezpiecz uprawnienia katalogu danych ProxySQL"
+      ansible.builtin.file:
+        path: /var/lib/proxysql
+        state: directory
+        owner: proxysql
+        group: proxysql
+        mode: "0700"
+
+    - name: "Zabezpiecz uprawnienia pliku konfiguracyjnego /etc/proxysql.cnf"
+      ansible.builtin.file:
+        path: /etc/proxysql.cnf
+        owner: root
+        group: root
+        mode: "0600"
     - name: "Wdróż prywatny profil klienta administratora ProxySQL"
       ansible.builtin.copy:
         content: |
@@ -433,8 +447,14 @@
       changed_when: false
       no_log: true
 
+    - name: "Zabezpiecz uprawnienia bazy SQLite proxysql.db"
+      ansible.builtin.file:
+        path: /var/lib/proxysql/proxysql.db
+        owner: proxysql
+        group: proxysql
+        mode: "0600"
+
     - name: "Wydrukuj status serwerów ProxySQL"
       ansible.builtin.debug:
         msg: "{{ server_status.stdout_lines }}"
-
   handlers: []
