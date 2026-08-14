@@ -1,0 +1,22 @@
+---
+# Canonical Galera cluster health gate (ISC-51, ISC-52, ISC-55).
+# Asserts that:
+# 1. wsrep_local_state == 4 (Synced)
+# 2. wsrep_cluster_status == Primary
+# 3. wsrep_ready == ON
+# 4. wsrep_cluster_size == expected_size
+
+- name: "{{ health_gate_name | default('Brama zdrowia Galera (Synced + Primary + ready + full size)') }}"
+  ansible.builtin.shell: >-
+    mariadb --socket={{ mariadb_socket | default('/var/lib/mysql/mysql.sock') }} -N -B -e
+    "SHOW STATUS WHERE Variable_name IN
+    ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+  register: _galera_wsrep_health
+  until: >-
+    _galera_wsrep_health.stdout is search('wsrep_local_state\t4')
+    and _galera_wsrep_health.stdout is search('wsrep_cluster_status\tPrimary')
+    and _galera_wsrep_health.stdout is search('wsrep_ready\tON')
+    and _galera_wsrep_health.stdout is search('wsrep_cluster_size\t' ~ ((expected_size | default(galera.nodes_expected | default(3))) | int | string))
+  retries: "{{ health_retries | default(24) | int }}"
+  delay: "{{ health_delay | default(5) | int }}"
+  changed_when: false

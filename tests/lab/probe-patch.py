@@ -48,11 +48,10 @@ def main():
         if "canary" in name and "galera" in hosts:
             canary_found = True
 
-        # ISC-55: health gate on galera phases
-        if "galera" in hosts and "until" in text:
-            if all(v in text for v in HEALTH_GATE_VARS):
+        # ISC-55: health gate on galera phases (direct or canonical include)
+        if "galera" in hosts:
+            if "assert_galera_healthy" in text or ("until" in text and all(v in text for v in HEALTH_GATE_VARS)):
                 health_gates += 1
-
         # ISC-57: ProxySQL serial:1 + SAVE TO DISK
         if "proxysql" in hosts:
             if str(play.get("serial")) == "1":

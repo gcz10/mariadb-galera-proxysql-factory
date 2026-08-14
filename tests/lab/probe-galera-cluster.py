@@ -15,37 +15,30 @@ import yaml
 CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
 INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
+from pathlib import Path
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from labenv import run_ansible
+
+INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
+CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
+ANSIBLE = os.environ.get("ANSIBLE", "ansible")
 
 with open(CONFIG_PATH, encoding="utf-8") as fh:
     CLUSTER_CONFIG = yaml.safe_load(fh)
 
-EXPECTED_SIZE = int(CLUSTER_CONFIG["galera"]["nodes_expected"])
+EXPECTED_NODES = int(CLUSTER_CONFIG["galera"]["nodes_expected"])
 
 
 def run_ansible_query(nodes, query):
-    """Run a MariaDB query on Galera nodes via ansible, return {node: {col: val}}."""
-    cmd = [
-        ANSIBLE, nodes, "-i", INVENTORY, "-m", "ansible.builtin.shell",
-        "-a", f'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "{query}"',
-        "--fork", "5",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    data = {}
-    current_host = None
-    current_body = []
-    for line in result.stdout.splitlines():
-        header = re.match(r'^(\S+)\s*\|\s*\w+\s*\|\s*rc=\d+\s*>>?\s*$', line)
-        if header:
-            if current_host:
-                data[current_host] = "\n".join(current_body).strip()
-            current_host = header.group(1)
-            current_body = []
-        elif current_host:
-            current_body.append(line)
-    if current_host:
-        data[current_host] = "\n".join(current_body).strip()
-    return data
-
+    """Run a MariaDB query on Galera nodes via ansible, return {node: body}."""
+    return run_ansible(
+        nodes,
+        "ansible.builtin.shell",
+        f'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "{query}"',
+        inventory=INVENTORY,
+    )
 
 def check(condition, message, failures):
     if not condition:
