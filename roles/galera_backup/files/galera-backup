@@ -1854,7 +1854,8 @@ def run_backup(
     except BackupError as exc:
         state_mgr.update_locked("backup", now_ts)
         event_mgr.emit("locked", {"error_code": exc.code, "message": exc.public_message})
-        metrics_mgr.update(last_failure_unixtime=now_ts, last_run_success=0)
+        last_succ_ts = (state_mgr.read().get("last_success") or {}).get("unixtime", 0)
+        metrics_mgr.update(last_success_unixtime=last_succ_ts, last_failure_unixtime=now_ts, last_run_success=0)
         raise
 
     start_time = time.time()
@@ -2075,7 +2076,9 @@ def run_backup(
                 "state.failure",
                 {"error_code": err_code, "error_message": redactor.redact(err_msg)},
             )
+            last_succ_ts = (state_mgr.read().get("last_success") or {}).get("unixtime", 0)
             metrics_mgr.update(
+                last_success_unixtime=last_succ_ts,
                 last_failure_unixtime=int(time.time()),
                 last_run_success=0,
                 last_duration_seconds=duration,
