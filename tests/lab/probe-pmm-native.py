@@ -110,10 +110,17 @@ EXPECTED_PROXYSQL = (
 EXPECTED_CREDENTIALS_REVISION = str(PMM_CONFIG["credentials_revision"])
 EXPECTED_NODE_EXPORTER_VERSION = str(VERSION_LOCK["node_exporter"]["version"])
 EXPECTED_PMM_VERSION = str(VERSION_LOCK["pmm"]["version"])
-# Lifecycle config gauges — exact value match expected (baseline from F11).
+# Lifecycle config gauges. WYPROWADZANE z cluster.yml, nie zaszyte: playbook
+# liczy je z tej samej konfiguracji (f11_freshness.yml), wiec zaszyta wartosc
+# opisywala tylko klaster, na ktorym sonde pisano. `isa_tls_monitoring_enabled`
+# bylo na sztywno 0 i kazdy klaster z tls.mode=full oblewal sonde, mimo ze
+# playbook publikowal poprawna 1.
+TLS_MODE = CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled")
 EXPECTED_CONFIG_METRICS = {
-    "isa_restore_test_monitoring_enabled": 1,
-    "isa_tls_monitoring_enabled": 0,
+    "isa_restore_test_monitoring_enabled": (
+        1 if str(CLUSTER_CONFIG["backup"].get("restore_test_schedule", "")) else 0
+    ),
+    "isa_tls_monitoring_enabled": 1 if TLS_MODE == "full" else 0,
 }
 # ISC-49 freshness unixtimes: non-zero + within an age window after F10 runs.
 BACKUP_FRESHNESS_SLA_HOURS = int(CLUSTER_CONFIG["backup"]["freshness_sla_hours"])
@@ -129,7 +136,6 @@ EXPECTED_GALERA_BACKUP_METRICS = [
     "galera_backup_last_duration_seconds",
 ]
 # TLS cert expiry: 0 when tls.mode != full; future epoch when full.
-TLS_MODE = CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled")
 TLS_EXPIRY_DISABLED_EXPECTED = TLS_MODE != "full"
 ALL_STATE_METRICS = (
     set(EXPECTED_CONFIG_METRICS)

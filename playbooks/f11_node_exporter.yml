@@ -121,23 +121,10 @@
         mode: "0644"
       register: node_exporter_runtime_signature
 
-    - name: "Opublikuj konfigurację monitorowanych cykli życia"
-      ansible.builtin.copy:
-        dest: "{{ node_exporter_textfile_dir }}/isa_monitoring_config.prom"
-        content: |
-          # HELP isa_backup_monitoring_enabled Whether backup freshness is required.
-          # TYPE isa_backup_monitoring_enabled gauge
-          isa_backup_monitoring_enabled{cluster="{{ monitoring.pmm.cluster_name }}"} {{ backup.enabled | ternary(1, 0) }}
-          # HELP isa_restore_test_monitoring_enabled Whether restore drill freshness is required.
-          # TYPE isa_restore_test_monitoring_enabled gauge
-          isa_restore_test_monitoring_enabled{cluster="{{ monitoring.pmm.cluster_name }}"} {{ (backup.restore_test_schedule | length > 0) | ternary(1, 0) }}
-          # HELP isa_tls_monitoring_enabled Whether certificate expiry monitoring is required.
-          # TYPE isa_tls_monitoring_enabled gauge
-          isa_tls_monitoring_enabled{cluster="{{ monitoring.pmm.cluster_name }}"} {{ (tls.mode == 'full') | ternary(1, 0) }}
-        owner: root
-        group: node_exporter
-        mode: "0640"
-      when: inventory_hostname == groups['galera'][0]
+    # Bramki cyklu zycia (isa_*_monitoring_enabled) publikuje f11_freshness.yml.
+    # Byly TUTAJ, ale `hosts:` tego playa wyklucza grupy z monitoring.agent_groups,
+    # wiec klaster z lokalnym pmm-agentem nigdy ich nie dostawal. Jeden wlasciciel
+    # pliku zamiast dwoch warunkowych.
 
     - name: "Zainicjuj trwałe metryki cyklu życia bez nadpisywania dowodów"
       ansible.builtin.copy:
