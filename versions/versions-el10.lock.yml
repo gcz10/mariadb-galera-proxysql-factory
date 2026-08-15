@@ -55,13 +55,13 @@ proxysql:
 
 pmm:
   # Kontener — niezależny od OS hosta; identyczny z lockfile EL9.
-  version: "3.8.1"
-  released: "2026-06-16"
-  image: "percona/pmm-server:3.8.1"
-  image_digest: "sha256:ef47471fb3b54e10897a92bab0b7b45e82d9825c3b0abf5a0693242191f99468"
+  version: "3.9.0"
+  released: "2026-07-30"
+  image: "percona/pmm-server:3.9.0"
+  image_digest: "sha256:ec0391338420a019a45ab33c101a2b62c3e2e0908bf6748056a9793b97c6d094"
   deployment: "docker-volume"
   support_eol: "not-published-per-point-release"
-  source: "https://github.com/percona/pmm/blob/main/documentation/docs/release-notes/3.8.1.md"
+  source: "https://github.com/percona/pmm/blob/main/documentation/docs/release-notes/3.9.0.md"
 
 docker:
   # Zweryfikowane w repodata download.docker.com/linux/centos/10/x86_64/stable:
@@ -129,11 +129,11 @@ repositories:
 pmm_client:
   # Agent PMM instalowany z repozytorium Percony (pmm3-client), NIE tarball.
   # Wersja MUSI byc <= wersji serwera (pmm.version powyzej) — dokumentacja Percony
-  # wymaga kolejnosci: najpierw serwer, potem klient. Repo oferuje juz 3.9.0;
-  # przypinamy 3.8.1, bo taki jest serwer.
-  version: "3.8.1"
+  # wymaga kolejnosci: najpierw serwer, potem klient. Oba na 3.9.0.
+  # Zweryfikowane w repodata: pmm-client-3.9.0-1.el10.x86_64.rpm istnieje.
+  version: "3.9.0"
   rpm_release: "1.el10"
-  package: "pmm-client-3.8.1-1.el10"
+  package: "pmm-client-3.9.0-1.el10"
   repo_component: "pmm3-client"
   release_rpm: "https://repo.percona.com/yum/percona-release-latest.noarch.rpm"
   # Tryb metryk MUSI byc jawnie 'push'. Domyslka `pmm-admin add` to 'auto', ktore
