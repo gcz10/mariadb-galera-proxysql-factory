@@ -48,15 +48,25 @@ proxysql:
     - "CVE-2026-48773"
 
 pmm:
-  version: "3.8.1"
-  released: "2026-06-16"
-  image: "percona/pmm-server:3.8.1"
-  image_digest: "sha256:ef47471fb3b54e10897a92bab0b7b45e82d9825c3b0abf5a0693242191f99468"
+  version: "3.9.0"
+  released: "2026-07-30"
+  image: "percona/pmm-server:3.9.0"
+  image_digest: "sha256:ec0391338420a019a45ab33c101a2b62c3e2e0908bf6748056a9793b97c6d094"
   deployment: "docker-volume"
   rpm_for_rocky_9: false
   support_eol: "not-published-per-point-release"
-  security: "security release; upgrades Grafana/nginx/gRPC dependencies"
-  source: "https://github.com/percona/pmm/blob/main/documentation/docs/release-notes/3.8.1.md"
+  # 3.9.0 USUWA upgrade z UI i Watchtower z obrazu (PMM-14969). Jedyna wspierana
+  # sciezka to podmiana obrazu kontenera — czyli dokladnie to, co robi
+  # infra_services.yml przez `docker compose up --pull always`.
+  security: >-
+    CVE-2026-39822 (HIGH, symlink traversal w stdlib Go) naprawiony w
+    percona-telemetry-agent; usuniety preinstalowany datasource PostgreSQL,
+    ktory pozwalal roli Viewer wykonywac dowolny SQL na wewnetrznej bazie PMM
+    (dokanczka hardeningu po CVE-2026-25212 z 3.7.0)
+  # Dlaczego ta wersja, a nie tylko "nowsza": PMM-14193/PMM-15145 naprawiaja
+  # alerty *Down* wracajace do Normal, gdy baza I agent padaja jednoczesnie.
+  # To dokladnie ta sama zasada fail-closed, ktorej pilnuje ISC-47.
+  source: "https://github.com/percona/pmm/blob/main/documentation/docs/release-notes/3.9.0.md"
 
 docker:
   engine_version: "3:29.6.2-1.el9"
@@ -124,11 +134,12 @@ repositories:
 pmm_client:
   # Agent PMM instalowany z repozytorium Percony (pmm3-client), NIE tarball.
   # Wersja MUSI byc <= wersji serwera (pmm.version powyzej) — dokumentacja Percony
-  # wymaga kolejnosci: najpierw serwer, potem klient. Repo oferuje juz 3.9.0;
-  # przypinamy 3.8.1, bo taki jest serwer.
-  version: "3.8.1"
+  # wymaga kolejnosci: najpierw serwer, potem klient. Oba na 3.9.0.
+  # Zweryfikowane w repo na zywym hoscie: `dnf --showduplicates list pmm-client`
+  # zwraca 3.9.0-1.el9 jako najnowszy.
+  version: "3.9.0"
   rpm_release: "1.el9"
-  package: "pmm-client-3.8.1-1.el9"
+  package: "pmm-client-3.9.0-1.el9"
   repo_component: "pmm3-client"
   release_rpm: "https://repo.percona.com/yum/percona-release-latest.noarch.rpm"
   # Tryb metryk MUSI byc jawnie 'push'. Domyslka `pmm-admin add` to 'auto', ktore
