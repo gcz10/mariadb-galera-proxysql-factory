@@ -35,10 +35,10 @@ mariadb:
   galera_provider_source: "https://github.com/codership/galera/releases/tag/release_26.4.27"
 
 proxysql:
-  version: "3.0.9"
+  version: "3.0.10"
   series: "3.0"
   tier: "Stable"
-  released: "2026-06-05"
+  released: "2026-07-31"
   rpm_release: "1"              # audit#12: potwierdzone na hostach (proxysql-3.0.9-1.x86_64)
   # R1: usunieto repo_baseurl - wskazywalo na 404 (sciezka `rocky/9` nie istnieje;
   # oficjalna jest `centos/<major>`) i nie bylo przez nic konsumowane.
@@ -47,11 +47,12 @@ proxysql:
   # audit#6: klucz repo_pub_key.gpg jest binarny (nie ASCII-armored) → rpm --import odrzuca.
   # Kontrolą integralności jest przypięty sha256 RPM-u (weryfikowany przez get_url).
   rpm_sha256:
-    x86_64: "ca209152e5162aa73474b999e4ab289e89e6dcc2762f12c3018d33a11af1b6da"  # proxysql-3.0.9-1-centos9.x86_64.rpm, 40352686B
+    x86_64: "04d5696c2b9b12bf5dd758a3024c4553231c629521929274d5dd1d53bc35ecc0"  # proxysql-3.0.10-1-centos9.x86_64.rpm, 41610935B
   cves_patched:
     - "CVE-2026-48772"
     - "CVE-2026-48773"
-  source: "https://github.com/sysown/proxysql/releases/tag/v3.0.9"
+    - "GHSA-fvch-fpgq-pwfx"
+  source: "https://github.com/sysown/proxysql/releases/tag/v3.0.10"
 
 pmm:
   version: "3.9.0"

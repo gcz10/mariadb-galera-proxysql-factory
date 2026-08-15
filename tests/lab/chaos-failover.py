@@ -135,9 +135,10 @@ def main():
            'mariadb --socket=/var/lib/mysql/mysql.sock -e "TRUNCATE isa_test.isa_failover"',
            check=True)
 
+        app_user = CLUSTER.get("proxysql", {}).get("app_user", "app_user")
         fd, local_cnf = tempfile.mkstemp()
         with os.fdopen(fd, "w") as fh:
-            fh.write(f"[client]\nuser=app_user\npassword={APP_PW}\n")
+            fh.write(f"[client]\nuser={app_user}\npassword={APP_PW}\n")
         subprocess.run(
             [ANSIBLE, WORKLOAD_HOST, "-i", INVENTORY, "-m", "copy",
              "-a", f"src={local_cnf} dest={CNF_REMOTE} mode=0600 owner=root"],
