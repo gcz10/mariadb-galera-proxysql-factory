@@ -66,9 +66,12 @@ proxysql:
 
 tls:
   mode: "full"
-  # RUNDA 2/3: fallback wciaz wlaczony. Zdjecie go WLACZA takze szyfrowanie SST,
-  # a tego nie da sie przeprowadzic rolling — patrz komentarz przy [sst] w szablonie.
-  socket_dynamic: true
+  # RUNDA 3 (2026-08-14): fallback ZDJETY. Ten sam przelacznik wlacza [sst] encrypt=3
+  # — sprzezenie jest celowe, bo SST nie ma odpowiednika socket.dynamic i dawca musi
+  # zgadzac sie z przyjmujacym. Konfiguracja trafia na WSZYSTKIE wezly przed
+  # jakimkolwiek restartem, wiec skrypt SST czyta encrypt=3 po obu stronach nawet
+  # zanim mariadbd przeladuje wsrep_provider_options.
+  socket_dynamic: false
   certificate_source: "file"
   ca_reference: "tests/lab/tls/fc9/ca.pem"
   certificate_reference: "tests/lab/tls/fc9/server-cert.pem"
