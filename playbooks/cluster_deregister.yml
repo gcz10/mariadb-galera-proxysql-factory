@@ -1,0 +1,302 @@
+---
+# cluster_deregister.yml — pelna derejestracja klastra z monitoringu, alertingu i ProxySQL.
+#
+# DOKLADNA ODWROTNOSC faz F11 (monitoring), F15 (alerty) oraz F7 (ProxySQL per-klaster).
+# Wolana PRZED `infra-teardown` (zniszczeniem maszyn).
+#
+# Zapobiega powstawaniu "sierot":
+#   1. Wylaczone/zniszczone maszyny nie generuja falszywych alertow w Grafanie.
+#   2. Inwentarz PMM nie zawiera martwych wezlow ani uslug.
+#   3. Wspoldzielona para ProxySQL nie trzyma martwych backendow ani uzytkownikow.
+#
+# Bezpieczenstwo wspoldzielenia:
+#   - Czyszczenie PMM i Grafany jest scisle filtrowane po `monitoring.pmm.cluster_name`.
+#   - Czyszczenie ProxySQL jest scisle ograniczone do hostgroup klastra (hg_base..hg_base+30),
+#     app_user klastra oraz per-klaster certyfikatu CA.
+#   - Zasoby innych klastrow na wspolnym PMM i ProxySQL pozostaja NIETKNIETE.
+#
+# Uruchomienie:
+#   ansible-playbook playbooks/cluster_deregister.yml -i clusters/<name>/inventory.yml -e @clusters/<name>/cluster.yml
+
+- name: "F15/F11 — usun reguly alertow, contact point, folder i inwentarz PMM"
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+  vars:
+    pmm_api_url: "{{ lookup('ansible.builtin.env', 'PMM_SERVER_URL') | default((monitoring | default({})).get('pmm', {}).get('server_url', 'https://192.168.1.130'), true) | regex_replace('/$', '') }}"
+    pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    cluster_label: "{{ (monitoring | default({})).get('pmm', {}).get('cluster_name', cluster.name) }}"
+    f15_folder_uid: "{{ (monitoring | default({})).get('alerts', {}).get('folder_uid', 'isa-alerts-' ~ cluster_label) }}"
+    f15_contact_uid: "email-isa-{{ cluster_label }}"
+    f15_contact_name: "ISA Email Alerts ({{ cluster_label }})"
+
+  tasks:
+    - name: "Pomin jesli PMM_ADMIN_PASSWORD nie jest ustawione"
+      ansible.builtin.meta: end_play
+      when: pmm_admin_password | length == 0
+
+    # ==========================================================================
+    # KROK 1: Usun reguly alertow Grafana (musza zniknac PRZED folderem)
+    # ==========================================================================
+    - name: "Pobierz istniejace reguly alertow Grafana"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/alert-rules"
+        method: GET
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: [200, 404]
+      register: f15_dereg_rules
+      no_log: true
+
+    - name: "Usun reguly alertow nalezace do klastra"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/alert-rules/{{ item.uid }}"
+        method: DELETE
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: [200, 204, 404]
+      loop: >-
+        {{ (f15_dereg_rules.json | default([]))
+           | selectattr('uid', 'defined')
+           | selectattr('uid', 'search', '^isa-' ~ cluster_label ~ '-')
+           | list }}
+      loop_control:
+        label: "{{ item.uid }}"
+      no_log: true
+
+    # ==========================================================================
+    # KROK 2: Usun trase z Notification Policy (musi zniknac PRZED contact pointem)
+    # ==========================================================================
+    - name: "Pobierz biezaca notification policy"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/policies"
+        method: GET
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: 200
+      register: f15_dereg_policy
+      no_log: true
+
+    - name: "Wytnij trase tego klastra z notification policy"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/policies"
+        method: PUT
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body: >-
+          {{
+            f15_dereg_policy.json | combine({
+              'routes': (f15_dereg_policy.json.routes | default([]))
+                        | rejectattr('receiver', 'equalto', f15_contact_name)
+                        | list
+            })
+          }}
+        status_code: [200, 202]
+      when: >-
+        (f15_dereg_policy.json.routes | default([]))
+        | selectattr('receiver', 'equalto', f15_contact_name)
+        | list | length > 0
+      no_log: true
+
+    # ==========================================================================
+    # KROK 3: Usun contact point (po wycieciu trasy z polityki)
+    # ==========================================================================
+    - name: "Usun email contact point klastra"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/contact-points/{{ f15_contact_uid }}"
+        method: DELETE
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: [200, 202, 204, 404]
+      no_log: true
+
+    # ==========================================================================
+    # KROK 4: Usun folder alertow Grafana
+    # ==========================================================================
+    - name: "Pobierz foldery Grafany"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/folders"
+        method: GET
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: 200
+      register: f15_dereg_folders
+      no_log: true
+
+    - name: "Usun folder ISA Alerts tego klastra"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/folders/{{ item.uid }}?forceDeleteRules=true"
+        method: DELETE
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: [200, 204, 404]
+      loop: >-
+        {{ (f15_dereg_folders.json | default([]))
+           | selectattr('title', 'equalto', 'ISA Alerts (' ~ cluster_label ~ ')')
+           | list }}
+      loop_control:
+        label: "{{ item.title }} ({{ item.uid }})"
+      no_log: true
+
+    # ==========================================================================
+    # KROK 5: Usun uslugi z PMM Inventory (kaskadowo usuwa eksportery i QAN)
+    # ==========================================================================
+    - name: "Pobierz uslugi PMM Inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/services"
+        method: GET
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: 200
+      register: pmm_dereg_services
+      no_log: true
+
+    - name: "Wyznacz liste ID uslug nalezacych do klastra"
+      ansible.builtin.set_fact:
+        pmm_cluster_service_ids: >-
+          {{
+            [
+              pmm_dereg_services.json.mysql | default([]),
+              pmm_dereg_services.json.proxysql | default([]),
+              pmm_dereg_services.json.external | default([]),
+              pmm_dereg_services.json.postgresql | default([])
+            ]
+            | flatten
+            | selectattr('service_name', 'defined')
+            | selectattr('service_name', 'search', '^' ~ cluster_label ~ '-')
+            | map(attribute='service_id')
+            | list
+          }}
+
+    - name: "Usun uslugi klastra z PMM Inventory (Management API / kaskada)"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/management/services/{{ item }}"
+        method: DELETE
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: [200, 204, 404]
+      loop: "{{ pmm_cluster_service_ids | default([]) }}"
+      no_log: true
+
+    # ==========================================================================
+    # KROK 6: Usun wezly z PMM Inventory (po usunieciu uslug)
+    # ==========================================================================
+    - name: "Pobierz wezly PMM Inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes"
+        method: GET
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: 200
+      register: pmm_dereg_nodes
+      no_log: true
+
+    - name: "Wyznacz liste ID wezlow nalezacych do klastra"
+      ansible.builtin.set_fact:
+        pmm_cluster_node_ids: >-
+          {{
+            [
+              pmm_dereg_nodes.json.generic | default([]),
+              pmm_dereg_nodes.json.container | default([]),
+              pmm_dereg_nodes.json.remote | default([])
+            ]
+            | flatten
+            | selectattr('node_name', 'defined')
+            | selectattr('node_name', 'search', '^' ~ cluster_label ~ '-')
+            | map(attribute='node_id')
+            | list
+          }}
+
+    - name: "Usun wezly klastra z PMM Inventory (force=true)"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes/{{ item }}?force=true"
+        method: DELETE
+        url_username: admin
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: [200, 204, 404]
+      loop: "{{ pmm_cluster_node_ids | default([]) }}"
+      no_log: true
+
+    - name: "Raport derejestracji PMM i Grafany"
+      ansible.builtin.debug:
+        msg: >-
+          Derejestracja monitoringu zakonczona dla '{{ cluster_label }}':
+          uslug={{ pmm_cluster_service_ids | default([]) | length }},
+          wezlow={{ pmm_cluster_node_ids | default([]) | length }},
+          folder={{ f15_folder_uid }}.
+
+
+- name: "F7 — usun konfiguracje klastra ze wspoldzielonego ProxySQL"
+  hosts: proxysql
+  become: true
+  serial: 1
+  vars:
+    proxysql_admin_cli:
+      - mariadb
+      - --defaults-extra-file=/etc/proxysql/admin-check.cnf
+      - -h127.0.0.1
+      - -P6032
+      - -uadmin
+      - -N
+      - -B
+    galera_writer_hg: "{{ proxysql.hostgroup_base | default(10) | int }}"
+    galera_backup_hg: "{{ proxysql.hostgroup_base | default(10) | int + 10 }}"
+    galera_reader_hg: "{{ proxysql.hostgroup_base | default(10) | int + 20 }}"
+    galera_offline_hg: "{{ proxysql.hostgroup_base | default(10) | int + 30 }}"
+    galera_app_user: "{{ proxysql.app_user | default('app_user') }}"
+    galera_backends: "{{ groups['galera'] | default([]) | map('extract', hostvars, 'galera_node_address') | select('defined') | list }}"
+
+  tasks:
+    - name: "Wyczysc wpisy klastra w tabelach ProxySQL (scisle zakresowane)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          DELETE FROM mysql_servers WHERE hostgroup_id IN ({{ galera_writer_hg }}, {{ galera_backup_hg }}, {{ galera_reader_hg }}, {{ galera_offline_hg }});
+          DELETE FROM mysql_galera_hostgroups WHERE writer_hostgroup={{ galera_writer_hg }};
+          DELETE FROM mysql_users WHERE username='{{ galera_app_user }}' AND default_hostgroup={{ galera_writer_hg }};
+          DELETE FROM mysql_query_rules WHERE destination_hostgroup IN ({{ galera_writer_hg }}, {{ galera_backup_hg }}, {{ galera_reader_hg }}, {{ galera_offline_hg }});
+          {% if galera_backends | length > 0 %}
+          DELETE FROM mysql_servers_ssl_params WHERE hostname IN ({% for b in galera_backends %}'{{ b }}'{% if not loop.last %},{% endif %}{% endfor %});
+          {% endif %}
+          DELETE FROM mysql_servers_ssl_params WHERE ssl_ca LIKE '%/{{ cluster.name }}/%';
+          LOAD MYSQL SERVERS TO RUNTIME;
+          LOAD MYSQL USERS TO RUNTIME;
+          LOAD MYSQL QUERY RULES TO RUNTIME;
+          SAVE MYSQL SERVERS TO DISK;
+          SAVE MYSQL USERS TO DISK;
+          SAVE MYSQL QUERY RULES TO DISK;
+      no_log: true
+      changed_when: true
+
+    - name: "Usun katalog certyfikatow CA per-klaster na ProxySQL"
+      ansible.builtin.file:
+        path: "/etc/mysql/tls/{{ cluster.name }}"
+        state: absent
+
+    - name: "Raport czyszczenia ProxySQL"
+      ansible.builtin.debug:
+        msg: "ProxySQL oczyszczone z hostgroup {{ galera_writer_hg }}-{{ galera_offline_hg }} i usera {{ galera_app_user }} na {{ inventory_hostname }}."
