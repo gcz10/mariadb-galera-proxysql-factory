@@ -56,39 +56,14 @@ from galera_backup.storage.artifacts import (  # noqa: E402
 )
 from galera_backup.storage.filesystem import FilesystemBackend, SMBBackend  # noqa: E402
 from galera_backup.storage.s3 import S3Backend  # noqa: E402
+from galera_backup.secrets import (  # noqa: E402
+    REDACT_ONLY_SECRET_KEYS,
+    SENSITIVE_SECRET_KEYS,
+    redactable_secret_values,
+    sensitive_secret_values,
+)
+from galera_backup.runner import CommandRunner, SecretRedactor  # noqa: E402
 
-# Values that gate argv. Identifiers MUST NOT be here: enrolling the ProxySQL
-# admin username made the guard reject the writer guard's own `-u <user>`.
-SENSITIVE_SECRET_KEYS = frozenset({
-    "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD",
-    "GALERA_BACKUP_ENCRYPTION_KEY",
-    "GALERA_BACKUP_S3_SECRET_KEY",
-    "GALERA_BACKUP_SMB_PASSWORD",
-})
-
-# Additionally masked in output. Credential halves worth hiding from logs, but
-# never allowed to gate argv. GALERA_BACKUP_PROXYSQL_ADMIN_USER is deliberately
-# absent from BOTH sets: it is an identifier, and short identity strings are
-# substrings of real argv/output tokens (`admin` occurs in `mariadb-admin`,
-# `admin_host` and `/etc/proxysql/admin-check.cnf`), so guarding or redacting
-# on it breaks legitimate commands and mangles diagnostics.
-REDACT_ONLY_SECRET_KEYS = frozenset({
-    "GALERA_BACKUP_S3_ACCESS_KEY",
-    "GALERA_BACKUP_SMB_USERNAME",
-})
-
-
-def sensitive_secret_values(secrets: dict[str, str]) -> set[str]:
-    """Credential values that gate argv — identifiers must never appear here."""
-    return {v for k, v in secrets.items() if k in SENSITIVE_SECRET_KEYS and v}
-
-
-def redactable_secret_values(secrets: dict[str, str]) -> set[str]:
-    """Values masked in captured output: credentials plus credential halves."""
-    return {
-        v for k, v in secrets.items()
-        if v and (k in SENSITIVE_SECRET_KEYS or k in REDACT_ONLY_SECRET_KEYS)
-    }
 
 
 # Installed by run_backup/run_restore once secrets are loaded, so main() can
@@ -303,101 +278,6 @@ def resolve_lock_path(cluster_name: str, cluster_dir: Path) -> Path:
         return runtime_lock_dir / f"galera-backup-{cluster_name}.lock"
     return cluster_dir / f"galera-backup-{cluster_name}.lock"
 
-
-class SecretRedactor:
-    def __init__(self, secret_values: Sequence[str] | set[str]):
-        self.secret_values = sorted([s for s in secret_values if s], key=len, reverse=True)
-
-    def redact(self, text: str) -> str:
-        if not text:
-            return text
-        res = str(text)
-        for secret in self.secret_values:
-            if secret:
-                res = res.replace(secret, "[REDACTED]")
-        return res
-
-
-class CommandRunner:
-    def __init__(
-        self,
-        secret_values: Sequence[str] | set[str],
-        redactor: Optional["SecretRedactor"] = None,
-    ):
-        self.secret_values = set(s for s in secret_values if s)
-        # The argv guard gates on secret_values only. Output redaction may use a
-        # wider set (credential halves) passed in explicitly; default to the
-        # guard set when no redactor is supplied.
-        self.redactor = redactor if redactor is not None else SecretRedactor(self.secret_values)
-
-    def run(
-        self,
-        cmd: list[str],
-        env: Optional[dict[str, str]] = None,
-        cwd: Optional[str | Path] = None,
-        timeout: Optional[float] = None,
-    ) -> tuple[int, str, str]:
-        # Pre-execution check: no secret value in argv
-        for arg in cmd:
-            for secret in self.secret_values:
-                if secret and secret in str(arg):
-                    raise BackupError(
-                        "E_SECRET_IN_ARGV",
-                        "Command argv contains a loaded secret value; command rejected before process creation"
-                    )
-
-        return self._exec(cmd, env=env, cwd=cwd, timeout=timeout)
-
-    def _exec(
-        self,
-        cmd: list[str],
-        env: Optional[dict[str, str]] = None,
-        cwd: Optional[str | Path] = None,
-        timeout: Optional[float] = None,
-    ) -> tuple[int, str, str]:
-        proc_env = os.environ.copy()
-        if env:
-            proc_env.update(env)
-
-        p: Optional[subprocess.Popen] = None
-        try:
-            # start_new_session=True JEST WYMAGANE przez os.killpg ponizej: bez
-            # wlasnej grupy procesow `os.getpgid(p.pid)` zwraca grupe RODZICA,
-            # wiec killpg zabija runnera (a pod cronem cala grupe zadania).
-            # Zweryfikowane: usuniecie tej flagi konczy proces testowy rc=137.
-            p = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(cwd) if cwd else None,
-                env=proc_env,
-                start_new_session=True,
-            )
-            stdout, stderr = p.communicate(timeout=timeout)
-            return p.returncode, self.redactor.redact(stdout), self.redactor.redact(stderr)
-        except subprocess.TimeoutExpired:
-            if p is not None:
-                try:
-                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-                except Exception:
-                    p.kill()
-                p.communicate()
-            raise BackupError("E_SUBPROCESS", f"Command '{cmd[0]}' timed out after {timeout}s")
-        except BaseException as exc:
-            if p is not None and p.poll() is None:
-                try:
-                    os.killpg(os.getpgid(p.pid), signal.SIGTERM)
-                    p.wait(timeout=5)
-                except Exception:
-                    try:
-                        os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-                    except Exception:
-                        p.kill()
-                    p.wait()
-            if isinstance(exc, BackupError):
-                raise
-            raise BackupError("E_SUBPROCESS", f"Failed to execute command '{cmd[0]}': {exc}") from exc
 
 
 def assert_scheduler_is_not_writer(
