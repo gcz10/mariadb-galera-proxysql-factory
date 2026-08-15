@@ -1,7 +1,6 @@
 import os
 import json
 import re
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,7 +15,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
     def setUpClass(cls):
         try:
             cls.mod = load_galera_backup_module()
-        except Exception as e:
+        except Exception:
             cls.mod = None
 
     def setUp(self):

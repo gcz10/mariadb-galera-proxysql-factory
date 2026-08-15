@@ -137,7 +137,7 @@ def main():
     check(meta.get("format_version") == 1,
           f"ISC-35 — format_version {meta.get('format_version')!r} != 1", failures)
     check(meta.get("sha256_encrypted") == computed,
-          f"ISC-35 — sha256_encrypted in metadata mismatch with computed", failures)
+          "ISC-35 — sha256_encrypted in metadata mismatch with computed", failures)
 
     for f in (enc, os.path.join(tmp, "backup.sha256"), os.path.join(tmp, "metadata.json")):
         os.unlink(f)

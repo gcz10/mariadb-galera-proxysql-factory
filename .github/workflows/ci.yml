@@ -116,8 +116,16 @@ jobs:
           done
           exit $rc
 
+      # compileall tylko parsuje — przepuszcza martwe importy, zduplikowane stale
+      # i f-stringi bez placeholderow. Dokladnie ten brud przeszedl w commicie
+      # 439218a i wyszedl dopiero w review. pyflakes to lapie.
       - name: python compile (tests + validation)
         run: python3 -m compileall -q tests
+
+      - name: pyflakes (martwe importy, nieuzywane zmienne, puste f-stringi)
+        run: |
+          python3 -m pip install -q pyflakes
+          python3 -m pyflakes tests roles/galera_backup/filter_plugins
 
       - name: Static guards (mass restart, double bootstrap, zero hardcode, conditional env, proxysql tenancy, secret leak, no state latest)
         run: |

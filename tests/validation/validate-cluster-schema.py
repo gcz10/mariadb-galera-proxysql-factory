@@ -78,7 +78,7 @@ def main():
     # Check: tls.mode=disabled in production requires risk acceptance (ISC-45)
     tls_mode = cluster.get("tls", {}).get("mode", "")
     if env == "production" and tls_mode == "disabled":
-        print(f"WARN: tls.mode=disabled in production — ISC-45 requires documented risk acceptance in Decisions")
+        print("WARN: tls.mode=disabled in production — ISC-45 requires documented risk acceptance in Decisions")
 
     # Check: read_write_split must be false (ISC-23)
     rws = cluster.get("proxysql", {}).get("read_write_split_enabled", None)
