@@ -1,17 +1,21 @@
 ---
-# newclaude2-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
+# newclaude3-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
 #
-# KLASTER KONTROLNY, DRUGI PRZEBIEG. Pierwszy (`newclaude-r9`, 2026-08-15)
-# zbudowal sie od zera i znalazl szesc defektow: brak generatora certow TLS,
-# kolizje globalnego CA na wspoldzielonym ProxySQL, nieczytelna dla uslugi
-# sciezke CA, martwa backreferencje Jinja w bloku YAML (zadanie nigdy nie bylo
-# idempotentne) oraz trzy zalozenia sciezki agentless w F11. Wszystkie
-# naprawione. Ten klaster sprawdza, czy poprawki trzymaja przy budowie od zera
-# — tym razem LACZNIE z monitoringiem, ktorego pierwszy przebieg nie przeszedl.
+# KLASTER KONTROLNY, TRZECI PRZEBIEG. Dwa poprzednie znalazly lacznie osiem
+# defektow — piec z nich w F11, wszystkie z jednej przyczyny: sciezka z lokalnym
+# pmm-agentem po cichu zakladala artefakty tworzone przez sciezke tarballowa
+# (katalog textfile, grupe systemowa node_exporter, konto pmm_monitor, bramki
+# isa_*_monitoring_enabled). Ta kombinacja nigdy nie byla uruchomiona od zera.
+#
+# Drugi przebieg (`newclaude2-r9`) przeszedl F0-F10 BEZ zmian w kodzie; dwa
+# ostatnie defekty odslonila dopiero sonda akceptacyjna, nie `PLAY RECAP`.
+# Ten klaster odpowiada na pytanie, czy CALY cykl F0-F15 — z backupem, drillem
+# i alertami — przechodzi juz bez ani jednej poprawki.
+#
 # `finalclaude-r9` jest WYLACZONY (nie skasowany) i moze wrocic — dlatego kazdy
 # identyfikator ponizej jest z nim rozlaczny.
 #
-# Adresacja: n2g1-3 na .160-.162 (VMID 9430-9432), restore n2r1 .163 (9433).
+# Adresacja: n3g1-3 na .160-.162 (VMID 9430-9432), restore n3r1 .163 (9433).
 #
 # WARSTWA WSPOLNA (terraform/shared/): ProxySQL fcp1/fcp2 .131/.132, VIP .133,
 # infra .130 (PMM + MinIO). TA SAMA para ProxySQL obsluguje finalclaude-r10.
@@ -19,7 +23,7 @@
 # ROZLACZNOSC NA WSPOLNYM ProxySQL — bez niej drugi klaster kasuje pierwszego:
 #   hostgroup_base: 210  (writer 210, backup 220, reader 230, offline 240)
 #                        finalclaude-r10 uzywa domyslnych 10/20/30/40
-#   app_user: app_user_n2
+#   app_user: app_user_n3
 #                        wpis w mysql_users jest globalny, a jego
 #                        default_hostgroup wybiera klaster
 # Pilnuje tego tests/validation/probe-proxysql-tenancy.py.
@@ -42,7 +46,7 @@
 # obecnosc mechanizmu per-serwer, nie tylko brak kolizji miedzy klastrami.
 
 cluster:
-  name: "newclaude2-r9"
+  name: "newclaude3-r9"
   environment: "laboratory"
   profile: "laboratory"
   automation_release: "0.1.0"
@@ -58,7 +62,7 @@ versions:
 galera:
   # wsrep_cluster_name jest czescia tozsamosci Primary Component — kolizja nazw
   # skleilaby dwa niezalezne klastry w jeden.
-  cluster_name: "n2_galera"
+  cluster_name: "n3_galera"
   nodes_expected: 3
 
 proxysql:
@@ -66,7 +70,7 @@ proxysql:
   max_writers: 1
   read_write_split_enabled: false
   hostgroup_base: 210
-  app_user: "app_user_n2"
+  app_user: "app_user_n3"
   # Konsument warstwy wspolnej: NIE instaluje pakietow na fcp1/fcp2/fcinfra ani
   # nie zarzadza VIP-em. Rejestruje tylko wlasne hostgroupy i uzytkownika przez
   # f7. Ownerem tej pary jest finalclaude-r10 — i on postawil te wezly na EL10,
@@ -86,9 +90,9 @@ tls:
   # zanim mariadbd przeladuje wsrep_provider_options.
   socket_dynamic: false
   certificate_source: "file"
-  ca_reference: "tests/lab/tls/n2/ca.pem"
-  certificate_reference: "tests/lab/tls/n2/server-cert.pem"
-  private_key_reference: "tests/lab/tls/n2/server-key.pem"
+  ca_reference: "tests/lab/tls/n3/ca.pem"
+  certificate_reference: "tests/lab/tls/n3/server-cert.pem"
+  private_key_reference: "tests/lab/tls/n3/server-key.pem"
   # Wymuszanie TLS na WSZYSTKICH polaczeniach TCP to osobny krok, nie czesc tej
   # migracji: ProxySQL laczy sie do backendow z use_ssl=0, a mysqld_exporter i
   # agent QAN ida TCP na 127.0.0.1:3306 (nie socketem, wiec wyjatek dla socketa
@@ -141,11 +145,11 @@ backup:
   scheduler:
     mode: "cron"
     # Nie moze byc aktywnym writerem ProxySQL — runner odrzuca backup z writera (ISC-39).
-    host: "n2g1"
+    host: "n3g1"
     timezone: "UTC"
   s3:
     endpoint: "192.168.1.130:9000"
-    bucket: "n2-galera-backups"          # rozlaczny z fc9/fc10-galera-backups
+    bucket: "n3-galera-backups"          # rozlaczny z fc9/fc10-galera-backups
     secure: false
 
 monitoring:
@@ -153,7 +157,7 @@ monitoring:
     server_url: "https://192.168.1.130"
     agent_id: "pmm-server"
     # Namespace regul alertow i folderow w PMM — musi byc rozlaczny z fc10-galera.
-    cluster_name: "n2-galera"
+    cluster_name: "n3-galera"
     validate_certs: false
     credentials_revision: 3
   # Wezly Galera tego klastra dostaja lokalnego pmm-agenta (porownanie z r10,

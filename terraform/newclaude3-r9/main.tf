@@ -10,14 +10,15 @@ terraform {
 
 provider "proxmox" {} # endpoint + api_token + insecure z env PROXMOX_VE_*
 
-# newclaude2-r9 — klaster kontrolny: budowa OD ZERA na tym samym kodzie.
+# newclaude3-r9 — klaster kontrolny: budowa OD ZERA na tym samym kodzie.
 #
-# Po co istnieje: to DRUGI przebieg budowy od zera. Pierwszy (`newclaude-r9`,
-# 2026-08-15) postawil dzialajacy klaster, ale po drodze znalazl szesc defektow
-# — trzy z nich w F11, gdzie sciezka z lokalnym pmm-agentem po cichu zakladala
-# artefakty tworzone przez sciezke agentless. Wszystkie naprawione. Ten klaster
-# sprawdza, czy poprawki trzymaja przy budowie bez recznej interwencji.
-# Wczesniejsze takie cwiczenie (2026-08-02) znalazlo piec innych defektow.
+# Po co istnieje: to TRZECI przebieg budowy od zera. Dwa poprzednie
+# (`newclaude-r9`, `newclaude2-r9`, oba 2026-08-15) znalazly osiem defektow,
+# piec z nich w F11 — sciezka z lokalnym pmm-agentem zakladala artefakty
+# tworzone przez sciezke tarballowa. Drugi przebieg domknal F0-F10 bez zmian
+# w kodzie, a ostatnie dwa defekty wyszly dopiero z sondy akceptacyjnej.
+# Ten sprawdza CALY cykl F0-F15, z backupem, drillem odtwarzania i alertami.
+# Wczesniejsze cwiczenie (2026-08-02) znalazlo piec innych defektow.
 #
 # Wszystko rozlaczne z `finalclaude-r9`, ktory zostaje WYLACZONY (nie skasowany)
 # i moze wrocic: inne VMID, adresy, nazwy hostow, wsrep_cluster_name, hostgroupy
@@ -49,10 +50,10 @@ locals {
   # 9420-9423 (r9, wylaczony ale ISTNIEJE — nie wolno nadpisac).
   # Adresy .160-.163: zwolnione po tym samym teardownie.
   vms = {
-    n2g1 = { id = 9430, ip = 160, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n2g2 = { id = 9431, ip = 161, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n2g3 = { id = 9432, ip = 162, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n2r1 = { id = 9433, ip = 163, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    n3g1 = { id = 9430, ip = 160, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n3g2 = { id = 9431, ip = 161, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n3g3 = { id = 9432, ip = 162, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n3r1 = { id = 9433, ip = 163, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
 
@@ -62,8 +63,8 @@ resource "proxmox_virtual_environment_vm" "node" {
   node_name   = local.node_name
   vm_id       = each.value.id
   pool_id     = local.pool_id
-  tags        = ["newclaude2", "galera", "rocky9", "n2", each.value.role]
-  description = "newclaude2-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
+  tags        = ["newclaude3", "galera", "rocky9", "n3", each.value.role]
+  description = "newclaude3-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
 
   # F2 instaluje i wlacza qemu-guest-agent; provider nie czeka na raport IP,
   # bo adresy sa statyczne, a agent moze wystartowac dopiero po restarcie VM.
