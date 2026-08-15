@@ -11,7 +11,7 @@
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook \
-        infra-teardown infra-provision cluster-trust-hosts
+        infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify
 
 CLUSTER ?= example-cluster
 ANSIBLE_OPTS ?=
@@ -51,6 +51,15 @@ infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM
 	@cd $(TF_DIR) && terraform init -input=false >/dev/null
 	terraform/pve-teardown.sh $(TF_DIR)
 
+
+cluster-deregister:  ## Usuń obiekty klastra z PMM, Grafany i ProxySQL (przed infra-teardown; CONFIRM=yes)
+	$(cluster_guard)
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (usuwa obiekty klastra $(CLUSTER) z PMM/Grafana/ProxySQL)"; exit 1)
+	ansible-playbook playbooks/cluster_deregister.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+
+cluster-deregister-verify:  ## Zweryfikuj brak sierot po klastrze w PMM, Grafanie i ProxySQL
+	$(TARGET_ENV) python3 tests/lab/probe-orphans.py
 infra-provision:  ## Utwórz VM klastra (parallelism=1 — równoległość wywala locki ZFS na PVE)
 	$(cluster_guard)
 	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
