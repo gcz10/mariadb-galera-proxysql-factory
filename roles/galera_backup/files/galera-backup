@@ -43,6 +43,12 @@ from galera_backup.textutil import (  # noqa: E402
     sanitize_cluster_name,
     validate_smb_options,
 )
+from galera_backup.fsutil import (  # noqa: E402
+    atomic_write,
+    file_sha256_and_size,
+    remove_sensitive_work_dir,
+    remove_tree_or_raise,
+)
 
 # Values that gate argv. Identifiers MUST NOT be here: enrolling the ProxySQL
 # admin username made the guard reject the writer guard's own `-u <user>`.
@@ -84,67 +90,6 @@ def redactable_secret_values(secrets: dict[str, str]) -> set[str]:
 _module_redactor: Optional["SecretRedactor"] = None
 
 
-
-def file_sha256_and_size(path: Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    with open(path, "rb") as payload_file:
-        while chunk := payload_file.read(1024 * 1024):
-            digest.update(chunk)
-            size += len(chunk)
-    return digest.hexdigest(), size
-
-
-def atomic_write(target_path: Path, content: str, mode: int = 0o644) -> None:
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = target_path.parent / f".tmp.{target_path.name}.{os.getpid()}"
-    try:
-        with open(temp_path, "w", encoding="utf-8") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(temp_path, mode)
-        os.replace(temp_path, target_path)
-    except Exception:
-        if temp_path.exists():
-            try:
-                temp_path.unlink()
-            except OSError:
-                pass
-        raise
-
-def remove_tree_or_raise(
-    path: Path,
-    error_code: str,
-    purpose: str,
-) -> None:
-    if not path.exists():
-        return
-    try:
-        shutil.rmtree(path)
-    except OSError as exc:
-        raise BackupError(
-            error_code,
-            f"Failed to remove {purpose} '{path}': {exc}",
-        ) from exc
-    if path.exists():
-        raise BackupError(
-            error_code,
-            f"Failed to remove {purpose} '{path}': path still exists",
-        )
-
-
-def remove_sensitive_work_dir(
-    work_dir: Optional[Path],
-    error_code: str,
-) -> None:
-    if work_dir is None:
-        return
-    remove_tree_or_raise(
-        work_dir,
-        error_code,
-        "sensitive staging directory",
-    )
 
 
 def selinux_is_enabled() -> bool:
