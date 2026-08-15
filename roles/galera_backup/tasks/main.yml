@@ -50,6 +50,18 @@
     group: root
     mode: "0755"
 
+# Entrypoint robi `sys.path.insert(0, dirname(__file__))` i importuje ten pakiet,
+# wiec MUSI jechac razem z nim. Bez tego kolejny deploy zostawia na hoscie plik,
+# ktory wywala sie na `ModuleNotFoundError: galera_backup` przy pierwszym cronie.
+- name: Deploy galera_backup package (modules imported by the executable)
+  ansible.builtin.copy:
+    src: galera_backup/
+    dest: /opt/galera-backup/galera_backup/
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+
 - name: Deploy cluster config.json
   ansible.builtin.template:
     src: config.json.j2
