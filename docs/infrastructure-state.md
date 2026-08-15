@@ -1,6 +1,9 @@
 # Stan infrastruktury
 
-**Snapshot:** 2026-08-02 01:40 UTC
+**Snapshot bazowy:** 2026-08-02 01:40 UTC — topologia, VMID, adresy.
+**Warstwy nalozone pozniej:** 2026-08-05 (TLS full na r9), 2026-08-15 (runda 3
+TLS, limity systemd, dekompozycja runnera, rotacja poswiadczen) — zaznaczone
+w miejscach, ktorych dotycza.
 **Zebrany z:** `terraform`, `ansible`, ProxySQL admin, PMM, MinIO, `qm list`.
 
 > Ten plik jest **datowanym zdjęciem**, nie źródłem prawdy. Źródłem prawdy dla
@@ -45,6 +48,17 @@ MariaDB 11.4.12 (`el9`), `wsrep_cluster_name: fc9_galera`.
 **Korekta 2026-08-05:** replikacja Galera jest szyfrowana — `tls.mode: full`
 (commit `607871d`), a nie `disabled` jak w zdjeciu z 2026-08-02 powyzej.
 Szczegoly w `docs/records/2026-08-02-session-handoff.md`.
+
+**Aktualizacja 2026-08-15 — runda 3 TLS wykonana (PR #11).** Zdjety
+`socket.dynamic`, czyli fallback dopuszczajacy nieszyfrowana replikacje; wlaczone
+`[sst] encrypt=3`. Runtime na 3/3 wezlach: `socket.ssl = YES`, brak
+`socket.dynamic`. Szyfrowanie SST **zweryfikowane wymuszonym pelnym SST**, nie
+tylko konfiguracja — log dawcy pokazuje strumien przez
+`socat openssl-connect ... cert=/etc/mysql/tls/server-cert.pem`. Aktywacja poszla
+rolling (`serial: 1`), klaster nie zszedl ponizej `size=3`.
+`require_secure_transport` pozostaje `false` **swiadomie**: ProxySQL siega
+backendow z `use_ssl=0`, a `mysqld_exporter` i QAN ida TCP na `127.0.0.1:3306`.
+
 Hostgroupy ProxySQL **110/120/130/140**, użytkownik `app_user_fc9`.
 
 | Host | VMID | IP | Rola | RAM |
@@ -87,6 +101,18 @@ tylko `f7`. Pilnuje tego `tests/validation/probe-proxysql-tenancy.py`.
 | Drill restore | oba `success`, 1 baza / 1 tabela / 1 wiersz |
 | PMM | owner: 5 węzłów + 2 eksportery ProxySQL; konsument: 3 węzły, 0 |
 | Reguły alertowe | 8 na klaster, namespace `isa-fc10-*` / `isa-fc9-*` |
+
+### Dolozone 2026-08-15
+
+| Sprawdzenie | Wynik |
+|---|---|
+| Limity ZYWYCH procesow | `/proc/<pid>/limits`: `nofile=1048576` dla `mariadbd` i `proxysql` na 8/8 hostach (bylo 32768 / 102400) |
+| `TimeoutStartSec` | `infinity` na 6/6 wezlach Galera — pelny SST duzej bazy nie zostanie zabity po 15 min |
+| TLS na r9 | `socket.ssl = YES`, brak `socket.dynamic` na 3/3; SST szyfrowany, potwierdzony wymuszonym pelnym transferem |
+| SELinux / firewalld | `Enforcing` i `running` na 14/14 hostow; polityka firewalld bez dryfu (`--check` = `changed=0`) |
+| Idempotencja | drugi `site.yml`: `changed=0` na 6/6 wezlow Galera |
+| Runner backupu | 12 modulow, entrypoint 21 linii; backup + drill restore przeszly po dekompozycji |
+| `wsrep_desync` | backup odsynchronizowuje wezel i przywraca `Synced` — `galera.desync` → `galera.resync` w dzienniku zdarzen |
 
 ## Limit zasobów
 

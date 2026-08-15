@@ -95,16 +95,41 @@ Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje 6 reguł (node
 
 `lab-backup-verify` weryfikuje backend S3 i wymaga przypiętego SDK (`minio.sdk_version` z lockfile). Zarządzany SMB oraz wcześniej zamontowany filesystem weryfikuje `tests/live/probe-galera-backup-backends.py`; procedury i ograniczenia opisuje `docs/runbooks/backup.md`.
 
+## Żywa flota
+
+Szybki start powyżej uczy na `lab-cluster` (kontenery). Realne klastry są dwa i
+chodzą na **tym samym kodzie** — różnicę niesie wyłącznie `versions.lock_file`
+w `cluster.yml`:
+
+| Klaster | OS | Węzły | TLS | Hostgroupy ProxySQL |
+|---|---|---|---|---|
+| `finalclaude-r9` | Rocky 9 | `f9g1-3` + `f9r1` (restore) | `full`, SST szyfrowany | 110/120/130/140 |
+| `finalclaude-r10` | Rocky 10 | `f10g1-3` + `f10r1` | `disabled` (kontrast platformowy) | 10/20/30/40 |
+
+Warstwa wspólna dla obu: `fcp1`/`fcp2` (ProxySQL w HA, VIP `192.168.1.133:6033`)
+oraz `fcinfra` (PMM, MinIO, maildev). Jedna para ProxySQL obsługuje całą flotę,
+a klastry rozdziela wyłącznie rozłączność hostgroup i użytkowników — pilnuje jej
+sonda `make verify-proxysql-tenancy`.
+
+Każda komenda ze Szybkiego startu działa na nich przez `CLUSTER=<nazwa>`, np.
+`make cluster-backup CLUSTER=finalclaude-r9`. Aktualny stan maszyn, adresy i
+dowody z żywej instalacji: `docs/infrastructure-state.md`.
+
 ## Struktura
 
 ```
 clusters/<name>/     — inventory.yml + cluster.yml + secrets per klaster
 versions/            — lockfile, discovered-versions, compatibility-report
 profiles/            — production/staging/laboratory
-playbooks/           — feature po feature
+playbooks/           — feature po feature (F0-F15) + tasks/ z helperami wspoldzielonymi
 roles/               — standardowe katalogi, gdy potrzebne
-tests/               — integration/idempotence/failure/recovery/upgrade/validation
-docs/                — architecture, adr, runbooks, stan infrastruktury
+  galera_backup/files/
+    galera-backup           — cienki wrapper (21 linii), wdrazany na scheduler
+    galera_backup/          — pakiet: pipeline, storage/{s3,filesystem}, config,
+                              runner, state, locking, secrets, fsutil, textutil
+tests/               — unit/ (138), validation/ (sondy statyczne, blokujace w CI),
+                       lab/ (sondy przeciw zywemu klastrowi), live/
+docs/                — adr, runbooks, plans, records, stan infrastruktury
 ```
 
 Nowy klaster = nowy katalog `clusters/<name>/`. Kod ról nie zawiera danych klastra.
