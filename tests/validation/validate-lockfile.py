@@ -48,6 +48,21 @@ REQUIRED = {
     "node_exporter": ["version", "linux_sha256"],
 }
 
+# Proweniencja pinow (dodane 2026-08-15). Kazda przypieta wersja musi zapisac,
+# SKAD zostala wzieta. Powod jest konkretny: `mariadb` i `proxysql` mialy tu
+# przypiete wersje bez zadnego `source`, wiec nikt nie mogl zweryfikowac pinu
+# inaczej niz powtarzajac cale rozeznanie — a to jest dokladnie ta droga, ktora
+# wpuszcza niesprawdzona liczbe do repo i utrwala ja na lata.
+# Format: (sekcja, klucz z wersja, klucz ze zrodlem).
+PROVENANCE = (
+    ("mariadb", "version", "source"),
+    ("mariadb", "galera_provider_version", "galera_provider_source"),
+    ("proxysql", "version", "source"),
+    ("pmm", "version", "source"),
+    ("pmm_client", "version", "source"),
+    ("node_exporter", "version", "source"),
+)
+
 PLACEHOLDER_MARKERS = ("to-confirm-f0", "to-verify", "todo:", "fixme:", "xxx:")
 
 
@@ -110,6 +125,34 @@ def validate(path: Path) -> list[str]:
             errors.append(
                 f"{path}: mariadb.repo_setup_args '{args}' nie pasuje do serii "
                 f"'{series}' wynikajacej z mariadb.version '{version}'"
+            )
+
+    # 5. Proweniencja: pin musi wskazywac zrodlo, a zrodlo musi pasowac do pinu.
+    #    Druga czesc lapie realny tryb bledu: podniesienie `version` bez zmiany
+    #    `source`, czyli URL nadal opisujacy poprzednie wydanie.
+    for section, version_key, source_key in PROVENANCE:
+        block = data.get(section)
+        if not isinstance(block, dict) or version_key not in block:
+            continue
+        source = str(block.get(source_key, "")).strip()
+        if not source:
+            if is_locked:
+                errors.append(
+                    f"{path}: brak '{section}.{source_key}' dla przypietej wersji "
+                    f"'{block[version_key]}' — pin bez zapisanego zrodla"
+                )
+            continue
+        if not re.match(r"^https?://", source):
+            errors.append(f"{path}: '{section}.{source_key}' nie jest URL-em: {source}")
+            continue
+        version = str(block[version_key])
+        series = ".".join(version.split(".")[:2])
+        versions_in_url = re.findall(r"\d+\.\d+(?:\.\d+)*", source)
+        if versions_in_url and version not in versions_in_url and series not in versions_in_url:
+            errors.append(
+                f"{path}: '{section}.{source_key}' wskazuje na {versions_in_url}, "
+                f"a przypieta wersja to '{version}' — zrodlo nie zostalo "
+                f"zaktualizowane po podniesieniu wersji"
             )
 
     return errors

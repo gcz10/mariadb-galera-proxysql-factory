@@ -99,6 +99,15 @@ jobs:
           done
           exit $rc
 
+      # Hook `.omp/hooks/pre/docs-fetch.ts` blokuje pobieranie dokumentacji
+      # przez curl. Sonda pilnuje OBU kierunkow: ze wpadki sa lapane i ze
+      # legalne wywolania API/rejestrow nie sa. Falszywy alarm jest tu
+      # grozniejszy — bramka, ktora blokuje curl do Docker Huba, zostanie
+      # wylaczona i nie ochroni juz przed niczym.
+      # Node >= 22.18 uruchamia .ts bez transpilacji; obraz CI ma node.
+      - name: Docs-fetch hook guard
+        run: node tests/validation/probe-docs-fetch-hook.ts
+
       - name: ansible syntax-check (playbooks only; skip include-only files)
         run: |
           set -e

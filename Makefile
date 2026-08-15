@@ -10,7 +10,7 @@
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke \
-        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest \
+        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook \
         infra-teardown infra-provision cluster-trust-hosts
 
 CLUSTER ?= example-cluster
@@ -192,6 +192,11 @@ verify-no-secrets-leak:  ## Statyczny guard: brak sekretów w repo i argv proces
 
 verify-no-state-latest:  ## Statyczny guard: brak state: latest w rolach i playbookach (ISC-63)
 	bash tests/validation/probe-no-state-latest.sh
+
+# `node`, nie `deno`: CI ma node w obrazie, deno wymagaloby dodatkowego kroku.
+# Node >= 22.18 zdejmuje typy sam, wiec plik .ts idzie bez transpilacji.
+verify-docs-fetch-hook:  ## Statyczny guard: hook blokujacy scraping dokumentacji przez curl
+	node tests/validation/probe-docs-fetch-hook.ts
 
 cluster-backup-configure:  ## F10 — skonfiguruj runner, minio identity i cron dla klastra
 	$(cluster_guard)

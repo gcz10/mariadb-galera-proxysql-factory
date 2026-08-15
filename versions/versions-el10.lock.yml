@@ -36,6 +36,11 @@ mariadb:
   # https://dlm.mariadb.com/repo/mariadb-server/11.4/yum/rhel/10/x86_64 (repomd.xml, application/xml).
   # Sam mariadb_repo_setup składa tę ścieżkę poprawnie; pole jest tu jako ostrzeżenie dla operatora.
   verified_baseurl: "https://dlm.mariadb.com/repo/mariadb-server/11.4/yum/rhel/10/x86_64"
+  # Zrodla pinow — zweryfikowane pobraniem 2026-08-15 (HTTP 200 + wzmianka
+  # o dokladnej wersji). Identyczne z lockfile EL9: pakiet rozni sie tylko
+  # sufiksem release, wydanie upstream jest to samo.
+  source: "https://github.com/mariadb-corporation/mariadb-docs/blob/main/platform/post-download/mariadb-server-11.4.12.md"
+  galera_provider_source: "https://github.com/codership/galera/releases/tag/release_26.4.27"
 
 proxysql:
   version: "3.0.9"
@@ -52,6 +57,7 @@ proxysql:
   cves_patched:
     - "CVE-2026-48772"
     - "CVE-2026-48773"
+  source: "https://github.com/sysown/proxysql/releases/tag/v3.0.9"
 
 pmm:
   # Kontener — niezależny od OS hosta; identyczny z lockfile EL9.
