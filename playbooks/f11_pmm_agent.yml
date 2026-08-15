@@ -62,6 +62,23 @@
       ansible.builtin.assert:
         that: pmm_admin_password | length > 0
         fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium."
+    - name: "Zapewnij konto bazy danych pmm_monitor"
+      ansible.mysql.mysql_user:
+        name: pmm_monitor
+        password: "{{ lookup('ansible.builtin.env', 'PMM_MONITOR_PASSWORD') }}"
+        host: "{{ item }}"
+        priv: "*.*:PROCESS,REPLICATION CLIENT,SELECT,SHOW DATABASES,RELOAD"
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      loop:
+        - "localhost"
+        - "127.0.0.1"
+        - "%"
+      when:
+        - inventory_hostname in groups.get('galera', [])
+        - galera_node_idx | default(1) == 1
+      no_log: true
+
 
     - name: "Repozytorium Percony"
       ansible.builtin.dnf:
@@ -163,6 +180,14 @@
 
     - name: "Podepnij katalog textfile runnera pod node_exporter z paczki"
       block:
+        - name: "Zapewnij katalog metryk runnera"
+          ansible.builtin.file:
+            path: /var/lib/node_exporter/textfile_collector
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
         - name: "Usun domyslny katalog textfile PMM (jesli nie jest juz symlinkiem)"
           ansible.builtin.file:
             path: "{{ pmm_textfile_dir }}"
@@ -176,7 +201,6 @@
             state: link
       vars:
         pmm_textfile_dir: /usr/local/percona/pmm/collectors/textfile-collector/medium-resolution
-
 - name: "F11 — zarejestruj uslugi bazodanowe pod lokalnym agentem"
   hosts: localhost
   connection: local

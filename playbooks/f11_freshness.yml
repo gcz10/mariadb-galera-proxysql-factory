@@ -51,9 +51,8 @@
         path: "{{ textfile_dir }}"
         state: directory
         owner: root
-        group: node_exporter
-        mode: "0750"
-
+        group: root
+        mode: "0755"
     # === Opublikuj realne unixtimes (Ansible copy = atomic write) ===
     - name: "Zapisz realne unixtimes do isa_monitoring_state.prom"
       ansible.builtin.copy:
@@ -68,5 +67,5 @@
           # TYPE isa_tls_cert_expiry_unixtime gauge
           isa_tls_cert_expiry_unixtime{cluster="{{ cluster_label }}"} {{ tls_expiry_epoch.stdout | trim | int }}
         owner: root
-        group: node_exporter
-        mode: "0640"
+        group: root
+        mode: "0644"
