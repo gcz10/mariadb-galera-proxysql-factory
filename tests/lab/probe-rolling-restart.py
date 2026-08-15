@@ -101,17 +101,20 @@ def main():
                     f"ISC-50 — play '{play.get('name', '?')}' cycles mariadbd "
                     f"but serial={serial!r} (must be 1)"
                 )
-            # health gate must poll the three wsrep markers
+            # health gate must poll the three wsrep markers OR include the canonical helper
             gate_ok = (
-                "wsrep_local_state" in text
-                and "wsrep_cluster_status" in text
-                and "wsrep_cluster_size" in text
-                and "until" in text
+                "assert_galera_healthy" in text
+                or (
+                    "wsrep_local_state" in text
+                    and "wsrep_cluster_status" in text
+                    and "wsrep_cluster_size" in text
+                    and "until" in text
+                )
             )
             if not gate_ok:
                 failures.append(
                     f"ISC-51 — play '{play.get('name', '?')}' lacks a health gate "
-                    f"(until + wsrep_local_state/cluster_status/cluster_size)"
+                    f"(until + wsrep_local_state/cluster_status/cluster_size or tasks/assert_galera_healthy.yml)"
                 )
             serial_checked = True
 
