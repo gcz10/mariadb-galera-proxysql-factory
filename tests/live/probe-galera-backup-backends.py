@@ -75,17 +75,23 @@ def resolve_remote_connection(
 
 
 def load_installed_runner(path: Path = RUNNER_PATH):
-    """Import installed galera-backup runner using SourceFileLoader."""
+    """Zaimportuj wdrozony runner jako modul pakietu.
+
+    Wczesniej ta funkcja czytala `path` przez `SourceFileLoader`, bo caly runner
+    byl jednym plikiem. Po dekompozycji `/opt/galera-backup/galera-backup` jest
+    21-liniowym wrapperem eksponujacym wylacznie `main`, wiec ladowanie go dalej
+    dawaloby `AttributeError` na `mod.SMBBackend`, `mod.run_restore` i reszcie
+    API, ktorego ta sonda uzywa. API mieszka teraz w `galera_backup.pipeline`,
+    ktory lezy w tym samym katalogu co wrapper.
+    """
     if not path.exists():
         raise RuntimeError(f"Installed runner not found at {path}")
-    loader = importlib.machinery.SourceFileLoader("galera_backup_module", str(path))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load spec for {path}")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[loader.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    package_root = str(path.resolve().parent)
+    if package_root not in sys.path:
+        sys.path.insert(0, package_root)
+    if importlib.util.find_spec("galera_backup") is None:
+        raise ImportError(f"Cannot import package 'galera_backup' from {package_root}")
+    return importlib.import_module("galera_backup.pipeline")
 
 
 def parse_cifs_diagnostic(msg: str) -> Dict[str, str]:
