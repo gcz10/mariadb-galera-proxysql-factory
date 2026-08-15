@@ -68,6 +68,16 @@
       {{ app_password | replace("'", "''") }}
     galera_backends: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | list }}"
     tls_use_ssl: "{{ 1 if (tls | default({})).mode | default('disabled') == 'full' else 0 }}"
+    # Katalog CA per klaster na WSPOLDZIELONYCH wezlach ProxySQL.
+    #
+    # Pod /etc/mysql/tls, a NIE /etc/proxysql/tls: `/etc/proxysql` jest celowo
+    # zamkniete (0750 root:root, trzyma proxysql.cnf z haslem admina), wiec
+    # uzytkownik `proxysql` nie moze tamtedy przejsc i CA byloby nieczytelne.
+    # Sprawdzone na zywo: przy sciezce /etc/proxysql/tls/<klaster>/ca.pem
+    # `sudo -u proxysql cat` odmawia dostepu, a TLS dziala tylko dzieki
+    # zostawionej starej zmiennej globalnej — czyli awaria czeka na pierwsza
+    # zmiane. Nazwa klastra jest walidowana przez schema (^[A-Za-z0-9_-]+$).
+    proxysql_cluster_tls_dir: "/etc/mysql/tls/{{ cluster.name }}"
     proxysql_admin_cli:
       - mariadb
       - --defaults-extra-file=/etc/proxysql/admin-check.cnf
@@ -218,35 +228,57 @@
     # raportowal "TLS/SSL error: Permission denied (13)" i SHUNNOWAL wszystkie
     # backendy, czyli caly odcinek ProxySQL->MariaDB po TLS byl nieczynny.
     # Klucz prywatny nadal NIE jest tu kopiowany (tls_deploy_key: false).
+    #
+    # Sciezka jest PER KLASTER, bo ta para ProxySQL obsluguje cala flote. Wczesniej
+    # kazdy klaster pisal swoje CA do /etc/mysql/tls/ca.pem i do globalnej zmiennej
+    # `mysql-ssl_p2s_ca` — drugi klaster z tls.mode=full nadpisywal CA pierwszego,
+    # a ProxySQL ufal juz tylko temu, kto uruchomil f7 jako ostatni. Bledu nie bylo
+    # widac, dopoki TLS mial wlaczony tylko jeden klaster.
     - name: "TLS: rozprowadź CA na węzeł ProxySQL (walidacja backendu; gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
       vars:
         tls_file_owner: proxysql
         tls_deploy_key: false
+        tls_dir: "{{ proxysql_cluster_tls_dir }}"
       when: (tls | default({})).mode | default('disabled') == 'full'
 
-    - name: "TLS: sprawdź CA backendu ProxySQL"
+    # Lista hostow budowana JAWNA PETLA, nie `regex_replace` z backreferencja.
+    # W bloku YAML `|`/`>-` zapis "'\\1'" nie dociera do Jinja jako odwolanie do
+    # grupy — renderowal sie jako '' i cala klauzula wychodzila `IN ('','')`.
+    # Skutek byl cichy: DELETE nie pasowal do niczego, licznik ponizej zawsze
+    # zwracal 0, wiec zadanie NIGDY nie bylo idempotentne, a przy drugim
+    # przebiegu INSERT wywalal sie na UNIQUE constraint.
+    - name: "TLS: sprawdź CA per backend (mysql_servers_ssl_params)"
       ansible.builtin.command:
         argv: "{{ proxysql_admin_cli }}"
-        stdin: "SELECT variable_value FROM global_variables WHERE variable_name='mysql-ssl_p2s_ca';"
-      register: proxysql_tls_ca
+        stdin: >-
+          SELECT COUNT(*) FROM mysql_servers_ssl_params
+          WHERE ssl_ca='{{ proxysql_cluster_tls_dir }}/ca.pem'
+          AND hostname IN ({% for b in galera_backends %}'{{ b }}'{% if not loop.last %},{% endif %}{% endfor %});
+      register: proxysql_tls_ca_rows
       changed_when: false
       no_log: true
       when: (tls | default({})).mode | default('disabled') == 'full'
 
-    - name: "TLS: ustaw CA backendu ProxySQL"
+    # DELETE jest skopowany do nazw hostow TEGO klastra. Tabela nie ma kolumny
+    # hostgroup, wiec czyszczenie "wszystkiego" skasowaloby wpisy sasiada.
+    - name: "TLS: ustaw CA per backend (rozlacznie miedzy klastrami)"
       ansible.builtin.command:
         argv: "{{ proxysql_admin_cli }}"
         stdin: |
-          UPDATE global_variables SET variable_value='/etc/mysql/tls/ca.pem'
-          WHERE variable_name='mysql-ssl_p2s_ca';
-          LOAD MYSQL VARIABLES TO RUNTIME;
-          SAVE MYSQL VARIABLES TO DISK;
+          DELETE FROM mysql_servers_ssl_params
+          WHERE hostname IN ({% for b in galera_backends %}'{{ b }}'{% if not loop.last %},{% endif %}{% endfor %});
+          {% for backend in galera_backends %}
+          INSERT INTO mysql_servers_ssl_params (hostname, port, username, ssl_ca)
+          VALUES ('{{ backend }}', 3306, '', '{{ proxysql_cluster_tls_dir }}/ca.pem');
+          {% endfor %}
+          LOAD MYSQL SERVERS TO RUNTIME;
+          SAVE MYSQL SERVERS TO DISK;
       no_log: true
       changed_when: true
       when:
         - (tls | default({})).mode | default('disabled') == 'full'
-        - proxysql_tls_ca.stdout | default('') | trim != '/etc/mysql/tls/ca.pem'
+        - (proxysql_tls_ca_rows.stdout | default('0') | trim | int) != (galera_backends | length)
 
     - name: "Sprawdź ustawienia monitora Galera"
       ansible.builtin.command:

@@ -6,6 +6,11 @@
 # Zmienne sterujące:
 #   tls_file_owner  (domyślnie 'mysql')  — właściciel plików/katalogu
 #   tls_deploy_key  (domyślnie true)     — czy kopiować klucz prywatny (ProxySQL: false)
+#   tls_dir         (domyślnie '/etc/mysql/tls') — katalog docelowy.
+#     Wezly Galera obsluguja JEDEN klaster, wiec domyslna sciezka wystarcza.
+#     Wezly ProxySQL sa WSPOLDZIELONE przez cala flote: dwa klastry z tls.mode=full
+#     nadpisalyby sobie ca.pem pod ta sama sciezka, a ProxySQL zaufalby CA tego,
+#     kto uruchomil f7 jako ostatni. Dlatego f7 podaje sciezke per klaster.
 ---
 # audit: `copy` rozwiazuje relatywny `src` wzgledem katalogu PLAYBOOKA, wiec
 # repo-relatywne referencje z cluster.yml (np. "tests/lab/tls/ca.pem", tak jak
@@ -33,7 +38,7 @@
 # prywatny zostaje 0600 w katalogu 0750 ponizej.
 - name: "TLS: zapewnij przechodni katalog nadrzedny"
   ansible.builtin.file:
-    path: /etc/mysql
+    path: "{{ (tls_dir | default('/etc/mysql/tls')) | dirname }}"
     state: directory
     owner: root
     group: root
@@ -41,7 +46,7 @@
 
 - name: "TLS: utwórz katalog na certyfikaty"
   ansible.builtin.file:
-    path: /etc/mysql/tls
+    path: "{{ tls_dir | default('/etc/mysql/tls') }}"
     state: directory
     owner: "{{ tls_file_owner | default('mysql') }}"
     group: "{{ tls_file_owner | default('mysql') }}"
@@ -50,7 +55,7 @@
 - name: "TLS: skopiuj CA"
   ansible.builtin.copy:
     src: "{{ tls_ca_src }}"
-    dest: /etc/mysql/tls/ca.pem
+    dest: "{{ tls_dir | default('/etc/mysql/tls') }}/ca.pem"
     owner: "{{ tls_file_owner | default('mysql') }}"
     group: "{{ tls_file_owner | default('mysql') }}"
     mode: "0644"
@@ -59,7 +64,7 @@
 - name: "TLS: skopiuj certyfikat serwera"
   ansible.builtin.copy:
     src: "{{ tls_cert_src }}"
-    dest: /etc/mysql/tls/server-cert.pem
+    dest: "{{ tls_dir | default('/etc/mysql/tls') }}/server-cert.pem"
     owner: "{{ tls_file_owner | default('mysql') }}"
     group: "{{ tls_file_owner | default('mysql') }}"
     mode: "0644"
@@ -68,7 +73,7 @@
 - name: "TLS: skopiuj klucz prywatny (0600, tylko gdy potrzebny na węźle)"
   ansible.builtin.copy:
     src: "{{ tls_key_src }}"
-    dest: /etc/mysql/tls/server-key.pem
+    dest: "{{ tls_dir | default('/etc/mysql/tls') }}/server-key.pem"
     owner: "{{ tls_file_owner | default('mysql') }}"
     group: "{{ tls_file_owner | default('mysql') }}"
     mode: "0600"
