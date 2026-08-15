@@ -137,7 +137,7 @@ jobs:
       - name: pyflakes (martwe importy, nieuzywane zmienne, puste f-stringi)
         run: |
           python3 -m pip install -q pyflakes
-          python3 -m pyflakes tests roles/galera_backup/filter_plugins
+          python3 -m pyflakes tests roles/galera_backup/filter_plugins roles/galera_backup/files/galera_backup
 
       - name: Static guards (mass restart, double bootstrap, zero hardcode, conditional env, proxysql tenancy, secret leak, no state latest)
         run: |
