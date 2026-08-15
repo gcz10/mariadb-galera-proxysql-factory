@@ -12,17 +12,27 @@
   become: true
   gather_facts: false
   tasks:
+    # `set -o pipefail` jest tu istotny, nie kosmetyczny: bez niego padniecie
+    # `mariadb` (baza nie odpowiada) konczy sie tym, ze `awk` zwraca PUSTY ciag
+    # z rc=0. Zadanie melduje sukces, a straznik kworum ponizej dostaje pustke
+    # zamiast rozmiaru klastra — przed operacja DESTRUKCYJNA.
     - name: "Cluster size"
       ansible.builtin.shell: >-
+        set -o pipefail &&
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
         "SHOW STATUS WHERE Variable_name='wsrep_cluster_size'" | awk '{print $2}'
+      args:
+        executable: /bin/bash
       register: f13_current_size
       changed_when: false
 
     - name: "Cluster state UUID (odcisk stanu do walidacji planu; audit#18)"
       ansible.builtin.shell: >-
+        set -o pipefail &&
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
         "SHOW STATUS WHERE Variable_name='wsrep_cluster_state_uuid'" | awk '{print $2}'
+      args:
+        executable: /bin/bash
       register: f13_state_uuid
       changed_when: false
 

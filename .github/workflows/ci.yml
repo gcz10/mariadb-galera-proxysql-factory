@@ -162,8 +162,25 @@ jobs:
       - name: JSON schema file valid
         run: python3 -c "import json; json.load(open('clusters/schema/cluster.schema.json')); print('schema JSON valid')"
 
+  # Stan na 2026-08-14: 117 naruszen (bylo 135). Zdjete: martwa konfiguracja roli
+  # `discovery` (meta/defaults/vars nigdy nie ladowane, bo rola nie jest wolana)
+  # oraz bledna klasyfikacja plikow zadan jako playbookow (.ansible-lint kinds).
+  # Naprawione realne: `set -o pipefail` w f13_remove_node_plan — bez niego
+  # padniecie `mariadb` dawalo pusta odpowiedz z rc=0 straznikowi kworum PRZED
+  # operacja destrukcyjna.
+  #
+  # DLACZEGO WCIAZ non-blocking: ze 117 pozostalych 64 to czysta kosmetyka
+  # (40 yaml[line-length] + 24 name[casing]). Blokujacym mozna go uczynic dopiero
+  # gdy zniknie ostatnie `syntax-check[specific]` w f10_backup.yml — regula jest
+  # NIESKIPOWALNA (nie dziala ani skip_list, ani warn_list), a znalezisko to
+  # artefakt narzedzia: `hosts: "{{ backup.scheduler.host }}"` jest nierozwiazywalne
+  # bez `-e @clusters/<name>/cluster.yml`, ktorego ansible-lint nie przyjmuje.
+  # Jedyna droga do zera to `exclude_paths: playbooks/f10_backup.yml`, czyli
+  # wylaczenie lintu na calym playbooku backupu. Zielona plakietka za realna luke
+  # w pokryciu to zly interes — zostaje non-blocking do czasu, az lint dostanie
+  # zmienne klastra.
   lint:
-    name: ansible-lint (non-blocking — debt tracked)
+    name: ansible-lint (non-blocking — 117 naruszen, 64 kosmetyczne)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:

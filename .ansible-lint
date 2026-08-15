@@ -1,0 +1,20 @@
+# Konfiguracja ansible-lint. Kazda pozycja ma uzasadnienie — lista wyjatkow bez
+# powodu zamienia sie w smietnik, do ktorego dopisuje sie wszystko, co przeszkadza.
+
+exclude_paths:
+  - .ansible/            # kolekcje instalowane przez ansible-galaxy, nie nasz kod
+  - .worktrees/          # rownolegle checkouty innych galezi
+
+# Pliki w playbooks/ ktore NIE sa playbookami, tylko listami zadan wlaczanymi
+# przez include_tasks. Bez tej klasyfikacji ansible-lint probuje je parsowac jak
+# playbooki i zglasza syntax-check[specific] na braku klucza `hosts` — blad
+# narzedzia, nie kodu. `playbooks/tasks/` trzyma helpery kanoniczne.
+kinds:
+  - tasks: "playbooks/tasks/*.yml"
+  - tasks: "playbooks/f12_apply_patch.yml"
+  - tasks: "playbooks/tls_certs.yml"
+
+# UWAGA na przyszlosc: `syntax-check` jest w ansible-lint regula NIESKIPOWALNA.
+# Wpisanie jej do `skip_list` nie wycisza znaleziska — wywala cale narzedzie
+# bledem, a przy fladze `-q` wyglada to jak "0 naruszen". Probowalem; licznik
+# spadl ze 135 na 0, co bylo nie sukcesem, tylko lintem, ktory sie nie uruchomil.
