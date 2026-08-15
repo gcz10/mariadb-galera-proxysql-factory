@@ -90,6 +90,12 @@
           Klaster 2-węzłowy bez arbitra (garbd) nie przetrwa awarii jednego węzła — wymaga decyzji/ADR.
           Potwierdź świadomie: -e accept_topology_change=yes
       when: (f13_survivors | length) != (galera.nodes_expected | int)
+    # CELOWO inline, nie `tasks/assert_galera_healthy.yml`. Trzy roznice: (1) mierzy
+    # rozmiar wzgledem `groups['galera'] | length` (inwentarz), nie `nodes_expected`;
+    # (2) `delegate_to` na ocalalego, bo wezel usuwany moze juz nie odpowiadac;
+    # (3) jednorazowy odczyt + assert, bez petli `until` — przed operacja
+    # destrukcyjna czekanie na poprawe stanu jest niepozadane, klaster ma byc
+    # zdrowy JUZ TERAZ albo operacja ma sie nie odbyc.
     - name: "Odczytaj stan klastra przed operacją destrukcyjną"
       ansible.builtin.command:
         argv:

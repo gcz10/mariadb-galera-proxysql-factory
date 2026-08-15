@@ -62,7 +62,7 @@ def main():
         print("  Must resolve: measure write rate in F0 with representative workload")
         return 0  # fog is not a failure — it's an honest unknown
 
-    print(f"PASS: ISC-68 — gcache.size calculated")
+    print("PASS: ISC-68 — gcache.size calculated")
     print(f"  write_rate: {result['write_rate_bps']} bytes/sec")
     print(f"  ist_window: {result['ist_window_min']} minutes")
     print(f"  gcache_bytes: {result['gcache_bytes']}")

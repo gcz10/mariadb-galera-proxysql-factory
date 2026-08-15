@@ -17,7 +17,6 @@ Requires APP/PROXYSQL secrets only if you also run the playbook; the probe itsel
 is read-only (queries wsrep status via the local MariaDB socket).
 """
 
-import glob
 import os
 import re
 import subprocess

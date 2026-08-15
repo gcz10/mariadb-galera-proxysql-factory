@@ -73,35 +73,17 @@
       ansible.builtin.meta: end_host
       when: inventory_hostname != hostvars[groups['proxysql'][0]].f12_patch_canary
     - name: "ISC-52: brama zdrowia PRZED patchem canary (Synced+Primary+size)"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_cluster_size','wsrep_ready')"
-      register: f12_canary_pre
-      until: >-
-        f12_canary_pre.stdout is search('wsrep_local_state\t4')
-        and f12_canary_pre.stdout is search('wsrep_cluster_status\tPrimary')
-        and f12_canary_pre.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
-        and f12_canary_pre.stdout is search('wsrep_ready\tON')
-      retries: 3
-      delay: 5
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "ISC-52: brama zdrowia PRZED patchem canary"
+        health_retries: 3
     - name: "ISC-52: canary — patch (real gdy podano pakiety/komendę; inaczej DRY-RUN)"
       ansible.builtin.include_tasks: f12_apply_patch.yml
     - name: "ISC-52: brama zdrowia canary — Synced+Primary+size"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_cluster_size','wsrep_ready')"
-      register: f12_canary_health
-      until: >-
-        f12_canary_health.stdout is search('wsrep_local_state\t4')
-        and f12_canary_health.stdout is search('wsrep_cluster_status\tPrimary')
-        and f12_canary_health.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
-        and f12_canary_health.stdout is search('wsrep_ready\tON')
-      retries: 24
-      delay: 5
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "ISC-52: brama zdrowia canary PO patchu"
+        health_retries: 24
     - name: "ISC-52: canary zdrowy — kontynuuj rolling"
       ansible.builtin.debug:
         msg: "Canary {{ inventory_hostname }} OK po patch — health stable"
@@ -126,35 +108,17 @@
         inventory_hostname == hostvars[groups['proxysql'][0]].f12_patch_canary
         or inventory_hostname == hostvars[groups['proxysql'][0]].f12_patch_writer
     - name: "ISC-55: brama zdrowia PRZED patchem non-writera (Synced+Primary+size)"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_cluster_size','wsrep_ready')"
-      register: f12_roll_pre
-      until: >-
-        f12_roll_pre.stdout is search('wsrep_local_state\t4')
-        and f12_roll_pre.stdout is search('wsrep_cluster_status\tPrimary')
-        and f12_roll_pre.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
-        and f12_roll_pre.stdout is search('wsrep_ready\tON')
-      retries: 3
-      delay: 5
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "ISC-55: brama zdrowia PRZED patchem non-writera"
+        health_retries: 3
     - name: "ISC-55: patch non-writera (real lub DRY-RUN)"
       ansible.builtin.include_tasks: f12_apply_patch.yml
     - name: "ISC-55: brama zdrowia — STOP rolling jeśli klaster utracił zdrowie"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_cluster_size','wsrep_ready')"
-      register: f12_roll_health
-      until: >-
-        f12_roll_health.stdout is search('wsrep_local_state\t4')
-        and f12_roll_health.stdout is search('wsrep_cluster_status\tPrimary')
-        and f12_roll_health.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
-        and f12_roll_health.stdout is search('wsrep_ready\tON')
-      retries: 24
-      delay: 5
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "ISC-55: brama zdrowia PO patchu non-writera (STOP przy utracie zdrowia)"
+        health_retries: 24
 
 # === Play 3: patch WRITERA (serial:1, ostatni) ===
 - name: "F12 — patch writera (serial:1, ostatni, z bramą zdrowia)"
@@ -174,35 +138,17 @@
       ansible.builtin.meta: end_host
       when: inventory_hostname != hostvars[groups['proxysql'][0]].f12_patch_writer
     - name: "ISC-55: brama zdrowia PRZED patchem writera (Synced+Primary+size)"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_cluster_size','wsrep_ready')"
-      register: f12_writer_pre
-      until: >-
-        f12_writer_pre.stdout is search('wsrep_local_state\t4')
-        and f12_writer_pre.stdout is search('wsrep_cluster_status\tPrimary')
-        and f12_writer_pre.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
-        and f12_writer_pre.stdout is search('wsrep_ready\tON')
-      retries: 3
-      delay: 5
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "ISC-55: brama zdrowia PRZED patchem writera"
+        health_retries: 3
     - name: "ISC-55: patch writera (real lub DRY-RUN)"
       ansible.builtin.include_tasks: f12_apply_patch.yml
     - name: "ISC-55: brama zdrowia writera"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_cluster_size','wsrep_ready')"
-      register: f12_writer_patch_health
-      until: >-
-        f12_writer_patch_health.stdout is search('wsrep_local_state\t4')
-        and f12_writer_patch_health.stdout is search('wsrep_cluster_status\tPrimary')
-        and f12_writer_patch_health.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
-        and f12_writer_patch_health.stdout is search('wsrep_ready\tON')
-      retries: 24
-      delay: 5
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "ISC-55: brama zdrowia writera PO patchu"
+        health_retries: 24
 
 # === Play 4: ISC-57 ProxySQL rolling patch (serial:1, osobno) ===
 - name: "F12 — ISC-57 ProxySQL rolling patch (serial:1, osobno)"

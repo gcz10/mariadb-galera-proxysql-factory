@@ -3,9 +3,8 @@ import json
 import hashlib
 import unittest
 import tempfile
-import shutil
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from tests.unit.galera_backup_testlib import load_galera_backup_module
@@ -139,7 +138,7 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
 
             with patch.object(backend, "_get_mount_info", return_value=fake_mount):
                 backend.preflight()
-                pub = backend.publish(art)
+                backend.publish(art)
 
                 final_dir = mount_path / "claude-r10b" / "galera-claude-r10b-20260729-120000"
                 self.assertTrue(final_dir.exists())
@@ -478,7 +477,6 @@ class ManagedSMBTests(unittest.TestCase):
         )
 
         cred_file_created = []
-        cred_file_removed = []
 
         def fake_exec_mount(cmd):
             mount_options = cmd[cmd.index("-o") + 1].split(",")

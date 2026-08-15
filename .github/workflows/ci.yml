@@ -114,10 +114,30 @@ jobs:
               echo "syntax FAIL: $pb"; cat /tmp/sx.out; rc=1
             fi
           done
+          # `playbooks/*.yml` nie schodzi do `playbooks/tasks/`, a `--syntax-check`
+          # nie wchodzi w `include_tasks` (include dynamiczny). Bez tego kroku
+          # zepsuty helper przechodzi CI i wywala sie dopiero w runtime — od razu
+          # we wszystkich 11 bramach zdrowia, ktore go wlaczaja.
+          for tf in playbooks/tasks/*.yml; do
+            [ -f "$tf" ] || continue
+            if python3 -c "import sys,yaml; d=yaml.safe_load(open(sys.argv[1])); sys.exit(0 if isinstance(d,list) else 1)" "$tf"; then
+              echo "task-file OK: $tf"
+            else
+              echo "task-file FAIL (nie jest lista zadan): $tf"; rc=1
+            fi
+          done
           exit $rc
 
+      # compileall tylko parsuje — przepuszcza martwe importy, zduplikowane stale
+      # i f-stringi bez placeholderow. Dokladnie ten brud przeszedl w commicie
+      # 439218a i wyszedl dopiero w review. pyflakes to lapie.
       - name: python compile (tests + validation)
         run: python3 -m compileall -q tests
+
+      - name: pyflakes (martwe importy, nieuzywane zmienne, puste f-stringi)
+        run: |
+          python3 -m pip install -q pyflakes
+          python3 -m pyflakes tests roles/galera_backup/filter_plugins
 
       - name: Static guards (mass restart, double bootstrap, zero hardcode, conditional env, proxysql tenancy, secret leak, no state latest)
         run: |

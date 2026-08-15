@@ -4,8 +4,8 @@ import json
 import unittest
 import tempfile
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch
+from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 from tests.unit.galera_backup_testlib import load_galera_backup_module
 

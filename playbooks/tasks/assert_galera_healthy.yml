@@ -1,0 +1,35 @@
+---
+# Kanoniczna brama zdrowia klastra Galera (ISC-51, ISC-52, ISC-55).
+#
+# Asertuje jednocześnie:
+#   1. wsrep_local_state    == 4 (Synced)
+#   2. wsrep_cluster_status == Primary
+#   3. wsrep_ready          == ON
+#   4. wsrep_cluster_size   == expected_size
+#
+# Parametry (wszystkie przekazuj JAWNIE przez `vars:` w include_tasks):
+#   health_gate_name — nazwa zadania widoczna w logu; bez niej bramy są
+#                      nierozróżnialne w PLAY RECAP.
+#   expected_size    — oczekiwany rozmiar klastra; domyślnie galera.nodes_expected.
+#   health_retries   — liczba prób. DOMYŚLNIE 3, czyli „klaster ma już być zdrowy".
+#                      Wariant długiego oczekiwania (24/30) MUSI być podany jawnie.
+#                      Odwrotna domyślność (24) jest pułapką: literówka w nazwie
+#                      zmiennej po cichu wydłużałaby bramę zamiast ją zaostrzyć,
+#                      a wtedy zawieszony węzeł czeka dwie minuty zamiast paść.
+#   health_delay     — odstęp między próbami w sekundach (domyślnie 5).
+#   mariadb_socket   — ścieżka gniazda; domyślnie /var/lib/mysql/mysql.sock.
+
+- name: "{{ health_gate_name | default('Brama zdrowia Galera (Synced + Primary + ready + full size)') }}"
+  ansible.builtin.shell: >-
+    mariadb --socket={{ mariadb_socket | default('/var/lib/mysql/mysql.sock') }} -N -B -e
+    "SHOW STATUS WHERE Variable_name IN
+    ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+  register: _galera_health
+  until: >-
+    _galera_health.stdout is search('wsrep_local_state\t4')
+    and _galera_health.stdout is search('wsrep_cluster_status\tPrimary')
+    and _galera_health.stdout is search('wsrep_ready\tON')
+    and _galera_health.stdout is search('wsrep_cluster_size\t' ~ ((expected_size | default(galera.nodes_expected)) | int | string))
+  retries: "{{ health_retries | default(3) | int }}"
+  delay: "{{ health_delay | default(5) | int }}"
+  changed_when: false

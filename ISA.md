@@ -5,9 +5,9 @@ effort: comprehensive
 effort_source: explicit
 phase: build
 progress: 68/68
-# 66 kryteriow zweryfikowanych na biezacym drzewie; ISC-1 i ISC-2 opieraja sie na
-# dowodzie historycznym z odbudowy od zera 2026-08-02 (patrz Verification) — swieza
-# rewalidacja po zmianach tej sesji wymaga okna serwisowego na pelny converge.
+# 67 kryteriow zweryfikowanych na biezacym drzewie (ISC-2 zamkniety swiezym
+# converge 2026-08-14: changed=0 na 6/6). ISC-1 opiera sie na dowodzie
+# historycznym z odbudowy od zera 2026-08-02 — powtorzenie wymaga teardownu.
 mode: iterate
 started: "2026-07-22T15:27:04Z"
 updated: "2026-08-14T23:10:00Z"
@@ -1112,8 +1112,8 @@ d
 - ISC-12 / ISC-13: PASS — `probe-no-double-bootstrap.py`: jedyny play wykonujący bootstrap to `playbooks/bootstrap.yml`, jest single-host-safe (`serial: 1` + assert `ansible_play_hosts == 1`) i confirm-gated; żaden inny playbook nie wywołuje `--wsrep-new-cluster` w `shell`/`command`, więc `site.yml` nie może go uruchomić ubocznie. Sonda uruchomiona 2026-08-14.
 - ISC-44: PASS — na `finalclaude-r9` (`tls.mode=full`) połączenie klienta z obcym CA jest odrzucane przez serwer: `mariadb --ssl-ca=<rogue> --ssl-verify-server-cert -h 192.168.1.150` → `ERROR 2026 (HY000): TLS/SSL error: self-signed certificate in certificate chain`. Certyfikat rogue generowany jednorazowo na hoście i kasowany. Zweryfikowana jest klauzula „niezaufany certyfikat"; wariant „nieważny (wygasły)" wymagałby podmiany certyfikatu serwera i nie był testowany. 2026-08-14.
 - ISC-1: PASS (dowód historyczny) — flota `finalclaude` została zbudowana OD ZERA na czystych VM Rocky 9 i Rocky 10 i przeszła komplet 8 kryteriów akceptacji Fazy 5 bez ręcznej interwencji: `docs/plans/from-scratch-revalidation.md:3-4` („✅ WYKONANY 2026-08-02"). Że był to realny przebieg, a nie papier, dowodzi 5 defektów możliwych do wykrycia WYŁĄCZNIE przy budowie od zera (`svcaccs: null` na świeżym MinIO, zaszyty `rnode1` w sondzie restore, nieaktualna lista reguł alertowych, RAM trafiający w próg preflightu, brak pojęcia własności warstwy współdzielonej w f2/f11) — commity `7e1429e`, `9eed120`, `a9ab24a`. 2026-08-02.
-- ISC-2: PASS (dowód historyczny) — `docs/plans/rocky10-dual-platform-plan.md:222`: „`f2_install`/`site`/`firewall` changed=0 na 7/7 EL9"; tamże `:286`: „idempotencja — drugi `cluster-deploy`: `changed=0` na 7/7". 2026-08-02.
-- OTWARTE (nie luka dowodowa, lecz świeżość) — ISC-1 i ISC-2 opierają się na przebiegu z 2026-08-02, sprzed zmian tej sesji (PR #3 drop-iny systemd + `LimitNOFILE`/`TimeoutStartSec`, PR #6 `wsrep_desync` w runnerze backupu, PR #7 sonda firewalld). Świeża rewalidacja na bieżącym drzewie nie została wykonana. Trybu `--check` NIE da się użyć jako substytutu i to jest zmierzone, nie założone: 2026-08-14 na `finalclaude-r9` brama zdrowia Galery przerywa play w check mode komunikatem `Command would have run if not in check mode` (`failed=1`), więc check mode nie orzeka o idempotencji. Do zamknięcia potrzebny pełny converge obu klastrów w oknie serwisowym.
+- ISC-2: PASS (zmierzone świeżo na bieżącym drzewie) — 2026-08-14, po zmergowaniu PR #5/#6/#7, realny `site.yml` uruchomiony DWUKROTNIE na obu klastrach. Pierwszy przebieg nanosi zaległy stan (`changed=2` na węzeł: drop-iny systemd z PR #3), drugi raportuje **`changed=0` na 6/6 węzłów Galery** (finalclaude-r9: f9g1-3; finalclaude-r10: f10g1-3), `failed=0`, `unreachable=0`. Po converge klastry nietknięte: `wsrep_cluster_size=3`, `Synced` na 6/6; VIP 192.168.1.133 nadal na `fcp1`; limity z PR #3 obowiązują na żywych procesach (`/proc/<pid>/limits`: `nofile=1048576` dla mariadbd i proxysql). Dowód historyczny (poprzedni): `docs/plans/rocky10-dual-platform-plan.md:222` i `:286` — `changed=0` na 7/7, 2026-08-02.
+- OTWARTE — ISC-1 pozostaje na dowodzie historycznym z 2026-08-02: budowy od zera nie da się powtórzyć na działającej flocie bez teardownu, a ten wymaga poświadczeń Proxmoxa i osobnej decyzji. ISC-2 został zamknięty świeżym pomiarem (wpis wyżej), więc `--check` nie jest już potrzebny jako substytut — dla porządku pozostaje ustalenie z 2026-08-14, że nie nadaje się na taki substytut: brama zdrowia Galery przerywa play w check mode komunikatem `Command would have run if not in check mode` (`failed=1`).
 
 
 ## Blockers

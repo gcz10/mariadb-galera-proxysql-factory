@@ -238,6 +238,11 @@
       delay: 5
       changed_when: false
 
+    # CELOWO inline, nie `tasks/assert_galera_healthy.yml`. Helper asertuje
+    # `wsrep_cluster_size == expected_size`, a dolaczanie wezla pilnuje INNEGO
+    # niezmiennika: `size >= galera_node_idx` (klaster rosnie stopniowo, wiec
+    # przy dolaczaniu drugiego z trzech wezlow pelny rozmiar jeszcze nie istnieje).
+    # Podstawienie helpera zamienioby dzialajaca brame w taka, ktora zawsze pada.
     - name: "Weryfikuj rozmiar i stan klastra po dołączeniu"
       ansible.builtin.shell: >
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
