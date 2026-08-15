@@ -1,13 +1,17 @@
 ---
-# newclaude-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
+# newclaude2-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
 #
-# KLASTER KONTROLNY. Powstal, zeby sprawdzic, czy repozytorium nadal odtwarza
-# dzialajacy klaster OD ZERA po zmianach, ktore weszly od 2026-08-02: runda 3
-# TLS, wsrep_desync w runnerze backupu, dekompozycja runnera, drop-iny systemd.
-# `finalclaude-r9` jest na czas tego cwiczenia WYLACZONY (nie skasowany) i moze
-# wrocic — dlatego kazdy identyfikator ponizej jest z nim rozlaczny.
+# KLASTER KONTROLNY, DRUGI PRZEBIEG. Pierwszy (`newclaude-r9`, 2026-08-15)
+# zbudowal sie od zera i znalazl szesc defektow: brak generatora certow TLS,
+# kolizje globalnego CA na wspoldzielonym ProxySQL, nieczytelna dla uslugi
+# sciezke CA, martwa backreferencje Jinja w bloku YAML (zadanie nigdy nie bylo
+# idempotentne) oraz trzy zalozenia sciezki agentless w F11. Wszystkie
+# naprawione. Ten klaster sprawdza, czy poprawki trzymaja przy budowie od zera
+# — tym razem LACZNIE z monitoringiem, ktorego pierwszy przebieg nie przeszedl.
+# `finalclaude-r9` jest WYLACZONY (nie skasowany) i moze wrocic — dlatego kazdy
+# identyfikator ponizej jest z nim rozlaczny.
 #
-# Adresacja: ncg1-3 na .160-.162 (VMID 9430-9432), restore ncr1 .163 (9433).
+# Adresacja: n2g1-3 na .160-.162 (VMID 9430-9432), restore n2r1 .163 (9433).
 #
 # WARSTWA WSPOLNA (terraform/shared/): ProxySQL fcp1/fcp2 .131/.132, VIP .133,
 # infra .130 (PMM + MinIO). TA SAMA para ProxySQL obsluguje finalclaude-r10.
@@ -15,7 +19,7 @@
 # ROZLACZNOSC NA WSPOLNYM ProxySQL — bez niej drugi klaster kasuje pierwszego:
 #   hostgroup_base: 210  (writer 210, backup 220, reader 230, offline 240)
 #                        finalclaude-r10 uzywa domyslnych 10/20/30/40
-#   app_user: app_user_nc9
+#   app_user: app_user_n2
 #                        wpis w mysql_users jest globalny, a jego
 #                        default_hostgroup wybiera klaster
 # Pilnuje tego tests/validation/probe-proxysql-tenancy.py.
@@ -26,16 +30,19 @@
 # TLS jest WLACZONY na tym klastrze, a finalclaude-r10 zostaje plaintextem.
 # Jest to mozliwe, bo `use_ssl` to kolumna PER SERWER w `mysql_servers`, a kazde
 # zadanie TLS w f7_proxysql jest bramkowane wlasnym `tls.mode` klastra — klaster
-# bez TLS nie czyta ani nie czysci globalnego CA.
+# bez TLS nie czyta ani nie czysci CA sasiada.
 #
-# Ograniczenie dotyczy dopiero DRUGIEGO klastra z TLS: f7 zapisuje CA do globalnej
-# `mysql-ssl_p2s_ca` pod stala sciezka, wiec nadpisalby CA pierwszego. Pilnuje tego
-# probe-proxysql-tenancy.py. To NIE jest wymog wspolnego CA — ProxySQL >= 2.6.0 ma
-# tabele `mysql_servers_ssl_params` z ssl_ca per serwer (dopasowanie: hostname+port+
-# user, potem hostname+port, na koncu zmienne globalne); f7 z niej nie korzysta.
+# DWA klastry z tls.mode=full na tej samej parze ProxySQL sa juz bezpieczne.
+# Do 2026-08-15 NIE byly: f7 zapisywalo CA do GLOBALNEJ zmiennej
+# `mysql-ssl_p2s_ca` pod stala sciezka, wiec drugi klaster cicho nadpisywal CA
+# pierwszego. Teraz f7 pisze wiersze `mysql_servers_ssl_params` (ssl_ca per
+# hostname+port+username, ProxySQL >= 2.6.0), a CA lezy pod
+# /etc/mysql/tls/<klaster>/ca.pem — sciezka per klaster i przechodnia dla
+# uzytkownika `proxysql`. Pilnuje tego probe-proxysql-tenancy.py: sonda sprawdza
+# obecnosc mechanizmu per-serwer, nie tylko brak kolizji miedzy klastrami.
 
 cluster:
-  name: "newclaude-r9"
+  name: "newclaude2-r9"
   environment: "laboratory"
   profile: "laboratory"
   automation_release: "0.1.0"
@@ -51,7 +58,7 @@ versions:
 galera:
   # wsrep_cluster_name jest czescia tozsamosci Primary Component — kolizja nazw
   # skleilaby dwa niezalezne klastry w jeden.
-  cluster_name: "nc9_galera"
+  cluster_name: "n2_galera"
   nodes_expected: 3
 
 proxysql:
@@ -59,7 +66,7 @@ proxysql:
   max_writers: 1
   read_write_split_enabled: false
   hostgroup_base: 210
-  app_user: "app_user_nc9"
+  app_user: "app_user_n2"
   # Konsument warstwy wspolnej: NIE instaluje pakietow na fcp1/fcp2/fcinfra ani
   # nie zarzadza VIP-em. Rejestruje tylko wlasne hostgroupy i uzytkownika przez
   # f7. Ownerem tej pary jest finalclaude-r10 — i on postawil te wezly na EL10,
@@ -79,9 +86,9 @@ tls:
   # zanim mariadbd przeladuje wsrep_provider_options.
   socket_dynamic: false
   certificate_source: "file"
-  ca_reference: "tests/lab/tls/nc9/ca.pem"
-  certificate_reference: "tests/lab/tls/nc9/server-cert.pem"
-  private_key_reference: "tests/lab/tls/nc9/server-key.pem"
+  ca_reference: "tests/lab/tls/n2/ca.pem"
+  certificate_reference: "tests/lab/tls/n2/server-cert.pem"
+  private_key_reference: "tests/lab/tls/n2/server-key.pem"
   # Wymuszanie TLS na WSZYSTKICH polaczeniach TCP to osobny krok, nie czesc tej
   # migracji: ProxySQL laczy sie do backendow z use_ssl=0, a mysqld_exporter i
   # agent QAN ida TCP na 127.0.0.1:3306 (nie socketem, wiec wyjatek dla socketa
@@ -134,11 +141,11 @@ backup:
   scheduler:
     mode: "cron"
     # Nie moze byc aktywnym writerem ProxySQL — runner odrzuca backup z writera (ISC-39).
-    host: "ncg1"
+    host: "n2g1"
     timezone: "UTC"
   s3:
     endpoint: "192.168.1.130:9000"
-    bucket: "nc9-galera-backups"          # rozlaczny z fc9/fc10-galera-backups
+    bucket: "n2-galera-backups"          # rozlaczny z fc9/fc10-galera-backups
     secure: false
 
 monitoring:
@@ -146,7 +153,7 @@ monitoring:
     server_url: "https://192.168.1.130"
     agent_id: "pmm-server"
     # Namespace regul alertow i folderow w PMM — musi byc rozlaczny z fc10-galera.
-    cluster_name: "nc9-galera"
+    cluster_name: "n2-galera"
     validate_certs: false
     credentials_revision: 3
   # Wezly Galera tego klastra dostaja lokalnego pmm-agenta (porownanie z r10,

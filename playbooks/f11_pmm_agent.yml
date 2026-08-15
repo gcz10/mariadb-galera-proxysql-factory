@@ -62,23 +62,28 @@
       ansible.builtin.assert:
         that: pmm_admin_password | length > 0
         fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium."
+
+    # Eksportery tworzone nizej przez API PMM sa walidowane POLACZENIEM: PMM
+    # loguje sie jako pmm_monitor i odrzuca zadanie golym HTTP 400, gdy konta
+    # nie ma. f11_pmm_client.yml tworzy je tez, ale biegnie PO tym playbooku,
+    # wiec na swiezym klastrze bylo za pozno.
+    #
+    # WYLACZNIE @'%'. Konto @localhost jest w tym repo uznane za legacy i
+    # f11_pmm_client.yml:677 je kasuje — tworzenie go tutaj dawalo ping-pong
+    # (agent tworzy, client kasuje) i F11 nigdy nie zbiegalo do changed=0.
+    # Eksporter laczy sie po TCP na 127.0.0.1, co `%` pokrywa.
     - name: "Zapewnij konto bazy danych pmm_monitor"
       ansible.mysql.mysql_user:
         name: pmm_monitor
         password: "{{ lookup('ansible.builtin.env', 'PMM_MONITOR_PASSWORD') }}"
-        host: "{{ item }}"
+        host: "%"
         priv: "*.*:PROCESS,REPLICATION CLIENT,SELECT,SHOW DATABASES,RELOAD"
         state: present
         login_unix_socket: /var/lib/mysql/mysql.sock
-      loop:
-        - "localhost"
-        - "127.0.0.1"
-        - "%"
       when:
         - inventory_hostname in groups.get('galera', [])
         - galera_node_idx | default(1) == 1
       no_log: true
-
 
     - name: "Repozytorium Percony"
       ansible.builtin.dnf:

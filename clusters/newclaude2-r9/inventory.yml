@@ -1,9 +1,9 @@
 ---
-# newclaude-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
+# newclaude2-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
 # Logowanie jako root przez klucz cloud-init; become:true jest wtedy no-opem.
 #
-# VM Galera i restore tworzy terraform/newclaude-r9/:
-#   ncg1-3 (VMID 9430-9432, IP .160-.162), ncr1 (9433, .163).
+# VM Galera i restore tworzy terraform/newclaude2-r9/:
+#   n2g1-3 (VMID 9430-9432, IP .160-.162), n2r1 (9433, .163).
 # ProxySQL fcp1/fcp2 (.131/.132) i infra fcinfra (.130) NALEZA do terraform/shared/
 # i sa tu tylko deklarowane — ten katalog ich nie tworzy ani nie niszczy. VIP .133.
 #
@@ -22,15 +22,15 @@ all:
       vars:
         galera_role: "galera"
       hosts:
-        ncg1:
+        n2g1:
           ansible_host: "192.168.1.160"
           galera_node_idx: 1
           galera_node_address: "192.168.1.160"
-        ncg2:
+        n2g2:
           ansible_host: "192.168.1.161"
           galera_node_idx: 2
           galera_node_address: "192.168.1.161"
-        ncg3:
+        n2g3:
           ansible_host: "192.168.1.162"
           galera_node_idx: 3
           galera_node_address: "192.168.1.162"
@@ -52,7 +52,7 @@ all:
       vars:
         restore_role: "restore"
       hosts:
-        ncr1:
+        n2r1:
           ansible_host: "192.168.1.163"
           restore_node_address: "192.168.1.163"
 
