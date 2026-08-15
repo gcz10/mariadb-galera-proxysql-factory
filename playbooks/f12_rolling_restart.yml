@@ -85,19 +85,10 @@
       when: inventory_hostname == hostvars[groups['proxysql'][0]].f12_writer_host
 
     - name: "ISC-50: status wsrep PRZED restartem"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
-      register: wsrep_before
-      until: >-
-        wsrep_before.stdout is search('wsrep_local_state\t4')
-        and wsrep_before.stdout is search('wsrep_cluster_status\tPrimary')
-        and wsrep_before.stdout is search('wsrep_ready\tON')
-        and wsrep_before.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
-      retries: 3
-      delay: 5
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "ISC-50: status wsrep PRZED restartem"
+        health_retries: 3
 
     - name: "ISC-50: restartuj MariaDB przez systemd"
       ansible.builtin.systemd_service:
@@ -131,23 +122,14 @@
         timeout: "{{ galera_socket_wait_timeout | default(300) | int }}"
 
     - name: "ISC-51: brama zdrowia — Synced + Primary + pełny size (przed kolejnym węzłem)"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
-      register: wsrep_after
-      until: >-
-        wsrep_after.stdout is search('wsrep_local_state\t4')
-        and wsrep_after.stdout is search('wsrep_cluster_status\tPrimary')
-        and wsrep_after.stdout is search('wsrep_ready\tON')
-        and wsrep_after.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
-      retries: 30
-      delay: 5
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "ISC-51: brama zdrowia po restarcie (przed kolejnym węzłem)"
+        health_retries: 30
 
     - name: "ISC-51: potwierdzenie zdrowia węzła"
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }} rejoined: {{ wsrep_after.stdout | replace('\t',' = ') | replace('\n',', ') }}"
+        msg: "{{ inventory_hostname }} rejoined: {{ _galera_health.stdout | replace('\t',' = ') | replace('\n',', ') }}"
 
 # === Play 2: restart WRITERA (serial:1, na końcu) ===
 - name: "F12 — restart writera Galera (serial:1, ostatni)"
@@ -167,19 +149,10 @@
       when: inventory_hostname != hostvars[groups['proxysql'][0]].f12_writer_host
 
     - name: "ISC-50: brama zdrowia PRZED restartem writera"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
-      register: wsrep_writer_before
-      until: >-
-        wsrep_writer_before.stdout is search('wsrep_local_state\t4')
-        and wsrep_writer_before.stdout is search('wsrep_cluster_status\tPrimary')
-        and wsrep_writer_before.stdout is search('wsrep_ready\tON')
-        and wsrep_writer_before.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
-      retries: 3
-      delay: 5
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "ISC-50: brama zdrowia PRZED restartem writera"
+        health_retries: 3
 
     - name: "ISC-50: restartuj MariaDB writera przez systemd"
       ansible.builtin.systemd_service:
@@ -213,20 +186,11 @@
         timeout: "{{ galera_socket_wait_timeout | default(300) | int }}"
 
     - name: "ISC-51: brama zdrowia writera — Synced + Primary + pełny size"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
-      register: wsrep_writer_after
-      until: >-
-        wsrep_writer_after.stdout is search('wsrep_local_state\t4')
-        and wsrep_writer_after.stdout is search('wsrep_cluster_status\tPrimary')
-        and wsrep_writer_after.stdout is search('wsrep_ready\tON')
-        and wsrep_writer_after.stdout is search('wsrep_cluster_size\t' ~ (expected_size | int | string))
-      retries: 30
-      delay: 5
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "ISC-51: brama zdrowia writera po restarcie"
+        health_retries: 30
 
     - name: "ISC-51: potwierdzenie zdrowia writera"
       ansible.builtin.debug:
-        msg: "Writer {{ inventory_hostname }} rejoined: {{ wsrep_writer_after.stdout | replace('\t',' = ') | replace('\n',', ') }}"
+        msg: "Writer {{ inventory_hostname }} rejoined: {{ _galera_health.stdout | replace('\t',' = ') | replace('\n',', ') }}"

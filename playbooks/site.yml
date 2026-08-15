@@ -152,21 +152,10 @@
       failed_when: false
       when: use_systemd
     - name: "Brama zdrowia przed zaplanowanym restartem konfiguracji"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
-      register: mariadb_health_before_config_restart
-      until: >-
-        mariadb_health_before_config_restart.stdout is search('wsrep_local_state\t4')
-        and mariadb_health_before_config_restart.stdout is search('wsrep_cluster_status\tPrimary')
-        and mariadb_health_before_config_restart.stdout is search('wsrep_ready\tON')
-        and mariadb_health_before_config_restart.stdout is search(
-          'wsrep_cluster_size\t' ~ (galera.nodes_expected | int | string)
-        )
-      retries: 3
-      delay: 5
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "Brama zdrowia PRZED restartem konfiguracji (Synced+Primary+size)"
+        health_retries: 3
       when:
         - use_systemd
         - config_result.changed or ((tls_files_changed | default(false)) | bool)
@@ -214,6 +203,12 @@
         - use_systemd
         - (mariadb_active | default({})).rc | default(1) == 0
 
+    # CELOWO inline, nie `tasks/assert_galera_healthy.yml`. To handler, czyli inny
+    # kontekst wykonania niz zadanie: `include_tasks` w handlerze dziala, ale
+    # dowodem poprawnosci byloby dopiero wywolanie handlera na zywym klastrze —
+    # czyli restart MariaDB w sciezce produkcyjnej. Konsolidacja jednej bramy nie
+    # jest warta rewalidacji sciezki restartu. Pozostale 11 bram tej samej klasy
+    # (f12_patch x6, f12_rolling_restart x4, site pre-restart x1) korzysta z helpera.
     - name: "Verify MariaDB health after config restart"
       ansible.builtin.shell: >-
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e

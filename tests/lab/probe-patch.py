@@ -48,9 +48,15 @@ def main():
         if "canary" in name and "galera" in hosts:
             canary_found = True
 
-        # ISC-55: health gate on galera phases
-        if "galera" in hosts and "until" in text:
-            if all(v in text for v in HEALTH_GATE_VARS):
+        # ISC-55: brama zdrowia na fazach galera. Liczymy OBIE formy: zapytanie
+        # inline z `until:` oraz include kanonicznego helpera. Po konsolidacji
+        # bramy zyja w tasks/assert_galera_healthy.yml i wariant inline przestal
+        # wystepowac w tym playbooku — sonda liczaca tylko inline meldowala
+        # "found 0" i przestala pilnowac czegokolwiek.
+        if "galera" in hosts:
+            if "assert_galera_healthy" in text:
+                health_gates += text.count("assert_galera_healthy")
+            elif "until" in text and all(v in text for v in HEALTH_GATE_VARS):
                 health_gates += 1
 
         # ISC-57: ProxySQL serial:1 + SAVE TO DISK
