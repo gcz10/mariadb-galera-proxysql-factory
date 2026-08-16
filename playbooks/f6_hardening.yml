@@ -27,9 +27,12 @@
       ansible.builtin.shell: |-
         set -o pipefail
         stmts=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SELECT CONCAT('DROP USER IF EXISTS ', QUOTE(user), '@', QUOTE(host), ';') FROM mysql.user WHERE user=''")
-        if [ -n "$stmts" ]; then echo "$stmts" | mariadb --socket=/var/lib/mysql/mysql.sock; fi
+        if [ -n "$stmts" ]; then echo "$stmts" | mariadb --socket=/var/lib/mysql/mysql.sock && echo DROPPED; fi
       register: anon_cleanup
-      changed_when: "'DROP USER' in anon_cleanup.stdout | default('')"
+      # Marker, nie tresc SQL: instrukcje DROP ida POTOKIEM do klienta, wiec stdout
+      # jest puste nawet gdy konta znikaja. Poprzedni warunek ('DROP USER' in stdout)
+      # nie strzelal nigdy: F6 kasowal anonimowe konta i meldowal `ok`.
+      changed_when: "'DROPPED' in anon_cleanup.stdout | default('')"
 
     - name: "ISC-40: usuń testową bazę danych (jeśli istnieje)"
       ansible.builtin.shell: |
