@@ -6,7 +6,7 @@
         cluster-infra cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan \
         cluster-drift cluster-remove-node-plan cluster-remove-node cluster-alerts \
-        lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test lab-failover-hard-test \
+        lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test lab-failover-hard-test cluster-tls-rotate \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke \
@@ -194,6 +194,15 @@ lab-failover-test:  ## F9 — test failover writera (ISC-27/28, lab-only, destru
 lab-failover-hard-test:  ## F9 — failover przy TWARDEJ utracie maszyny (sysrq, lab-only, destrukcyjny)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) FAILOVER_MODE=hard tests/lab/chaos-failover.py
+
+# Rotacja materialu TLS bez przestoju, wg galera-security/reloading-tls-
+# certificates-without-downtime.md: atomowa podmiana plikow + FLUSH SSL per wezel
+# (przeladowuje kontekst serwera ORAZ providera wsrep) + dowod, ze wezel serwuje
+# juz nowy certyfikat. Zadnego restartu i zadnego okna serwisowego.
+# Zmiana SCIEZEK do certow to inna operacja — idzie przez server.cnf i cluster-deploy.
+cluster-tls-rotate:  ## Rotuj certyfikaty TLS Galery bez przestoju (FLUSH SSL, serial:1)
+	$(cluster_guard)
+	ansible-playbook playbooks/tls_rotate.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-split-brain-test:  ## F9 — test split-brain / partycji sieci (ISC-30, lab-only, destrukcyjny)
 	$(TARGET_ENV) tests/lab/chaos-split-brain.py

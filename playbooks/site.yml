@@ -116,14 +116,19 @@
       register: tls_deploy_result
       when: (tls | default({})).mode | default('disabled') == 'full'
 
-    - name: "Zaplanuj bezpieczny restart po rotacji certyfikatu TLS"
-      ansible.builtin.debug:
-        msg: "Pliki TLS zmienione; restart MariaDB zostanie wykonany po bramie zdrowia."
-      changed_when: (tls_files_changed | default(false)) | bool
-      notify:
-        - "Restart MariaDB (systemd, on config change)"
-        - "Verify MariaDB health after config restart"
-      when: (tls | default({})).mode | default('disabled') == 'full'
+    # Rotacja certu NIE wymaga restartu. Dokumentacja Galery ma na to osobna
+    # strone (galera-security/reloading-tls-certificates-without-downtime.md):
+    # podmien pliki atomowo pod tymi samymi sciezkami i wykonaj `FLUSH SSL`,
+    # ktore przeladowuje kontekst TLS serwera ORAZ providera wsrep. "Not dynamic"
+    # z dokumentacji dotyczy WARTOSCI zmiennych (ssl_cert=...), nie zawartosci
+    # plikow — a te zmieniaja sie razem z server.cnf, wiec przypadek zmiany
+    # sciezek i tak lapie restart po `config_result.changed`.
+    #
+    # Wczesniej rotacja PEM restartowala kazdy wezel Galery: kilkanascie sekund
+    # niedostepnosci wezla za operacje, ktora dokumentacja opisuje jako
+    # bezprzestojowa. `FLUSH SSL` wykonujemy dopiero po ustaleniu, ze serwer
+    # faktycznie dziala (ponizej), bo na swiezym wezle przed bootstrapem
+    # nie ma do czego sie podlaczyc.
 
     - name: "Inicjalizuj datadir (jeśli pusty)"
       ansible.builtin.command: mariadb-install-db --user=mysql --datadir=/var/lib/mysql
@@ -151,6 +156,21 @@
       changed_when: false
       failed_when: false
       when: use_systemd
+
+    - name: "TLS: przeladuj certyfikaty bez restartu (FLUSH SSL)"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - FLUSH SSL
+      changed_when: true
+      when:
+        - (tls | default({})).mode | default('disabled') == 'full'
+        - (tls_files_changed | default(false)) | bool
+        - (mariadb_active | default({})).rc | default(1) == 0
     - name: "Brama zdrowia przed zaplanowanym restartem konfiguracji"
       ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
       vars:
@@ -158,7 +178,7 @@
         health_retries: 3
       when:
         - use_systemd
-        - config_result.changed or ((tls_files_changed | default(false)) | bool)
+        - config_result.changed
         - (mariadb_active | default({})).rc | default(1) == 0
 
     # Czekamy TYLKO gdy mariadbd faktycznie dziala. Na swiezym klastrze (przed bootstrapem)

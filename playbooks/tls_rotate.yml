@@ -1,0 +1,109 @@
+---
+# Rotacja certyfikatów TLS klastra Galera BEZ przestoju.
+#
+# Realizuje procedurę opisaną w dokumentacji MariaDB
+# (galera-cluster/galera-security/reloading-tls-certificates-without-downtime.md):
+#   1. zapisz nowy certyfikat i klucz obok istniejących,
+#   2. podmień pliki atomowo pod skonfigurowanymi ścieżkami,
+#   3. wykonaj `FLUSH SSL` — przeładowuje kontekst TLS serwera ORAZ providera wsrep,
+#   4. potwierdź, że węzeł serwuje nowy certyfikat,
+#   5. powtórz na kolejnym węźle — bez skoordynowanego przestoju.
+#
+# `ansible.builtin.copy` zapisuje do pliku tymczasowego i wykonuje rename, więc
+# krok 2 jest atomowy z definicji — czytelnik nigdy nie zobaczy pół pliku.
+#
+# serial:1 nie wynika z wymogu dokumentacji (rotacja jest bezprzestojowa), tylko
+# z ostrożności operacyjnej: gdy nowy materiał jest wadliwy, zatrzymujemy się na
+# pierwszym węźle zamiast rozlać go na cały klaster.
+#
+# Czego ten playbook NIE robi: nie zmienia ŚCIEŻEK do certyfikatów. Wartości
+# ssl_cert/ssl_key/ssl_ca nie są dynamiczne — ich zmiana idzie przez server.cnf
+# i restart, czyli przez `make cluster-deploy`.
+#
+# Użycie: make cluster-tls-rotate CLUSTER=<nazwa>
+
+- name: "TLS — rotacja certyfikatów bez przestoju"
+  hosts: galera
+  become: true
+  gather_facts: false
+  serial: 1
+
+  pre_tasks:
+    - name: "Wymagaj tls.mode=full"
+      ansible.builtin.assert:
+        that:
+          - (tls | default({})).mode | default('disabled') == 'full'
+        fail_msg: >-
+          Rotacja dotyczy wyłącznie klastrów z tls.mode=full;
+          ten ma '{{ (tls | default({})).mode | default('disabled') }}'.
+
+    - name: "Odczytaj odcisk certyfikatu SERWOWANEGO przed rotacją"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        echo | openssl s_client -starttls mysql -connect 127.0.0.1:3306 2>/dev/null
+        | openssl x509 -noout -fingerprint -sha256 2>/dev/null
+        | cut -d= -f2
+      args:
+        executable: /bin/bash
+      register: tls_served_before
+      changed_when: false
+      failed_when: false
+
+  tasks:
+    - name: "Podmień materiał TLS (atomowo, przez plik tymczasowy + rename)"
+      ansible.builtin.include_tasks: tls_certs.yml
+
+    - name: "Przeładuj kontekst TLS serwera i providera wsrep"
+      ansible.builtin.command:
+        argv: [mariadb, --socket=/var/lib/mysql/mysql.sock, -N, -B, -e, FLUSH SSL]
+      changed_when: true
+      when: (tls_files_changed | default(false)) | bool
+
+    # Dowód, że rotacja faktycznie zadziałała: bez tego kroku playbook
+    # potwierdzałby wyłącznie, że pliki leżą na dysku — a serwer mógłby dalej
+    # trzymać stary kontekst w pamięci i nikt by się o tym nie dowiedział aż do
+    # wygaśnięcia certu.
+    - name: "Odczytaj odcisk certyfikatu SERWOWANEGO po rotacji"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        echo | openssl s_client -starttls mysql -connect 127.0.0.1:3306 2>/dev/null
+        | openssl x509 -noout -fingerprint -sha256 2>/dev/null
+        | cut -d= -f2
+      args:
+        executable: /bin/bash
+      register: tls_served_after
+      changed_when: false
+
+    - name: "Odczytaj odcisk certyfikatu z PLIKU na dysku"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        openssl x509 -in {{ tls_dir | default('/etc/mysql/tls') }}/server-cert.pem
+        -noout -fingerprint -sha256 | cut -d= -f2
+      args:
+        executable: /bin/bash
+      register: tls_file_fp
+      changed_when: false
+
+    - name: "Wymagaj zgodności: serwowany certyfikat == certyfikat z dysku"
+      ansible.builtin.assert:
+        that:
+          - tls_served_after.stdout | trim | length > 0
+          - (tls_served_after.stdout | trim) == (tls_file_fp.stdout | trim)
+        fail_msg: >-
+          {{ inventory_hostname }}: po FLUSH SSL serwer nadal serwuje inny certyfikat
+          niż ten na dysku (serwowany={{ tls_served_after.stdout | trim }},
+          plik={{ tls_file_fp.stdout | trim }}). Rotacja NIE weszła w życie.
+
+    - name: "Brama zdrowia — węzeł musi zostać w klastrze po rotacji"
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "Brama zdrowia PO rotacji TLS (Synced+Primary+size)"
+        health_retries: 3
+
+    - name: "Raport rotacji"
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ 'certyfikat wymieniony' if (tls_files_changed | default(false)) | bool else 'bez zmian (materiał identyczny)' }};
+          przed={{ (tls_served_before.stdout | default('') | trim)[:17] | default('?', true) }}...
+          po={{ (tls_served_after.stdout | trim)[:17] }}...
