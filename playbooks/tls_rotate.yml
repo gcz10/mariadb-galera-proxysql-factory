@@ -107,3 +107,35 @@
           {{ 'certyfikat wymieniony' if (tls_files_changed | default(false)) | bool else 'bez zmian (materiał identyczny)' }};
           przed={{ (tls_served_before.stdout | default('') | trim)[:17] | default('?', true) }}...
           po={{ (tls_served_after.stdout | trim)[:17] }}...
+
+# ProxySQL trzyma WLASNA kopie naszego CA i weryfikuje nia certyfikaty backendow
+# (f7_proxysql.yml: mysql_servers_ssl_params.ssl_ca = /etc/mysql/tls/<klaster>/ca.pem).
+# Przy rotacji SAMEGO LISCIA pod tym samym CA ten play jest no-opem, ale przy
+# rotacji CA jest obowiazkowy: gdyby ProxySQL zostal ze starym CA, przestalby
+# weryfikowac backendy prezentujace nowy certyfikat i zSHUNNowalby caly klaster.
+#
+# Reload nie jest potrzebny. Dokumentacja ProxySQL (ssl-support, "Backend
+# certificates renewal") mowi, ze wystarczy podmienic pliki wskazywane przez
+# konfiguracje, pod warunkiem ze operacja jest ATOMOWA — "since ProxySQL will be
+# accessing these paths when creating new backend connections". `ansible.builtin.copy`
+# pisze do pliku tymczasowego i robi rename, wiec ten warunek jest spelniony.
+# (`PROXYSQL RELOAD TLS` dotyczy certyfikatow FRONTENDU, nie zaufania do backendow.)
+- name: "TLS — zaktualizuj zaufanie ProxySQL do backendow"
+  hosts: proxysql
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: "Podmień CA klastra na węźle ProxySQL (atomowo)"
+      ansible.builtin.include_tasks: tls_certs.yml
+      vars:
+        tls_file_owner: proxysql
+        tls_deploy_key: false
+        tls_dir: "/etc/mysql/tls/{{ cluster.name }}"
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
+    - name: "Raport zaufania ProxySQL"
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: CA klastra {{ cluster.name }}
+          {{ 'zaktualizowane' if (tls_files_changed | default(false)) | bool else 'bez zmian' }}
