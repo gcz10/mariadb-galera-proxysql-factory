@@ -7,7 +7,7 @@
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan \
         cluster-drift cluster-remove-node-plan cluster-remove-node cluster-alerts \
         lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test lab-failover-hard-test cluster-tls-rotate \
-        cluster-app-host lab-app-verify \
+        cluster-app-host lab-app-verify lab-app-bench lab-app-degradation-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke \
@@ -219,6 +219,19 @@ cluster-app-host:  ## Przygotuj host aplikacyjny (klient + CA klastra) dla grupy
 lab-app-verify:  ## Zweryfikuj kontrakt aplikacyjny z hosta `app` (TLS, read-your-writes, transakcje, jeden writer)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" tests/lab/probe-app-conformance.py
+
+# Pomiar Z HOSTA APLIKACYJNEGO, nie z wezla klastra: wczesniejsze benchmarki
+# szly z hosta `restore`, ktory dzieli CPU i siec z warstwa bazodanowa.
+lab-app-bench:  ## Zmierz przepustowosc z hosta `app` (direct vs VIP, TLS vs plaintext)
+	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
+	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" tests/lab/bench-app.py
+
+# Sondy stanu ustalonego mowia, ze wszystko dziala, dopoki wszystko dziala.
+# Ta sprawdza, co aplikacja widzi przy utracie kworum: czy zapis zostaje
+# odrzucony (bezpieczenstwo) i czy blad da sie odroznic od awarii sieci.
+lab-app-degradation-test:  ## Zachowanie aplikacji przy utracie kworum (lab-only, destrukcyjny)
+	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
+	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" tests/lab/chaos-app-degradation.py
 
 lab-split-brain-test:  ## F9 — test split-brain / partycji sieci (ISC-30, lab-only, destrukcyjny)
 	$(TARGET_ENV) tests/lab/chaos-split-brain.py
