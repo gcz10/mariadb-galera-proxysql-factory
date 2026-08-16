@@ -85,9 +85,13 @@
       ansible.builtin.shell: |-
         set -o pipefail
         stmts=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SELECT CONCAT('DROP USER IF EXISTS ', QUOTE(user), '@', QUOTE(host), ';') FROM mysql.user WHERE user=''")
-        if [ -n "$stmts" ]; then echo "$stmts" | mariadb --socket=/var/lib/mysql/mysql.sock; fi
+        if [ -n "$stmts" ]; then echo "$stmts" | mariadb --socket=/var/lib/mysql/mysql.sock && echo DROPPED; fi
       register: pmm_anon_cleanup
-      changed_when: "'DROP USER' in pmm_anon_cleanup.stdout | default('')"
+      # Marker, nie tresc SQL: instrukcje DROP ida POTOKIEM do klienta, wiec stdout
+      # zadania jest puste nawet gdy konta faktycznie znikaja. Warunek oparty na
+      # 'DROP USER' w stdout nigdy nie strzelal — zadanie mutowalo stan i meldowalo
+      # `ok`, czyli raport idempotencji klamal. Zmierzone: 1 anonim -> 0, stdout [].
+      changed_when: "'DROPPED' in pmm_anon_cleanup.stdout | default('')"
       when:
         - inventory_hostname in groups.get('galera', [])
         - galera_node_idx | default(1) == 1

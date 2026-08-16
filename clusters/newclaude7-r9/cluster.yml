@@ -1,24 +1,28 @@
 ---
-# newclaude6-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
+# newclaude7-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
 #
-# SZOSTY przebieg budowy warstwy Galera od zera. Cel: pelna rewalidacja kodu
-# na zywej infrastrukturze po PR #28 (naprawa sondy split-brain, bramka
-# kolizji adresow). Kolejnosc wg README.md:32-38 — F11 przed F6,
-# lab-seed-smoke przed drillem, lab-monitoring-verify na samym koncu.
+# SIODMY przebieg budowy warstwy Galera od zera. Cel tego przebiegu jest
+# WEZSZY niz poprzednich: na v6 naprawa z PR #29 (F11 usuwa anonimowe konta
+# cieniujace pmm_monitor) wykonala sie jako no-op, bo debugging tamtej sesji
+# zdazyl juz wyczyscic anonimowych recznie. Ten klaster jest pierwszym, na
+# ktorym ten task musi zadzialac SAM — F11 ma przejsc za pierwszym razem,
+# bez zadnej recznej interwencji w mysql.user.
 #
-# Adresacja: n6g1-3 na .174-.176 (VMID 9460-9462), restore n6r1 .177 (9463).
-# Blok .174-.177 wybrany AKTYWNYM skanem (ping + 22/8006) — konfiguracja
-# Proxmoxa nie widzi hostow spoza siebie (zyciowa lekcja z .181).
+# Kolejnosc wg README.md:32-38 — F11 przed F6, lab-seed-smoke przed drillem,
+# lab-monitoring-verify na samym koncu.
+#
+# Adresacja: n7g1-3 na .160-.162 (VMID 9470-9472), restore n7r1 .163 (9473).
+# Blok potwierdzony AKTYWNYM skanem (ping + 22/8006) — konfiguracja Proxmoxa
+# nie widzi hostow spoza siebie (lekcja z .181, adresu hypervisora).
 #
 # WARSTWA WSPOLNA (terraform/shared/): ProxySQL fcp1/fcp2 .131/.132, VIP .133,
 # infra .130 (PMM + MinIO). Ten klaster jest jej KONSUMENTEM — nie tworzy jej,
 # nie niszczy i nie zarzadza VIP-em. Ownerem pary ProxySQL jest finalclaude-r10.
 #
 # ROZLACZNOSC NA WSPOLNYM ProxySQL — bez niej drugi klaster kasuje pierwszego:
-#   hostgroup_base: 450 (writer 450, backup 460, reader 470, offline 480)
-#     finalclaude-r10 uzywa domyslnych 10/20/30/40, finalclaude-r9 110-140,
-#     newclaude5-r9 mial 410-440
-#   app_user: app_user_n6
+#   hostgroup_base: 490 (writer 490, backup 500, reader 510, offline 520)
+#     finalclaude-r10 uzywa domyslnych 10/20/30/40, finalclaude-r9 110-140
+#   app_user: app_user_n7
 #     wpis w mysql_users jest globalny, a jego default_hostgroup wybiera klaster
 #   Pilnuje tego tests/validation/probe-proxysql-tenancy.py.
 #
@@ -26,7 +30,7 @@
 # (sciezka przechodnia dla uzytkownika `proxysql`; /etc/proxysql jest 0750 root:root).
 
 cluster:
-  name: "newclaude6-r9"
+  name: "newclaude7-r9"
   environment: "laboratory"
   profile: "laboratory"
   automation_release: "0.1.0"
@@ -42,15 +46,15 @@ versions:
 galera:
   # wsrep_cluster_name jest czescia tozsamosci Primary Component — kolizja nazw
   # skleilaby dwa niezalezne klastry w jeden.
-  cluster_name: "n6_galera"
+  cluster_name: "n7_galera"
   nodes_expected: 3
 
 proxysql:
   nodes_expected: 2
   max_writers: 1
   read_write_split_enabled: false
-  hostgroup_base: 450
-  app_user: "app_user_n6"
+  hostgroup_base: 490
+  app_user: "app_user_n7"
   # Konsument warstwy wspolnej: NIE instaluje pakietow na fcp1/fcp2/fcinfra ani
   # nie zarzadza VIP-em. Rejestruje tylko wlasne hostgroupy i uzytkownika przez f7.
   # Owner (finalclaude-r10) postawil te wezly na EL10, wiec lockfile EL9 ich nie dotyczy.
@@ -64,9 +68,9 @@ tls:
   mode: "full"
   socket_dynamic: false
   certificate_source: "file"
-  ca_reference: "tests/lab/tls/n6/ca.pem"
-  certificate_reference: "tests/lab/tls/n6/server-cert.pem"
-  private_key_reference: "tests/lab/tls/n6/server-key.pem"
+  ca_reference: "tests/lab/tls/n7/ca.pem"
+  certificate_reference: "tests/lab/tls/n7/server-cert.pem"
+  private_key_reference: "tests/lab/tls/n7/server-key.pem"
   # Wymuszanie TLS na WSZYSTKICH polaczeniach TCP to osobny krok: ProxySQL laczy
   # sie do backendow z use_ssl per serwer, a mysqld_exporter i agent QAN ida TCP
   # na 127.0.0.1:3306. Wlaczenie tego tutaj zshunnowaloby backendy i wygasilo metryki.
@@ -107,21 +111,21 @@ availability:
 backup:
   enabled: true
   destination: "s3"
-  full_backup_schedule: "15 2 * * *"      # przesuniete wzgledem r10 (0 2), r9 (30 2) i v5 (45 2) — wspolny MinIO
+  full_backup_schedule: "50 2 * * *"      # rozlaczne z r10 (0 2) i r9 (30 2) — wspolny MinIO
   incremental_backup_schedule: "disabled"
   freshness_sla_hours: 26
   retention_days: 14
   encryption_enabled: true
   immutable_or_offsite_copy: true
-  restore_test_schedule: "0 7 * * 0"      # przesuniete wzgledem r10 (0 4), r9 (0 5) i v5 (0 6)
+  restore_test_schedule: "0 8 * * 0"      # rozlaczne z r10 (0 4) i r9 (0 5)
   scheduler:
     mode: "cron"
     # Nie moze byc aktywnym writerem ProxySQL — runner odrzuca backup z writera (ISC-39).
-    host: "n6g1"
+    host: "n7g1"
     timezone: "UTC"
   s3:
     endpoint: "192.168.1.130:9000"
-    bucket: "n6-galera-backups"           # rozlaczny z fc10-galera-backups
+    bucket: "n7-galera-backups"           # rozlaczny z fc10-galera-backups
     secure: false
 
 monitoring:
@@ -129,10 +133,12 @@ monitoring:
     server_url: "https://192.168.1.130"
     agent_id: "pmm-server"
     # Namespace regul alertow i folderow w PMM — musi byc rozlaczny z fc10-galera.
-    cluster_name: "n6-galera"
+    cluster_name: "n7-galera"
     validate_certs: false
     credentials_revision: 1
   # Wezly Galera dostaja lokalnego pmm-agenta. ProxySQL pomijamy — nalezy do ownera (r10).
+  # To ta sciezka (local-agent) wymaga, by F11 sam usunal anonimowe konta: eksporter
+  # laczy sie po TCP na 127.0.0.1, ktore MariaDB resolvuje do 'localhost'.
   agent_groups: ["galera"]
   # Zrodlo QAN. slowlog mozliwy TYLKO tu (lokalny agent czyta plik);
   # fc10 jest agentless i musi zostac przy perfschema.
