@@ -14,9 +14,12 @@ _inv = yaml.safe_load(open(INVENTORY))
 GALERA_NODE = list(_inv["all"]["children"]["galera"]["hosts"])[0]
 with open(CONFIG_PATH, encoding="utf-8") as _fh:
     CLUSTER_CONFIG = yaml.safe_load(_fh)
-# Prog ostrzegania o wygasaniu: 30 dni. Dokumentacja Galery mowi wprost, ze
-# socket.ssl_* "are not dynamic" — wymiana certu to restart KAZDEGO wezla, wiec
-# ostrzezenie musi przyjsc z zapasem na zaplanowanie rolling restartu.
+# Prog ostrzegania o wygasaniu: 30 dni. Wymiana NIE wymaga restartu — Galera ma
+# udokumentowana sciezke bez przestoju (galera-security/reloading-tls-certificates-
+# without-downtime.md): podmien pliki atomowo w miejscu i wykonaj `FLUSH SSL`,
+# ktore przeladowuje kontekst TLS serwera ORAZ providera wsrep; procedure powtarza
+# sie per wezel. "Not dynamic" z dokumentacji dotyczy WARTOSCI zmiennych (sciezek),
+# nie zawartosci plikow. 30 dni to zapas na zaplanowanie rotacji, nie na okno serwisowe.
 CERT_MIN_DAYS = int(os.environ.get("TLS_CERT_MIN_DAYS", "30"))
 
 
@@ -131,10 +134,9 @@ def main():
     #
     # Nasze certy sa wystawiane recznie przez tests/lab/tls/generate.sh i nikt ich
     # nie rotuje — CA i lisc dostaja 1095 dni, po czym po prostu wygasaja. Sciezka
-    # naprawy jest droga: dokumentacja Galery mowi, ze socket.ssl_* "are not
-    # dynamic", wiec wymiana certu wymaga restartu kazdego wezla. Dlatego prog
-    # ostrzegania (30 dni) ma dac czas na zaplanowany rolling restart, a nie
-    # postawic operatora przed faktem dokonanym w niedziele.
+    # naprawy jest udokumentowana i bezprzestojowa: podmiana plikow w miejscu +
+    # `FLUSH SSL` per wezel (galera-security/reloading-tls-certificates-without-
+    # downtime.md). Prog 30 dni daje czas na jej zaplanowanie.
     #
     # Sprawdzamy wszystkie wezly, nie tylko pierwszy: dystrybucja moze byc
     # niekompletna i wtedy jeden wezel ma stary albo zaden cert.
@@ -170,8 +172,8 @@ def main():
                     when = parts[2].replace("_", " ") if len(parts) > 2 else "?"
                     failures.append(
                         f"{node}: certyfikat {parts[1]} wygasa przed uplywem "
-                        f"{CERT_MIN_DAYS} dni (notAfter: {when}) — wymiana wymaga "
-                        f"rolling restartu calego klastra"
+                        f"{CERT_MIN_DAYS} dni (notAfter: {when}) — rotacja bez "
+                        f"przestoju: podmiana plikow + FLUSH SSL"
                     )
         tls_note = f"certy TLS wazne >{CERT_MIN_DAYS} dni ({checked} plikow na {len(cert_raw)} wezlach)"
 
