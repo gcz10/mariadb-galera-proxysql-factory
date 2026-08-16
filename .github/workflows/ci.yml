@@ -108,6 +108,13 @@ jobs:
       - name: Docs-fetch hook guard
         run: node tests/validation/probe-docs-fetch-hook.ts
 
+      # Adres wezla rowny adresowi hypervisora Proxmox wywalil `terraform apply`
+      # w polowie (konflikt ARP z wywolaniami API) i zwrocil klucz SSH cudzego
+      # hosta. Adres byl "wolny" wedlug listy VM, bo hypervisor nie jest VM.
+      # W CI brak PROXMOX_VE_ENDPOINT, wiec dziala czesc miedzyklastrowa i VIP.
+      - name: Address collision guard
+        run: python3 tests/validation/probe-address-collision.py
+
       - name: ansible syntax-check (playbooks only; skip include-only files)
         run: |
           set -e

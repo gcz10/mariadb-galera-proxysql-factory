@@ -1,0 +1,154 @@
+---
+# newclaude5-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
+#
+# PIATY przebieg budowy warstwy Galera od zera. Rozny od v4 jedna rzecza:
+# przebieg idzie DOKLADNIE w kolejnosci z README.md:32-38, ktora poprzednia
+# runda zlamala w trzech miejscach (F6 przed F11, drill bez lab-seed-smoke,
+# lab-monitoring-verify przed odswiezeniem metryk). Zaden z tych trzech bledow
+# nie byl defektem kodu — wszystkie byly zejsciem z udokumentowanej sciezki.
+#
+# Adresacja: n5g1-3 na .170-.172 (VMID 9450-9452), restore n5r1 .173 (9453).
+#
+# WARSTWA WSPOLNA (terraform/shared/): ProxySQL fcp1/fcp2 .131/.132, VIP .133,
+# infra .130 (PMM + MinIO). Ten klaster jest jej KONSUMENTEM — nie tworzy jej,
+# nie niszczy i nie zarzadza VIP-em. Ownerem pary ProxySQL jest finalclaude-r10.
+#
+# ROZLACZNOSC NA WSPOLNYM ProxySQL — bez niej drugi klaster kasuje pierwszego:
+#   hostgroup_base: 410 (writer 410, backup 420, reader 430, offline 440)
+#     finalclaude-r10 uzywa domyslnych 10/20/30/40
+#   app_user: app_user_n5
+#     wpis w mysql_users jest globalny, a jego default_hostgroup wybiera klaster
+#   Pilnuje tego tests/validation/probe-proxysql-tenancy.py.
+#
+# TLS jest WLACZONY z rozlacznym CA per klaster pod /etc/mysql/tls/<klaster>/ca.pem
+# (sciezka przechodnia dla uzytkownika `proxysql`; /etc/proxysql jest 0750 root:root).
+
+cluster:
+  name: "newclaude5-r9"
+  environment: "laboratory"
+  profile: "laboratory"
+  automation_release: "0.1.0"
+
+platform:
+  virtualization: "proxmox_kvm"
+  rocky_linux_major: 9
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/versions.lock.yml"
+
+galera:
+  # wsrep_cluster_name jest czescia tozsamosci Primary Component — kolizja nazw
+  # skleilaby dwa niezalezne klastry w jeden.
+  cluster_name: "n5_galera"
+  nodes_expected: 3
+
+proxysql:
+  nodes_expected: 2
+  max_writers: 1
+  read_write_split_enabled: false
+  hostgroup_base: 410
+  app_user: "app_user_n5"
+  # Konsument warstwy wspolnej: NIE instaluje pakietow na fcp1/fcp2/fcinfra ani
+  # nie zarzadza VIP-em. Rejestruje tylko wlasne hostgroupy i uzytkownika przez f7.
+  # Owner (finalclaude-r10) postawil te wezly na EL10, wiec lockfile EL9 ich nie dotyczy.
+  role: "consumer"
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.133"   # VIP warstwy wspolnej — ten sam co finalclaude-r10
+    port: 6033
+
+tls:
+  mode: "full"
+  socket_dynamic: false
+  certificate_source: "file"
+  ca_reference: "tests/lab/tls/n5/ca.pem"
+  certificate_reference: "tests/lab/tls/n5/server-cert.pem"
+  private_key_reference: "tests/lab/tls/n5/server-key.pem"
+  # Wymuszanie TLS na WSZYSTKICH polaczeniach TCP to osobny krok: ProxySQL laczy
+  # sie do backendow z use_ssl per serwer, a mysqld_exporter i agent QAN ida TCP
+  # na 127.0.0.1:3306. Wlaczenie tego tutaj zshunnowaloby backendy i wygasilo metryki.
+  require_secure_transport: false
+
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.130/32"]
+
+secrets:
+  backend: "ansible_vault"
+
+storage:
+  data_directory: "/var/lib/mysql"
+  backup_staging_directory: "/var/tmp/mariadb-backup"
+  filesystem: "xfs"
+  expected_database_size_gb: "unknown"
+  expected_growth_gb_per_month: "unknown"
+  available_iops: "unknown"
+
+workload:
+  peak_qps: "unknown"
+  peak_connections: "unknown"
+  read_write_ratio: "unknown"
+  largest_transaction_mb: "unknown"
+  largest_table_gb: "unknown"
+  expected_write_latency_ms: "unknown"
+
+availability:
+  rpo: "0"
+  rto_node_failure: "2m"
+  rto_full_cluster_failure: "30m"
+  maintenance_window: "weekend"
+  allowed_service_interruption: "2m"
+
+backup:
+  enabled: true
+  destination: "s3"
+  full_backup_schedule: "45 2 * * *"      # przesuniete wzgledem r10 (0 2) — wspolny MinIO
+  incremental_backup_schedule: "disabled"
+  freshness_sla_hours: 26
+  retention_days: 14
+  encryption_enabled: true
+  immutable_or_offsite_copy: true
+  restore_test_schedule: "0 6 * * 0"      # przesuniete wzgledem r10 (0 4)
+  scheduler:
+    mode: "cron"
+    # Nie moze byc aktywnym writerem ProxySQL — runner odrzuca backup z writera (ISC-39).
+    host: "n5g1"
+    timezone: "UTC"
+  s3:
+    endpoint: "192.168.1.130:9000"
+    bucket: "n5-galera-backups"           # rozlaczny z fc10-galera-backups
+    secure: false
+
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.130"
+    agent_id: "pmm-server"
+    # Namespace regul alertow i folderow w PMM — musi byc rozlaczny z fc10-galera.
+    cluster_name: "n5-galera"
+    validate_certs: false
+    credentials_revision: 5
+  # Wezly Galera dostaja lokalnego pmm-agenta. ProxySQL pomijamy — nalezy do ownera (r10).
+  agent_groups: ["galera"]
+  # Zrodlo QAN. slowlog mozliwy TYLKO tu (lokalny agent czyta plik);
+  # fc10 jest agentless i musi zostac przy perfschema.
+  qan_source: "slowlog"
+  system: "pmm"
+  alerts:
+    email: "ops@claude.local"
+  log_destination: "journald"
+
+mariadb_tuning:
+  # Limit operatora: 5 GB RAM na VM; wezly Galera maja 3 GB. Buffer pool 768M
+  # zostawia zapas na mariabackup podczas SST i backupu.
+  innodb_buffer_pool_size: "768M"
+  innodb_log_file_size: "256M"
+  max_connections: 100
+  innodb_flush_log_at_trx_commit: 0
+  gcache_size: "256M"
+  slow_query_log: "ON"
+  # 0.1 = tylko zapytania >=100 ms. Przy 0 (loguj wszystko) zmierzono 276 B/zapytanie,
+  # czyli ~1 GB/h przy 1000 q/s NA WEZEL.
+  long_query_time: 0.1

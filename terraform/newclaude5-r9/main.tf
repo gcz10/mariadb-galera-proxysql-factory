@@ -10,16 +10,20 @@ terraform {
 
 provider "proxmox" {} # endpoint + api_token + insecure z env PROXMOX_VE_*
 
-# newclaude4-r9 — klaster kontrolny: czwarty pelny przebieg budowy od zera.
+# newclaude5-r9 — warstwa BAZODANOWA piatego przebiegu budowy od zera.
 #
-# Weryfikuje zaktualizowany stos fabryki:
-# - ProxySQL 3.0.10 (przypiete sha256 w versions.lock.yml)
-# - PMM 3.9.0 (monitoring push z pmm-client)
-# - MariaDB 11.4.12 LTS + Galera 26.4.27
-# - TLS mode: full (rozlaczne CA per klaster)
+# Weryfikuje stos po aktualizacjach z tej sesji: ProxySQL 3.0.10 (PR #26),
+# PMM 3.9.0 (PR #23), sciezka deprovisioningu cluster-deregister (PR #25).
 #
-# Adresacja: n4g1-3 na .170-.172 (VMID 9440-9442), restore n4r1 .173 (9443).
-# ProxySQL fcp1/fcp2 (.131/.132) i infra fcinfra (.130) naleza do terraform/shared/.
+# Rozny od `newclaude4-r9` proceduralnie: przebieg idzie dokladnie w kolejnosci
+# z README.md:32-38 (F11 przed F6, lab-seed-smoke przed drillem, weryfikacja
+# monitoringu na samym koncu). Poprzednia runda zlamala wszystkie trzy zaleznosci.
+#
+# ProxySQL, VIP, PMM i MinIO sa wspoldzielone i mieszkaja w terraform/shared/ —
+# ten katalog ich nie tworzy ani nie niszczy.
+#
+# Rocky 9 GenericCloud NIE wymaga snippetu cloud-init: w przeciwienstwie do EL10
+# nie ma `disable_root: true`, wiec klucz z `user_account` trafia prosto do roota.
 locals {
   node_name = "pve"
   pool_id   = "claude-isa"
@@ -30,13 +34,23 @@ locals {
 
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
-
-  # RAM: limit operatora to 5 GB na VM. Galera dostaje 3 GB, a buffer pool 768M.
+  # VMID 9450-9453 wolne. IP .170-.173 zwolnione po `newclaude4-r9`.
+  #
+  # NIE UZYWAC .180-.183: `.181` to adres zarzadzania hypervisora Proxmox
+  # (PROXMOX_VE_ENDPOINT). Przypisanie go VM tworzy konflikt ARP, ktory zrywa
+  # wywolania API w trakcie `terraform apply` (objaw: "failed to perform HTTP
+  # POST request"). Wolnosc adresow potwierdzona AKTYWNYM skanem sieci
+  # (ping + port 22/8006), nie sama konfiguracja Proxmoxa — ta pomija
+  # hypervisor i hosty spoza niego (wykryto tez zywe .184 i .190).
+  #
+  # RAM: limit operatora to 5 GB na VM; wezly Galera dostaja 3 GB, a
+  # innodb_buffer_pool_size zjezdza do 768M, zeby zostal zapas na mariabackup
+  # podczas SST i backupu.
   vms = {
-    n4g1 = { id = 9440, ip = 170, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n4g2 = { id = 9441, ip = 171, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n4g3 = { id = 9442, ip = 172, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n4r1 = { id = 9443, ip = 173, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    n5g1 = { id = 9450, ip = 170, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n5g2 = { id = 9451, ip = 171, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n5g3 = { id = 9452, ip = 172, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n5r1 = { id = 9453, ip = 173, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
 
@@ -46,8 +60,8 @@ resource "proxmox_virtual_environment_vm" "node" {
   node_name   = local.node_name
   pool_id     = local.pool_id
   vm_id       = each.value.id
-  description = "newclaude4-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
-  tags        = ["rocky9", "galera", "newclaude4", each.value.role, "n4"]
+  description = "newclaude5-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
+  tags        = ["rocky9", "galera", "newclaude5", each.value.role, "n5"]
 
   agent {
     enabled = true
