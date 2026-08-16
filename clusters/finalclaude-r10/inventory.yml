@@ -56,6 +56,16 @@ all:
           ansible_host: "192.168.1.143"
           restore_node_address: "192.168.1.143"
 
+    # Host APLIKACYJNY warstwy wspolnej — ten sam dla calej floty. Nie jest wezlem
+    # bazy i nie liczy sie do zadnego nodes_expected; tworzy go terraform/shared/.
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        fcapp:
+          ansible_host: "192.168.1.134"
+          app_node_address: "192.168.1.134"
+
     infra:
       vars:
         infra_role: "infra"

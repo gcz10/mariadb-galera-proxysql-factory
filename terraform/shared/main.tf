@@ -47,10 +47,22 @@ locals {
   # 2048 MB mierzonych przez `ansible_memtotal_mb`, a to pamiec WIDZIANA przez
   # system po rezerwach firmware/kernela — przydzial 2048 MB daje 1769 MB i cel
   # sie wywala. Prog trzeba przebic z zapasem, nie trafic w niego dokladnie.
+  # `fcapp` to host APLIKACYJNY, nie element klastra: laczy sie do Galery tak,
+  # jak zrobilaby to aplikacja — przez VIP, po sieci, z wlasna konfiguracja
+  # klienta. Powstal, bo ta sesja dwa razy pokazala, ze zdrowy klaster nie
+  # znaczy dzialajaca aplikacja: klient MariaDB 11.4 z domyslna weryfikacja
+  # certu nie laczy sie przez VIP (auto-cert ProxySQL), a przy utracie kworum
+  # aplikacja dostaje "ERROR 2027 malformed packet" zamiast bledu bazy. Oba
+  # znaleziono przypadkiem, bo zaden test nie patrzyl z perspektywy klienta.
+  #
+  # Nalezy do warstwy WSPOLNEJ, nie do klastra: ma przezyc przebudowy klastrow
+  # (v8 -> v9 -> ...) i testowac dowolny z nich, tak jak PMM je monitoruje.
+  # Zero roli serwerowej — sam klient, zeby nie mylic go z wezlem bazy.
   vms = {
     fcinfra = { id = 9400, ip = 130, role = "infra", cpu = 4, ram = 5120, disk = 80 }
     fcp1    = { id = 9401, ip = 131, role = "proxysql", cpu = 1, ram = 3072, disk = 40 }
     fcp2    = { id = 9402, ip = 132, role = "proxysql", cpu = 1, ram = 3072, disk = 40 }
+    fcapp   = { id = 9403, ip = 134, role = "app", cpu = 2, ram = 3072, disk = 40 }
   }
 }
 

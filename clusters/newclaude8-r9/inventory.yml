@@ -56,6 +56,17 @@ all:
           ansible_host: "192.168.1.167"
           restore_node_address: "192.168.1.167"
 
+    # Host APLIKACYJNY warstwy wspolnej: laczy sie do klastra tak, jak zrobilaby
+    # to aplikacja (po sieci, przez VIP). Nie jest wezlem bazy i nie liczy sie do
+    # zadnego nodes_expected. Tworzy go terraform/shared/, nie ten klaster.
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        fcapp:
+          ansible_host: "192.168.1.134"
+          app_node_address: "192.168.1.134"
+
     infra:
       vars:
         infra_role: "infra"

@@ -1,0 +1,112 @@
+---
+# app_host.yml — przygotowanie hosta APLIKACYJNEGO (grupa `app`).
+#
+# DLACZEGO ISTNIEJE: wszystkie dotychczasowe sondy patrzyly na klaster albo z
+# hosta kontrolnego, albo z samych wezlow Galery. Nikt nie sprawdzal sciezki,
+# ktora naprawde przechodzi aplikacja: po sieci, przez VIP, z wlasna konfiguracja
+# klienta. Ta luka przepuscila dwa realne defekty, oba znalezione przypadkiem:
+#   * klient MariaDB 11.4 z DOMYSLNA weryfikacja certu nie laczy sie przez VIP,
+#     bo ProxySQL serwuje wlasny auto-cert (release notes 11.4: "Clients now
+#     require SSL and have server certificate verification enabled by default"),
+#   * przy utracie kworum aplikacja dostaje "ERROR 2027 malformed packet"
+#     zamiast czystego "ERROR 1047 (08S01)", ktory zwraca sam wezel.
+#
+# Host jest CZYSTYM KLIENTEM: instalujemy wylacznie MariaDB-client w wersji z
+# lockfile'a. Zadnego serwera — inaczej po pierwszej pomylce ktos policzy go
+# jako wezel klastra.
+#
+# Nalezy do warstwy wspolnej (terraform/shared/), wiec przezywa przebudowy
+# klastrow i obsluguje kazdy z nich; material per klaster (CA, profil klienta)
+# laduje w katalogach nazwanych po klastrze.
+
+- name: "APP — przygotuj host aplikacyjny"
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars:
+    # Host aplikacyjny nalezy do warstwy WSPOLNEJ, a ta stoi na innej platformie
+    # niz czesc klastrow, ktore obsluguje (dzis: shared = EL10, newclaude8-r9 = EL9).
+    # Lockfile jest zwiazany z platforma — `f2_preflight.yml` wprost asertuje
+    # zgodnosc lock.rocky_linux.major z hostem. Branie lockfile'a KLASTRA konczy
+    # sie "No package MariaDB-client-11.4.12-1.el9 available" na Rocky 10
+    # (zmierzone). Wybieramy wiec lockfile platformy TEGO hosta.
+    app_lock_by_major:
+      "9": "../versions/versions.lock.yml"
+      "10": "../versions/versions-el10.lock.yml"
+
+  pre_tasks:
+    - name: "Wymagaj lockfile dla platformy hosta"
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution_major_version in app_lock_by_major
+        fail_msg: >-
+          Brak lockfile dla {{ ansible_distribution }} {{ ansible_distribution_major_version }};
+          znane platformy: {{ app_lock_by_major.keys() | list }}.
+
+    - name: "Załaduj lockfile platformy hosta (reprodukowalne wersje)"
+      ansible.builtin.include_vars:
+        file: "{{ app_lock_by_major[ansible_distribution_major_version] }}"
+        name: lock
+
+    # Ta sama brama co w f2_preflight: lockfile MUSI pasowac do systemu, inaczej
+    # instalujemy pakiet zbudowany dla innej platformy.
+    - name: "Wymagaj zgodnosci lockfile z systemem hosta"
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution_major_version | int == lock.rocky_linux.major | int
+        fail_msg: >-
+          Lockfile deklaruje Rocky {{ lock.rocky_linux.major }}, a host to
+          {{ ansible_distribution }} {{ ansible_distribution_major_version }}.
+
+  tasks:
+    - name: "Ustaw hostname zgodny z inventory"
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+      when: ansible_service_mgr == 'systemd'
+
+    - name: "MariaDB repo — pobierz mariadb_repo_setup (weryfikacja sha256)"
+      ansible.builtin.get_url:
+        url: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
+        dest: /usr/local/bin/mariadb_repo_setup
+        mode: "0755"
+        checksum: "sha256:{{ lock.mariadb.repo_setup_sha256 }}"
+
+    - name: "MariaDB repo — konfiguruj wersje z lockfile"
+      ansible.builtin.command: "/usr/local/bin/mariadb_repo_setup {{ lock.mariadb.repo_setup_args }} --skip-check-installed"
+      args:
+        creates: /etc/yum.repos.d/mariadb.repo
+
+    # Wersja przypieta tak samo jak na wezlach: aplikacja ma testowac TEN klient,
+    # ktory flota faktycznie wdraza, a nie dowolny z repozytorium dystrybucji.
+    - name: "Zainstaluj klienta MariaDB (wersja z lockfile)"
+      ansible.builtin.dnf:
+        name:
+          - "{{ lock.mariadb.client_package | default('MariaDB-client') }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+        state: present
+
+    - name: "Katalog materialu klienta per klaster"
+      ansible.builtin.file:
+        path: "/etc/mysql/app/{{ cluster.name }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    # CA klastra na hoscie aplikacyjnym to warunek, zeby aplikacja mogla w ogole
+    # zweryfikowac serwer. Bez tego jedyna dzialajaca opcja jest wylaczenie
+    # weryfikacji, czyli TLS bez ochrony przed MITM.
+    - name: "Rozprowadz CA klastra (do weryfikacji po stronie aplikacji)"
+      ansible.builtin.include_tasks: tls_certs.yml
+      vars:
+        tls_file_owner: root
+        tls_deploy_key: false
+        tls_dir: "/etc/mysql/app/{{ cluster.name }}"
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
+    - name: "Raport"
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: klient MariaDB {{ lock.mariadb.version }} gotowy;
+          CA klastra {{ cluster.name }}
+          {{ 'w /etc/mysql/app/' ~ cluster.name if (tls | default({})).mode | default('disabled') == 'full' else 'pominiete (tls.mode != full)' }}
