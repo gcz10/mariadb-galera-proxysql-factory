@@ -7,6 +7,7 @@
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan \
         cluster-drift cluster-remove-node-plan cluster-remove-node cluster-alerts \
         lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test lab-failover-hard-test cluster-tls-rotate \
+        cluster-app-host lab-app-verify \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke \
@@ -203,6 +204,21 @@ lab-failover-hard-test:  ## F9 — failover przy TWARDEJ utracie maszyny (sysrq,
 cluster-tls-rotate:  ## Rotuj certyfikaty TLS Galery bez przestoju (FLUSH SSL, serial:1)
 	$(cluster_guard)
 	ansible-playbook playbooks/tls_rotate.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+
+# Host aplikacyjny: nalezy do warstwy wspolnej (terraform/shared/), wiec przezywa
+# przebudowy klastrow. `cluster-app-host` instaluje na nim klienta w wersji z
+# lockfile'a JEGO platformy i rozprowadza CA testowanego klastra.
+cluster-app-host:  ## Przygotuj host aplikacyjny (klient + CA klastra) dla grupy `app`
+	$(cluster_guard)
+	ansible-playbook playbooks/app_host.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+
+# Jedyna sonda patrzaca na klaster OCZAMI APLIKACJI: po sieci, przez VIP, klientem
+# z lockfile'a. Pozostale patrza z hosta kontrolnego albo z samych wezlow, przez co
+# przepuscily dwa realne defekty widoczne tylko stad (weryfikacja certu przez VIP,
+# blad protokolu zamiast bledu bazy przy utracie kworum).
+lab-app-verify:  ## Zweryfikuj kontrakt aplikacyjny z hosta `app` (TLS, read-your-writes, transakcje, jeden writer)
+	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
+	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" tests/lab/probe-app-conformance.py
 
 lab-split-brain-test:  ## F9 — test split-brain / partycji sieci (ISC-30, lab-only, destrukcyjny)
 	$(TARGET_ENV) tests/lab/chaos-split-brain.py
