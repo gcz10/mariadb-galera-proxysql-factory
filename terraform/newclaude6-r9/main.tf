@@ -10,14 +10,14 @@ terraform {
 
 provider "proxmox" {} # endpoint + api_token + insecure z env PROXMOX_VE_*
 
-# newclaude5-r9 — warstwa BAZODANOWA piatego przebiegu budowy od zera.
+# newclaude6-r9 — warstwa BAZODANOWA szostego przebiegu budowy od zera.
 #
-# Weryfikuje stos po aktualizacjach z tej sesji: ProxySQL 3.0.10 (PR #26),
-# PMM 3.9.0 (PR #23), sciezka deprovisioningu cluster-deregister (PR #25).
+# Rewalidacja kodu po PR #28: naprawiona sonda split-brain (reguly lustrzane
+# + ss -K na 4567 + brama poprawnosci pomiaru) i probe-address-collision,
+# ktory od teraz pilnuje bloku adresow tego klastra w CI.
 #
-# Rozny od `newclaude4-r9` proceduralnie: przebieg idzie dokladnie w kolejnosci
-# z README.md:32-38 (F11 przed F6, lab-seed-smoke przed drillem, weryfikacja
-# monitoringu na samym koncu). Poprzednia runda zlamala wszystkie trzy zaleznosci.
+# Kolejnosc przebiegu dokladnie wg README.md:32-38 (F11 przed F6,
+# lab-seed-smoke przed drillem, lab-monitoring-verify na koncu).
 #
 # ProxySQL, VIP, PMM i MinIO sa wspoldzielone i mieszkaja w terraform/shared/ —
 # ten katalog ich nie tworzy ani nie niszczy.
@@ -34,23 +34,22 @@ locals {
 
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
-  # VMID 9450-9453 wolne. IP .170-.173 zwolnione po `newclaude4-r9`.
+  # VMID 9460-9463 wolne (pelna lista VM w klastrze PVE sprawdzona przez API).
+  # IP .174-.177 potwierdzone AKTYWNYM skanem sieci (ping + port 22/8006),
+  # nie sama konfiguracja Proxmoxa — ta pomija hypervisor i hosty spoza niego.
   #
   # NIE UZYWAC .180-.183: `.181` to adres zarzadzania hypervisora Proxmox
-  # (PROXMOX_VE_ENDPOINT). Przypisanie go VM tworzy konflikt ARP, ktory zrywa
-  # wywolania API w trakcie `terraform apply` (objaw: "failed to perform HTTP
-  # POST request"). Wolnosc adresow potwierdzona AKTYWNYM skanem sieci
-  # (ping + port 22/8006), nie sama konfiguracja Proxmoxa — ta pomija
-  # hypervisor i hosty spoza niego (wykryto tez zywe .184 i .190).
+  # (PROXMOX_VE_ENDPOINT). Zywe sa tez .179 i .184. Kolizje z tymi blokami
+  # lowi tests/validation/probe-address-collision.py w CI.
   #
   # RAM: limit operatora to 5 GB na VM; wezly Galera dostaja 3 GB, a
   # innodb_buffer_pool_size zjezdza do 768M, zeby zostal zapas na mariabackup
   # podczas SST i backupu.
   vms = {
-    n5g1 = { id = 9450, ip = 170, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n5g2 = { id = 9451, ip = 171, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n5g3 = { id = 9452, ip = 172, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n5r1 = { id = 9453, ip = 173, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    n6g1 = { id = 9460, ip = 174, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n6g2 = { id = 9461, ip = 175, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n6g3 = { id = 9462, ip = 176, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n6r1 = { id = 9463, ip = 177, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
 
@@ -60,8 +59,8 @@ resource "proxmox_virtual_environment_vm" "node" {
   node_name   = local.node_name
   pool_id     = local.pool_id
   vm_id       = each.value.id
-  description = "newclaude5-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
-  tags        = ["rocky9", "galera", "newclaude5", each.value.role, "n5"]
+  description = "newclaude6-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
+  tags        = ["rocky9", "galera", "newclaude6", each.value.role, "n6"]
 
   agent {
     enabled = true
