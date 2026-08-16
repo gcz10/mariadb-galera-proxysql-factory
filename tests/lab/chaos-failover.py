@@ -24,6 +24,22 @@ INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
 APP_PW = os.environ.get("APP_DB_PASSWORD", "")
 
+# Tryb awarii. `soft` (domyslny) zabija sam proces bazy (SIGKILL); `hard` gasi
+# CALA maszyne przez sysrq — maszyna znika bez zamykania gniazd i wraca dopiero
+# po restarcie, dolaczajac przez IST. Test pokrywal wylacznie wariant `soft`.
+#
+# Zmierzone na newclaude8-r9 tym samym workloadem (3 przebiegi kazdy):
+#   soft: przerwa 6.0-6.2 s
+#   hard: przerwa 0.0-0.1 s
+# Twarda utrata maszyny okazala sie MNIEJ odczuwalna dla klienta niz zabicie
+# procesu — mechanizmu nie zweryfikowano, wiec nie ma tu teorii, tylko pomiar.
+# Sens tego trybu to inna sciezka awarii, nie dluzsza przerwa: dowodzi zerowej
+# utraty transakcji przy zniknieciu maszyny i przechodzi przez powrot wezla po
+# crashu, czego `soft` nie dotyka.
+FAILOVER_MODE = os.environ.get("FAILOVER_MODE", "soft").lower()
+if FAILOVER_MODE not in ("soft", "hard"):
+    raise SystemExit(f"REFUSED: FAILOVER_MODE={FAILOVER_MODE!r} (dozwolone: soft, hard)")
+
 WORKLOAD_LOCAL = "tests/lab/workload-numbered.sh"
 _inv = yaml.safe_load(open(INVENTORY))
 WORKLOAD_HOST = list(_inv["all"]["children"]["galera"]["hosts"])[0]  # first galera node (portable)
@@ -185,10 +201,35 @@ def main():
             failures.append(f"could not map writer IP {writer_ip} to a host")
             raise RuntimeError(failures[-1])
 
-        # Kill the active writer with SIGKILL (hard crash, not a graceful leave).
+        # Zabij aktywnego writera. `soft`: sam proces bazy (SIGKILL). `hard`:
+        # cala maszyna przez sysrq — bez zamkniecia gniazd, jak utrata zasilania.
+        if FAILOVER_MODE == "hard":
+            cap = body(killed_host, sh(killed_host, "test -w /proc/sysrq-trigger && echo yes || echo no"))
+            if "yes" not in cap:
+                print(
+                    f"REFUSED: tryb hard wymaga zapisywalnego /proc/sysrq-trigger na {killed_host}. "
+                    "Kontenerowy lab go nie ma — uruchom na realnych VM albo uzyj FAILOVER_MODE=soft "
+                    "(ale wtedy mierzysz wariant optymistyczny, nie utrate maszyny)."
+                )
+                return 2
         kill_ts = time.time()
-        sh(killed_host, "pkill -9 -x mariadbd; echo killed", check=True)
-        print(f"killed writer {killed_host} at {kill_ts:.2f}")
+        if FAILOVER_MODE == "hard":
+            # Maszyna przestaje istniec w trakcie wykonania, wiec NIE wolno czekac
+            # na wynik: zwykle wywolanie wisi do timeoutu i wywraca caly test
+            # (subprocess.TimeoutExpired — zmierzone). Tryb async ansible (-B/-P 0)
+            # oddaje sterowanie zaraz po wystartowaniu zadania i nie czeka na
+            # odpowiedz, ktora juz nie nadejdzie.
+            try:
+                subprocess.run(
+                    [ANSIBLE, killed_host, "-i", INVENTORY, "-m", "ansible.builtin.shell",
+                     "-a", "echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger",
+                     "-B", "5", "-P", "0"],
+                    capture_output=True, text=True, timeout=30)
+            except subprocess.TimeoutExpired:
+                pass  # maszyna zniknela szybciej, niz ansible zdazyl wrocic — cel osiagniety
+        else:
+            sh(killed_host, "pkill -9 -x mariadbd; echo killed", check=True)
+        print(f"killed writer {killed_host} at {kill_ts:.2f} (tryb {FAILOVER_MODE})")
 
         # Wait for the workload to resume committing AFTER the kill instant.
         # Detect by timestamp (a commit clearly after kill_ts), not by count —
@@ -217,8 +258,20 @@ def main():
             failures.append(f"largest commit gap {gap:.1f}s exceeds RTO {RTO_SECONDS}s")
 
     finally:
-        # Restore the killed node so the cluster returns to full size.
-        if killed_host:
+        # Przywroc zabity wezel, zeby klaster wrocil do pelnego rozmiaru.
+        if killed_host and FAILOVER_MODE == "hard":
+            # Maszyna sie restartuje; czekamy na SSH, potem na systemd.
+            for _ in range(60):
+                r = subprocess.run(
+                    [ANSIBLE, killed_host, "-i", INVENTORY, "-m", "ansible.builtin.ping"],
+                    capture_output=True, text=True, timeout=60)
+                if "SUCCESS" in r.stdout:
+                    break
+                time.sleep(5)
+            sh(killed_host,
+               "systemctl start mariadb 2>/dev/null || true; sleep 10; echo restarted",
+               timeout=180)
+        elif killed_host:
             sh(killed_host,
                "rm -f /var/lib/mysql/aria_log_control /var/lib/mysql/aria_log.00000001; "
                "mariadbd --user=mysql --datadir=/var/lib/mysql "
@@ -242,8 +295,9 @@ def main():
             print(f"  - {f}")
         return 1
 
+    how = "SIGKILLed" if FAILOVER_MODE == "soft" else "wylaczony twardo (sysrq, utrata maszyny)"
     print(
-        f"PASS: failover survived — writer {killed_host} SIGKILLed, workload resumed "
+        f"PASS: failover survived — writer {killed_host} {how}, workload resumed "
         f"(failover gap {gap:.1f}s < {RTO_SECONDS}s RTO), "
         f"{len(seqs)} committed transactions all present on survivor after failover (0 lost)")
     return 0
