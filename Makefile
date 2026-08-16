@@ -6,7 +6,7 @@
         cluster-infra cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan \
         cluster-drift cluster-remove-node-plan cluster-remove-node cluster-alerts \
-        lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test \
+        lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test lab-failover-hard-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke \
@@ -178,6 +178,22 @@ lab-endpoint-verify:  ## Zweryfikuj endpoint VIP ProxySQL (ISC-24/26)
 lab-failover-test:  ## F9 — test failover writera (ISC-27/28, lab-only, destrukcyjny)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) tests/lab/chaos-failover.py
+
+# Utrata CALEJ maszyny (sysrq b), nie tylko procesu bazy. Inna sciezka awarii:
+# maszyna znika bez zamkniecia gniazd, a po restarcie wraca i dolacza przez IST.
+# Zmierzone na newclaude8-r9, workload z tests/lab/workload-numbered.sh:
+#   soft (SIGKILL mariadbd) : przerwa 6.0-6.2 s
+#   hard (sysrq, maszyna)   : przerwa 0.0-0.1 s   (3 przebiegi, powtarzalne)
+# Wbrew intuicji twarda utrata maszyny jest tu MNIEJ odczuwalna dla klienta niz
+# zabicie samego procesu; mechanizmu nie zweryfikowano, wiec zadnej teorii tutaj.
+# Wartosc tego celu nie lezy w dlugosci przerwy, tylko w pokryciu sciezki, ktorej
+# soft nie dotyka: zero utraconych transakcji przy zniknieciu maszyny i powrot
+# wezla po crashu (rejoin). Oddzielny pomiar recznym generatorem po TLS przez VIP
+# dal 15.8 s — inna konfiguracja klienta daje inny wynik, nie porownuj wprost.
+# Wymaga realnych VM — kontenerowy lab nie ma zapisywalnego /proc/sysrq-trigger.
+lab-failover-hard-test:  ## F9 — failover przy TWARDEJ utracie maszyny (sysrq, lab-only, destrukcyjny)
+	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
+	$(TARGET_ENV) FAILOVER_MODE=hard tests/lab/chaos-failover.py
 
 lab-split-brain-test:  ## F9 — test split-brain / partycji sieci (ISC-30, lab-only, destrukcyjny)
 	$(TARGET_ENV) tests/lab/chaos-split-brain.py
