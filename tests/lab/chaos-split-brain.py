@@ -128,22 +128,60 @@ def partition_rules(action):
     Uzywa rich-rule firewalld (nftables), nie --direct. --direct idzie przez
     shim iptables-nft, ktory na EL10 nie obsluguje celu REJECT (brak modulu
     kernela) i gubi te semantyke. DROP przez rich-rule jest podtrzymywany na
-    EL9 i EL10. Partycja to czarna dziura, nie odrzucenie — ale probe czeka
-    na obserwowalny stan, a na 3-wezlowym klastrze EVS moze potrzebowac pelnego
-    evs.inactive_timeout (PT15S) na instalacje nowego widoku, wiec budzet
-    PARTITION_CONVERGE_TIMEOUT obsluguje ten margines. check=True przerywa,
-    gdy nie udalo sie zalozyc izolacji: bez niej zadna obserwacja nie ma wartosci.
+    EL9 i EL10.
+
+    IZOLACJA MUSI BYC OBUSTRONNA, A POLACZENIA TRZEBA ZERWAC. Wersja, ktora
+    zakladala reguly wylacznie na wezle mniejszosciowym, NIE partycjonowala
+    niczego — klaster zostawal Primary/3 po obu stronach, a probe raportowal
+    wtedy "SPLIT-BRAIN", choc mierzyl wylacznie wlasna nieskutecznosc. Dwa
+    powody, oba potwierdzone na zywym kliencie (2026-08-16):
+
+      1. Rich-rule strefy filtruje WYLACZNIE INPUT. Wezel mniejszosciowy
+         swobodnie INICJUJE polaczenia wychodzace do wiekszosci, a odpowiedzi
+         wracaja jako ruch tej samej sesji. Dlatego reguly ida takze na wezly
+         wiekszosci — wtedy sam INPUT wystarczy, bo kazdy kierunek jest
+         blokowany na hoscie docelowym.
+
+      2. `filter_INPUT` zaczyna sie od `ct state {established, related} accept`,
+         PRZED skokiem do stref. Galera trzyma trwale polaczenia grupowe na
+         4567, wiec sama regula nie rusza juz zestawionych sesji. Trzeba je
+         zerwac jawnie.
+
+    `ss -K` jest zawezone do portu 4567. Bez tego zawezenia zrywa rowniez
+    wlasna sesje SSH Ansible i zadanie konczy sie UNREACHABLE.
     """
     heal = action == "remove"
     cmd = "add" if not heal else "remove"
+    min_ip = GALERA[MINORITY]["galera_node_address"]
+
+    # Kierunek 1: mniejszosc odrzuca ruch od kazdego wezla wiekszosci.
     for peer in MAJORITY:
         ip = GALERA[peer]["galera_node_address"]
         for direction in (f'source address="{ip}"', f'destination address="{ip}"'):
             sh(
                 MINORITY,
-                f'firewall-cmd --{cmd}-rich-rule '
+                f"firewall-cmd --{cmd}-rich-rule "
                 f"'rule family=ipv4 {direction} drop'",
                 check=not heal,
+            )
+
+    # Kierunek 2 (lustro): kazdy wezel wiekszosci odrzuca ruch od mniejszosci.
+    for peer in MAJORITY:
+        sh(
+            peer,
+            f"firewall-cmd --{cmd}-rich-rule "
+            f"'rule family=ipv4 source address=\"{min_ip}\" drop'",
+            check=not heal,
+        )
+
+    if not heal:
+        # Zerwij ZESTAWIONE sesje grupowe — regula ich nie dotyczy (conntrack).
+        for node in [MINORITY, *MAJORITY]:
+            sh(
+                node,
+                "ss -K -tn state established "
+                "'( sport = :4567 or dport = :4567 )' || true",
+                check=False,
             )
 
 
@@ -211,6 +249,22 @@ def main():
         min_size = wsrep(MINORITY, "wsrep_cluster_size")
         print(f"majority {MAJORITY[0]}: status={maj_status} size={maj_size}; "
               f"minority {MINORITY}: status={min_status} size={min_size}")
+
+        # BRAMA POPRAWNOSCI POMIARU, nie asercja produktu.
+        #
+        # Gdy mniejszosc nadal widzi PELNY klaster, partycja nie powstala i
+        # zaden ponizszy pomiar nie mowi nic o ISC-30. Wczesniejsza wersja
+        # raportowala wtedy "SPLIT-BRAIN: minority accepted a write" — komunikat
+        # kierujacy operatora na nieistniejacy blad integralnosci danych, choc
+        # w rzeczywistosci zawiodl sam harness (patrz partition_rules). Rozdzial
+        # tych dwoch diagnoz jest cala wartoscia tej bramy.
+        if min_size == str(len(GALERA)):
+            print(
+                f"FAIL: partycja NIE powstala — {MINORITY} nadal widzi "
+                f"{min_size} wezlow (status={min_status}). Test nie zmierzyl ISC-30; "
+                f"to awaria mechanizmu izolacji, NIE split-brain klastra."
+            )
+            return 1
 
         token = int(time.time())
         maj_write = can_write(MAJORITY[0], token)

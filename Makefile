@@ -10,7 +10,7 @@
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke \
-        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook \
+        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify
 
 CLUSTER ?= example-cluster
@@ -195,6 +195,11 @@ verify-no-conditional-env:  ## Statyczny guard: play-level environment bez warun
 
 verify-proxysql-tenancy:  ## Statyczny guard: klastry na wspólnym ProxySQL mają rozłączne hostgroupy i app_user
 	python3 tests/validation/probe-proxysql-tenancy.py
+
+# Adres hypervisora bierze sie z PROXMOX_VE_ENDPOINT, wiec ta czesc dziala tylko
+# lokalnie; kolizje miedzy klastrami i z VIP-em sa sprawdzane zawsze, takze w CI.
+verify-address-collision:  ## Statyczny guard: adresy wezlow nie kolidują z hypervisorem, innym klastrem ani VIP-em
+	python3 tests/validation/probe-address-collision.py
 
 verify-no-secrets-leak:  ## Statyczny guard: brak sekretów w repo i argv procesów
 	bash tests/validation/probe-no-secrets-leak.sh
