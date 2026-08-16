@@ -42,8 +42,8 @@ with open(INVENTORY, encoding="utf-8") as fh:
 ENVIRONMENT = CLUSTER["cluster"]["environment"]
 VIP = CLUSTER["proxysql"]["endpoint"]["address"]
 VIP_PORT = CLUSTER["proxysql"]["endpoint"]["port"]
+APP_USER = CLUSTER.get("proxysql", {}).get("app_user", "app_user")
 GALERA = list(INV["all"]["children"]["galera"]["hosts"])
-
 
 def sh(node, script, timeout=60, check=False):
     r = subprocess.run(
@@ -104,7 +104,7 @@ def main():
 
         fd, local_cnf = tempfile.mkstemp()
         with os.fdopen(fd, "w") as fh:
-            fh.write(f"[client]\nuser=app_user\npassword={APP_PW}\n")
+            fh.write(f"[client]\nuser={APP_USER}\npassword={APP_PW}\n")
         subprocess.run([ANSIBLE, WORKLOAD_HOST, "-i", INVENTORY, "-m", "copy",
                         "-a", f"src={local_cnf} dest={CNF_REMOTE} mode=0600 owner=root"],
                        capture_output=True, text=True, check=True)
