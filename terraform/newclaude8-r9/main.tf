@@ -10,12 +10,12 @@ terraform {
 
 provider "proxmox" {} # endpoint + api_token + insecure z env PROXMOX_VE_*
 
-# newclaude7-r9 — warstwa BAZODANOWA siodmego przebiegu budowy od zera.
+# newclaude8-r9 — warstwa BAZODANOWA osmego przebiegu budowy od zera.
 #
-# Cel: pierwszy klaster, na ktorym naprawa z PR #29 dziala BEZ recznej pomocy.
-# Na v6 task usuwajacy anonimowe konta cieniujace pmm_monitor wykonal sie jako
-# no-op, bo debugging tamtej sesji wyczyscil je wczesniej recznie. Tu F11 ma
-# przejsc za pierwszym razem na nietknietym mysql.user.
+# Cel: naturalny dowod poprawki z PR #30. Marker DROPPED w F6/F11 byl dotad
+# sprawdzony wylacznie wstrzyknietym anonimem na utwardzonym juz klastrze;
+# tutaj F11 spotyka swieza instalacje MariaDB i musi zaraportowac `changed`
+# sam z siebie, przy pierwszym przebiegu.
 #
 # ProxySQL, VIP, PMM i MinIO sa wspoldzielone i mieszkaja w terraform/shared/ —
 # ten katalog ich nie tworzy ani nie niszczy.
@@ -32,8 +32,8 @@ locals {
 
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
-  # VMID 9470-9473 wolne (sprawdzone przez API na pelnej liscie VM klastra PVE).
-  # IP .160-.163 potwierdzone AKTYWNYM skanem sieci (ping + port 22/8006),
+  # VMID 9480-9483 wolne (sprawdzone przez API na pelnej liscie VM klastra PVE).
+  # IP .164-.167 potwierdzone AKTYWNYM skanem sieci (ping + port 22/8006),
   # nie sama konfiguracja Proxmoxa — ta pomija hypervisor i hosty spoza niego.
   #
   # NIE UZYWAC .180-.183: `.181` to adres zarzadzania hypervisora Proxmox
@@ -44,10 +44,10 @@ locals {
   # innodb_buffer_pool_size zjezdza do 768M, zeby zostal zapas na mariabackup
   # podczas SST i backupu.
   vms = {
-    n7g1 = { id = 9470, ip = 160, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n7g2 = { id = 9471, ip = 161, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n7g3 = { id = 9472, ip = 162, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n7r1 = { id = 9473, ip = 163, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    n8g1 = { id = 9480, ip = 164, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n8g2 = { id = 9481, ip = 165, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n8g3 = { id = 9482, ip = 166, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n8r1 = { id = 9483, ip = 167, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
 
@@ -57,8 +57,8 @@ resource "proxmox_virtual_environment_vm" "node" {
   node_name   = local.node_name
   pool_id     = local.pool_id
   vm_id       = each.value.id
-  description = "newclaude7-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
-  tags        = ["rocky9", "galera", "newclaude7", each.value.role, "n7"]
+  description = "newclaude8-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
+  tags        = ["rocky9", "galera", "newclaude8", each.value.role, "n8"]
 
   agent {
     enabled = true
