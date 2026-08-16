@@ -106,6 +106,55 @@ def main():
             failures,
         )
 
+    # ISC-19 (rzeczywistosc, nie widok proxy): kazdy wezel ONLINE w aktywnej
+    # hostgrupie MUSI byc w Primary Component i Synced wedlug monitora Galery.
+    #
+    # Bez tej kontroli sonda przechodzila na zielono w stanie, w ktorym aplikacja
+    # dostawala smieci. Zmierzone na newclaude8-r9 przy utracie kworum (2 z 3
+    # wezlow zgaszone): monitor ProxySQL raportowal primary_partition=NO oraz
+    # wsrep_local_state=0, a mimo to wezel zostawal ONLINE w hostgrupie writera.
+    # Klient przez VIP dostawal wtedy "ERROR 2027 Received malformed packet"
+    # zamiast czystego "ERROR 1047 (08S01) WSREP has not yet prepared node",
+    # ktory ten sam wezel zwracal przy polaczeniu bezposrednim. Warunek
+    # "dokladnie jeden ONLINE writer" byl spelniony przez cala awarie.
+    active_hgs = {str(WRITER_HG), str(BACKUP_HG), str(READER_HG)}
+    galera_raw = run_admin_query(
+        "SELECT g.hostname, g.primary_partition, g.wsrep_local_state "
+        "FROM mysql_server_galera_log g JOIN (SELECT hostname, "
+        "MAX(time_start_us) AS t FROM mysql_server_galera_log GROUP BY hostname) m "
+        "ON g.hostname = m.hostname AND g.time_start_us = m.t"
+    )
+    for node, body in servers_raw.items():
+        rows = [ln.split("\t") for ln in body.splitlines() if "\t" in ln]
+        routed = {r[1] for r in rows if r[0] in active_hgs and r[2] == "ONLINE"}
+        monitor = {}
+        for line in galera_raw.get(node, "").splitlines():
+            if "\t" in line:
+                cols = line.split("\t")
+                monitor[cols[0]] = (cols[1], cols[2])
+        for host in sorted(routed):
+            sample = monitor.get(host)
+            if sample is None:
+                failures.append(
+                    f"{node}: {host} jest ONLINE w aktywnej hostgrupie, ale monitor "
+                    f"Galery nie ma o nim probki (mysql_server_galera_log)"
+                )
+                continue
+            primary, local_state = sample
+            check(
+                primary == "YES",
+                f"{node}: {host} routowany mimo primary_partition={primary} "
+                f"(wezel poza Primary Component — klient dostanie blad protokolu, "
+                f"nie blad bazy)",
+                failures,
+            )
+            check(
+                local_state == "4",
+                f"{node}: {host} routowany mimo wsrep_local_state={local_state} "
+                f"(oczekiwane 4 = Synced)",
+                failures,
+            )
+
     # ISC-21: runtime galera_hostgroups == disk galera_hostgroups (no drift)
     hg_query = (
         "SELECT CONCAT_WS(',', writer_hostgroup, backup_writer_hostgroup, "

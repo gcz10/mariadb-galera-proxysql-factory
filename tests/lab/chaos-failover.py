@@ -3,7 +3,8 @@
 
 Runs a numbered workload through the ProxySQL VIP, kills the active writer
 (the Galera node ProxySQL routes writes to), and proves:
-  - ISC-27: the client resumes committing within RTO (< 120 s),
+  - ISC-27: the client resumes committing within the RTO declared in
+    cluster.yml (`availability.rto_node_failure`),
   - ISC-28: every transaction the client saw committed survives the failover.
   - ISC-64: refuses to run on the production profile (destruction guard).
 
@@ -23,7 +24,6 @@ INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
 APP_PW = os.environ.get("APP_DB_PASSWORD", "")
 
-RTO_SECONDS = 120
 WORKLOAD_LOCAL = "tests/lab/workload-numbered.sh"
 _inv = yaml.safe_load(open(INVENTORY))
 WORKLOAD_HOST = list(_inv["all"]["children"]["galera"]["hosts"])[0]  # first galera node (portable)
@@ -40,6 +40,26 @@ with open(INVENTORY, encoding="utf-8") as fh:
 VIP = CLUSTER["proxysql"]["endpoint"]["address"]
 VIP_PORT = CLUSTER["proxysql"]["endpoint"]["port"]
 ENVIRONMENT = CLUSTER["cluster"]["environment"]
+
+
+def _duration_seconds(text):
+    """Parse an SLA duration ('2m', '30s', '1h', '90') into seconds.
+
+    RTO was hardcoded at 120 s while cluster.yml declares it in
+    `availability.rto_node_failure`. A cluster tightening its SLA to 30s kept
+    passing a 119 s failover: the assertion did not track the contract it
+    claims to enforce.
+    """
+    m = re.fullmatch(r"\s*(\d+)\s*([smh]?)\s*", str(text))
+    if not m:
+        raise SystemExit(
+            f"REFUSED: cannot parse availability.rto_node_failure={text!r} "
+            "(expected forms: '90', '30s', '2m', '1h')"
+        )
+    return int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
+
+
+RTO_SECONDS = _duration_seconds(CLUSTER["availability"]["rto_node_failure"])
 
 
 def sh(node, script, timeout=60, check=False):
