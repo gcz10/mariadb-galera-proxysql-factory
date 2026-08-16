@@ -71,7 +71,27 @@
     # WYLACZNIE @'%'. Konto @localhost jest w tym repo uznane za legacy i
     # f11_pmm_client.yml:677 je kasuje — tworzenie go tutaj dawalo ping-pong
     # (agent tworzy, client kasuje) i F11 nigdy nie zbiegalo do changed=0.
-    # Eksporter laczy sie po TCP na 127.0.0.1, co `%` pokrywa.
+    #
+    # CIEN ANONIMOWYCH KONT: swieza instalacja Mariadb tworzy ''@'localhost'
+    # (i ''@'<hostname>'), a MariaDB resolvuje 127.0.0.1 do 'localhost'.
+    # Anonim o bardziej konkretnym hoscie WYGRYWA z pmm_monitor@'%' — eksporter
+    # laczy sie po TCP na 127.0.0.1 i dostaje "Access denied for user
+    # 'pmm_monitor'@'localhost'", a API PMM odrzuca POST golym 400 bez
+    # wskazania przyczyny. F6 (ISC-40) usuwa anonimowych, ale biegnie PO F11,
+    # wiec na swiezym klastrze kazde tworzenie eksportera pod lokalnym agentem
+    # padalo. Tu idzie identyczne SQL jak w F6 — F6 zostaje audytorem, a jego
+    # drugi przebieg jest no-op. DDL replikuje sie Galera-wide z jednego wezla.
+    - name: "Usun anonimowe konta cieniujace pmm_monitor (to samo SQL co F6)"
+      ansible.builtin.shell: |-
+        set -o pipefail
+        stmts=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SELECT CONCAT('DROP USER IF EXISTS ', QUOTE(user), '@', QUOTE(host), ';') FROM mysql.user WHERE user=''")
+        if [ -n "$stmts" ]; then echo "$stmts" | mariadb --socket=/var/lib/mysql/mysql.sock; fi
+      register: pmm_anon_cleanup
+      changed_when: "'DROP USER' in pmm_anon_cleanup.stdout | default('')"
+      when:
+        - inventory_hostname in groups.get('galera', [])
+        - galera_node_idx | default(1) == 1
+
     - name: "Zapewnij konto bazy danych pmm_monitor"
       ansible.mysql.mysql_user:
         name: pmm_monitor
