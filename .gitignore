@@ -17,7 +17,14 @@ __pycache__/
 .venv/
 ssh_key
 ssh_key.pub
-tests/lab/tls/
+# Materiał TLS (klucze, certy, katalogi per klaster) zostaje lokalnie, ale
+# NARZĘDZIA do jego wytworzenia muszą być w repo. Wcześniej ignorowany był cały
+# katalog, więc generate.sh nigdy nie trafił do wersjonowania: klaster z tls.mode=full
+# odwoływał się w cluster.yml do plików, których nikt po sklonowaniu repo nie miał
+# jak wytworzyć. Wzorzec `tests/lab/tls/*` (nie sam katalog) pozwala odwrócić
+# wykluczenie dla skryptów; podkatalogi per klaster nadal są ignorowane w całości.
+tests/lab/tls/*
+!tests/lab/tls/*.sh
 .secret-probe-*.yml
 # Kolekcje instalowane przez ansible-galaxy (ANSIBLE_HOME wskazujacy na repo).
 # Nieignorowane trafialy do `git ls-files --others` i sonda ISC-43 skanowala
