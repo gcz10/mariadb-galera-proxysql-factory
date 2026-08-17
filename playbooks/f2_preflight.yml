@@ -14,9 +14,18 @@
     # Konsument nie instaluje tam pakietow, wiec jego lockfile nie opisuje ich
     # systemu — wspolne ProxySQL moze stac na innym EL major niz baza tego
     # klastra i to jest poprawne, a nie blad konfiguracji.
+    #
+    # Host aplikacyjny (grupa `app`) jest wylaczony BEZWARUNKOWO, takze dla
+    # ownera: nalezy do warstwy wspolnej, przezywa przebudowy klastrow i zaden
+    # klaster nie instaluje na nim swoich pakietow. Klienta stawia app_host.yml,
+    # ktory wybiera lockfile po majorze HOSTA (`app_lock_by_major`) wlasnie
+    # dlatego, ze platforma hosta jest niezalezna od platformy klastra.
+    # Bez tego `cluster-validate` kazdego klastra EL9 pada na fcapp (Rocky 10) —
+    # zmierzone na v11, defekt wprowadzony razem z grupa `app`.
     f2_lockfile_applies: >-
-      {{ (proxysql.role | default('owner')) == 'owner'
-         or not ('proxysql' in group_names or 'infra' in group_names) }}
+      {{ 'app' not in group_names
+         and ((proxysql.role | default('owner')) == 'owner'
+              or not ('proxysql' in group_names or 'infra' in group_names)) }}
   tasks:
     # R1/A1: lockfile wskazywany per klaster (versions.lock_file z cluster.yml),
     # nie ścieżka wpisana na sztywno. Ten sam wzorzec co f2_install — jedna konwencja w repo.

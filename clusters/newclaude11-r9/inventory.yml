@@ -1,0 +1,77 @@
+---
+# newclaude11-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
+# Logowanie jako root przez klucz cloud-init; become:true jest wtedy no-opem.
+#
+# VM Galera i restore tworzy terraform/newclaude11-r9/:
+#   n11g1-3 (VMID 9510-9512, IP .185-.187), n11r1 (9513, .188).
+# ProxySQL fcp1/fcp2 (.131/.132), app fcapp (.134) i infra fcinfra (.130)
+# NALEZA do terraform/shared/ i sa tu tylko deklarowane — ten katalog ich
+# nie tworzy ani nie niszczy. VIP .133.
+#
+# Nazwy hostow sa globalnie rozlaczne w calej flocie: trafiaja do PMM Inventory
+# jako <pmm.cluster_name>-<host> oraz do hostname VM.
+
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: tests/lab/ssh_key
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        n11g1:
+          ansible_host: "192.168.1.185"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.185"
+        n11g2:
+          ansible_host: "192.168.1.186"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.186"
+        n11g3:
+          ansible_host: "192.168.1.187"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.187"
+
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        fcp1:
+          ansible_host: "192.168.1.131"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.131"
+        fcp2:
+          ansible_host: "192.168.1.132"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.132"
+
+    restore:
+      vars:
+        restore_role: "restore"
+      hosts:
+        n11r1:
+          ansible_host: "192.168.1.188"
+          restore_node_address: "192.168.1.188"
+
+    # Host APLIKACYJNY warstwy wspolnej: laczy sie do klastra tak, jak zrobilaby
+    # to aplikacja (po sieci, przez VIP). Nie jest wezlem bazy i nie liczy sie do
+    # zadnego nodes_expected. Tworzy go terraform/shared/, nie ten klaster.
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        fcapp:
+          ansible_host: "192.168.1.134"
+          app_node_address: "192.168.1.134"
+
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        fcinfra:
+          ansible_host: "192.168.1.130"
+          infra_node_address: "192.168.1.130"
