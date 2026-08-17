@@ -1,18 +1,19 @@
 ---
-# newclaude11-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
+# newclaude12-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
 #
-# JEDENASTY przebieg budowy warstwy Galera od zera i ostatni tej petli.
+# DWUNASTY przebieg budowy warstwy Galera od zera.
 #
-# Hipoteza tego przebiegu: obie poprawki sondy degradacji z v10 (drop-in
-# Restart=no przed SIGKILL oraz odporne na wyjatki sprzatanie z --no-block)
-# powstaly NA TYM SAMYM klastrze, ktory je ujawnil — dokladnie ten blad metody,
-# ktory kazal zbudowac v10. Tutaj `lab-app-degradation-test` musi przejsc za
-# pierwszym razem, na swiezej instalacji, bez zadnej poprawki kodu.
+# Hipoteza: od czasu n11 przerobiono `command`/`shell` na moduly (package_facts,
+# service_facts, uri) w ~25 playbookach, zmieniono `state MASTER`->`BACKUP` w
+# keepalived, dodano certy per wezel i cert frontendu ProxySQL. WSZYSTKO to bylo
+# weryfikowane na ISTNIEJACYM klastrze. Budowa od zera przechodzi sciezki, ktorych
+# zbiezny klaster nie dotyka: package_facts na czystym hoście, preflight czystosci,
+# bootstrap, SST przy dolaczaniu, pierwsza rejestracja w PMM i w ProxySQL.
 #
 # Kolejnosc wg README.md:32-38 — F11 przed F6, lab-seed-smoke przed drillem,
 # lab-monitoring-verify na samym koncu.
 #
-# Adresacja: n11g1-3 na .185-.187 (VMID 9510-9512), restore n11r1 .188 (9513).
+# Adresacja: n12g1-3 na .172-.174 (VMID 9520-9522), restore n12r1 .175 (9523).
 # Blok potwierdzony AKTYWNYM skanem (ping + 22/8006). Skan jest falsyfikowalny:
 # kontrola .179/.184 wyszla ZYWA, a .189 okazal sie nowym zywym hostem, ktorego
 # nie bylo na dotychczasowej liscie — dlatego blok .185-.188, nie .186-.189.
@@ -23,9 +24,9 @@
 # jest finalclaude-r10.
 #
 # ROZLACZNOSC NA WSPOLNYM ProxySQL — bez niej drugi klaster kasuje pierwszego:
-#   hostgroup_base: 650 (writer 650, backup 660, reader 670, offline 680)
+#   hostgroup_base: 690 (writer 690, backup 700, reader 710, offline 720)
 #     finalclaude-r10 uzywa 10/20/30/40, finalclaude-r9 110-140
-#   app_user: app_user_n11
+#   app_user: app_user_n12
 #     wpis w mysql_users jest globalny, a jego default_hostgroup wybiera klaster
 #   Pilnuje tego tests/validation/probe-proxysql-tenancy.py.
 #
@@ -33,7 +34,7 @@
 # (sciezka przechodnia dla uzytkownika `proxysql`; /etc/proxysql jest 0750 root:root).
 
 cluster:
-  name: "newclaude11-r9"
+  name: "newclaude12-r9"
   environment: "laboratory"
   profile: "laboratory"
   automation_release: "0.1.0"
@@ -49,15 +50,15 @@ versions:
 galera:
   # wsrep_cluster_name jest czescia tozsamosci Primary Component — kolizja nazw
   # skleilaby dwa niezalezne klastry w jeden.
-  cluster_name: "n11_galera"
+  cluster_name: "n12_galera"
   nodes_expected: 3
 
 proxysql:
   nodes_expected: 2
   max_writers: 1
   read_write_split_enabled: false
-  hostgroup_base: 650
-  app_user: "app_user_n11"
+  hostgroup_base: 690
+  app_user: "app_user_n12"
   # Konsument warstwy wspolnej: NIE instaluje pakietow na fcp1/fcp2/fcinfra ani
   # nie zarzadza VIP-em. Rejestruje tylko wlasne hostgroupy i uzytkownika przez f7.
   # Owner (finalclaude-r10) postawil te wezly na EL10, wiec lockfile EL9 ich nie dotyczy.
@@ -82,9 +83,9 @@ tls:
   # materialu i sa ignorowane przy tej fladze — sciezke liscia wyprowadza
   # tls_certs.yml z katalogu CA i `inventory_hostname`.
   per_node_certificates: true
-  ca_reference: "tests/lab/tls/n11/ca.pem"
-  certificate_reference: "tests/lab/tls/n11/server-cert.pem"
-  private_key_reference: "tests/lab/tls/n11/server-key.pem"
+  ca_reference: "tests/lab/tls/n12/ca.pem"
+  certificate_reference: "tests/lab/tls/n12/server-cert.pem"
+  private_key_reference: "tests/lab/tls/n12/server-key.pem"
   # Wymuszanie TLS na WSZYSTKICH polaczeniach TCP to osobny krok: ProxySQL laczy
   # sie do backendow z use_ssl per serwer, a mysqld_exporter i agent QAN ida TCP
   # na 127.0.0.1:3306. Wlaczenie tego tutaj zshunnowaloby backendy i wygasilo metryki.
@@ -125,21 +126,21 @@ availability:
 backup:
   enabled: true
   destination: "s3"
-  full_backup_schedule: "0 3 * * *"       # rozlaczne z r10 (0 2), r9 (30 2), n10 (40 2)
+  full_backup_schedule: "20 3 * * *"       # rozlaczne z r10 (0 2), r9 (30 2), n10 (40 2)
   incremental_backup_schedule: "disabled"
   freshness_sla_hours: 26
   retention_days: 14
   encryption_enabled: true
   immutable_or_offsite_copy: true
-  restore_test_schedule: "0 11 * * 0"     # rozlaczne z r10 (0 4) i r9 (0 5)
+  restore_test_schedule: "0 12 * * 0"     # rozlaczne z r10 (0 4) i r9 (0 5)
   scheduler:
     mode: "cron"
     # Nie moze byc aktywnym writerem ProxySQL — runner odrzuca backup z writera (ISC-39).
-    host: "n11g1"
+    host: "n12g1"
     timezone: "UTC"
   s3:
     endpoint: "192.168.1.130:9000"
-    bucket: "n11-galera-backups"          # rozlaczny z fc10-galera-backups
+    bucket: "n12-galera-backups"          # rozlaczny z fc10-galera-backups
     secure: false
 
 monitoring:
@@ -147,7 +148,7 @@ monitoring:
     server_url: "https://192.168.1.130"
     agent_id: "pmm-server"
     # Namespace regul alertow i folderow w PMM — musi byc rozlaczny z fc10-galera.
-    cluster_name: "n11-galera"
+    cluster_name: "n12-galera"
     validate_certs: false
     credentials_revision: 1
   # Wezly Galera dostaja lokalnego pmm-agenta. ProxySQL pomijamy — nalezy do ownera (r10).

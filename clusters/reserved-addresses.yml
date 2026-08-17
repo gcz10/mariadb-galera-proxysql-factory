@@ -23,6 +23,17 @@
 #
 # Znalazles zywy adres, ktorego tu nie ma? Dopisz go RAZEM Z POWODEM. Wpis bez
 # powodu jest bezuzyteczny przy nastepnej rewizji — nikt nie wie, czy juz wygasl.
+#
+# ZWALNIANIE WPISU: martwy ping to ZA MALO. Lista jest celowo zachowawcza, bo
+# blad w jedna strone kosztuje kilka minut szukania innego bloku, a w druga —
+# przerwany provisioning i zerwane ARP na cudzej maszynie. Adres wraca do puli
+# dopiero, gdy WIADOMO, czym byl i ze go nie ma (np. potwierdzenie od
+# wlasciciela hosta), a nie gdy akurat nie odpowiada.
+#
+# Zmierzone 2026-08-17: `.189` wykryty jako zywy dnia poprzedniego, nastepnego
+# dnia juz nie odpowiadal. Host wlaczany okresowo (laptop, stacja, maszyna
+# uruchamiana na zadanie) wyglada w skanie dokladnie tak samo jak adres wolny.
+# Wpis ZOSTAJE.
 
 reserved:
   - address: "192.168.1.179"
