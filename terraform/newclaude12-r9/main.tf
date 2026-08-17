@@ -10,13 +10,12 @@ terraform {
 
 provider "proxmox" {} # endpoint + api_token + insecure z env PROXMOX_VE_*
 
-# newclaude10-r9 — warstwa BAZODANOWA dziesiatego przebiegu budowy od zera.
+# newclaude12-r9 — warstwa BAZODANOWA jedenastego przebiegu budowy od zera.
 #
-# Cel: naturalny dowod poprawki z v9. `tests/lab/backup-impact.py` czytal
-# `proxysql.app_user` z wpisanego na sztywno literalu, przez co na kazdym
-# klastrze o nazwie innej niz `app_user` workload szedl do cudzej hostgrupy.
-# Poprawka byla robiona na tym samym klastrze, wiec nie zobaczyla swiezej
-# instalacji — tutaj `lab-backup-impact` musi przejsc za pierwszym razem.
+# Cel: naturalny dowod obu poprawek sondy degradacji z v10. Drop-in Restart=no
+# przed SIGKILL oraz odporne na wyjatki sprzatanie z `--no-block` powstaly na
+# tym samym klastrze, ktory je ujawnil, wiec nigdy nie zobaczyly swiezej
+# instalacji. Tutaj `lab-app-degradation-test` musi przejsc za pierwszym razem.
 #
 # ProxySQL, VIP, PMM, MinIO i host aplikacyjny sa wspoldzielone i mieszkaja
 # w terraform/shared/ — ten katalog ich nie tworzy ani nie niszczy.
@@ -33,22 +32,25 @@ locals {
 
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
-  # VMID 9500-9503 wolne (sprawdzone przez API na pelnej liscie VM klastra PVE).
-  # IP .172-.175 potwierdzone AKTYWNYM skanem sieci (ping + port 22/8006),
-  # nie sama konfiguracja Proxmoxa — ta pomija hypervisor i hosty spoza niego.
+  # VMID 9520-9523 wolne (sprawdzone przez API na pelnej liscie VM klastra PVE).
+  # IP .172-.175 potwierdzone AKTYWNYM skanem sieci (ping + port 22/8006).
+  #
+  # Skan jest falsyfikowalny i to sie oplacilo: kontrola .179/.184 wyszla ZYWA,
+  # a .189 okazal sie NOWYM zywym hostem spoza dotychczasowej listy. Dlatego
+  # blok konczy sie na .188, mimo ze .189 sasiaduje.
   #
   # NIE UZYWAC .180-.183: `.181` to adres zarzadzania hypervisora Proxmox
-  # (PROXMOX_VE_ENDPOINT). Zywe sa tez .179 i .184. Kolizje z tymi blokami
+  # (PROXMOX_VE_ENDPOINT). Zywe sa tez .179, .184 i .189. Kolizje z tymi blokami
   # lowi tests/validation/probe-address-collision.py w CI.
   #
   # RAM: limit operatora to 5 GB na VM; wezly Galera dostaja 3 GB, a
   # innodb_buffer_pool_size zjezdza do 768M, zeby zostal zapas na mariabackup
   # podczas SST i backupu.
   vms = {
-    n10g1 = { id = 9500, ip = 172, role = "galera",  cpu = 2, ram = 3072, disk = 40 }
-    n10g2 = { id = 9501, ip = 173, role = "galera",  cpu = 2, ram = 3072, disk = 40 }
-    n10g3 = { id = 9502, ip = 174, role = "galera",  cpu = 2, ram = 3072, disk = 40 }
-    n10r1 = { id = 9503, ip = 175, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    n12g1 = { id = 9520, ip = 172, role = "galera",  cpu = 2, ram = 3072, disk = 40 }
+    n12g2 = { id = 9521, ip = 173, role = "galera",  cpu = 2, ram = 3072, disk = 40 }
+    n12g3 = { id = 9522, ip = 174, role = "galera",  cpu = 2, ram = 3072, disk = 40 }
+    n12r1 = { id = 9523, ip = 175, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
 
@@ -58,8 +60,8 @@ resource "proxmox_virtual_environment_vm" "node" {
   node_name   = local.node_name
   pool_id     = local.pool_id
   vm_id       = each.value.id
-  description = "newclaude10-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
-  tags        = ["rocky9", "galera", "newclaude10", each.value.role, "n10"]
+  description = "newclaude12-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
+  tags        = ["rocky9", "galera", "newclaude12", each.value.role, "n12"]
 
   agent {
     enabled = true
