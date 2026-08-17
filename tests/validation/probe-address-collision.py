@@ -27,11 +27,19 @@ Sprawdzane niezmienniki:
   3. Adres wezla nie moze byc rowny VIP-owi wlasnego klastra
      (`proxysql.endpoint.address`) — VIP podnosi Keepalived na wezlach ProxySQL.
 
+  4. Adres wezla nie moze nalezec do `clusters/reserved-addresses.yml` — rejestru
+     maszyn ZYWYCH, ale nie nalezacych do repo. Punkt 1 zamykal wylacznie
+     przypadek hypervisora; zwykly cudzy host w tej samej sieci byl dla sondy
+     niewidzialny, choc kolizja z nim wyglada IDENTYCZNIE (zerwane ARP,
+     `ssh-keyscan` z cudzym kluczem, UNREACHABLE). Rejestr powstal, gdy skan pod
+     newclaude11-r9 wykryl zywy `.189`, o ktorym nie wiedzial nikt.
+
 PASS: brak kolizji w sprawdzonych wymiarach (raportuje, ktore sprawdzenia byly aktywne).
-FAIL: kolizja adresu z hypervisorem, innym klastrem albo wlasnym VIP-em.
+FAIL: kolizja adresu z hypervisorem, innym klastrem, wlasnym VIP-em albo rejestrem.
 """
 
 import glob
+import ipaddress
 import os
 import sys
 from collections import defaultdict
@@ -73,6 +81,32 @@ def hypervisor_address():
     if not endpoint:
         return None
     return urlparse(endpoint).hostname
+
+RESERVED_PATH = "clusters/reserved-addresses.yml"
+
+
+def reserved_addresses():
+    """{adres: powod} z rejestru, z rozwinieciem blokow CIDR.
+
+    Brak pliku jest BLEDEM, nie cichym pominieciem: sonda bez rejestru
+    przepuszcza dokladnie te klase kolizji, dla ktorej rejestr powstal.
+    """
+    if not Path(RESERVED_PATH).exists():
+        return None
+    data = load_yaml(RESERVED_PATH)
+    out = {}
+    for item in data.get("reserved") or []:
+        addr = str(item.get("address", "")).strip()
+        if addr:
+            out[addr] = " ".join(str(item.get("reason", "")).split())
+    for item in data.get("reserved_ranges") or []:
+        cidr = str(item.get("cidr", "")).strip()
+        if not cidr:
+            continue
+        reason = " ".join(str(item.get("reason", "")).split())
+        for ip in ipaddress.ip_network(cidr, strict=False):
+            out.setdefault(str(ip), f"blok {cidr}: {reason}")
+    return out
 
 
 def main():
@@ -129,13 +163,28 @@ def main():
             if addr == str(vip):
                 errors.append(f"{name}: wezel {host} ma adres VIP-a {addr} klastra")
 
+    # --- 4. Kolizja z rejestrem adresow zajetych POZA repozytorium ---
+    reserved = reserved_addresses()
+    if reserved is None:
+        print(f"FAIL: brak {RESERVED_PATH} — sonda bez rejestru nie wykryje kolizji "
+              f"z zywym hostem spoza repo, czyli tej klasy bledu, dla ktorej powstala")
+        return 1
+    for name, data in sorted(clusters.items()):
+        for host, addr in sorted(data["hosts"].items()):
+            if addr in reserved:
+                errors.append(
+                    f"{name}: wezel {host} ma adres {addr} zarezerwowany w "
+                    f"{RESERVED_PATH} — {reserved[addr]}"
+                )
+
     if errors:
         print(f"FAIL: znaleziono {len(errors)} kolizji adresow:")
         for err in errors:
             print(f"  - {err}")
         return 1
 
-    checked = ["kolizje miedzy klastrami", "kolizje z VIP"]
+    checked = ["kolizje miedzy klastrami", "kolizje z VIP",
+               f"rejestr {len(reserved)} adresow zajetych"]
     if hyp:
         checked.insert(0, f"kolizja z hypervisorem ({hyp})")
     else:
