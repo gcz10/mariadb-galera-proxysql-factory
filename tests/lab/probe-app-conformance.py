@@ -15,8 +15,10 @@ sie w tej flocie przypadkiem, przy benchmarku:
   * przy utracie kworum aplikacja dostaje "ERROR 2027 malformed packet" zamiast
     czystego "ERROR 1047 (08S01)", ktory zwraca ten sam wezel bezposrednio.
     To osobna sprawa niz certyfikat i NADAL otwarta: zmierzone po wymianie certu
-    frontendu — kod bledu sie nie zmienil. Zrodlem jest routing (ProxySQL trzyma
-    wezel bez primary_partition w hostgrupie writera), nie tozsamosc TLS.
+    frontendu — kod bledu sie nie zmienil. Zrodlem NIE jest routing (sprostowane
+    na n11: `SELECT 1` przez VIP przechodzi w tej samej chwili, a wezel poza
+    kworum trafia do offline_hostgroup, o ile jest kogo promowac). ProxySQL zna
+    blad 1047 i loguje go, ale gubi przy kodowaniu odpowiedzi do klienta.
 
 Sprawdza (stan ustalony, bez destrukcji):
   1. polaczenie przez VIP jest SZYFROWANE (brak cichego zejscia do plaintextu),
