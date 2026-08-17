@@ -102,4 +102,3 @@ monitoring:
   system: "pmm"
   alerts:
     email: "ops@lab.local"
-  log_destination: "unknown"

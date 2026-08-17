@@ -464,8 +464,12 @@ backup:
 
 monitoring:
   system: "<Prometheus|Zabbix|Datadog|inne>"
-  alert_target: "<wartość>"
-  log_destination: "<Loki|ELK|SIEM|inne>"
+  pmm:
+    server_url: "<https://adres-pmm>"
+    agent_id: "<identyfikator agenta>"
+    cluster_name: "<namespace klastra w PMM>"
+  alerts:
+    email: "<adres@domena>"
 ```
 
 Inventory opisuje hosty, adresy i grupy. `cluster.yml` opisuje konfigurację usług. Nie duplikuj adresów IP w obu miejscach.

@@ -114,7 +114,6 @@ class BackupConfigValidatorTests(unittest.TestCase):
                     "credentials_revision": 1,
                 },
                 "system": "pmm",
-                "log_destination": "journald",
             },
         }
 
