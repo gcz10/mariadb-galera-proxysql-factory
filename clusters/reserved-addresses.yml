@@ -1,0 +1,52 @@
+---
+# Adresy, ktorych ZADEN klaster nie moze uzyc, mimo ze sa "wolne" wedlug repo.
+#
+# PO CO TO ISTNIEJE. probe-address-collision.py powstala po awarii z `.181`
+# (adres zarzadzania hypervisora), ale zamknela tylko TAMTEN przypadek: pyta
+# o `PROXMOX_VE_ENDPOINT` i porownuje inwentarze miedzy soba. Maszyna zywa w tej
+# sieci, ktora nie jest ani hypervisorem, ani wezlem z naszego repo, byla dla
+# sondy niewidzialna — a kolizja z nia wyglada dokladnie tak samo: zerwane ARP,
+# `ssh-keyscan` bioracy cudzy klucz, UNREACHABLE w Ansible.
+#
+# Ten plik jest JEDYNYM zrodlem prawdy o takich adresach i jest EGZEKWOWANY w CI.
+# Wczesniej ta wiedza mieszkala w komentarzach terraform/*/main.tf, czyli nigdzie:
+# komentarz nie zatrzyma nastepnego klastra przed wzieciem zajetego adresu.
+#
+# JAK AKTUALIZOWAC. Adresy potwierdza sie AKTYWNYM SKANEM (ping + porty), nie
+# konfiguracja Proxmoxa — hypervisor i hosty spoza niego nie wystepuja w
+# `nodes/pve/qemu`, wiec lista VM strukturalnie ich nie pokaze:
+#
+#   for ip in $(seq 176 190); do
+#     a=192.168.1.$ip
+#     ping -c1 -t1 "$a" >/dev/null 2>&1 && echo "$a ZYWY"
+#   done
+#
+# Znalazles zywy adres, ktorego tu nie ma? Dopisz go RAZEM Z POWODEM. Wpis bez
+# powodu jest bezuzyteczny przy nastepnej rewizji — nikt nie wie, czy juz wygasl.
+
+reserved:
+  - address: "192.168.1.179"
+    reason: >-
+      Zywy host spoza floty (odpowiada na ping). Nie jest zarzadzany przez to
+      repo i nie wystepuje w zadnym inventory. Potwierdzony aktywnym skanem.
+
+  - address: "192.168.1.184"
+    reason: >-
+      Zywy host spoza floty (odpowiada na ping). Jak wyzej.
+
+  - address: "192.168.1.189"
+    reason: >-
+      Zywy host spoza floty, WYKRYTY DOPIERO 2026-08-17 przy szukaniu bloku dla
+      newclaude11-r9. Nie bylo go na zadnej wczesniejszej liscie — dowod, ze
+      sama pamiec operatora nie wystarcza i skan musi byc powtarzany.
+
+# Bloki adresow. Zapis CIDR; kazdy adres w bloku jest zabroniony.
+reserved_ranges:
+  - cidr: "192.168.1.180/30"
+    reason: >-
+      Blok .180-.183 wokol adresu zarzadzania hypervisora Proxmox (.181).
+      Odpowiada za realna awarie z 2026-08-16: `terraform apply` przerywal sie
+      w polowie ("failed to perform HTTP POST request"), bo wywolania API
+      konkurowaly w ARP z wlasnie tworzona maszyna. Caly blok jest zabroniony,
+      nie tylko .181 — sasiedztwo tego adresu nie ma dla nas zadnej wartosci,
+      a pomylka o jeden kosztuje przerwany provisioning.
