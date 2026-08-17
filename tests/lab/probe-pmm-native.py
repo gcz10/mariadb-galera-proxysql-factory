@@ -232,23 +232,37 @@ def main():
     )
     with open(alerts_playbook, encoding="utf-8") as alerts_file:
         alerts_source = alerts_file.read()
-    rule_suffixes = re.findall(
-        r'^\s*-\s*uid:\s*"isa-\{\{\s*cluster_label\s*\}\}-([a-z0-9-]+)"',
-        alerts_source,
-        re.M,
-    )
+    # Reguly czytamy BLOKAMI, nie pojedyncza regexpa po UID: kazdy wpis moze
+    # nosic marker (`shared`, `requires_tls`), ktory decyduje, czy regula w ogole
+    # powstaje dla TEGO klastra. Sama lista UID-ow tego nie widzi i sonda
+    # zadalaby od klastra regul, ktorych f15 u niego swiadomie nie tworzy.
+    rule_blocks = re.split(r'^\s*-\s*uid:\s*', alerts_source, flags=re.M)[1:]
+    rule_suffixes, shared_suffixes, tls_suffixes = [], [], []
+    for block in rule_blocks:
+        m = re.match(r'"isa-(\{\{\s*cluster_label\s*\}\}|shared)-([a-z0-9-]+)"', block)
+        if not m:
+            continue
+        # Marker musi pochodzic z TEGO wpisu, a nie z nastepnego — tniemy blok
+        # na pierwszym `- uid:`, wiec `body` konczy sie przed kolejna regula.
+        body = block
+        suffix = m.group(2)
+        if m.group(1) == "shared":
+            shared_suffixes.append(suffix)
+        elif re.search(r'^\s+requires_tls:\s*true', body, re.M):
+            tls_suffixes.append(suffix)
+        else:
+            rule_suffixes.append(suffix)
     if not rule_suffixes:
         raise SystemExit(f"FAIL: nie odczytano zadnej reguly z {alerts_playbook}")
-    # Reguly WARSTWY WSPOLNEJ (`isa-shared-*`) opisuja pare ProxySQL, nie klaster,
-    # wiec nie maja namespace'u klastra i tworzy je WYLACZNIE owner. Konsument
-    # nie moze ich oczekiwac — u niego ich nie ma i nie powinno byc, bo N
-    # konsumentow wyslaloby N maili o jednym padnietym proxy.
-    shared_suffixes = re.findall(
-        r'^\s*-\s*uid:\s*"isa-shared-([a-z0-9-]+)"', alerts_source, re.M)
     is_owner = (CLUSTER_CONFIG.get("proxysql", {}).get("role", "owner") == "owner")
+    tls_full = (CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled") == "full")
     expected_alert_rules = {f"isa-{_cl}-{suffix}" for suffix in rule_suffixes}
     if is_owner:
+        # Warstwa wspolna: pare ProxySQL opisuje owner i tylko on.
         expected_alert_rules |= {f"isa-shared-{suffix}" for suffix in shared_suffixes}
+    if tls_full:
+        # Bez TLS metryka wygasania ma wartosc 0 i regula nie ma sensu.
+        expected_alert_rules |= {f"isa-{_cl}-{suffix}" for suffix in tls_suffixes}
     managed_alert_rules = [
         rule
         for rule in alert_rules

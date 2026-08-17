@@ -113,15 +113,18 @@
         - kl_config.changed or kl_script.changed
 
     - name: "Uruchom keepalived bez systemd (lab)"
-      ansible.builtin.shell: >-
-        keepalived -D -f /etc/keepalived/keepalived.conf
+      ansible.builtin.command: keepalived -D -f /etc/keepalived/keepalived.conf
       when:
         - not kl_systemd.stat.exists
         - (kl_process.rc != 0) or (kl_config.changed or kl_script.changed)
       changed_when: true
 
     - name: "ISC-24: czekaj na VIP na węźle MASTER"
+      # pipefail nie zmienia semantyki: ip zawsze konczy sie rc=0, o wyniku
+      # decysuje grep; wyjscie ip to pojedyncze linie adresow, daleko
+      # ponizej bufora potoku, wiec grep -q nie moze wywolas SIGPIPE.
       ansible.builtin.shell: >-
+        set -o pipefail;
         ip -o -4 addr show dev {{ keepalived_interface }} | grep -q "{{ proxysql.endpoint.address }}/"
       register: vip_master_check
       until: vip_master_check.rc == 0
@@ -132,6 +135,7 @@
 
     - name: "ISC-26: BACKUP nie trzyma VIP gdy MASTER zdrowy"
       ansible.builtin.shell: >-
+        set -o pipefail;
         ip -o -4 addr show dev {{ keepalived_interface }} | grep -q "{{ proxysql.endpoint.address }}/"
       register: vip_backup_check
       changed_when: false

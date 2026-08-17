@@ -33,13 +33,13 @@
 
     # audit#18: plan nie może być ozdobą — wymagamy jego artefaktu, świeżości (TTL)
     # i zgodności ze stanem klastra. Bez tego "wymaga planu" było tylko w komentarzu.
-    - name: "audit#18: wczytaj artefakt planu remove-node"
+    - name: "Audit#18: wczytaj artefakt planu remove-node"
       ansible.builtin.slurp:
         src: "{{ f13_plan_dir | default('/tmp/isa-plans') }}/remove-node-{{ cluster.name }}-{{ node }}.json"
       register: f13_plan_raw
       failed_when: false
 
-    - name: "audit#18: plan musi istnieć (uruchom najpierw f13_remove_node_plan.yml)"
+    - name: "Audit#18: plan musi istnieć (uruchom najpierw f13_remove_node_plan.yml)"
       ansible.builtin.assert:
         that:
           - not f13_plan_raw.failed
@@ -47,11 +47,11 @@
           Brak artefaktu planu dla {{ node }}. Uruchom najpierw:
           make cluster-remove-node-plan CLUSTER={{ cluster.name }} NODE={{ node }}
 
-    - name: "audit#18: sparsuj plan"
+    - name: "Audit#18: sparsuj plan"
       ansible.builtin.set_fact:
         f13_plan: "{{ f13_plan_raw.content | b64decode | from_json }}"
 
-    - name: "audit#18: plan świeży (TTL) i dla właściwego węzła/klastra"
+    - name: "Audit#18: plan świeży (TTL) i dla właściwego węzła/klastra"
       ansible.builtin.assert:
         that:
           - f13_plan.node == node
@@ -79,7 +79,7 @@
     # audit#18: po usunięciu klaster ma inną liczebność niż galera.nodes_expected.
     # Walidator schema, brama zdrowia i alerty nadal oczekują starej wartości, a 2-węzłowa
     # Galera bez arbitra traci odporność na awarię pojedynczego węzła — wymagaj świadomej zgody.
-    - name: "audit#18: zmiana topologii wymaga -e accept_topology_change=yes"
+    - name: "Audit#18: zmiana topologii wymaga -e accept_topology_change=yes"
       ansible.builtin.assert:
         that:
           - accept_topology_change is defined and accept_topology_change | bool
@@ -148,9 +148,16 @@
       no_log: true
 
     - name: "Drain: czekaj na zakończenie aktywnych połączeń do usuwanego węzła"
-      ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
-        "SELECT COALESCE(SUM(ConnUsed), 0) FROM stats_mysql_connection_pool WHERE srv_host='{{ hostvars[node].galera_node_address }}'"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - -h127.0.0.1
+          - -P6032
+          - -uadmin
+          - -N
+          - -B
+          - -e
+          - "SELECT COALESCE(SUM(ConnUsed), 0) FROM stats_mysql_connection_pool WHERE srv_host='{{ hostvars[node].galera_node_address }}'"
       register: f13_drain_conns
       until: (f13_drain_conns.stdout | trim | int) == 0
       retries: "{{ f13_drain_retries | default(30) | int }}"
@@ -286,9 +293,14 @@
 
   tasks:
     - name: "Czekaj na ustabilizowanie rozmiaru klastra (quorum utrzymane)"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name='wsrep_cluster_size'"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SHOW STATUS WHERE Variable_name='wsrep_cluster_size'"
       register: f13_size_after
       until: (f13_size_after.stdout | regex_search('\d+') | int) == (groups['galera'] | length) - 1
       retries: 12
@@ -296,9 +308,14 @@
       changed_when: false
 
     - name: "Weryfikuj Primary Component"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name='wsrep_cluster_status'"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SHOW STATUS WHERE Variable_name='wsrep_cluster_status'"
       register: f13_status_after
       changed_when: false
 

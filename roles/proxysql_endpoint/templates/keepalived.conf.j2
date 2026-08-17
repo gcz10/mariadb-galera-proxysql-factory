@@ -22,7 +22,26 @@ vrrp_script chk_proxysql {
 }
 
 vrrp_instance PROXYSQL_VIP {
-    state {{ 'MASTER' if proxysql_node_idx | int == 1 else 'BACKUP' }}
+    # OBA wezly startuja jako BACKUP — o roli decyduje priorytet, nie `state`.
+    #
+    # Wczesniej wezel 1 mial `state MASTER` i keepalived przy KAZDYM starcie
+    # zglaszal do logu:
+    #   "(PROXYSQL_VIP) Warning - preempt delay will not work with initial
+    #    state MASTER - clearing"
+    # Zrodlo tego zachowania jest jednoznaczne — keepalived/vrrp/vrrp.c:
+    #   if (vrrp->wantstate == VRRP_STATE_MAST) { ... vrrp->preempt_delay = false; }
+    # a man 5 keepalived.conf dodaje wprost: "NOTE: For this to work, the initial
+    # state must not be MASTER."
+    #
+    # Skutek byl taki, ze `preempt_delay` dzialal WYLACZNIE na wezle 2, czyli tam,
+    # gdzie nie ma znaczenia. Wezel 1 odbieral VIP natychmiast po powrocie —
+    # zmierzone 7 s od `systemctl start proxysql`, przy zadeklarowanych 30 s.
+    # Ochrona przed flappingiem istniala tylko w komentarzu.
+    #
+    # `state BACKUP` na obu kosztuje ~3,5 s dodatkowego czekania przy ZIMNYM
+    # starcie calej pary (advertisement timeout), za cene realnie dzialajacego
+    # opoznienia preempcji przy powrocie naprawionego wezla.
+    state BACKUP
     interface {{ keepalived_interface }}
     virtual_router_id {{ keepalived_virtual_router_id }}
     priority {{ 150 if proxysql_node_idx | int == 1 else 100 }}

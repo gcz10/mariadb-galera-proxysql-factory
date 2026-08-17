@@ -25,7 +25,7 @@
           - sst_password | length > 0
         fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env). Puste hasło = konto SST bez hasła."
     - name: "Zabij stary proces MariaDB (tylko lab: brak systemd)"
-      ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :4567 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :4568 2>/dev/null | xargs kill -9 2>/dev/null; true"
+      ansible.builtin.shell: "set -o pipefail; lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :4567 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :4568 2>/dev/null | xargs kill -9 2>/dev/null; true"
       changed_when: false
       when: not use_systemd
 
@@ -150,8 +150,13 @@
         enabled: true
       when: use_systemd
 
+    # rc==0 tego zadania steruje rozgalezieniem TLS (FLUSH SSL bez przestoju vs
+    # restart calego klastra) i brama restartu konfiguracji. `systemctl is-active`
+    # to DOKLADNIE to zrodlo prawdy; moduly facts (service_facts) daja grubniejszy
+    # snapshot (SUB stan 'running' vs ACTIVE 'active') i nie sa rownowazne dla
+    # jednostek typu exited/activating. Celowo zostaje command z pointwise noqa.
     - name: "Sprawdź czy MariaDB działa (produkcja: converge nie startuje zatrzymanego węzła)"
-      ansible.builtin.command: systemctl is-active mariadb
+      ansible.builtin.command: systemctl is-active mariadb  # noqa: command-instead-of-module
       register: mariadb_active
       changed_when: false
       failed_when: false
@@ -230,10 +235,16 @@
     # jest warta rewalidacji sciezki restartu. Pozostale 11 bram tej samej klasy
     # (f12_patch x6, f12_rolling_restart x4, site pre-restart x1) korzysta z helpera.
     - name: "Verify MariaDB health after config restart"
-      ansible.builtin.shell: >-
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name IN
-        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - >-
+            SHOW STATUS WHERE Variable_name IN
+            ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')
       register: mariadb_health_after_config_restart
       until: >-
         mariadb_health_after_config_restart.stdout is search('wsrep_local_state\t4')

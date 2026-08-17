@@ -158,6 +158,9 @@
           - "400"
           - -i
           - /var/cache/isa-selinux/mariadb-server.pp
+      # Laduje modul polityki SELinux — mutacja stanu hosta; zadanie jest
+      # juz ograniczone warunkiem checksumy modulu (nie poleci bez zmiany).
+      changed_when: true
       when:
         - "'galera' in group_names"
         - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
@@ -341,7 +344,7 @@
       changed_when: false
 
     - name: "ISC-3: asercja zainstalowanej wersji MariaDB zgodnej z lockfile"
-      ansible.builtin.shell: "mariadbd --version | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"
+      ansible.builtin.shell: "set -o pipefail; mariadbd --version | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"
       register: f2_installed_mariadb
       changed_when: false
       failed_when: false

@@ -53,9 +53,16 @@
         that: [proxysql_admin_password | length > 0]
         fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
     - name: "Writer ONLINE (writer HG)"
-      ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
-        "SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id={{ galera_writer_hg }} AND status='ONLINE'"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - -h127.0.0.1
+          - -P6032
+          - -uadmin
+          - -N
+          - -B
+          - -e
+          - "SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id={{ galera_writer_hg }} AND status='ONLINE'"
       register: f13_writer_ip
       changed_when: false
       no_log: true
@@ -115,7 +122,7 @@
         state: directory
         mode: "0700"
 
-    - name: "audit#18: zapisz artefakt planu remove-node"
+    - name: "Audit#18: zapisz artefakt planu remove-node"
       ansible.builtin.copy:
         content: |
           {
@@ -130,7 +137,7 @@
         dest: "{{ f13_plan_dir | default('/tmp/isa-plans') }}/remove-node-{{ cluster.name }}-{{ node }}.json"
         mode: "0600"
 
-    - name: "audit#18: gdzie leży plan"
+    - name: "Audit#18: gdzie leży plan"
       ansible.builtin.debug:
         msg: >-
           Plan zapisany: {{ f13_plan_dir | default('/tmp/isa-plans') }}/remove-node-{{ cluster.name }}-{{ node }}.json

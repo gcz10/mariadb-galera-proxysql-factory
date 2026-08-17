@@ -39,10 +39,16 @@ tests/lab/tls/generate.sh <klaster> <n1,n2,n3,ip1,ip2,ip3>
 #      wszystkie klastry JEDNYM certem frontendu. Wdraża go wyłącznie owner;
 #      SAN musi pokrywać VIP i adresy węzłów ProxySQL.
 tests/lab/tls/generate.sh shared-proxysql fcp1,fcp2,<ip-fcp1>,<ip-fcp2>,<ip-vip>
-#   Rotacja liścia pod tym samym CA: REUSE_CA=1 przed powyższym poleceniem,
-#   potem `make cluster-tls-rotate CLUSTER=<klaster>` (węzły) albo
-#   `make cluster-proxysql CLUSTER=<owner>` (frontend — PROXYSQL RELOAD TLS,
-#   bez zrywania istniejących sesji). Rotację CA prowadzi tests/lab/tls/rotate-ca.sh.
+#   3) Certyfikaty PER WĘZEŁ (tls.per_node_certificates=true). Po kroku 1 wystaw
+#      osobny liść i klucz dla każdego węzła pod wspólnym CA klastra:
+tests/lab/tls/issue-node-certs.sh <klaster> <n1=ip1,n2=ip2,n3=ip3> [dni]
+#
+#   Rotacja liścia pod tym samym CA:
+#     * wspólny cert: REUSE_CA=1 przed generate.sh, potem `make cluster-tls-rotate`
+#     * per węzeł: issue-node-certs.sh (nowy liść), potem `make cluster-tls-rotate`
+#     * frontend ProxySQL: REUSE_CA=1 przed generate.sh shared-proxysql, potem
+#       `make cluster-proxysql CLUSTER=<owner>` (PROXYSQL RELOAD TLS bez zrywania sesji).
+#   Rotację CA prowadzi tests/lab/tls/rotate-ca.sh (okno podwójnego zaufania).
 
 # UWAGA kolejność: poniższa sekwencja jest zweryfikowana od zera (from-scratch).
 # Zależności, które ją wymuszają:

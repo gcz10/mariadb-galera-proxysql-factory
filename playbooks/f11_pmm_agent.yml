@@ -208,6 +208,8 @@
       register: pmm_textfile_stat
 
     - name: "Podepnij katalog textfile runnera pod node_exporter z paczki"
+      vars:
+        pmm_textfile_dir: /usr/local/percona/pmm/collectors/textfile-collector/medium-resolution
       block:
         - name: "Zapewnij katalog metryk runnera"
           ansible.builtin.file:
@@ -228,8 +230,7 @@
             src: /var/lib/node_exporter/textfile_collector
             dest: "{{ pmm_textfile_dir }}"
             state: link
-      vars:
-        pmm_textfile_dir: /usr/local/percona/pmm/collectors/textfile-collector/medium-resolution
+
 - name: "F11 — zarejestruj uslugi bazodanowe pod lokalnym agentem"
   hosts: localhost
   connection: local
