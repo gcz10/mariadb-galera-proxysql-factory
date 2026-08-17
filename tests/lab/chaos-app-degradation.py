@@ -18,9 +18,22 @@ KONTRAKT, KTOREGO PILNUJE:
      czy buga w kliencie. Zmierzone na tej flocie.
   3. POWROT: po przywroceniu wezlow aplikacja musi zaczac dzialac bez interwencji.
 
-Punkt 2 jest dzis ZLAMANY i nie da sie tego naprawic w tym repo — decyduje o tym
-routing ProxySQL, ktory trzyma wezel bez `primary_partition` w hostgrupie writera
-(pilnuje tego juz probe-proxysql.py). Dlatego oczekiwanie jest STEROWANE flaga
+Punkt 2 jest dzis ZLAMANY i nie da sie tego naprawic w tym repo. Przyczyna
+ustalona przez ELIMINACJE (n11), nie przez domysl:
+  * NIE TLS — plaintext daje ten sam ERROR 2027,
+  * NIE routing — `SELECT 1` przez VIP w tym samym momencie PRZECHODZI,
+  * NIE ponowienia — `mysql-query_retries_on_failure=0` nic nie zmienia,
+  * NIE brak wiedzy ProxySQL — jego log zawiera dokladnie
+    "Error during query on (650,...): 1047, WSREP has not yet prepared node".
+ProxySQL ZNA poprawny blad i gubi go dopiero przy kodowaniu odpowiedzi do
+klienta. Ta sama sciezka (MySQL_Result_to_MySQL_wire) byla zrodlem upstreamowego
+crasha przy 1047 (sysown/proxysql#1596, naprawiony w 1.4.9); na 3.0.10 nie ma
+juz crasha, zostal uszkodzony pakiet.
+
+Osobno sprostowane: ProxySQL POPRAWNIE przenosi wezel poza kworum do
+offline_hostgroup, gdy jest kogo promowac (zmierzone: pojedynczy wezel odciety
+od klastra ladowal w hg offline). Nietkniety zostaje tylko OSTATNI wezel —
+"last man standing". Dlatego oczekiwanie jest STEROWANE flaga
 APP_QUORUM_ERROR_CONTRACT:
   * "degraded" (domyslnie) — wiemy o zlamaniu; sonda pada, jesli stan sie zmieni
     W DOWOLNA STRONE, zeby naprawa nie przeszla niezauwazona,

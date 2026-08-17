@@ -115,8 +115,18 @@ def main():
     # wsrep_local_state=0, a mimo to wezel zostawal ONLINE w hostgrupie writera.
     # Klient przez VIP dostawal wtedy "ERROR 2027 Received malformed packet"
     # zamiast czystego "ERROR 1047 (08S01) WSREP has not yet prepared node",
-    # ktory ten sam wezel zwracal przy polaczeniu bezposrednim. Warunek
-    # "dokladnie jeden ONLINE writer" byl spelniony przez cala awarie.
+    # ktory ten sam wezel zwracal przy polaczeniu bezposrednim.
+    #
+    # SPROSTOWANIE (n11, eksperyment rozrozniajacy). Zdanie "ProxySQL nie reaguje
+    # na primary_partition=NO" bylo ZA SZEROKIE i jest nieprawdziwe. Gdy poza
+    # kworum wypada JEDEN wezel (odciety port 4567, monitor nadal go widzi),
+    # ProxySQL poprawnie przenosi go do offline_hostgroup i promuje innego
+    # writera — zmierzone: .187 wyladowal w hg 680, .186 przejal role.
+    # Nieruszony zostaje wylacznie OSTATNI wezel: przy calkowitej utracie kworum
+    # .186/.187 trafily do 680, a .185 zostal ONLINE w 650 mimo primary_partition=NO.
+    # To zachowanie typu "last man standing" — ProxySQL nie oprozni hostgrupy
+    # writera do zera. Warunek ponizej i tak jest sluszny: routowanie do wezla
+    # poza Primary Component to stan, o ktorym operator ma wiedziec.
     active_hgs = {str(WRITER_HG), str(BACKUP_HG), str(READER_HG)}
     galera_raw = run_admin_query(
         "SELECT g.hostname, g.primary_partition, g.wsrep_local_state "
