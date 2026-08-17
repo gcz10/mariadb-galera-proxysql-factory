@@ -90,7 +90,7 @@
           Adres inventory {{ ansible_host }} nie należy do aktywnego interfejsu IPv4;
           nie można bezpiecznie przypisać polityki ingress.
 
-    - name: "audit#16: źródło sesji SSH w administration_cidrs (ochrona przed odcięciem)"
+    - name: "Audit#16: źródło sesji SSH w administration_cidrs (ochrona przed odcięciem)"
       ansible.builtin.shell: |
         python3 - <<'PY'
         import os, ipaddress
@@ -112,7 +112,7 @@
       register: firewall_session_check
       changed_when: false
 
-    - name: "audit#16: brama — sesja SSH w administration_cidrs przed przeładowaniem firewall"
+    - name: "Audit#16: brama — sesja SSH w administration_cidrs przed przeładowaniem firewall"
       ansible.builtin.assert:
         that:
           - "'DENY' not in (firewall_session_check.stdout | default(''))"

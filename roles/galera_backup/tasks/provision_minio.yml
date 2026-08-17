@@ -88,6 +88,8 @@
         stdin: >-
           {{ {'format_version': 1, 'cluster_name': cluster.name} | to_json }}
       when: galera_backup_owner_marker_initial.rc != 0
+      # Marker tworzymy tylko gdy go nie bylo — to realna mutacja stanu MinIO.
+      changed_when: true
       no_log: true
 
     - name: Verify managed bucket owner marker after provisioning
@@ -132,14 +134,14 @@
           - myminio
           - --all
           - --json
-      register: mc_accesskey_list
+      register: galera_backup_mc_accesskey_list
       changed_when: false
       no_log: true
 
     - name: Extract existing MinIO service-account keys
       ansible.builtin.set_fact:
         galera_backup_all_access_keys: >-
-          {{ mc_accesskey_list.stdout | minio_service_account_keys }}
+          {{ galera_backup_mc_accesskey_list.stdout | minio_service_account_keys }}
       no_log: true
 
     - name: Read existing MinIO service-account identities
@@ -160,7 +162,7 @@
           - "{{ item }}"
           - --json
       loop: "{{ galera_backup_all_access_keys }}"
-      register: mc_accesskey_info
+      register: galera_backup_mc_accesskey_info
       changed_when: false
       no_log: true
 
@@ -168,7 +170,7 @@
       ansible.builtin.set_fact:
         galera_backup_existing_access_keys: >-
           {{
-            mc_accesskey_info.results
+            galera_backup_mc_accesskey_info.results
             | default([])
             | map(attribute='stdout')
             | list
@@ -249,6 +251,8 @@
           - --name
           - "galera-backup-{{ cluster.name }}"
       when: galera_backup_reuse_existing_s3_key
+      # `mc accesskey edit` zapisuje polityke — mutacja, nawet gdy wynik identyczny.
+      changed_when: true
       no_log: true
 
     - name: Select stale MinIO service accounts for removal
@@ -282,6 +286,8 @@
           - myminio
           - "{{ item }}"
       loop: "{{ galera_backup_access_keys_to_revoke }}"
+      # Kazdy obrot petli usuwa konto serwisowe — mutacja stanu MinIO.
+      changed_when: true
       no_log: true
 
     - name: Create new scoped access key pair
@@ -306,8 +312,10 @@
           - "galera-backup-{{ cluster.name }}"
           - --policy
           - /tmp/policy.json
-      register: mc_create_result
+      register: galera_backup_mc_create_result
       when: not galera_backup_reuse_existing_s3_key
+      # Tworzy nowa pare kluczy — mutacja stanu MinIO.
+      changed_when: true
       no_log: true
 
     - name: Reuse existing scoped credentials
@@ -319,8 +327,8 @@
 
     - name: Extract generated scoped credentials
       ansible.builtin.set_fact:
-        galera_backup_s3_access_key: "{{ (mc_create_result.stdout | from_json).accessKey }}"
-        galera_backup_s3_secret_key: "{{ (mc_create_result.stdout | from_json).secretKey }}"
+        galera_backup_s3_access_key: "{{ (galera_backup_mc_create_result.stdout | from_json).accessKey }}"
+        galera_backup_s3_secret_key: "{{ (galera_backup_mc_create_result.stdout | from_json).secretKey }}"
       when: not galera_backup_reuse_existing_s3_key
       no_log: true
 

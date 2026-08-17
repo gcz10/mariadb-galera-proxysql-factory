@@ -127,7 +127,7 @@
       when: not proxysql_systemd.stat.exists
 
     - name: "Uruchom ProxySQL bez systemd (lab)"
-      ansible.builtin.shell: "proxysql --idle-threads -c /etc/proxysql.cnf"
+      ansible.builtin.command: proxysql --idle-threads -c /etc/proxysql.cnf
       when:
         - not proxysql_systemd.stat.exists
         - proxysql_process.rc != 0
@@ -473,7 +473,7 @@
     # backend przyjmował nowe APP_DB_PASSWORD, a ProxySQL trzymał stare (aplikacja odcięta).
     # Zamiast zgadywać hash (ProxySQL hashuje przy LOAD TO RUNTIME) sprawdzamy zachowanie:
     # czy app_user faktycznie loguje się przez ProxySQL bieżącym hasłem.
-    - name: "audit#13: probe logowania app_user przez ProxySQL (wykrycie rotacji hasła)"
+    - name: "Audit#13: probe logowania app_user przez ProxySQL (wykrycie rotacji hasła)"
       ansible.builtin.command:
         argv:
           - mariadb
@@ -506,7 +506,7 @@
       changed_when: true
       no_log: true
 
-    - name: "audit#13: potwierdź logowanie app_user przez ProxySQL po synchronizacji"
+    - name: "Audit#13: potwierdź logowanie app_user przez ProxySQL po synchronizacji"
       ansible.builtin.command:
         argv:
           - mariadb
@@ -526,7 +526,7 @@
       changed_when: false
       no_log: true
 
-    - name: "audit#13: raport synchronizacji hasła app_user"
+    - name: "Audit#13: raport synchronizacji hasła app_user"
       ansible.builtin.debug:
         msg: >-
           app_user loguje się przez ProxySQL (6033) — hasło zsynchronizowane backend↔ProxySQL.

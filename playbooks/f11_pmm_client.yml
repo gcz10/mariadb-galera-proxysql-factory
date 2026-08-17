@@ -75,7 +75,9 @@
         that:
           - pmm_monitor_password | length > 0
         fail_msg: "Ustaw PMM_MONITOR_PASSWORD poza repozytorium."
-      run_once: true
+      # Bez run_once: asercja czyta env kontrolera (lookup), wiec kazdy wezel
+      # sprawdzi ta sama wartosc; run_once pod strategia free zmienilby
+      # kolejnosc względem zadan zakladajacych linear.
 
   tasks:
     - name: "Utwórz replikowane konto PMM na pierwszym węźle Galera"
@@ -210,7 +212,6 @@
         - item.node_name in pmm_node_names
         - item.address != pmm_expected_address or item.custom_labels.get('cluster', '') != pmm_cluster_name_effective or item.custom_labels.get('environment', '') != pmm_environment_effective
       no_log: true
-
 
 
     - name: "Odśwież PMM node inventory"

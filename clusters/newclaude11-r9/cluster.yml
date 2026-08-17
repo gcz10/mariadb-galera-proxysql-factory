@@ -77,6 +77,11 @@ tls:
   mode: "full"
   socket_dynamic: false
   certificate_source: "file"
+  # Lisc i klucz PER WEZEL spod wspolnego CA (node-<host>-{cert,key}.pem).
+  # certificate_reference/private_key_reference zostaja jako opis wspolnego
+  # materialu i sa ignorowane przy tej fladze — sciezke liscia wyprowadza
+  # tls_certs.yml z katalogu CA i `inventory_hostname`.
+  per_node_certificates: true
   ca_reference: "tests/lab/tls/n11/ca.pem"
   certificate_reference: "tests/lab/tls/n11/server-cert.pem"
   private_key_reference: "tests/lab/tls/n11/server-key.pem"

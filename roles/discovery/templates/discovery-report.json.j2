@@ -40,15 +40,21 @@
     "firewalld_list": {{ firewalld_list.stdout | default('') | to_json }}
   },
   "packages": {
-    "existing_db_packages": {{ existing_db_pkgs.stdout_lines | default([]) | to_json }},
+    "existing_db_packages": {{ (ansible_facts.packages | default({})).keys()
+      | select('search', '(?i)(mariadb|galera|proxysql|wsrep)') | list | to_json }},
     "dnf_repolist": {{ dnf_repolist.stdout_lines | default([]) | to_json }}
   },
   "existing_services": {
-    "db_services": {{ existing_db_services.stdout_lines | default([]) | to_json }}
+    {% set services = ansible_facts.services | default({}) %}
+    "db_services": {{ services | dict2items
+      | selectattr('key', 'search', '(?i)(mariadb|mysql|proxysql)')
+      | map(attribute='key') | list | to_json }},
+    "log_shipping": {{ services | dict2items
+      | selectattr('key', 'search', '(?i)(loki|filebeat|fluentd|rsyslog)')
+      | map(attribute='key') | list | to_json }}
   },
   "monitoring": {
-    "processes": {{ monitoring_procs.stdout_lines | default([]) | to_json }},
-    "log_shipping": {{ log_shipping.stdout_lines | default([]) | to_json }}
+    "processes": {{ monitoring_procs.stdout_lines | default([]) | to_json }}
   },
   "database": {
     "missing_primary_keys": {{ missing_pk.query_result | default([]) | to_json }},

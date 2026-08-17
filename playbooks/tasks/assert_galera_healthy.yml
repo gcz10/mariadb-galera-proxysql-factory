@@ -20,10 +20,18 @@
 #   mariadb_socket   — ścieżka gniazda; domyślnie /var/lib/mysql/mysql.sock.
 
 - name: "{{ health_gate_name | default('Brama zdrowia Galera (Synced + Primary + ready + full size)') }}"
-  ansible.builtin.shell: >-
-    mariadb --socket={{ mariadb_socket | default('/var/lib/mysql/mysql.sock') }} -N -B -e
-    "SHOW STATUS WHERE Variable_name IN
-    ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+  # Forma argv (nie shell): komenda nie ma zadnych featurow shella, a jawna lista
+  # argumentow eliminuje pytania o splitowanie cudzyslowow w SQL.
+  ansible.builtin.command:
+    argv:
+      - mariadb
+      - --socket={{ mariadb_socket | default('/var/lib/mysql/mysql.sock') }}
+      - -N
+      - -B
+      - -e
+      - >-
+        SHOW STATUS WHERE Variable_name IN
+        ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')
   register: _galera_health
   until: >-
     _galera_health.stdout is search('wsrep_local_state\t4')

@@ -46,9 +46,19 @@
     # plik textfile po padniętym runnerze/kolektorze), więc mtime/last_success
     # porównujemy z time() jawnie — to jedyny sygnał tego trybu awarii.
     # Konsument dostaje wylacznie swoje reguly; wspoldzielone sa domena ownera.
+    # Reguly oznaczone `requires_tls` powstaja tylko przy tls.mode=full: przy
+    # wylaczonym TLS f11_freshness publikuje isa_tls_cert_expiry_unixtime=0, wiec
+    # regula liczaca "ile zostalo do wygasniecia" widzialaby cert przeterminowany
+    # o pol wieku i palila sie wiecznie na klastrze, ktory certu nie ma.
+    # Reguly bez markera dostaje kazdy; `shared` tylko owner, `requires_tls`
+    # tylko klaster z wlaczonym TLS.
     f15_effective_rules: >-
-      {{ f15_rules if (proxysql.role | default('owner')) == 'owner'
-         else (f15_rules | rejectattr('shared', 'defined') | list) }}
+      {{ (f15_rules | rejectattr('shared', 'defined')
+                    | rejectattr('requires_tls', 'defined') | list)
+         + (f15_rules | selectattr('shared', 'defined') | list
+            if (proxysql.role | default('owner')) == 'owner' else [])
+         + (f15_rules | selectattr('requires_tls', 'defined') | list
+            if ((tls | default({})).mode | default('disabled')) == 'full' else []) }}
     f15_rules:
       - uid: "isa-{{ cluster_label }}-node-loss"
         title: "Galera node loss (cluster size < expected)"
@@ -144,6 +154,27 @@
         # regex nie trafia w nic i regula alarmuje bez przerwy (zweryfikowane na PMM).
         expr: "(time() - (max(node_textfile_mtime_seconds{file=~\".*galera_backup-.*[.]prom\"}) or vector(0))) > bool ({{ backup_freshness_sla_hours }} * 3600)"
         summary: "galera_backup textfile mtime older than {{ backup_freshness_sla_hours }} hours — runner stopped rewriting metrics"
+        severity: "critical"
+        noDataState: "Alerting"
+
+      # Metryka isa_tls_cert_expiry_unixtime byla publikowana przez f11_freshness
+      # od dawna i NIKT jej nie pilnowal — klasyczny martwy sygnal: koszt zbierania
+      # ponoszony, wartosc zerowa. Wygasly certyfikat Galery to natychmiastowe
+      # zerwanie replikacji, awaria bez ostrzezenia i bez zwiazku z obciazeniem.
+      #
+      # Prog 30 dni jest CELOWO ten sam co TLS_CERT_MIN_DAYS w probe-hardening.py:
+      # jedna liczba do uzasadnienia zamiast dwoch, ktore z czasem sie rozjada.
+      #
+      # `requires_tls` — regula nie powstaje przy tls.mode != full. Przy wylaczonym
+      # TLS f11_freshness publikuje 0, a 0 - time() jest gleboko ujemne, wiec regula
+      # palilaby sie wiecznie na klastrze, ktory certu w ogole nie ma.
+      - uid: "isa-{{ cluster_label }}-tls-cert-expiring"
+        requires_tls: true
+        title: "TLS certificate expiring (Galera nodes)"
+        expr: "((max(isa_tls_cert_expiry_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0)) - time()) < bool (30 * 24 * 3600)"
+        summary: >-
+          Certyfikat TLS wezlow Galery wygasa w ciagu 30 dni albo metryka zniknela.
+          Rotacja bez przestoju: `make cluster-tls-rotate CLUSTER={{ cluster.name }}`.
         severity: "critical"
         noDataState: "Alerting"
 

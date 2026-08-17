@@ -24,14 +24,14 @@
         file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
         name: lock
 
-    - name: "audit#5: restore wymaga -e restore_confirm=yes"
+    - name: "Audit#5: restore wymaga -e restore_confirm=yes"
       ansible.builtin.assert:
         that:
           - restore_confirm is defined
           - restore_confirm | bool
         fail_msg: "Restore usuwa datadir na hoście docelowym — wymaga -e restore_confirm=yes."
 
-    - name: "audit#5: host restore NIE może należeć do galera/proxysql (ochrona żywego klastra)"
+    - name: "Audit#5: host restore NIE może należeć do galera/proxysql (ochrona żywego klastra)"
       ansible.builtin.assert:
         that:
           - inventory_hostname not in (groups['galera'] | default([]))
@@ -79,3 +79,6 @@
           - restore
           - "{{ cluster.name }}"
           - --confirm
+      # Restore z definicji mutuje datadir na hoście docelowym — to nie jest
+      # zadanie "check-only", wiec zmienilismy stan zawsze, gdy doszlo do skutku.
+      changed_when: true

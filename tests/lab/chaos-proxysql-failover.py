@@ -19,6 +19,14 @@ TRZY ROZNE TRYBY AWARII, bo sprawdzaja trzy rozne mechanizmy:
   PROXYSQL_FAILOVER_MODE=service (domyslny)
     Ginie CALY ProxySQL — `pkill -x proxysql` trafia w rodzica I dziecko, wiec
     angel nie ma kogo wskrzesic, a jednostka systemd ma Restart=no (zmierzone).
+    DECYZJA: zostawiamy Restart=no, jednostki producenta nie zmieniamy. Angel
+    obsluguje crash workera (tryb `worker` wyzej, 0,1 s przerwy), a smierc samego
+    angela jest rzadka i NIE powoduje awarii — keepalived zabiera VIP i ruch
+    idzie dalej. Brakowalo wylacznie WIDOCZNOSCI tego stanu i to zostalo
+    domkniete regula ISC-47 `isa-shared-proxysql-down`, ktora liczy zdrowe
+    instancje. `Restart=on-failure` dodalby samoleczenie, ale maskowalby petle
+    crashy na wspoldzielonej infrastrukturze — alert mowi prawde, auto-restart
+    ja ukrywa.
     Maszyna i keepalived zyja, VRRP nie widzi tu NICZEGO — sasiad dostaje
     advertisementy jak gdyby nic. Jedyne, co moze zabrac VIP, to
     `vrrp_script chk_proxysql` z `weight 0`, ktory wprowadza instancje w FAULT.

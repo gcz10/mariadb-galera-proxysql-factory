@@ -31,9 +31,16 @@
         that: [proxysql_admin_password | length > 0]
         fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
     - name: "Odczytaj writera (ProxySQL runtime)"
-      ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
-        "SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id={{ galera_writer_hg }} AND status='ONLINE'"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - -h127.0.0.1
+          - -P6032
+          - -uadmin
+          - -N
+          - -B
+          - -e
+          - "SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id={{ galera_writer_hg }} AND status='ONLINE'"
       register: f12_patch_writer_ip
       changed_when: false
       no_log: true
@@ -189,6 +196,6 @@
       delay: 5
       changed_when: false
       no_log: true
-    - name: "ISC-57: ProxySQL {{ inventory_hostname }} zdrowy po patch"
+    - name: "ISC-57: ProxySQL zdrowy po patch ({{ inventory_hostname }})"
       ansible.builtin.debug:
         msg: "ProxySQL {{ inventory_hostname }} online ({{ f12_proxysql_backends.stdout | trim }} backends ONLINE)"

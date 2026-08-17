@@ -69,7 +69,7 @@
           Żywy Primary Component wykryty: {{ bootstrap_live_primary }}.
           Bootstrap = drugi Primary → split-brain / utrata danych. Dołącz zamiast bootstrappować.
 
-    - name: "audit#2: nieosiągalne węzły wymagają bootstrap_confirm_all_down=true"
+    - name: "Audit#2: nieosiągalne węzły wymagają bootstrap_confirm_all_down=true"
       ansible.builtin.assert:
         that:
           - (bootstrap_unreachable | length == 0) or (bootstrap_confirm_all_down | default(false) | bool)
@@ -109,7 +109,10 @@
         - not (bootstrap_force | default(false)) | bool
 
     - name: "Zabij stary proces MariaDB (tylko lab: brak systemd)"
-      ansible.builtin.shell: "lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null || true"
+      # pipefail + `|| true` na koncu: rc zadania bylo i jest zawsze 0
+      # (maskowane), ale porazka lsof przy braku procesu nie jest juz
+      # cicho gubiona w srodku potoku przed dotarciem do xargs.
+      ansible.builtin.shell: "set -o pipefail; lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null || true"
       changed_when: false
       when: not use_systemd
 

@@ -18,3 +18,16 @@ kinds:
 # Wpisanie jej do `skip_list` nie wycisza znaleziska — wywala cale narzedzie
 # bledem, a przy fladze `-q` wyglada to jak "0 naruszen". Probowalem; licznik
 # spadl ze 135 na 0, co bylo nie sukcesem, tylko lintem, ktory sie nie uruchomil.
+
+# yaml[line-length] wylaczony celowo. Zostaly po tym wlacznie dlugie
+# wyrazenia Jinja (lancuchy lookup/selectattr/rejectattr w bramkach zdrowia
+# i raportach PMM), jednolinijkowe komendy shell w skalarach YAML oraz
+# dlugie URL-e/checksumy z lockfile. Lamanie ich to realne ryzyko zmiany
+# semantyki: folded scalary (`>-`) wstawiaja spacje w miejscach zlaman,
+# a wyrazenia Jinja nie znosza dowolnych podzialow — cichy blank w
+# `{{ a | b }}` potrafi zepsuc bramke zdrowia, ktora pilnuje restartu.
+# Zysk z limitu 160 znakow (domysl yamllint, nie wymog projektu) jest
+# czysto wizualny, wiec handel jest zly. Pozostale podreguly `yaml`
+# (empty-lines, comments itd.) zostaja aktywne.
+skip_list:
+  - yaml[line-length]

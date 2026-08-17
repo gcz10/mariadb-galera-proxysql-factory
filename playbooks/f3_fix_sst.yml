@@ -13,7 +13,12 @@
         state: present
 
     - name: "Sprawdz mbstream (z MariaDB-backup)"
-      ansible.builtin.shell: which mbstream 2>/dev/null || find /usr -name "mbstream" -type f 2>/dev/null | head -1
+      # `-print -quit` zamiast `| head -1`: find sam konczy po pierwszym trafieniu,
+      # wiec nie ma potoku, ktory z pipefail zglosilby SIGPIPE przy wielu kopiach
+      # binaria (rc 141 = falszywa awaria) — a bez pipefail zglasza to risky-shell-pipe.
+      ansible.builtin.shell: >-
+        which mbstream 2>/dev/null
+        || find /usr -name "mbstream" -type f -print -quit 2>/dev/null
       changed_when: false
       register: mbstream_path
 

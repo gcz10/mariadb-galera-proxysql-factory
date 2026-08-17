@@ -1,8 +1,8 @@
 ---
 # CI — gate merge na sprawdzeniach, które realnie łapią błędy (audit#22).
 # validate (blocking): schema, ansible syntax-check, python compile, bash -n.
-# lint (non-blocking): ansible-lint — 119 istniejących naruszeń (głównie styl +
-# parsowanie include-files jako playbook); nie blokuje dopóki dług nie zostanie spłacony.
+# lint (blocking): ansible-lint — 0 naruszeń; dług stylistyczny i idiomatyczny
+# spłacony (yaml[line-length] wyłączony z uzasadnieniem w .ansible-lint).
 name: ci
 
 on:
@@ -178,27 +178,19 @@ jobs:
       - name: JSON schema file valid
         run: python3 -c "import json; json.load(open('clusters/schema/cluster.schema.json')); print('schema JSON valid')"
 
-  # Stan na 2026-08-14: 117 naruszen (bylo 135). Zdjete: martwa konfiguracja roli
-  # `discovery` (meta/defaults/vars nigdy nie ladowane, bo rola nie jest wolana)
-  # oraz bledna klasyfikacja plikow zadan jako playbookow (.ansible-lint kinds).
-  # Naprawione realne: `set -o pipefail` w f13_remove_node_plan — bez niego
-  # padniecie `mariadb` dawalo pusta odpowiedz z rc=0 straznikowi kworum PRZED
-  # operacja destrukcyjna.
-  #
-  # DLACZEGO WCIAZ non-blocking: ze 117 pozostalych 64 to czysta kosmetyka
-  # (40 yaml[line-length] + 24 name[casing]). Blokujacym mozna go uczynic dopiero
-  # gdy zniknie ostatnie `syntax-check[specific]` w f10_backup.yml — regula jest
-  # NIESKIPOWALNA (nie dziala ani skip_list, ani warn_list), a znalezisko to
-  # artefakt narzedzia: `hosts: "{{ backup.scheduler.host }}"` jest nierozwiazywalne
-  # bez `-e @clusters/<name>/cluster.yml`, ktorego ansible-lint nie przyjmuje.
-  # Jedyna droga do zera to `exclude_paths: playbooks/f10_backup.yml`, czyli
-  # wylaczenie lintu na calym playbooku backupu. Zielona plakietka za realna luke
-  # w pokryciu to zly interes — zostaje non-blocking do czasu, az lint dostanie
-  # zmienne klastra.
+  # Stan na 2026-08-17: 0 naruszen. Ostatni syntax-check[specific] w f10_backup.yml
+  # rozwiazany konwencja repo (hosts z `| default(...)`, jak bootstrap.yml/firewall.yml)
+  # zamiast wykluczania pliku z lintu. Kosmetyka name[casing]/empty-lines poprawiona
+  # w miejscu; yaml[line-length] wylaczony w .ansible-lint (tam uzasadnienie).
+  # Merytoryka splacona: pipefail w potokach sond, package_facts/service_facts/uri
+  # zamiast rpm/systemctl/curl, changed_when na mutatorach, handler dla restartu
+  # Dockera, prefiks galera_backup_ dla zmiennych rejestrowanych w roli.
+  # Dwa celowe, uzasadnione w kodzie wyjatki noqa: `systemctl is-active` w site.yml
+  # (rc steruje rozgalezieniem FLUSH SSL vs restart klastra) i komenda operatora
+  # w f12_apply_patch.yml (dane operatora moga uzywac featurow shella).
   lint:
-    name: ansible-lint (non-blocking — 117 naruszen, 64 kosmetyczne)
+    name: ansible-lint (blocking — 0 naruszeń)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -275,6 +275,10 @@
         },
         "require_secure_transport": {
           "type": "boolean"
+        },
+        "per_node_certificates": {
+          "type": "boolean",
+          "description": "Gdy true, kazdy wezel Galera dostaje WLASNY lisc i klucz spod wspolnego CA klastra (tests/lab/tls/issue-node-certs.sh, pliki node-<host>-cert.pem / node-<host>-key.pem obok ca.pem). Wyciek klucza z jednego wezla nie daje wtedy tozsamosci pozostalych, a lisc mozna wymienic pojedynczo. Gdy false lub brak — wszystkie wezly dziela jeden certyfikat wskazany przez certificate_reference."
         }
       },
       "allOf": [

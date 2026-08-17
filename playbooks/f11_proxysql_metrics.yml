@@ -43,9 +43,16 @@
         or 'proxysql' in (monitoring.agent_groups | default([]))
 
     - name: "Sprawdź aktualny stan admin-restapi_enabled (runtime)"
-      ansible.builtin.shell: >-
-        mariadb -h127.0.0.1 -P6032 -uadmin -N -B -e
-        "SELECT variable_value FROM global_variables WHERE variable_name='admin-restapi_enabled'"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - -h127.0.0.1
+          - -P6032
+          - -uadmin
+          - -N
+          - -B
+          - -e
+          - "SELECT variable_value FROM global_variables WHERE variable_name='admin-restapi_enabled'"
       register: restapi_current
       changed_when: false
       no_log: true
@@ -73,16 +80,20 @@
         port: "{{ restapi_port }}"
         timeout: 15
 
-    - name: "Potwierdź metryki Prometheus na :{{ restapi_port }}/metrics"
-      ansible.builtin.shell: >-
-        curl -s http://127.0.0.1:{{ restapi_port }}/metrics | grep -c '^proxysql_'
-      register: proxysql_metric_count
+    # uri zamiast `curl -s | grep -c`: brak pipe, rc nie zalezy od grep, a tresc
+    # odpowiedzi asertujemy w Jinja (search z flaga (?m) — ten sam wzorzec, ktorego
+    # uzywa bootstrap.yml dla safe_to_bootstrap w grastate.dat).
+    - name: "Potwierdź metryki Prometheus na porcie {{ restapi_port }}"
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ restapi_port }}/metrics"
+        return_content: true
+      register: proxysql_metrics_scrape
       changed_when: false
 
     - name: "Wymagaj niepustych metryk ProxySQL"
       ansible.builtin.assert:
         that:
-          - proxysql_metric_count.stdout | int > 0
+          - proxysql_metrics_scrape.content is search('(?m)^proxysql_')
         fail_msg: "Brak metryk ProxySQL na :{{ restapi_port }}/metrics."
 
 # === Play 2: zarejestruj ProxySQL metrics w PMM Inventory ===

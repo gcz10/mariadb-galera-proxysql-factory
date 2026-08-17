@@ -11,18 +11,18 @@
 #   f12_patch_packages: lista pakietów do `dnf update` (real) — domyślnie [] → dry-run
 #   f12_patch_command:  komenda operatora (real) — domyślnie '' → dry-run
 
-- name: "audit#11: odczytaj wersję binaria PRZED patch"
+- name: "Audit#11: odczytaj wersję binaria PRZED patch"
   ansible.builtin.command: "{{ f12_version_cmd }}"
   register: f12_ver_before
   changed_when: false
 
-- name: "audit#11: tryb patcha (real gdy pakiety LUB komenda operatora)"
+- name: "Audit#11: tryb patcha (real gdy pakiety LUB komenda operatora)"
   ansible.builtin.set_fact:
     f12_real_patch: >-
       {{ ((f12_patch_packages | default([])) | length > 0)
          or ((f12_patch_command | default('')) | length > 0) }}
 
-- name: "audit#11: DRY-RUN — brak f12_patch_packages/f12_patch_command (0 pakietów zmienionych)"
+- name: "Audit#11: DRY-RUN — brak f12_patch_packages/f12_patch_command (0 pakietów zmienionych)"
   ansible.builtin.debug:
     msg: >-
       DRY-RUN {{ inventory_hostname }}: wykonano tylko bramę zdrowia; 0 pakietów zmienionych.
@@ -35,7 +35,7 @@
 # i kontrolowana (operator podaje -e f12_patch_packages='[...]'), a nie
 # "zaktualizuj wszystko co możliwe". Moduł dnf traci idempotencję, ale
 # patching z natury nie jest idempotentny — drugi przebieg nic nie zmienia.
-- name: "audit#11: real patch — dnf update wskazanych pakietów"
+- name: "Audit#11: real patch — dnf update wskazanych pakietów"
   ansible.builtin.command:
     argv: "{{ ['dnf', 'update', '-y'] + (f12_patch_packages | list) }}"
   register: f12_dnf_result
@@ -44,7 +44,11 @@
     - f12_real_patch | bool
     - (f12_patch_packages | default([]) | length) > 0
 
-- name: "audit#11: real patch — komenda operatora"
+- name: "Audit#11: real patch — komenda operatora"
+  # noqa: command-instead-of-shell — komenda operatora (-e f12_patch_command=...)
+  # moze legalnie uzywac featurow shella (potoki, &&, redyrekcje), bo to dane
+  # operatora, nie nasz staly kod; wymuszenie modulu command zepsuloby kazda
+  # taka komenda w runtime.
   ansible.builtin.shell: "{{ f12_patch_command }}"
   register: f12_cmd_result
   changed_when: true
@@ -53,12 +57,12 @@
     - (f12_patch_command | default('') | length) > 0
     - (f12_patch_packages | default([]) | length) == 0
 
-- name: "audit#11: odczytaj wersję binaria PO patch"
+- name: "Audit#11: odczytaj wersję binaria PO patch"
   ansible.builtin.command: "{{ f12_version_cmd }}"
   register: f12_ver_after
   changed_when: false
 
-- name: "audit#11: restart usługi gdy binarium się zmienił (kontrolowany; bramę zdrowia sprawdzi play)"
+- name: "Audit#11: restart usługi gdy binarium się zmienił (kontrolowany; bramę zdrowia sprawdzi play)"
   ansible.builtin.systemd:
     name: "{{ f12_service }}"
     state: restarted
@@ -73,7 +77,7 @@
          or (f12_cmd_result.changed | default(false))
          or (f12_ver_before.stdout != f12_ver_after.stdout))
 
-- name: "audit#11: raport wersji (przed/po) + decyzja restart"
+- name: "Audit#11: raport wersji (przed/po) + decyzja restart"
   ansible.builtin.debug:
     msg: >-
       {{ inventory_hostname }} [{{ f12_role }}]

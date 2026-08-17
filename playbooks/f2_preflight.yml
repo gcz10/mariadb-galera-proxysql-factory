@@ -34,7 +34,7 @@
         file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
         name: lock
 
-    - name: "Preflight - wymagany Rocky Linux {{ lock.rocky_linux.major }} (wg lockfile)"
+    - name: "Preflight - wymagany Rocky Linux wg lockfile ({{ lock.rocky_linux.major }})"
       ansible.builtin.assert:
         that:
           - ansible_distribution == "Rocky"
@@ -66,7 +66,9 @@
           Lockfile niespojny: repo_setup_args "{{ lock.mariadb.repo_setup_args }}"
           nie pasuje do serii {{ lock.mariadb.version.split('.')[:2] | join('.') }}
           wynikajacej z mariadb.version {{ lock.mariadb.version }}
-      run_once: true
+      # Bez run_once: asercja jest tania (dane juz na kontrolerze), a run_once
+      # pod strategia free dawalby rozjazd kolejnosci. Klasyczna strategia
+      # sprawdza to samo na kazdym wezle.
 
     - name: "Preflight - minimal RAM 2GB"
       ansible.builtin.assert:
@@ -116,12 +118,17 @@
                    ((storage.expected_database_size_gb | float) * 1073741824 * 1.2) | int) }}
       when: "'galera' in group_names"
 
+    # package_facts zamiast `rpm -qa | grep`: brak dopasowania przestaje byc
+    # wyjatkiem (grep zwracal rc=1 maskowane przez || true) i nie parsujemy
+    # stdout w shellu. Slownik kluczy to nazwy pakietow rpm.
     - name: "Preflight — wykryj istniejące pakiety MariaDB/Galera (audit#3)"
-      ansible.builtin.shell: rpm -qa | grep -iE '^(mariadb|galera)' | sort -u || true
-      args:
-        executable: /bin/bash
-      changed_when: false
-      register: mariadb_pkgs
+      ansible.builtin.package_facts:
+
+    - name: "Preflight — lista pakietów MariaDB/Galera na hoście (audit#3)"
+      ansible.builtin.set_fact:
+        mariadb_pkgs: >-
+          {{ (ansible_facts.packages | default({})).keys()
+             | select('match', '(?i)^(mariadb|galera)') | list | sort }}
 
     - name: "Preflight — wykryj istniejący datadir MariaDB"
       ansible.builtin.stat:
@@ -138,11 +145,11 @@
     - name: "Preflight — host czysty (brak MariaDB); ISC-6/audit#3"
       ansible.builtin.assert:
         that:
-          - mariadb_pkgs.stdout | trim | length == 0
+          - mariadb_pkgs | length == 0
           - not mariadb_datadir.stat.exists
           - mariadb_proc.stdout == "STOPPED"
         fail_msg: >-
-          Host nie jest czysty: pakiety=[{{ mariadb_pkgs.stdout | trim }}],
+          Host nie jest czysty: pakiety=[{{ mariadb_pkgs | join(', ') }}],
           datadir istnieje={{ mariadb_datadir.stat.exists }}, proces={{ mariadb_proc.stdout }}.
           F2 oczekuje czystych hostów. Jeśli klaster jest już wdrożony — to oczekiwane:
           użyj ,make cluster-health' zamiast ,cluster-validate' na wdrożonym klastrze.

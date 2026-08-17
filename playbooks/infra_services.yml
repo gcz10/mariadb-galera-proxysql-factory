@@ -177,7 +177,10 @@
         owner: root
         group: root
         mode: "0644"
-      register: infra_docker_ipforward
+      # Handler zamiast zadania z `when: ...changed` — flush_handlers ponizej trzyma
+      # restart w tym SAMYM miejscu play (przed `docker compose up`), a deduplikacja
+      # handlerow daje jeden restart nawet przy wielu powiadomieniach.
+      notify: Restart Docker po zmianie sysctl ip_forward
 
     - name: "Docker - zastosuj sysctl ip_forward"
       ansible.posix.sysctl:
@@ -194,11 +197,11 @@
         state: started
       register: infra_docker_start
 
-    - name: "Restart Docker gdy zmienil sie sysctl ip_forward"
-      ansible.builtin.systemd:
-        name: docker
-        state: restarted
-      when: infra_docker_ipforward.changed
+    - name: "Restart Docker jesli sysctl ip_forward sie zmienil"
+      # Wypycha handler DOPIERO TUTAJ: w tym miejscu play robi to samo, co dawne
+      # zadanie restartu. Bez flush handler wystapilby dopiero na koncu play,
+      # czyli po `docker compose up` — zrestartowany daemon zdjalby kontenery.
+      ansible.builtin.meta: flush_handlers
 
     - name: "Utwórz prywatny katalog konfiguracji infra"
       ansible.builtin.file:
@@ -330,3 +333,9 @@
           - 200
       when: pmm_admin_auth.status == 401
       no_log: true
+
+  handlers:
+    - name: "Restart Docker po zmianie sysctl ip_forward"
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted

@@ -73,6 +73,7 @@
 
     - name: Osiągalność portów Galery/ProxySQL (localhost probe)
       ansible.builtin.shell: |
+        set -o pipefail
         for p in 3306 4567 4568 6033 6032; do
           (ss -tlnp | grep -q ":$p " && echo "$p LISTEN") || echo "$p CLOSED"
         done
@@ -91,26 +92,22 @@
       changed_when: false
       register: findmnt_out
 
+    # package_facts zamiast `rpm -qa | grep`: kanoniczny modul zapytania, odporny
+    # na brak dopasowania (grep zwracal rc=1) i bez parseowania stdout w shellu.
     - name: Istniejące pakiety MariaDB/ProxySQL
-      ansible.builtin.shell: rpm -qa | grep -Ei 'mariadb|galera|proxysql|wsrep' || true
-      changed_when: false
-      register: existing_db_pkgs
+      ansible.builtin.package_facts:
 
-    - name: Istniejące usługi MariaDB/ProxySQL
-      ansible.builtin.shell: systemctl list-units --type=service --all | grep -Ei 'mariadb|mysql|proxysql' || true
-      changed_when: false
-      register: existing_db_services
+    # service_facts raz dla calego raportu (uslugi DB + log shipping); filtracje
+    # po nazwie jednostki robimy w szablonie raportu, nie w shellu.
+    - name: "Zrzut stanu usług systemd (raport: MariaDB/ProxySQL/log shipping)"
+      ansible.builtin.service_facts:
 
     - name: Istniejący monitoring (procesy)
       ansible.builtin.shell: |
+        set -o pipefail
         ps -eo comm | grep -Ei 'prometheus|node_exporter|zabbix|datadog|grafana' || true
       changed_when: false
       register: monitoring_procs
-
-    - name: Istniejący log shipping
-      ansible.builtin.shell: systemctl list-units --type=service --all | grep -Ei 'loki|filebeat|fluentd|rsyslog' || true
-      changed_when: false
-      register: log_shipping
 
     - name: Audyt PK w information_schema (jeśli istnieje MariaDB)
       ansible.mysql.mysql_query:
@@ -157,6 +154,7 @@
 
     - name: Secret backend — sprawdź dostępność Ansible Vault
       ansible.builtin.shell: |
+        set -o pipefail
         which ansible-vault 2>/dev/null && echo "ansible-vault: available" || echo "ansible-vault: not-found"
         if [ -f "{{ playbook_dir }}/../clusters/{{ cluster_name | default('example-cluster') }}/secrets.yml" ]; then
           head -1 "{{ playbook_dir }}/../clusters/{{ cluster_name | default('example-cluster') }}/secrets.yml" | grep -q 'ANSIBLE_VAULT' && echo "secrets.yml: vault-encrypted" || echo "secrets.yml: plaintext-WARNING"
@@ -170,6 +168,7 @@
 
     - name: Backup target — sprawdź czy SMB mount osiągalny
       ansible.builtin.shell: |
+        set -o pipefail
         # Sprawdź czy istnieje zamontowany zasób SMB/CIFS
         if findmnt -t cifs 2>/dev/null | grep -q .; then
           echo "smb-mount: found"
@@ -190,6 +189,7 @@
 
     - name: GPG fingerprint — repozytoria MariaDB/ProxySQL
       ansible.builtin.shell: |
+        set -o pipefail
         for repo in /etc/yum.repos.d/mariadb.repo /etc/yum.repos.d/proxysql.repo; do
           if [ -f "$repo" ]; then
             echo "=== $repo ==="
@@ -199,7 +199,9 @@
         # Lista zaimportowanych kluczy GPG
         rpm -qa gpg-pubkey 2>/dev/null | while read -r key; do
           rpm -qi "$key" 2>/dev/null | grep -E '^(Summary|Version|Packager)' || true
-        done | head -30
+        done | head -30 || true
+        # `|| true` na koncu: head zamyka potok, wiec przy wielu kluczach while
+        # dostaje SIGPIPE i z pipefail zwracalby 141 — falszywa awaria sondy.
       args:
         executable: /bin/bash
       changed_when: false
@@ -235,7 +237,8 @@
       ignore_errors: true
       register: numa_hw
 
-    - name: fio benchmark — TYLKO na hostach [discovery_bench] z allow_bench
+    - name: Bench fio — TYLKO na hostach [discovery_bench] z allow_bench
+      when: "'discovery_bench' in group_names"
       block:
         - name: Instaluj fio na bench hostach
           ansible.builtin.dnf:
@@ -250,7 +253,6 @@
             --output-format=json --output={{ bench_path }}/f0-fio.json
           changed_when: false
           when: allow_bench | bool
-      when: "'discovery_bench' in group_names"
 
     - name: Zapisz fakty hosta do pliku raportu
       ansible.builtin.copy:
