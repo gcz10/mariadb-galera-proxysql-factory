@@ -60,10 +60,15 @@
         force_basic_auth: true
         validate_certs: false
         status_code: [200, 204, 404]
+      # Owner sprzata TAKZE reguly warstwy wspolnej (`isa-shared-*`). Nikt inny
+      # tego nie zrobi: konsument ich nie tworzy i nie ma prawa ich kasowac, a
+      # zostawiona bez wlasciciela regula `critical` alarmowalaby o endpoincie,
+      # ktorego juz nikt nie utrzymuje.
       loop: >-
         {{ (f15_dereg_rules.json | default([]))
            | selectattr('uid', 'defined')
-           | selectattr('uid', 'search', '^isa-' ~ cluster_label ~ '-')
+           | selectattr('uid', 'search',
+               '^isa-(' ~ cluster_label ~ ((')|(shared)') if (proxysql.role | default('owner')) == 'owner' else ')') ~ ')-')
            | list }}
       loop_control:
         label: "{{ item.uid }}"

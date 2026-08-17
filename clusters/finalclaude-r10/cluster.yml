@@ -134,7 +134,6 @@ monitoring:
   system: "pmm"
   alerts:
     email: "ops@claude.local"
-  log_destination: "journald"
 
 mariadb_tuning:
   # Limit operatora: 3 GB RAM na VM. Buffer pool 768M zamiast 1G zostawia zapas

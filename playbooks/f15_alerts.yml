@@ -45,6 +45,10 @@
     # `or vector(0)` NIE widzi .prom, które node_exporter podaje bez zmian (zamrożony
     # plik textfile po padniętym runnerze/kolektorze), więc mtime/last_success
     # porównujemy z time() jawnie — to jedyny sygnał tego trybu awarii.
+    # Konsument dostaje wylacznie swoje reguly; wspoldzielone sa domena ownera.
+    f15_effective_rules: >-
+      {{ f15_rules if (proxysql.role | default('owner')) == 'owner'
+         else (f15_rules | rejectattr('shared', 'defined') | list) }}
     f15_rules:
       - uid: "isa-{{ cluster_label }}-node-loss"
         title: "Galera node loss (cluster size < expected)"
@@ -84,6 +88,34 @@
         title: "ProxySQL no ONLINE writer (writer hostgroup empty)"
         expr: "(count(proxysql_connection_pool_status{hostgroup=\"{{ galera_writer_hg }}\"} == 1) or vector(0)) < bool 1"
         summary: "No ONLINE backend in ProxySQL writer hostgroup {{ galera_writer_hg }} — writes will fail"
+        severity: "critical"
+        noDataState: "Alerting"
+
+      # === Alert WARSTWY WSPOLNEJ — tylko owner (patrz f15_shared_rules ponizej) ===
+      #
+      # Luka znaleziona przy testach failoveru endpointu: gdy pada JEDEN wezel
+      # ProxySQL, keepalived przenosi VIP i aplikacja dziala dalej — wiec zadna
+      # istniejaca regula nie zapala sie NIGDY. Para po cichu degraduje sie do
+      # jednego proxy i zostaje tak do momentu, az padnie drugi. Wtedy nie ma juz
+      # dokad przeniesc VIP-a i awaria jest natychmiastowa i pelna.
+      #
+      # Liczymy ZDROWE instancje, a nie `min(proxysql_up) != 1`. Przy utracie
+      # calej maszyny eksporter znika razem z nia i seria PRZESTAJE ISTNIEC —
+      # `min()` po pozostalych daje wtedy 1, czyli "zdrowo". Zliczanie wylapuje
+      # oba tryby: wygaszony proces (proxysql_up=0) i zniknieta maszyne.
+      # Zmierzone na fcp1/fcp2: `proxysql_up` ma etykiete node_name per wezel.
+      - uid: "isa-shared-proxysql-down"
+        # `shared: true` => regula NALEZY DO WARSTWY WSPOLNEJ, nie do klastra.
+        # Tworzy ja i kasuje wylacznie owner pary ProxySQL. Gdyby tworzyl ja kazdy
+        # konsument, jedno padniecie fcp1 wyslaloby N identycznych maili, a UID
+        # bez namespace'u i tak trzymalby tylko jedna kopie — czyli ostatni
+        # uruchomiony klaster cicho nadpisywalby regule pozostalym.
+        shared: true
+        title: "ProxySQL instance down (shared endpoint pair degraded)"
+        expr: "(count(proxysql_up == 1) or vector(0)) < bool {{ proxysql.nodes_expected }}"
+        summary: >-
+          Zdrowych instancji ProxySQL mniej niz {{ proxysql.nodes_expected }} —
+          endpoint dziala, ale stracil redundancje. Kolejna awaria zdejmie VIP bez zapasu.
         severity: "critical"
         noDataState: "Alerting"
       - uid: "isa-{{ cluster_label }}-backup-failed"
@@ -254,7 +286,7 @@
             severity: "{{ item.severity }}"
             isc: "ISC-47"
         status_code: [200, 201, 202]
-      loop: "{{ f15_rules }}"
+      loop: "{{ f15_effective_rules }}"
       no_log: true
 
     # === BLK-5: email contact point + notification policy (delivery) ===
@@ -389,7 +421,7 @@
     - name: "Raport alertów ISC-47 (reguły + email delivery)"
       ansible.builtin.debug:
         msg: >-
-          ISC-47: {{ f15_rules | length }} reguł alertów + email contact point (ISA Email Alerts)
+          ISC-47: {{ f15_effective_rules | length }} reguł alertów + email contact point (ISA Email Alerts)
           + notification policy (managed_by=ansible → email). Delivery skonfigurowane;
           test dostarczenia wykonuje kontrolowana symulacja alertu.
           Cluster={{ cluster_label }}.

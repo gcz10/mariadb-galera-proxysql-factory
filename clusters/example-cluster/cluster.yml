@@ -118,4 +118,3 @@ monitoring:
     folder_uid: "isa-alerts"
     datasource_uid: ""
   system: "pmm"
-  log_destination: "unknown"

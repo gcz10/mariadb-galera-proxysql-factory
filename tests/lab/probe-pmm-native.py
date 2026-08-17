@@ -239,7 +239,16 @@ def main():
     )
     if not rule_suffixes:
         raise SystemExit(f"FAIL: nie odczytano zadnej reguly z {alerts_playbook}")
+    # Reguly WARSTWY WSPOLNEJ (`isa-shared-*`) opisuja pare ProxySQL, nie klaster,
+    # wiec nie maja namespace'u klastra i tworzy je WYLACZNIE owner. Konsument
+    # nie moze ich oczekiwac — u niego ich nie ma i nie powinno byc, bo N
+    # konsumentow wyslaloby N maili o jednym padnietym proxy.
+    shared_suffixes = re.findall(
+        r'^\s*-\s*uid:\s*"isa-shared-([a-z0-9-]+)"', alerts_source, re.M)
+    is_owner = (CLUSTER_CONFIG.get("proxysql", {}).get("role", "owner") == "owner")
     expected_alert_rules = {f"isa-{_cl}-{suffix}" for suffix in rule_suffixes}
+    if is_owner:
+        expected_alert_rules |= {f"isa-shared-{suffix}" for suffix in shared_suffixes}
     managed_alert_rules = [
         rule
         for rule in alert_rules

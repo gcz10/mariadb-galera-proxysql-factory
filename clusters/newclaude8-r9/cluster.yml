@@ -146,7 +146,6 @@ monitoring:
   system: "pmm"
   alerts:
     email: "ops@claude.local"
-  log_destination: "journald"
 
 mariadb_tuning:
   # Limit operatora: 5 GB RAM na VM; wezly Galera maja 3 GB. Buffer pool 768M
