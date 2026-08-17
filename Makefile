@@ -10,7 +10,7 @@
         cluster-app-host lab-app-verify lab-app-bench lab-app-degradation-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
-        lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke \
+        lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify
 
@@ -232,6 +232,19 @@ lab-app-bench:  ## Zmierz przepustowosc z hosta `app` (direct vs VIP, TLS vs pla
 lab-app-degradation-test:  ## Zachowanie aplikacji przy utracie kworum (lab-only, destrukcyjny)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" tests/lab/chaos-app-degradation.py
+
+# Caly pozostaly chaos celuje w Galere. Ta sprawdza WARSTWE POSREDNIA — ta, przez
+# ktora aplikacja faktycznie chodzi. Tryb `service` (domyslny) zabija sam proces
+# ProxySQL i zostawia keepalived przy zyciu: VRRP nie widzi wtedy nic, wiec VIP
+# moze zabrac WYLACZNIE vrrp_script chk_proxysql. Tryb `node` gasi cala maszyne
+# przez API Proxmoksa i sprawdza klasyczny VRRP.
+lab-proxysql-failover-test:  ## Awaria wezla ProxySQL — przelaczenie VIP, ciaglosc, brak utraty (lab-only)
+	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
+	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" \
+	  PROXYSQL_FAILOVER_MODE="$${PROXYSQL_FAILOVER_MODE:-service}" \
+	  PROXYSQL_VMIDS="$${PROXYSQL_VMIDS:-}" \
+	  PROXMOX_VE_API_TOKEN="$${PROXMOX_VE_API_TOKEN:-}" \
+	  tests/lab/chaos-proxysql-failover.py
 
 lab-split-brain-test:  ## F9 — test split-brain / partycji sieci (ISC-30, lab-only, destrukcyjny)
 	$(TARGET_ENV) tests/lab/chaos-split-brain.py
