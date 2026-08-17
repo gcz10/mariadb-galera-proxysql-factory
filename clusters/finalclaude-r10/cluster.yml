@@ -40,6 +40,18 @@ proxysql:
   # pilnuje tego tests/validation/probe-proxysql-tenancy.py.
   # Hostgroupy zostaja domyslne (10/20/30/40), app_user domyslny.
   role: "owner"
+  # Tozsamosc TLS WSPOLNEGO endpointu. Ten klaster jest ownerem pary ProxySQL,
+  # wiec jako jedyny WDRAZA ten material (f7 kopiuje go do /var/lib/proxysql
+  # i robi `PROXYSQL RELOAD TLS`). Konsumenci deklaruja samo `ca_reference`.
+  #
+  # CA jest WSPOLNE, nie klastrowe, i to jest celowe: jedna para ProxySQL serwuje
+  # wszystkie klastry JEDNYM certem frontendu, wiec podpisanie go CA najemcy
+  # zmusiloby klientow pozostalych do zaufania cudzemu CA, a zniszczenie tego
+  # najemcy uniewaznialoby endpoint calej floty.
+  frontend_tls:
+    ca_reference: "tests/lab/tls/shared/ca.pem"
+    certificate_reference: "tests/lab/tls/shared/server-cert.pem"
+    private_key_reference: "tests/lab/tls/shared/server-key.pem"
   endpoint:
     type: "keepalived_vip"
     address: "192.168.1.133"   # VIP warstwy wspolnej

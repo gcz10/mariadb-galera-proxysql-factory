@@ -7,11 +7,16 @@ sieci, przez VIP ProxySQL, klientem w wersji z lockfile'a. Powstala, bo zdrowy
 klaster nie znaczy dzialajaca aplikacja — dwa realne defekty tej klasy znalazly
 sie w tej flocie przypadkiem, przy benchmarku:
 
-  * klient MariaDB 11.4 z DOMYSLNA weryfikacja certu nie laczy sie przez VIP
-    (ProxySQL serwuje auto-cert). Release notes 11.4: "Clients now require SSL
-    and have server certificate verification enabled by default".
+  * klient MariaDB 11.4 z DOMYSLNA weryfikacja certu nie laczyl sie przez VIP,
+    bo ProxySQL serwowal auto-cert. Release notes 11.4: "Clients now require SSL
+    and have server certificate verification enabled by default". NAPRAWIONE:
+    frontend wspolnego ProxySQL serwuje cert z CA warstwy wspolnej
+    (proxysql.frontend_tls), wiec punkt 6 jest dzis EGZEKWOWANY, nie tolerowany.
   * przy utracie kworum aplikacja dostaje "ERROR 2027 malformed packet" zamiast
     czystego "ERROR 1047 (08S01)", ktory zwraca ten sam wezel bezposrednio.
+    To osobna sprawa niz certyfikat i NADAL otwarta: zmierzone po wymianie certu
+    frontendu — kod bledu sie nie zmienil. Zrodlem jest routing (ProxySQL trzyma
+    wezel bez primary_partition w hostgrupie writera), nie tozsamosc TLS.
 
 Sprawdza (stan ustalony, bez destrukcji):
   1. polaczenie przez VIP jest SZYFROWANE (brak cichego zejscia do plaintextu),
@@ -36,12 +41,13 @@ CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml
 INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
 APP_PW = os.environ.get("APP_DB_PASSWORD", "")
-# Stan zweryfikowanego TLS przez VIP. Dzis 'fail': ProxySQL serwuje wlasny
-# auto-cert, ktorego nasze CA nie podpisalo. Gdy frontend dostanie certyfikat z
-# CA klastra, przestawienie na 'pass' zamienia dzisiejsza luke w egzekwowany
-# kontrakt. Sonda pilnuje OBU kierunkow: ciche "naprawilo sie samo" tez jest
-# rozbieznoscia wymagajaca decyzji.
-VIP_VERIFIED_TLS = os.environ.get("APP_VIP_VERIFIED_TLS", "fail")
+# Stan zweryfikowanego TLS przez VIP. Domyslnie 'pass': frontend wspolnego
+# ProxySQL serwuje juz certyfikat z CA warstwy wspolnej (proxysql.frontend_tls),
+# wiec klient weryfikujacy lancuch MUSI sie polaczyc. Wczesniej bylo 'fail', bo
+# ProxySQL serwowal wlasny auto-cert — szyfrowanie bylo, uwierzytelnienie
+# serwera nie. Sonda pilnuje OBU kierunkow: ciche "przestalo dzialac" i ciche
+# "zaczelo dzialac" to tak samo rozbieznosc wymagajaca decyzji.
+VIP_VERIFIED_TLS = os.environ.get("APP_VIP_VERIFIED_TLS", "pass")
 
 with open(CONFIG_PATH, encoding="utf-8") as fh:
     CLUSTER = yaml.safe_load(fh)
@@ -53,6 +59,9 @@ VIP_PORT = CLUSTER["proxysql"]["endpoint"]["port"]
 APP_USER = CLUSTER.get("proxysql", {}).get("app_user", "app_user")
 CLUSTER_NAME = CLUSTER["cluster"]["name"]
 CA_PATH = f"/etc/mysql/app/{CLUSTER_NAME}/ca.pem"
+# CA wspolnego endpointu — jedno dla calej floty, poza katalogiem klastra,
+# bo jeden cert frontendu ProxySQL obsluguje wszystkie klastry naraz.
+SHARED_CA_PATH = "/etc/mysql/app/shared/proxysql-ca.pem"
 TLS_FULL = (CLUSTER.get("tls") or {}).get("mode", "disabled") == "full"
 
 _galera = INV["all"]["children"]["galera"]["hosts"]
@@ -198,22 +207,30 @@ def main():
             )
 
         # 6. Zweryfikowany TLS przez VIP vs stan spodziewany.
+        #
+        # CA JEST INNE niz przy wezle i to nie jest przeoczenie: wspolna para
+        # ProxySQL serwuje cala flote jednym certem frontendu, wiec jej tozsamosc
+        # pochodzi z CA warstwy wspolnej (proxysql.frontend_tls), a nie z CA
+        # zadnego klastra. Uzycie tu CA_PATH testowaloby zaufanie, ktorego z
+        # zalozenia nie ma.
         rc_v, out_v = on_app(mariadb(
-            "SELECT 1", VIP, VIP_PORT, f"--ssl-ca={CA_PATH} --ssl-verify-server-cert"))
+            "SELECT 1", VIP, VIP_PORT,
+            f"--ssl-ca={SHARED_CA_PATH} --ssl-verify-server-cert"))
         works = rc_v == 0
         if works and VIP_VERIFIED_TLS == "fail":
             failures.append(
                 "zweryfikowany TLS przez VIP DZIALA, a sonda spodziewa sie awarii — "
-                "jesli frontend ProxySQL dostal certyfikat z CA klastra, ustaw "
-                "APP_VIP_VERIFIED_TLS=pass i egzekwuj ten kontrakt"
+                "ustaw APP_VIP_VERIFIED_TLS=pass i egzekwuj ten kontrakt"
             )
         elif not works and VIP_VERIFIED_TLS == "pass":
             failures.append(
-                f"zweryfikowany TLS przez VIP NIE dziala, a mial dzialac: {out_v[:160]}"
+                f"zweryfikowany TLS przez VIP NIE dziala, a mial dzialac (CA wspolnego "
+                f"endpointu {SHARED_CA_PATH}): {out_v[:160]}"
             )
         verified_note = (
-            "zweryfikowany TLS: wezel=OK, VIP="
-            + ("OK" if works else "odrzucony (auto-cert ProxySQL, stan znany)")
+            "zweryfikowany TLS: wezel=OK (CA klastra), VIP="
+            + ("OK (CA wspolnego endpointu)" if works
+               else "odrzucony (auto-cert ProxySQL, stan znany)")
         )
 
     if failures:

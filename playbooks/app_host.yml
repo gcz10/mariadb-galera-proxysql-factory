@@ -104,6 +104,29 @@
         tls_dir: "/etc/mysql/app/{{ cluster.name }}"
       when: (tls | default({})).mode | default('disabled') == 'full'
 
+    # CA WSPOLNEGO endpointu to osobne zaufanie niz CA klastra i celowo lezy
+    # poza katalogiem klastra: jeden cert frontendu ProxySQL obsluguje cala
+    # flote, wiec ten sam plik obowiazuje przy kazdym kliencie, niezaleznie od
+    # tego, do ktorego klastra aplikacja akurat siega. Trzymanie go per klaster
+    # sugerowaloby, ze da sie go wymienic dla jednego najemcy — nie da sie.
+    - name: "Katalog materialu wspolnego endpointu"
+      ansible.builtin.file:
+        path: /etc/mysql/app/shared
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      when: ((proxysql.frontend_tls | default({})).ca_reference | default('')) | length > 0
+
+    - name: "Rozprowadz CA wspolnego endpointu ProxySQL"
+      ansible.builtin.copy:
+        src: "{{ (playbook_dir ~ '/../' ~ proxysql.frontend_tls.ca_reference) | realpath }}"
+        dest: /etc/mysql/app/shared/proxysql-ca.pem
+        owner: root
+        group: root
+        mode: "0644"
+      when: ((proxysql.frontend_tls | default({})).ca_reference | default('')) | length > 0
+
     - name: "Raport"
       ansible.builtin.debug:
         msg: >-

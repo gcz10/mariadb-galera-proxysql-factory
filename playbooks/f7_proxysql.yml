@@ -87,6 +87,15 @@
       - -N
       - -B
 
+    # Material frontendu wdraza WYLACZNIE owner pary ProxySQL i tylko wtedy, gdy
+    # zadeklarowal komplet (cert + klucz). Konsument podaje samo `ca_reference`,
+    # zeby jego host aplikacyjny wiedzial, komu ufac — i nie dotyka wspolnego
+    # endpointu, bo nadpisalby tozsamosc serwowana pozostalym najemcom.
+    proxysql_frontend_managed: >-
+      {{ (proxysql.role | default('owner')) == 'owner'
+         and ((proxysql.frontend_tls | default({})).certificate_reference | default('')) | length > 0
+         and ((proxysql.frontend_tls | default({})).private_key_reference | default('')) | length > 0 }}
+
   pre_tasks:
     - name: "Wymagaj haseł"
       ansible.builtin.assert:
@@ -241,6 +250,98 @@
         tls_deploy_key: false
         tls_dir: "{{ proxysql_cluster_tls_dir }}"
       when: (tls | default({})).mode | default('disabled') == 'full'
+
+    # === Certyfikat FRONTENDU wspolnego endpointu (owner only) ===
+    #
+    # Do tej pory ProxySQL serwowal aplikacjom auto-cert
+    # (CN=ProxySQL_Auto_Generated_Server_Certificate), ktorego nie podpisalo
+    # zadne nasze CA. Klient MariaDB 11.4 weryfikuje lancuch DOMYSLNIE, wiec
+    # aplikacja szla przez VIP tylko z wylaczona weryfikacja — szyfrowanie bylo,
+    # uwierzytelnienie serwera nie.
+    #
+    # CA jest WSPOLNE (proxysql.frontend_tls), nie klastrowe. Ta para ProxySQL
+    # serwuje cala flote JEDNYM certem frontendu, wiec podpisanie go CA najemcy
+    # zmusiloby klientow pozostalych do zaufania cudzemu CA, a teardown tego
+    # najemcy uniewaznialby endpoint wszystkim. Material wdraza WYLACZNIE owner;
+    # konsument deklaruje tylko ca_reference, ktore trafia na host aplikacyjny.
+    #
+    # Nazwy plikow sa narzucone przez ProxySQL — dokumentacja (ssl-support)
+    # wymienia dokladnie proxysql-ca.pem / proxysql-cert.pem / proxysql-key.pem
+    # w datadir i mowi, ze "these files can be replaced with custom ones".
+    - name: "TLS frontendu: rozwiąż referencje materiału wspólnego endpointu"
+      ansible.builtin.set_fact:
+        proxysql_frontend_src: >-
+          {{ {
+               'proxysql-ca.pem': proxysql.frontend_tls.ca_reference,
+               'proxysql-cert.pem': proxysql.frontend_tls.certificate_reference,
+               'proxysql-key.pem': proxysql.frontend_tls.private_key_reference,
+             } }}
+      when: proxysql_frontend_managed | bool
+
+    - name: "TLS frontendu: wdróż materiał do datadir ProxySQL (atomowo)"
+      ansible.builtin.copy:
+        src: "{{ (playbook_dir ~ '/../' ~ item.value) | realpath }}"
+        dest: "/var/lib/proxysql/{{ item.key }}"
+        owner: proxysql
+        group: proxysql
+        # Klucz prywatny frontendu widzi TYLKO uzytkownik uslugi.
+        mode: "{{ '0600' if item.key.endswith('-key.pem') else '0640' }}"
+      loop: "{{ proxysql_frontend_src | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: proxysql_frontend_files
+      when: proxysql_frontend_managed | bool
+
+    # RELOAD TLS dziala od ProxySQL 2.3.0 i dotyczy TYLKO nowych polaczen
+    # przychodzacych — istniejace sesje aplikacji nie sa zrywane, wiec podmiana
+    # jest bezprzestojowa. Dokumentacja kaze po niej sprawdzic error log, bo
+    # blad zaladowania materialu NIE jest zwracany w odpowiedzi na komende.
+    - name: "TLS frontendu: przeładuj certyfikaty (PROXYSQL RELOAD TLS)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: "PROXYSQL RELOAD TLS;"
+      when:
+        - proxysql_frontend_managed | bool
+        - proxysql_frontend_files is changed
+      changed_when: true
+
+    # `-starttls mysql` jest OBOWIAZKOWE: protokol MySQL nie zaczyna od TLS,
+    # tylko od powitania serwera, a TLS jest negocjowane dopiero potem. Bez tej
+    # flagi openssl nie widzi zadnego certyfikatu ("Could not find certificate
+    # from <stdin>") i brama wywala sie na wlasnym bledzie, a nie na produkcie.
+    - name: "TLS frontendu: potwierdź serwowany certyfikat (a nie tylko plik na dysku)"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        pem=$(echo | timeout 10 openssl s_client -starttls mysql
+        -connect 127.0.0.1:{{ proxysql.endpoint.port | default(6033) }} 2>/dev/null
+        | sed -n '/BEGIN CERT/,/END CERT/p');
+        [ -n "$pem" ] || { echo NO_TLS; exit 0; };
+        echo "$pem" | openssl x509 -noout -issuer
+      args:
+        executable: /bin/bash
+      register: proxysql_frontend_served
+      changed_when: false
+      when: proxysql_frontend_managed | bool
+
+    # Falsyfikowalna brama: plik moze lezec na dysku, a ProxySQL nadal serwowac
+    # auto-cert (np. gdy RELOAD TLS cicho odrzucil material). Sprawdzamy to, co
+    # widzi klient, a nie to, co lezy w katalogu.
+    - name: "TLS frontendu: odrzuć auto-cert po przeładowaniu"
+      ansible.builtin.assert:
+        that:
+          - "'ProxySQL_Auto_Generated' not in proxysql_frontend_served.stdout"
+          # Brak TLS musi byc bledem, nie cichym przejsciem: gdyby ProxySQL
+          # przestal serwowac TLS, warunek na sam brak auto-certu bylby
+          # spelniony i brama przepuscilaby nieszyfrowany endpoint.
+          - "'NO_TLS' not in proxysql_frontend_served.stdout"
+        fail_msg: >-
+          ProxySQL nadal serwuje auto-cert ({{ proxysql_frontend_served.stdout | trim }})
+          mimo wdrozenia materialu z proxysql.frontend_tls. Sprawdz error log ProxySQL —
+          dokumentacja ostrzega, ze RELOAD TLS nie zglasza bledu w odpowiedzi.
+        success_msg: >-
+          Frontend serwuje material wspolnego endpointu:
+          {{ proxysql_frontend_served.stdout | trim }}
+      when: proxysql_frontend_managed | bool
 
     # Lista hostow budowana JAWNA PETLA, nie `regex_replace` z backreferencja.
     # W bloku YAML `|`/`>-` zapis "'\\1'" nie dociera do Jinja jako odwolanie do

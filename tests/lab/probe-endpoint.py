@@ -99,10 +99,13 @@ def main():
     # faktycznie laczy sie aplikacja — nie sprawdzal nikt: 110 linii bez slowa
     # o TLS, przy `tls.mode: full` zadeklarowanym w cluster.yml.
     #
-    # Zmierzone na zywej flocie: ProxySQL serwuje tu certyfikat, ktorego nikt w
-    # repo nie provisionuje ani nie rotuje —
+    # Zmierzone na zywej flocie: ProxySQL serwowal tu certyfikat, ktorego nikt w
+    # repo nie provisionowal ani nie rotowal —
     #   subject=CN=ProxySQL_Auto_Generated_Server_Certificate
     #   issuer =CN=ProxySQL_Auto_Generated_CA_Certificate
+    # NAPRAWIONE: owner pary ProxySQL wdraza material z `proxysql.frontend_tls`
+    # (CA warstwy wspolnej, nie klastra — jeden cert obsluguje cala flote), a
+    # sonda ponizej raportuje wystawce, wiec powrot auto-certu bylby widoczny.
     #
     # To nie jest problem tylko dla klientow o zaostrzonej konfiguracji. Release
     # notes MariaDB 11.4 (mariadb-docs, what-is-mariadb-114) mowia wprost:
