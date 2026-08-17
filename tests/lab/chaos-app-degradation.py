@@ -70,6 +70,11 @@ APP_HOST = next(iter(_app)) if _app else None
 SURVIVOR = GALERA[0]
 STOPPED = GALERA[1:]
 
+# Drop-in zdejmujacy systemd polityke restartu NA CZAS testu. Nazwa `zz-` daje
+# pewnosc, ze wchodzi po innych drop-inach (np. TimeoutStartSec z F5).
+DROPIN_DIR = "/etc/systemd/system/mariadb.service.d"
+DROPIN = f"{DROPIN_DIR}/zz-chaos-norestart.conf"
+
 
 def sh(host, script, timeout=120):
     cmd = [ANSIBLE, host, "-i", INVENTORY, "-m", "ansible.builtin.shell", "-a", script]
@@ -129,9 +134,32 @@ def main():
     stopped_ok = []
     try:
         for host in STOPPED:
+            # KOLEJNOSC MA ZNACZENIE: najpierw odbierz systemd prawo wskrzeszenia,
+            # dopiero potem zabij. Jednostka MariaDB ma Restart=on-abnormal, a
+            # systemd.service(5) mowi wprost, ze ta polityka restartuje usluge
+            # "when the process is terminated by a signal (...) excluding
+            # SIGHUP, SIGINT, SIGTERM, SIGPIPE" — SIGKILL nie jest wykluczony,
+            # wiec wezel wstawal sam. Zmierzone na v10: NRestarts=2 i 3, klaster
+            # z powrotem Primary, zanim sonda zdazyla zobaczyc utrate kworum.
+            # Na v9 ta sama sonda przeszla, bo wyscig wygrala detekcja Galery —
+            # czyli test byl NIEDETERMINISTYCZNY, a nie poprawny.
+            #
+            # Zdejmujemy wylacznie zmartwychwstanie; sposob smierci zostaje
+            # nagly (SIGKILL, bez pozegnania do klastra).
+            sh(host, f"mkdir -p {DROPIN_DIR} && printf '[Service]\\nRestart=no\\n' > {DROPIN} "
+                     f"&& systemctl daemon-reload && echo armed", timeout=120)
             sh(host, "pkill -9 -x mariadbd; echo killed", timeout=180)
             stopped_ok.append(host)
-        print(f"zatrzymano {stopped_ok}; zostal {SURVIVOR}")
+
+        # Poprzednia wersja ufala, ze `pkill` zadzialal — a `pkill ...; echo killed`
+        # zawsze konczy sie rc=0, wiec brak dopasowania procesu przechodzil cicho.
+        still_alive = [h for h in stopped_ok
+                       if sh(h, "pgrep -x mariadbd >/dev/null && echo ALIVE || echo DEAD")[1] != "DEAD"]
+        if still_alive:
+            print(f"FAIL: mariadbd nadal zyje na {still_alive} mimo SIGKILL — "
+                  f"test nie wytworzyl awarii, wynik odrzucony")
+            return 1
+        print(f"zabito {stopped_ok} (bez wskrzeszenia przez systemd); zostal {SURVIVOR}")
 
         # Provider potrzebuje chwili, zeby stwierdzic utrate kworum.
         deadline = time.time() + 120
@@ -189,8 +217,21 @@ def main():
             )
 
     finally:
+        # Sprzatanie MUSI dojsc do konca dla KAZDEGO hosta. Poprzednia wersja
+        # robila blokujacy `systemctl start`, ktory przy niepelnym skladzie czeka
+        # na uformowanie Primary Component; timeout wywalal wyjatek w polowie
+        # petli i kolejny wezel zostawal z Restart=no na stale. Zmierzone na v10.
         for host in stopped_ok:
-            sh(host, "systemctl start mariadb", timeout=300)
+            try:
+                # Najpierw oddaj polityke restartu sprzed testu, potem startuj.
+                sh(host, f"rm -f {DROPIN} && systemctl daemon-reload && echo disarmed", timeout=120)
+                # --no-block: systemctl(1) "it is only verified and enqueued".
+                # Start wezla Galera czeka na grupe, wiec synchroniczny start
+                # zakleszcza sie z brama powrotu ponizej — ona i tak sprawdza
+                # efekt (Primary + udany zapis), wiec czekanie tutaj nic nie wnosi.
+                sh(host, "systemctl start --no-block mariadb", timeout=120)
+            except subprocess.TimeoutExpired:
+                print(f"UWAGA: sprzatanie {host} przekroczylo limit; kontynuuje pozostale")
         # Powrot wezlow to IST; brama ponizej i tak czeka na pelny sklad.
         time.sleep(20)
 
