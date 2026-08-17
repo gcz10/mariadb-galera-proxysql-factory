@@ -160,6 +160,40 @@
           ],
           "description": "Kto zarządza WĘZŁAMI ProxySQL/infra: 'owner' instaluje i utrzymuje warstwę wspólną, 'consumer' tylko rejestruje w niej swoje hostgroupy przez f7. Domyślnie owner. Na wspólnej parze DOKŁADNIE JEDEN klaster może być ownerem — drugi owner nadpisałby pakiety ProxySQL wersją ze swojego lockfile (inny EL major) i zdublował eksportery w PMM."
         },
+        "frontend_tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Tożsamość TLS WSPÓLNEGO endpointu ProxySQL (port aplikacyjny). Świadomie NIE pochodzi z CA żadnego klastra: jedna para ProxySQL serwuje wszystkie klastry jednym certyfikatem frontendu (/var/lib/proxysql/proxysql-cert.pem), więc podpisanie go CA jednego najemcy zmusiłoby klientów pozostałych do zaufania cudzemu CA i unieważniłoby endpoint przy zniszczeniu tego klastra. Owner deklaruje cały materiał i go wdraża; konsument deklaruje samo 'ca_reference', bo musi jedynie ufać wspólnemu endpointowi.",
+          "required": [
+            "ca_reference"
+          ],
+          "properties": {
+            "ca_reference": {
+              "type": "string",
+              "minLength": 1,
+              "description": "CA warstwy wspólnej, którym klient weryfikuje endpoint ProxySQL. Trafia na hosty aplikacyjne."
+            },
+            "certificate_reference": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Certyfikat frontendu ProxySQL (SAN musi pokrywać VIP i adresy węzłów ProxySQL). Wdrażany WYŁĄCZNIE przez ownera."
+            },
+            "private_key_reference": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Klucz prywatny certyfikatu frontendu. Wdrażany WYŁĄCZNIE przez ownera."
+            }
+          },
+          "_comment_dependencies": "Ten schemat deklaruje draft-07 ($schema u gory), gdzie slowo kluczowe nazywa sie 'dependencies'. 'dependentRequired' pochodzi z draft 2019-09 i walidator draft-07 IGNORUJE nieznane slowa kluczowe po cichu — ograniczenie bylo atrapa, dopoki nie zlapala tego proba falsyfikacyjna (cert bez klucza przechodzil).",
+          "dependencies": {
+            "certificate_reference": [
+              "private_key_reference"
+            ],
+            "private_key_reference": [
+              "certificate_reference"
+            ]
+          }
+        },
         "endpoint": {
           "required": [
             "type",

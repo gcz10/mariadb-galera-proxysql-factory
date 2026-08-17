@@ -62,6 +62,12 @@ proxysql:
   # nie zarzadza VIP-em. Rejestruje tylko wlasne hostgroupy i uzytkownika przez f7.
   # Owner (finalclaude-r10) postawil te wezly na EL10, wiec lockfile EL9 ich nie dotyczy.
   role: "consumer"
+  # Konsument DEKLARUJE, komu ufa na wspolnym endpoincie, ale go NIE wdraza —
+  # material frontendu nalezy do ownera. Ta sciezka trafia na host aplikacyjny,
+  # zeby klient mogl zweryfikowac lancuch VIP-a. CA jest wspolne, nie klastrowe:
+  # jeden cert frontendu obsluguje wszystkie klastry naraz.
+  frontend_tls:
+    ca_reference: "tests/lab/tls/shared/ca.pem"
   endpoint:
     type: "keepalived_vip"
     address: "192.168.1.133"   # VIP warstwy wspolnej — ten sam co finalclaude-r10

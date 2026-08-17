@@ -29,6 +29,21 @@ make lab-up
 make cluster-discover CLUSTER=lab-cluster
 make cluster-validate CLUSTER=lab-cluster
 
+# Materiał TLS (gdy tls.mode=full). Artefakty są gitignorowane — na nowej
+# maszynie trzeba je wytworzyć, inaczej F3/F7 padną na brakującym pliku.
+#   1) CA + cert KLASTRA (ścieżki z tls.*_reference w cluster.yml); SAN musi
+#      pokrywać nazwy ORAZ adresy węzłów — Galera łączy się po adresie.
+tests/lab/tls/generate.sh <klaster> <n1,n2,n3,ip1,ip2,ip3>
+#   2) CA + cert WSPÓLNEGO endpointu ProxySQL (proxysql.frontend_tls). CA jest
+#      wspólne dla całej floty, nie klastrowe: jedna para ProxySQL serwuje
+#      wszystkie klastry JEDNYM certem frontendu. Wdraża go wyłącznie owner;
+#      SAN musi pokrywać VIP i adresy węzłów ProxySQL.
+tests/lab/tls/generate.sh shared-proxysql fcp1,fcp2,<ip-fcp1>,<ip-fcp2>,<ip-vip>
+#   Rotacja liścia pod tym samym CA: REUSE_CA=1 przed powyższym poleceniem,
+#   potem `make cluster-tls-rotate CLUSTER=<klaster>` (węzły) albo
+#   `make cluster-proxysql CLUSTER=<owner>` (frontend — PROXYSQL RELOAD TLS,
+#   bez zrywania istniejących sesji). Rotację CA prowadzi tests/lab/tls/rotate-ca.sh.
+
 # UWAGA kolejność: poniższa sekwencja jest zweryfikowana od zera (from-scratch).
 # Zależności, które ją wymuszają:
 #   F6 asertuje granty pmm_monitor  -> musi być PO F11
