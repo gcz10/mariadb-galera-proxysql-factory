@@ -214,6 +214,7 @@
           [Service]
           TimeoutStartSec=infinity
           LimitNOFILE=1048576
+          OOMScoreAdjust=-800
         dest: /etc/systemd/system/mariadb.service.d/timeoutstartsec.conf
         owner: root
         group: root

@@ -48,6 +48,11 @@ vrrp_instance PROXYSQL_VIP {
     advert_int 1
     # Powrót MASTERA nie może ściągać VIP natychmiast, aby zapobiec flappingowi przy awariach.
     preempt_delay {{ proxysql_endpoint_preempt_delay | default(30) }}
+    # Gratuitous ARP — ochrona przed zatrutym/nieodswiezonym ARP na switchach/hypervisorach
+    garp_master_delay 1
+    garp_master_repeat 2
+    garp_master_refresh 5
+    garp_master_refresh_repeat 1
     unicast_src_ip {{ proxysql_node_address }}
     unicast_peer {
 {% for peer in groups['proxysql'] if peer != inventory_hostname %}

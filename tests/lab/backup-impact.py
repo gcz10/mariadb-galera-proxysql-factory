@@ -28,8 +28,12 @@ APP_PW = os.environ.get("APP_DB_PASSWORD", "")
 FLOW_THRESHOLD_NS = 2_000_000_000     # 2s cumulative flow-control pause
 COMMIT_GAP_THRESHOLD = 8.0            # max seconds writer may stall
 WORKLOAD_LOCAL = "tests/lab/workload-numbered.sh"
+# Klient obciazenia: preferuj dedykowany host aplikacyjny (fcapp), zeby workload
+# nie konkurowal o CPU/IO z mariabackup na wezle scheduler. Fallback na galera[0]
+# jesli inventory nie ma grupy `app`.
 _inv = yaml.safe_load(open(INVENTORY))
-WORKLOAD_HOST = list(_inv["all"]["children"]["galera"]["hosts"])[0]
+_app = (_inv["all"]["children"].get("app") or {}).get("hosts") or {}
+WORKLOAD_HOST = next(iter(_app)) if _app else list(_inv["all"]["children"]["galera"]["hosts"])[0]
 CNF_REMOTE = "/root/.workload.cnf"
 SCRIPT_REMOTE = "/tmp/workload-numbered.sh"
 LOG_REMOTE = "/tmp/workload.log"
@@ -96,11 +100,13 @@ def main():
 
     local_cnf = None
     try:
-        sh(WORKLOAD_HOST,
+        # Przygotowanie tabeli na wezle Galera (z TRUNCATE, zeby seq startowal od 1).
+        sh(GALERA[0],
            'mariadb --socket=/var/lib/mysql/mysql.sock -e '
            '"CREATE DATABASE IF NOT EXISTS isa_test; '
            'CREATE TABLE IF NOT EXISTS isa_test.isa_failover '
-           '(seq BIGINT PRIMARY KEY, ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"', check=True)
+           '(seq BIGINT PRIMARY KEY, ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP); '
+           'TRUNCATE isa_test.isa_failover;"', check=True)
 
         fd, local_cnf = tempfile.mkstemp()
         with os.fdopen(fd, "w") as fh:
