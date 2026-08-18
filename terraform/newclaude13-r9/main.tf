@@ -10,12 +10,14 @@ terraform {
 
 provider "proxmox" {} # endpoint + api_token + insecure z env PROXMOX_VE_*
 
-# newclaude12-r9 — warstwa BAZODANOWA jedenastego przebiegu budowy od zera.
+# newclaude13-r9 — warstwa BAZODANOWA trzynastego przebiegu budowy od zera.
 #
-# Cel: naturalny dowod obu poprawek sondy degradacji z v10. Drop-in Restart=no
-# przed SIGKILL oraz odporne na wyjatki sprzatanie z `--no-block` powstaly na
-# tym samym klastrze, ktory je ujawnil, wiec nigdy nie zobaczyly swiezej
-# instalacji. Tutaj `lab-app-degradation-test` musi przejsc za pierwszym razem.
+# Cel: naturalny dowod parametrow produkcyjnych z PR #50. THP off, OOMScoreAdjust,
+# wsrep_slave_threads i GARP powstaly i byly mierzone na DZIALAJACYM n12 — czyli
+# na maszynach po bootstrapie, SST i restartach. Tutaj musza zadzialac w innej
+# kolejnosci: `disable-thp.service` przed pierwszym startem mariadbd, drop-in
+# OOMScoreAdjust przed pierwszym uruchomieniem jednostki, a `wsrep_slave_threads`
+# z faktow zebranych na surowym hoscie.
 #
 # ProxySQL, VIP, PMM, MinIO i host aplikacyjny sa wspoldzielone i mieszkaja
 # w terraform/shared/ — ten katalog ich nie tworzy ani nie niszczy.
@@ -32,12 +34,15 @@ locals {
 
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
-  # VMID 9520-9523 wolne (sprawdzone przez API na pelnej liscie VM klastra PVE).
-  # IP .172-.175 potwierdzone AKTYWNYM skanem sieci (ping + port 22/8006).
+  # VMID 9530-9533 wolne (sprawdzone przez API na pelnej liscie VM klastra PVE).
+  # IP .164-.167 potwierdzone AKTYWNYM skanem sieci (ping + port 22/8006) juz PO
+  # zniszczeniu n12, wiec blok jest realnie pusty, a nie tylko zwolniony w planie.
   #
-  # Skan jest falsyfikowalny i to sie oplacilo: kontrola .179/.184 wyszla ZYWA,
-  # a .189 okazal sie NOWYM zywym hostem spoza dotychczasowej listy. Dlatego
-  # blok konczy sie na .188, mimo ze .189 sasiaduje.
+  # Skan jest falsyfikowalny i to sie oplaca: kontrola .179 w tym samym przebiegu
+  # wyszla ZYWA (host spoza floty, odnotowany w clusters/reserved-addresses.yml).
+  #
+  # Blok nalezal kiedys do n8 (dawno zniszczonego), wiec w known_hosts moga siedziec
+  # stare klucze SSH. Czysci je `make cluster-trust-hosts` przed pierwszym playbookiem.
   #
   # NIE UZYWAC .180-.183: `.181` to adres zarzadzania hypervisora Proxmox
   # (PROXMOX_VE_ENDPOINT). Zywe sa tez .179, .184 i .189. Kolizje z tymi blokami
@@ -47,10 +52,10 @@ locals {
   # innodb_buffer_pool_size zjezdza do 768M, zeby zostal zapas na mariabackup
   # podczas SST i backupu.
   vms = {
-    n12g1 = { id = 9520, ip = 172, role = "galera",  cpu = 2, ram = 3072, disk = 40 }
-    n12g2 = { id = 9521, ip = 173, role = "galera",  cpu = 2, ram = 3072, disk = 40 }
-    n12g3 = { id = 9522, ip = 174, role = "galera",  cpu = 2, ram = 3072, disk = 40 }
-    n12r1 = { id = 9523, ip = 175, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    n13g1 = { id = 9530, ip = 164, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n13g2 = { id = 9531, ip = 165, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n13g3 = { id = 9532, ip = 166, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n13r1 = { id = 9533, ip = 167, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
 
@@ -60,8 +65,8 @@ resource "proxmox_virtual_environment_vm" "node" {
   node_name   = local.node_name
   pool_id     = local.pool_id
   vm_id       = each.value.id
-  description = "newclaude12-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
-  tags        = ["rocky9", "galera", "newclaude12", each.value.role, "n12"]
+  description = "newclaude13-r9 Rocky 9 (${each.value.role}) — VMID ${each.value.id}"
+  tags        = ["rocky9", "galera", "newclaude13", each.value.role, "n13"]
 
   agent {
     enabled = true
