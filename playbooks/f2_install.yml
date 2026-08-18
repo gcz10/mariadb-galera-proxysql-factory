@@ -187,6 +187,9 @@
           [Service]
           TimeoutStartSec=infinity
           LimitNOFILE=1048576
+          # Rekomendacja produkcyjna: OOMScoreAdjust=-800 chroni proces bazy
+          # przed ubiciem przez kernel OOM killer przed innymi procesami w tle.
+          OOMScoreAdjust=-800
         dest: /etc/systemd/system/mariadb.service.d/timeoutstartsec.conf
         owner: root
         group: root
@@ -278,6 +281,9 @@
         content: |
           [Service]
           LimitNOFILE=1048576
+          # Rekomendacja produkcyjna: OOMScoreAdjust=-800 chroni ProxySQL
+          # przed ubiciem przez kernel OOM killer.
+          OOMScoreAdjust=-800
         dest: /etc/systemd/system/proxysql.service.d/limits.conf
         owner: root
         group: root
@@ -316,6 +322,46 @@
         - ansible_facts['service_mgr'] == 'systemd'
         - db_sysctl_conf.changed
       changed_when: true
+
+    # === Transparent Huge Pages (THP) — wyłączenie dla baz danych ===
+    # B-drzewa InnoDB oraz silnik pamięci ProxySQL mają rzadki dostęp do pamięci.
+    # THP alokuje 2MB ciągłe strony i przy braku ciągłej pamięci wywołuje defragmentację
+    # synchroniczną w jądrze, co powoduje skoki opóźnień (latency spikes) i fragmentację RAM.
+    # Oficjalne przewodniki MariaDB/Percona zalecają wyłączenie THP (never).
+    - name: "THP — wdróż usługę systemd wyłączającą Transparent Huge Pages"
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Disable Transparent Huge Pages (THP) for Database Performance
+          DefaultDependencies=no
+          After=sysinit.target local-fs.target
+          Before=mongod.service mariadb.service mysql.service mysqld.service proxysql.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled && echo never > /sys/kernel/mm/transparent_hugepage/defrag'
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=basic.target
+        dest: /etc/systemd/system/disable-thp.service
+        owner: root
+        group: root
+        mode: "0644"
+      when:
+        - ansible_facts['service_mgr'] == 'systemd'
+        - "('galera' in group_names or 'proxysql' in group_names or 'restore' in group_names)"
+      register: thp_service_unit
+
+    - name: "THP — włącz i uruchom disable-thp.service"
+      ansible.builtin.systemd:
+        name: disable-thp
+        enabled: true
+        state: started
+        daemon_reload: "{{ thp_service_unit.changed }}"
+      when:
+        - ansible_facts['service_mgr'] == 'systemd'
+        - "('galera' in group_names or 'proxysql' in group_names or 'restore' in group_names)"
     # === Wspolne: time sync ===
     - name: Instaluj i wlacz chrony
       ansible.builtin.dnf:

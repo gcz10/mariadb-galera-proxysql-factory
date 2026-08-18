@@ -24,6 +24,10 @@ wsrep_node_name = {{ inventory_hostname }}
 wsrep_node_address = {{ galera_node_address }}
 wsrep_sst_method = mariabackup
 wsrep_sst_auth = {{ (sst_user ~ ':' ~ sst_password) | to_json }}
+# Rownolegle aplikowanie writesetow (oficjalna rekomendacja: minimum liczba vCPU hosta).
+wsrep_slave_threads = {{ (mariadb_tuning | default({})).wsrep_slave_threads | default(ansible_processor_vcpus | default(2)) }}
+# Rejestruj kolizje certyfikacji w logu bazy (kluczowe dla diagnostyki w produkcji).
+wsrep_log_conflicts = {{ (mariadb_tuning | default({})).wsrep_log_conflicts | default('ON') }}
 
 # === Bind ===
 bind-address = 0.0.0.0
