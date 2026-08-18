@@ -82,3 +82,12 @@
       # Restore z definicji mutuje datadir na hoście docelowym — to nie jest
       # zadanie "check-only", wiec zmienilismy stan zawsze, gdy doszlo do skutku.
       changed_when: true
+
+# Drill zapisuje sukces do state.json na hoscie restore, ale metryka
+# `isa_restore_test_last_success_unixtime` mieszka w textfile collectorze na
+# galera[0] i byla odswiezana WYLACZNIE recznym uruchomieniem F11. Skutek: alert
+# ISC-47 "Restore drill stale" mierzyl, kiedy ostatnio puszczono Ansible, a nie
+# kiedy ostatnio udal sie drill. Domykamy to tutaj — po udanym drillu metryka
+# jest publikowana w tym samym przebiegu.
+- name: "F10 — opublikuj swiezosc drillu (ISC-49) zaraz po jego sukcesie"
+  ansible.builtin.import_playbook: f11_freshness.yml

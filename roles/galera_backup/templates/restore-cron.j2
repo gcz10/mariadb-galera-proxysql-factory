@@ -1,0 +1,18 @@
+# /etc/cron.d/galera-restore-{{ cluster.name }}
+#
+# Materializacja `backup.restore_test_schedule` ze schematu klastra.
+#
+# POWSTALO PO REALNEJ AWARII KONTRAKTU (n13, 2026-08-18): pole bylo WYMAGANE w
+# clusters/schema/cluster.schema.json, cytowane w tresci alertu ISC-47
+# ("Restore drill stale (no successful drill in 8 days)") i raportowane metryka
+# `isa_restore_test_monitoring_enabled=1`, ale NIE ISTNIALO w zadnym schedulerze.
+# Drill uruchamial sie wylacznie wtedy, gdy czlowiek wpisal `make cluster-restore-drill`.
+# W kazdym realnym wdrozeniu alert krytyczny zapalilby sie po 8 dniach — nie dlatego,
+# ze odtwarzanie jest zepsute, tylko dlatego, ze nikt go nie uruchamial.
+#
+# Drill CELOWO kasuje datadir hosta z grupy `restore`. Jest to host izolowany,
+# co f10_restore.yml egzekwuje asercja (nie moze nalezec do galera ani proxysql).
+CRON_TZ={{ backup.scheduler.timezone | default('UTC') }}
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+{{ backup.restore_test_schedule }} root /usr/bin/systemd-cat -t galera-restore-{{ cluster.name }} /opt/galera-backup/galera-backup restore {{ cluster.name }} --confirm

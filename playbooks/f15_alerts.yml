@@ -141,9 +141,16 @@
         summary: "Last successful backup older than {{ backup_freshness_sla_hours }} hours (or freshness metric missing)"
         severity: "critical"
         noDataState: "Alerting"
+      # Swiezosc drillu ma DWIE zrodla prawdy, bo sa dwie sciezki uruchomienia:
+      #   * `isa_restore_test_last_success_unixtime` — publikuje f11_freshness na
+      #     galera[0] (sciezka Ansible: `make cluster-restore-drill`),
+      #   * `galera_restore_last_success_unixtime` — publikuje SAM runner na hoscie
+      #     restore (sciezka cron: /etc/cron.d/galera-restore-<cluster>).
+      # Regula bierze `max` z obu. Wczesniej czytala wylacznie pierwsza, wiec
+      # mierzyla "kiedy ostatnio puszczono Ansible", a nie "kiedy udal sie drill".
       - uid: "isa-{{ cluster_label }}-restore-drill-stale"
         title: "Restore drill stale (no successful drill in 8 days)"
-        expr: "(time() - (max(isa_restore_test_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool (8 * 24 * 3600)"
+        expr: "(time() - max((max(isa_restore_test_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0)) or (max(galera_restore_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0)))) > bool (8 * 24 * 3600)"
         summary: "Last successful restore drill older than 8 days (schedule: {{ backup.restore_test_schedule }}) or drill metric missing"
         severity: "critical"
         noDataState: "Alerting"

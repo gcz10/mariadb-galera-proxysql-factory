@@ -289,3 +289,31 @@
   when: >
     not (backup.enabled and backup.scheduler.mode == 'cron' and inventory_hostname == backup.scheduler.host) or
     not (galera_backup_install_cron | default(true))
+
+# === Harmonogram restore drill (ISC-36/37) ===
+# `backup.restore_test_schedule` bylo dotad polem-widmem: wymaganym w schemacie,
+# cytowanym w alercie ISC-47 i raportowanym jako "monitoring enabled", ale bez
+# ani jednej implementacji. Ponizsze zadania nadaja mu skutek na hoscie `restore`.
+- name: Manage per-cluster restore drill cron job
+  ansible.builtin.template:
+    src: restore-cron.j2
+    dest: "/etc/cron.d/galera-restore-{{ cluster.name }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - (galera_backup_install_restore_cron | default(true))
+    - backup.enabled
+    - backup.scheduler.mode == 'cron'
+    - galera_backup_local_role | default('') == 'restore'
+    - (backup.restore_test_schedule | default('') | trim) not in ['', 'disabled']
+
+- name: Remove restore drill cron file when not scheduled on this host
+  ansible.builtin.file:
+    path: "/etc/cron.d/galera-restore-{{ cluster.name }}"
+    state: absent
+  when: >
+    not (galera_backup_install_restore_cron | default(true)) or
+    not (backup.enabled and backup.scheduler.mode == 'cron'
+         and galera_backup_local_role | default('') == 'restore'
+         and (backup.restore_test_schedule | default('') | trim) not in ['', 'disabled'])
