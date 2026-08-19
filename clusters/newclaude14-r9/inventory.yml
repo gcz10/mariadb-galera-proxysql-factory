@@ -1,11 +1,11 @@
 ---
-# newclaude13-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
+# newclaude14-r9 - klaster Galera na Rocky Linux 9 (Proxmox, real VM).
 # Logowanie jako root przez klucz cloud-init; become:true jest wtedy no-opem.
 #
-# VM Galera i restore tworzy terraform/newclaude13-r9/:
-#   n13g1-3 (VMID 9530-9532, IP .164-.166), n13r1 (9533, .167).
+# VM Galera i restore tworzy terraform/newclaude14-r9/:
+#   n14g1-3 (VMID 9540-9542, IP .168-.170), n14r1 (9543, .171).
 # ProxySQL fcp1/fcp2 (.131/.132), app fcapp (.134) i infra fcinfra (.130)
-# NALEZA do terraform/shared/ i sa tu tylko deklarowane — ten katalog ich
+# NALEZA do terraform/shared/ i sa tu tylko deklarowane - ten katalog ich
 # nie tworzy ani nie niszczy. VIP .133.
 #
 # Nazwy hostow sa globalnie rozlaczne w calej flocie: trafiaja do PMM Inventory
@@ -23,18 +23,18 @@ all:
       vars:
         galera_role: "galera"
       hosts:
-        n13g1:
-          ansible_host: "192.168.1.164"
+        n14g1:
+          ansible_host: "192.168.1.168"
           galera_node_idx: 1
-          galera_node_address: "192.168.1.164"
-        n13g2:
-          ansible_host: "192.168.1.165"
+          galera_node_address: "192.168.1.168"
+        n14g2:
+          ansible_host: "192.168.1.169"
           galera_node_idx: 2
-          galera_node_address: "192.168.1.165"
-        n13g3:
-          ansible_host: "192.168.1.166"
+          galera_node_address: "192.168.1.169"
+        n14g3:
+          ansible_host: "192.168.1.170"
           galera_node_idx: 3
-          galera_node_address: "192.168.1.166"
+          galera_node_address: "192.168.1.170"
 
     proxysql:
       vars:
@@ -53,9 +53,9 @@ all:
       vars:
         restore_role: "restore"
       hosts:
-        n13r1:
-          ansible_host: "192.168.1.167"
-          restore_node_address: "192.168.1.167"
+        n14r1:
+          ansible_host: "192.168.1.171"
+          restore_node_address: "192.168.1.171"
 
     # Host APLIKACYJNY warstwy wspolnej: laczy sie do klastra tak, jak zrobilaby
     # to aplikacja (po sieci, przez VIP). Nie jest wezlem bazy i nie liczy sie do
