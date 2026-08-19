@@ -17,25 +17,17 @@ Requires APP/PROXYSQL secrets only if you also run the playbook; the probe itsel
 is read-only (queries wsrep status via the local MariaDB socket).
 """
 
-import os
 import re
-import subprocess
 import sys
 
 import yaml
 
-INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
-CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
-ANSIBLE = os.environ.get("ANSIBLE", "ansible")
-PLAYBOOK = "playbooks/f12_rolling_restart.yml"
+from _probe_common import ProbeContext, REPO_ROOT, finish, require_hosts, run_ansible
 
-with open(CONFIG_PATH, encoding="utf-8") as fh:
-    CLUSTER = yaml.safe_load(fh)
-with open(INVENTORY, encoding="utf-8") as fh:
-    INV = yaml.safe_load(fh)
-
-EXPECTED_SIZE = str(CLUSTER["galera"]["nodes_expected"])
-GALERA = list(INV["all"]["children"]["galera"]["hosts"])
+CTX = ProbeContext()
+EXPECTED_SIZE = str(CTX.config["galera"]["nodes_expected"])
+GALERA = CTX.group_hosts("galera")
+PLAYBOOK = REPO_ROOT / "playbooks/f12_rolling_restart.yml"
 
 LIFECYCLE = re.compile(
     r"--wsrep-new-cluster"
@@ -56,24 +48,22 @@ def targets_multiple_galera(hosts):
     return True
 
 
-def sh(node, script, timeout=60):
-    cmd = [ANSIBLE, node, "-i", INVENTORY, "-m", "ansible.builtin.shell", "-a", script]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+def wsrep_status(node, failures, undetermined):
+    q = (
+        "SHOW STATUS WHERE Variable_name IN "
+        "('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+    )
+    result = run_ansible(
+        CTX,
+        node,
+        f'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "{q}" 2>&1 || true',
+    )
+    require_hosts(result, [node], f"wsrep-status {node}", failures, undetermined)
+    if node not in result.bodies:
+        return None
 
-
-def body(node, result):
-    out = result.stdout
-    m = re.search(rf'^{re.escape(node)}\s*\|\s*\w+\s*\|\s*rc=\d+\s*>>?\s*$', out, re.M)
-    return out[m.end():].strip() if m else out.strip()
-
-
-def wsrep_status(node):
-    q = ("SHOW STATUS WHERE Variable_name IN "
-         "('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')")
-    r = sh(node, f'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "{q}"')
-    text = body(node, r)
     status = {}
-    for line in text.splitlines():
+    for line in result.body(node).splitlines():
         parts = line.split("\t")
         if len(parts) == 2:
             status[parts[0]] = parts[1]
@@ -82,9 +72,10 @@ def wsrep_status(node):
 
 def main():
     failures = []
+    undetermined = []
 
     # === STATIC: serial:1 + health gate in the rolling-restart playbook ===
-    plays = yaml.safe_load(open(PLAYBOOK, encoding="utf-8"))
+    plays = yaml.safe_load(PLAYBOOK.read_text(encoding="utf-8"))
     if not isinstance(plays, list):
         failures.append(f"{PLAYBOOK}: not a list of plays")
         plays = []
@@ -119,12 +110,18 @@ def main():
             serial_checked = True
 
     if not serial_checked:
-        failures.append("ISC-50 — no serial:1 Galera lifecycle play found in "
-                        f"{PLAYBOOK}")
+        failures.append(
+            "ISC-50 — no serial:1 Galera lifecycle play found in "
+            f"{PLAYBOOK}"
+        )
 
     # === RUNTIME: every node Synced + Primary + full size + ready ===
+    if not GALERA:
+        undetermined.append("wsrep-status: inwentarz nie definiuje hostow galera")
     for node in GALERA:
-        status = wsrep_status(node)
+        status = wsrep_status(node, failures, undetermined)
+        if status is None:
+            continue
         if not status:
             failures.append(f"ISC-51 — {node}: no wsrep status (MariaDB down?)")
             continue
@@ -141,14 +138,12 @@ def main():
                     f"ISC-51 — {node}.{var}={actual!r} (expected {expected!r} {label})"
                 )
 
-    if failures:
-        for f in failures:
-            print(f"FAIL: {f}")
-        return 1
-
-    print(f"PASS: ISC-50/51 — rolling restart serial:1 + health gate verified; "
-          f"{len(GALERA)}/{len(GALERA)} Galera nodes Synced/Primary/{EXPECTED_SIZE}/ready")
-    return 0
+    return finish(
+        failures,
+        undetermined,
+        f"ISC-50/51 — rolling restart serial:1 + health gate verified; "
+        f"{len(GALERA)}/{len(GALERA)} Galera nodes Synced/Primary/{EXPECTED_SIZE}/ready",
+    )
 
 
 if __name__ == "__main__":

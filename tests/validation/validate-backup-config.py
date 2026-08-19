@@ -291,8 +291,13 @@ def main():
             cluster_dirs.append(p)
 
     if not cluster_dirs:
-        print(f"WARN: No cluster directories containing cluster.yml and inventory.yml found in {clusters_root}")
-        return 0
+        # Fail-closed: pusta lista katalogow klastrow to zle wskazane drzewo,
+        # a nie "repo bez problemow" — walidator nie mial czego sprawdzic.
+        print(
+            f"FAIL: No cluster directories containing cluster.yml and inventory.yml found in {clusters_root}",
+            file=sys.stderr,
+        )
+        return 1
 
     all_errors = []
     records = []

@@ -9,100 +9,89 @@ admin credentials rejected), ISC-23 (read/write split off — no query rules).
 Requires `/etc/proxysql/admin-check.cnf` deployed by F7 on each ProxySQL node.
 """
 
-import os
-import re
-import subprocess
+from __future__ import annotations
+
 import sys
-import yaml
 
-CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
-INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
-ANSIBLE = os.environ.get("ANSIBLE", "ansible")
-
-with open(CONFIG_PATH, encoding="utf-8") as fh:
-    CLUSTER_CONFIG = yaml.safe_load(fh)
-
-EXPECTED_BACKENDS = int(CLUSTER_CONFIG["galera"]["nodes_expected"])
-HG_BASE = int(CLUSTER_CONFIG.get("proxysql", {}).get("hostgroup_base", 10))
-WRITER_HG = HG_BASE + 0
-BACKUP_HG = HG_BASE + 10
-READER_HG = HG_BASE + 20
-OFFLINE_HG = HG_BASE + 30
-# ProxySQL factory-default admin credential — asserted to be REJECTED (ISC-22).
+from _probe_common import (
+    ProbeContext,
+    check,
+    finish,
+    require_hosts,
+    run_ansible,
+)
 
 
-def run_admin_query(query, factory_default=False):
-    """Run a ProxySQL admin query on all proxysql nodes, return {node: body}."""
+def admin_query(query: str, factory_default: bool = False) -> str:
+    """Zbuduj polecenie administracyjne wykonywane przez wspolny parser."""
     env_prefix = "MYSQL_PWD=admin " if factory_default else ""
     auth = "" if factory_default else "--defaults-extra-file=/etc/proxysql/admin-check.cnf "
-    cmd = [
-        ANSIBLE, "proxysql", "-i", INVENTORY, "-m", "ansible.builtin.shell",
-        "-a", f'{env_prefix}mariadb {auth}-h127.0.0.1 -P6032 -uadmin -N -B -e "{query}"',
-        "--fork", "5",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    data = {}
-    current_host = None
-    current_body = []
-    for line in result.stdout.splitlines():
-        header = re.match(r'^(\S+)\s*\|\s*\w+\s*\|\s*rc=\d+\s*>>?\s*$', line)
-        if header:
-            if current_host:
-                data[current_host] = "\n".join(current_body).strip()
-            current_host = header.group(1)
-            current_body = []
-        elif current_host:
-            current_body.append(line)
-    if current_host:
-        data[current_host] = "\n".join(current_body).strip()
-    return data
+    return f'{env_prefix}mariadb {auth}-h127.0.0.1 -P6032 -uadmin -N -B -e "{query}"'
 
 
-def check(condition, message, failures):
-    if not condition:
-        failures.append(message)
-
-
-def main():
-    failures = []
-
+def main() -> int:
+    failures: list[str] = []
+    undetermined: list[str] = []
+    ctx = ProbeContext()
+    proxysql_hosts = ctx.group_hosts("proxysql")
+    expected_backends = int(ctx.config["galera"]["nodes_expected"])
+    hg_base = int(ctx.config.get("proxysql", {}).get("hostgroup_base", 10))
+    writer_hg = hg_base + 0
+    backup_hg = hg_base + 10
+    reader_hg = hg_base + 20
+    offline_hg = hg_base + 30
 
     # Runtime server distribution per ProxySQL node
-    servers_raw = run_admin_query(
-        "SELECT hostgroup_id, hostname, status FROM runtime_mysql_servers "
-        "ORDER BY hostgroup_id, hostname"
+    servers_res = run_ansible(
+        ctx,
+        "proxysql",
+        admin_query(
+            "SELECT hostgroup_id, hostname, status FROM runtime_mysql_servers "
+            "ORDER BY hostgroup_id, hostname"
+        ),
     )
-    if not servers_raw:
-        print("FAIL: no ProxySQL nodes responded to admin query")
-        return 1
+    # Guard calej grupy: brak odpowiedzi hosta nie moze zniknac jako pusty pomiar.
+    require_hosts(
+        servers_res,
+        proxysql_hosts,
+        "ISC-18..20 runtime_mysql_servers",
+        failures,
+        undetermined,
+    )
 
-    for node, body in servers_raw.items():
+    servers_rows = {}
+    for node in proxysql_hosts:
+        if node not in servers_res.bodies:
+            continue
+        body = servers_res.body(node)
         rows = [ln.split("\t") for ln in body.splitlines() if "\t" in ln]
-        online_writers = [r for r in rows if r[0] == str(WRITER_HG) and r[2] == "ONLINE"]
-        online_offline = [r for r in rows if r[0] == str(OFFLINE_HG) and r[2] == "ONLINE"]
+        servers_rows[node] = rows
+        online_writers = [r for r in rows if r[0] == str(writer_hg) and r[2] == "ONLINE"]
+        online_offline = [r for r in rows if r[0] == str(offline_hg) and r[2] == "ONLINE"]
         healthy_backends = {
-            r[1] for r in rows
-            if r[0] in (str(WRITER_HG), str(BACKUP_HG)) and r[2] == "ONLINE"
+            r[1]
+            for r in rows
+            if r[0] in (str(writer_hg), str(backup_hg)) and r[2] == "ONLINE"
         }
 
         # ISC-18: exactly one active (ONLINE) writer
         check(
             len(online_writers) == 1,
-            f"{node}: {len(online_writers)} ONLINE writers in HG {WRITER_HG} (expected 1)",
+            f"{node}: {len(online_writers)} ONLINE writers in HG {writer_hg} (expected 1)",
             failures,
         )
         # ISC-19 steady state: no healthy node stuck in offline HG when cluster is healthy
         check(
             len(online_offline) == 0,
-            f"{node}: {len(online_offline)} node(s) ONLINE in offline HG {OFFLINE_HG} "
+            f"{node}: {len(online_offline)} node(s) ONLINE in offline HG {offline_hg} "
             f"(expected 0 when cluster healthy)",
             failures,
         )
         # ISC-20: Galera monitor converged — all expected backends are healthy
         check(
-            len(healthy_backends) == EXPECTED_BACKENDS,
+            len(healthy_backends) == expected_backends,
             f"{node}: {len(healthy_backends)} healthy backends in active HGs "
-            f"(expected {EXPECTED_BACKENDS})",
+            f"(expected {expected_backends})",
             failures,
         )
 
@@ -127,27 +116,42 @@ def main():
     # To zachowanie typu "last man standing" — ProxySQL nie oprozni hostgrupy
     # writera do zera. Warunek ponizej i tak jest sluszny: routowanie do wezla
     # poza Primary Component to stan, o ktorym operator ma wiedziec.
-    active_hgs = {str(WRITER_HG), str(BACKUP_HG), str(READER_HG)}
-    galera_raw = run_admin_query(
-        "SELECT g.hostname, g.primary_partition, g.wsrep_local_state "
-        "FROM mysql_server_galera_log g JOIN (SELECT hostname, "
-        "MAX(time_start_us) AS t FROM mysql_server_galera_log GROUP BY hostname) m "
-        "ON g.hostname = m.hostname AND g.time_start_us = m.t"
+    active_hgs = {str(writer_hg), str(backup_hg), str(reader_hg)}
+    galera_res = run_ansible(
+        ctx,
+        "proxysql",
+        admin_query(
+            "SELECT g.hostname, g.primary_partition, g.wsrep_local_state "
+            "FROM mysql_server_galera_log g JOIN (SELECT hostname, "
+            "MAX(time_start_us) AS t FROM mysql_server_galera_log GROUP BY hostname) m "
+            "ON g.hostname = m.hostname AND g.time_start_us = m.t"
+        ),
     )
-    for node, body in servers_raw.items():
-        rows = [ln.split("\t") for ln in body.splitlines() if "\t" in ln]
+    require_hosts(
+        galera_res,
+        proxysql_hosts,
+        "ISC-19 monitor Galery",
+        failures,
+        undetermined,
+    )
+    # Badany jest tylko host ProxySQL, dla ktorego obie sekcje maja odpowiedz.
+    for node, rows in servers_rows.items():
+        if node not in galera_res.bodies:
+            continue
         routed = {r[1] for r in rows if r[0] in active_hgs and r[2] == "ONLINE"}
         monitor = {}
-        for line in galera_raw.get(node, "").splitlines():
+        for line in galera_res.body(node).splitlines():
             if "\t" in line:
                 cols = line.split("\t")
                 monitor[cols[0]] = (cols[1], cols[2])
         for host in sorted(routed):
             sample = monitor.get(host)
             if sample is None:
-                failures.append(
+                check(
+                    False,
                     f"{node}: {host} jest ONLINE w aktywnej hostgrupie, ale monitor "
-                    f"Galery nie ma o nim probki (mysql_server_galera_log)"
+                    f"Galery nie ma o nim probki (mysql_server_galera_log)",
+                    failures,
                 )
                 continue
             primary, local_state = sample
@@ -171,21 +175,60 @@ def main():
         "reader_hostgroup, offline_hostgroup, max_writers, writer_is_also_reader) "
         "FROM {table} WHERE writer_hostgroup={hg}"
     )
-    runtime_hg = run_admin_query(hg_query.format(table="runtime_mysql_galera_hostgroups", hg=WRITER_HG))
-    disk_hg = run_admin_query(hg_query.format(table="mysql_galera_hostgroups", hg=WRITER_HG))
-    for node in runtime_hg:
-        r = runtime_hg.get(node, "").strip()
-        d = disk_hg.get(node, "").strip()
+    runtime_res = run_ansible(
+        ctx,
+        "proxysql",
+        admin_query(
+            hg_query.format(table="runtime_mysql_galera_hostgroups", hg=writer_hg)
+        ),
+    )
+    disk_res = run_ansible(
+        ctx,
+        "proxysql",
+        admin_query(hg_query.format(table="mysql_galera_hostgroups", hg=writer_hg)),
+    )
+    require_hosts(
+        runtime_res,
+        proxysql_hosts,
+        "ISC-21 runtime galera_hostgroups",
+        failures,
+        undetermined,
+    )
+    require_hosts(
+        disk_res,
+        proxysql_hosts,
+        "ISC-21 disk galera_hostgroups",
+        failures,
+        undetermined,
+    )
+    for node in proxysql_hosts:
+        if node not in runtime_res.bodies or node not in disk_res.bodies:
+            continue
+        runtime_value = runtime_res.body(node).strip()
+        disk_value = disk_res.body(node).strip()
         check(
-            r == d and r != "",
-            f"{node}: galera_hostgroups drift runtime='{r}' disk='{d}'",
+            runtime_value == disk_value and runtime_value != "",
+            f"{node}: galera_hostgroups drift runtime='{runtime_value}' disk='{disk_value}'",
             failures,
         )
 
     # ISC-23: read/write split off — no query rules in runtime
-    rules_raw = run_admin_query("SELECT COUNT(*) FROM runtime_mysql_query_rules")
-    for node, body in rules_raw.items():
-        count = body.strip()
+    rules_res = run_ansible(
+        ctx,
+        "proxysql",
+        admin_query("SELECT COUNT(*) FROM runtime_mysql_query_rules"),
+    )
+    require_hosts(
+        rules_res,
+        proxysql_hosts,
+        "ISC-23 query rules",
+        failures,
+        undetermined,
+    )
+    for node in proxysql_hosts:
+        if node not in rules_res.bodies:
+            continue
+        count = rules_res.body(node).strip()
         check(
             count == "0",
             f"{node}: {count} query rules present (expected 0 — R/W split must stay off)",
@@ -193,27 +236,38 @@ def main():
         )
 
     # ISC-22: default admin:admin credentials must be rejected
-    default_raw = run_admin_query("SELECT 1", factory_default=True)
-    for node, body in default_raw.items():
+    # Odmowa dostepu to oczekiwany wynik, ale ansible widzi rc!=0 jako FAILED.
+    # Przekierowanie stdout+stderr i wymuszenie rc=0 zachowuje tresc odmowy;
+    # prawdziwa awaria hosta nadal trafia do errors i daje UNDETERMINED.
+    default_res = run_ansible(
+        ctx,
+        "proxysql",
+        admin_query("SELECT 1", factory_default=True) + " 2>&1 || true",
+    )
+    require_hosts(
+        default_res,
+        proxysql_hosts,
+        "ISC-22 default admin",
+        failures,
+        undetermined,
+    )
+    for node in proxysql_hosts:
+        if node not in default_res.bodies:
+            continue
+        body = default_res.body(node)
         check(
             "Access denied" in body or "ERROR" in body,
             f"{node}: default admin:admin credentials accepted (must be rejected)",
             failures,
         )
 
-    if failures:
-        print("FAIL: ProxySQL routing checks failed:")
-        for f in failures:
-            print(f"  - {f}")
-        return 1
-
-    nodes = sorted(servers_raw.keys())
-    print(
-        f"PASS: ProxySQL healthy — {len(nodes)} node(s) ({', '.join(nodes)}), "
-        f"one active writer, {EXPECTED_BACKENDS} healthy backends, runtime==disk, "
+    nodes = sorted(servers_rows)
+    summary = (
+        f"ProxySQL healthy — {len(nodes)} node(s) ({', '.join(nodes)}), "
+        f"one active writer, {expected_backends} healthy backends, runtime==disk, "
         f"no query rules, default admin rejected"
     )
-    return 0
+    return finish(failures, undetermined, summary)
 
 
 if __name__ == "__main__":

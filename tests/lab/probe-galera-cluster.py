@@ -4,56 +4,35 @@
 Checks: ISC-7 (one Primary), ISC-8 (cluster size),
 ISC-9 (same state UUID), ISC-10 (all Synced/Ready),
 ISC-14 (mariabackup SST), ISC-16 (no tables without PK).
+
+Sonda jest fail-closed (tests/lab/_probe_common.py): wezel Galery, ktory nie
+odpowiedzial na sekcje pomiaru, daje UNDETERMINED — nigdy nie znika z wyniku.
 """
 
-import os
-import re
-import subprocess
+from __future__ import annotations
+
 import sys
-import yaml
 
-CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
-INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
-ANSIBLE = os.environ.get("ANSIBLE", "ansible")
-
-with open(CONFIG_PATH, encoding="utf-8") as fh:
-    CLUSTER_CONFIG = yaml.safe_load(fh)
-
-EXPECTED_SIZE = int(CLUSTER_CONFIG["galera"]["nodes_expected"])
+from _probe_common import (
+    ProbeContext,
+    check,
+    finish,
+    require_hosts,
+    run_ansible,
+)
 
 
-def run_ansible_query(nodes, query):
-    """Run a MariaDB query on Galera nodes via ansible, return {node: {col: val}}."""
-    cmd = [
-        ANSIBLE, nodes, "-i", INVENTORY, "-m", "ansible.builtin.shell",
-        "-a", f'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "{query}"',
-        "--fork", "5",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    data = {}
-    current_host = None
-    current_body = []
-    for line in result.stdout.splitlines():
-        header = re.match(r'^(\S+)\s*\|\s*\w+\s*\|\s*rc=\d+\s*>>?\s*$', line)
-        if header:
-            if current_host:
-                data[current_host] = "\n".join(current_body).strip()
-            current_host = header.group(1)
-            current_body = []
-        elif current_host:
-            current_body.append(line)
-    if current_host:
-        data[current_host] = "\n".join(current_body).strip()
-    return data
+def mariadb_query(query: str) -> str:
+    """Polecenie pomiarowe: query przez socket lokalny MariaDB."""
+    return f'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "{query}"'
 
 
-def check(condition, message, failures):
-    if not condition:
-        failures.append(message)
-
-
-def main():
-    failures = []
+def main() -> int:
+    failures: list[str] = []
+    undetermined: list[str] = []
+    ctx = ProbeContext()
+    galera_hosts = ctx.group_hosts("galera")
+    expected_size = int(ctx.config["galera"]["nodes_expected"])
 
     # Query wsrep status from all galera nodes
     status_query = (
@@ -61,17 +40,18 @@ def main():
         "('wsrep_cluster_size','wsrep_cluster_status','wsrep_cluster_state_uuid',"
         "'wsrep_local_state','wsrep_local_state_comment','wsrep_ready','wsrep_connected')"
     )
-    status_raw = run_ansible_query("galera", status_query)
+    status_res = run_ansible(ctx, "galera", mariadb_query(status_query))
+    # Guard calej grupy: bez kompletu odpowiedzi nie ma mowy o PASS.
+    require_hosts(status_res, galera_hosts, "ISC-7..10 wsrep status", failures, undetermined)
 
-    if not status_raw:
-        print("FAIL: no Galera nodes responded to status query")
-        return 1
-
-    # Parse TSV status per node
+    # Parse TSV status per node — tylko wezly, ktore naprawde odpowiedzialy
+    # (braki sa juz wpisane do undetermined przez require_hosts).
     node_status = {}
-    for node, body in status_raw.items():
+    for node in galera_hosts:
+        if node not in status_res.bodies:
+            continue
         status = {}
-        for line in body.splitlines():
+        for line in status_res.body(node).splitlines():
             parts = line.split("\t")
             if len(parts) == 2:
                 status[parts[0]] = parts[1]
@@ -81,8 +61,8 @@ def main():
     for node, status in node_status.items():
         size = int(status.get("wsrep_cluster_size", 0))
         check(
-            size == EXPECTED_SIZE,
-            f"{node}: wsrep_cluster_size={size}, expected {EXPECTED_SIZE}",
+            size == expected_size,
+            f"{node}: wsrep_cluster_size={size}, expected {expected_size}",
             failures,
         )
 
@@ -96,11 +76,12 @@ def main():
 
     # ISC-9: identical state UUID on all nodes
     uuids = {status.get("wsrep_cluster_state_uuid") for status in node_status.values()}
-    check(
-        len(uuids) == 1 and None not in uuids,
-        f"cluster state UUID differs across nodes: {uuids}",
-        failures,
-    )
+    if node_status:
+        check(
+            len(uuids) == 1 and None not in uuids,
+            f"cluster state UUID differs across nodes: {uuids}",
+            failures,
+        )
 
     # ISC-10: all nodes Synced, Ready, Connected
     for node, status in node_status.items():
@@ -121,8 +102,12 @@ def main():
         )
 
     # ISC-14: wsrep_sst_method = mariabackup
-    sst_raw = run_ansible_query("galera", "SHOW VARIABLES LIKE 'wsrep_sst_method'")
-    for node, body in sst_raw.items():
+    sst_res = run_ansible(ctx, "galera", mariadb_query("SHOW VARIABLES LIKE 'wsrep_sst_method'"))
+    require_hosts(sst_res, galera_hosts, "ISC-14 sst_method", failures, undetermined)
+    for node in galera_hosts:
+        if node not in sst_res.bodies:
+            continue
+        body = sst_res.body(node)
         check(
             "mariabackup" in body,
             f"{node}: wsrep_sst_method is not mariabackup: {body}",
@@ -141,27 +126,25 @@ def main():
     )
     # Dowolny wezel Galera — schemat jest replikowany, wiec pytamy grupe, a nie
     # zaszyta nazwe "gnode1" (klaster moze miec wezly nazwane inaczej).
-    pk_raw = run_ansible_query("galera[0]", pk_query)
-    for node, body in pk_raw.items():
-        tables = [line.strip() for line in body.splitlines() if line.strip()]
+    pk_res = run_ansible(ctx, "galera[0]", mariadb_query(pk_query))
+    require_hosts(pk_res, galera_hosts[:1], "ISC-16 tables without PK", failures, undetermined)
+    for node in galera_hosts[:1]:
+        if node not in pk_res.bodies:
+            continue
+        tables = [line.strip() for line in pk_res.body(node).splitlines() if line.strip()]
         check(
             not tables,
             f"{node}: tables without primary key: {tables}",
             failures,
         )
 
-    if failures:
-        for failure in failures:
-            print(f"FAIL: {failure}")
-        return 1
-
-    nodes_str = ", ".join(sorted(node_status.keys()))
-    print(
-        f"PASS: Galera cluster healthy — {len(node_status)} nodes ({nodes_str}), "
+    nodes_str = ", ".join(sorted(node_status))
+    summary = (
+        f"Galera cluster healthy — {len(node_status)} nodes ({nodes_str}), "
         f"all Primary/Synced/Ready, state UUID {uuids.pop() if uuids else 'unknown'}, "
         f"SST=mariabackup, no tables without PK"
     )
-    return 0
+    return finish(failures, undetermined, summary)
 
 
 if __name__ == "__main__":

@@ -9,32 +9,20 @@ Reads /opt/galera-backup/clusters/<cluster>/state.json from the restore host.
 """
 
 import json
-import os
-import re
-import subprocess
 import sys
 from datetime import datetime, timezone
 
-import yaml
+from _probe_common import ProbeContext, finish, require_hosts, run_ansible
 
-CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
-INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
-ANSIBLE = os.environ.get("ANSIBLE", "ansible")
-
-with open(CONFIG_PATH, encoding="utf-8") as fh:
-    CLUSTER = yaml.safe_load(fh)
-with open(INVENTORY, encoding="utf-8") as fh:
-    INVENTORY_DATA = yaml.safe_load(fh)
-
+CTX = ProbeContext()
+CLUSTER = CTX.config
 CLUSTER_NAME = CLUSTER["cluster"]["name"]
-# Nazwa hosta restore wg inventory — NIE zaszyte "rnode1". Klaster moze miec
-# wezel nazwany inaczej (tu: f10r1); wtedy regex w body() nie trafial w naglowek
-# ansible, funkcja zwracala CALE wyjscie razem z "host | CHANGED | rc=0 >>",
-# a json.loads padal na pierwszym znaku. Ta sama klasa bledu byla juz naprawiana
-# w chaos-split-brain.py — patrz komentarz przy MINORITY.
-RESTORE_HOST = next(iter(INVENTORY_DATA["all"]["children"]["restore"]["hosts"]))
+RESTORE_HOSTS = CTX.group_hosts("restore")
+RESTORE_HOST = RESTORE_HOSTS[0] if RESTORE_HOSTS else ""
 STATE_FILE = f"/opt/galera-backup/clusters/{CLUSTER_NAME}/state.json"
-RESTORE_SCHEDULE = str(CLUSTER["backup"].get("restore_test_schedule", "0 4 * * 0"))
+RESTORE_SCHEDULE = str(
+    CLUSTER["backup"].get("restore_test_schedule", "0 4 * * 0")
+)
 
 
 def schedule_max_age_days(cron):
@@ -50,41 +38,65 @@ def schedule_max_age_days(cron):
     return 2          # daily
 
 
-def body(node, out):
-    m = re.search(rf'^{re.escape(node)}\s*\|\s*\w+\s*\|\s*rc=\d+\s*>>?\s*$', out, re.M)
-    return out[m.end():].strip() if m else out.strip()
-
-
 def main():
     failures = []
+    undetermined = []
+    result = run_ansible(
+        CTX,
+        "restore",
+        f"cat {STATE_FILE} 2>&1 || echo PROBE_CAT_FAILED",
+        timeout=30,
+    )
+    require_hosts(
+        result,
+        RESTORE_HOSTS,
+        "ISC-36/37 restore state",
+        failures,
+        undetermined,
+    )
+    if not RESTORE_HOST or RESTORE_HOST not in result.bodies:
+        return finish(failures, undetermined, "")
 
-    r = subprocess.run(
-        [ANSIBLE, "restore", "-i", INVENTORY, "-m", "ansible.builtin.shell",
-         "-a", f"cat {STATE_FILE}"],
-        capture_output=True, text=True, timeout=30)
-    if r.returncode != 0:
-        print("FAIL: ISC-36/37 — no restore drill state found "
-              f"({STATE_FILE} missing; run the restore drill first)")
-        return 1
+    raw = result.body(RESTORE_HOST)
+    if "PROBE_CAT_FAILED" in raw:
+        failures.append(
+            "ISC-36/37 — no restore drill state found "
+            f"({STATE_FILE} missing; run the restore drill first)"
+        )
+        return finish(failures, undetermined, "")
 
     try:
-        state = json.loads(body(RESTORE_HOST, r.stdout))
+        state = json.loads(raw)
     except (json.JSONDecodeError, ValueError) as exc:
-        print(f"FAIL: cannot parse restore state: {exc}")
-        return 1
+        failures.append(f"cannot parse restore state: {exc}")
+        return finish(failures, undetermined, "")
+    if not isinstance(state, dict):
+        failures.append("cannot parse restore state: top-level JSON is not an object")
+        return finish(failures, undetermined, "")
 
     if state.get("cluster") != CLUSTER_NAME:
-        failures.append(f"ISC-36 — state cluster {state.get('cluster')!r} != {CLUSTER_NAME!r}")
+        failures.append(
+            f"ISC-36 — state cluster {state.get('cluster')!r} != {CLUSTER_NAME!r}"
+        )
 
     last_run = state.get("last_run", {})
     if last_run.get("command") != "restore":
-        failures.append(f"ISC-36 — last run command={last_run.get('command')!r} (expected restore)")
+        failures.append(
+            f"ISC-36 — last run command={last_run.get('command')!r} "
+            "(expected restore)"
+        )
     if last_run.get("status") != "success":
-        failures.append(f"ISC-36 — last restore drill status={last_run.get('status')!r} (expected success)")
+        failures.append(
+            f"ISC-36 — last restore drill status={last_run.get('status')!r} "
+            "(expected success)"
+        )
 
     last_success = state.get("last_success", {})
     if last_success.get("command") != "restore":
-        failures.append(f"ISC-36 — last success command={last_success.get('command')!r} (expected restore)")
+        failures.append(
+            f"ISC-36 — last success command={last_success.get('command')!r} "
+            "(expected restore)"
+        )
 
     artifact = last_success.get("artifact", {})
     if isinstance(artifact, dict):
@@ -94,8 +106,14 @@ def main():
         rows_verified = 0
         backup_name = str(artifact)
 
-    if int(rows_verified) <= 0:
-        failures.append(f"ISC-36 — restore verified {rows_verified} rows (expected > 0)")
+    try:
+        rows_count = int(rows_verified)
+    except (TypeError, ValueError):
+        rows_count = 0
+    if rows_count <= 0:
+        failures.append(
+            f"ISC-36 — restore verified {rows_verified} rows (expected > 0)"
+        )
 
     unixtime = last_success.get("unixtime", 0)
     if unixtime <= 0:
@@ -107,19 +125,16 @@ def main():
         if age_days > max_age:
             failures.append(
                 f"ISC-37 — last restore drill {age_days:.1f}d ago exceeds "
-                f"schedule window {max_age}d ('{RESTORE_SCHEDULE}')")
+                f"schedule window {max_age}d ('{RESTORE_SCHEDULE}')"
+            )
 
-    if failures:
-        print("FAIL: restore drill verification failed:")
-        for f in failures:
-            print(f"  - {f}")
-        return 1
-
-    print(
-        f"PASS: restore drill OK — {backup_name} restored to isolated host, "
+    return finish(
+        failures,
+        undetermined,
+        f"restore drill OK — {backup_name} restored to isolated host, "
         f"{rows_verified} rows verified, drill {age_days:.2f}d ago "
-        f"(within '{RESTORE_SCHEDULE}' window)")
-    return 0
+        f"(within '{RESTORE_SCHEDULE}' window)",
+    )
 
 
 if __name__ == "__main__":

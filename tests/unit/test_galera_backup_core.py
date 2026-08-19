@@ -1,36 +1,30 @@
 import os
 import json
 import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import yaml
+import jinja2
 
-from tests.unit.galera_backup_testlib import load_galera_backup_module, WORKSPACE_ROOT
+WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(WORKSPACE_ROOT / "roles" / "galera_backup" / "files"))
+
+from galera_backup import pipeline  # noqa: E402
 
 
 class GaleraBackupCoreTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        try:
-            cls.mod = load_galera_backup_module()
-        except Exception:
-            cls.mod = None
-
-    def setUp(self):
-        if self.mod is None:
-            self.skipTest("galera-backup executable not implemented yet")
-
     def test_sanitize_cluster_name(self):
         valid = ["claude-r10b", "claude_r10", "cluster123", "a-b_c"]
         for name in valid:
-            self.assertEqual(self.mod.sanitize_cluster_name(name), name)
+            self.assertEqual(pipeline.sanitize_cluster_name(name), name)
 
         invalid = ["../etc", "cluster/name", "cluster;rm", "cluster space", ""]
         for name in invalid:
-            with self.assertRaises(self.mod.BackupError) as ctx:
-                self.mod.sanitize_cluster_name(name)
+            with self.assertRaises(pipeline.BackupError) as ctx:
+                pipeline.sanitize_cluster_name(name)
             self.assertEqual(ctx.exception.code, "E_INVALID_CLUSTER")
 
     def test_config_loader_validation(self):
@@ -61,21 +55,21 @@ class GaleraBackupCoreTests(unittest.TestCase):
             tf_path = Path(tf.name)
 
         try:
-            cfg = self.mod.load_run_config(tf_path, "claude-r10b")
+            cfg = pipeline.load_run_config(tf_path, "claude-r10b")
             self.assertEqual(cfg.cluster_name, "claude-r10b")
             self.assertEqual(cfg.backend["type"], "s3")
 
             # Mismatched cluster name
-            with self.assertRaises(self.mod.BackupError) as ctx:
-                self.mod.load_run_config(tf_path, "different-cluster")
+            with self.assertRaises(pipeline.BackupError) as ctx:
+                pipeline.load_run_config(tf_path, "different-cluster")
             self.assertEqual(ctx.exception.code, "E_CONFIG")
 
             # Format version wrong
             bad_fmt = dict(valid_config, format_version=2)
             with open(tf_path, "w") as f:
                 json.dump(bad_fmt, f)
-            with self.assertRaises(self.mod.BackupError) as ctx:
-                self.mod.load_run_config(tf_path, "claude-r10b")
+            with self.assertRaises(pipeline.BackupError) as ctx:
+                pipeline.load_run_config(tf_path, "claude-r10b")
             self.assertEqual(ctx.exception.code, "E_CONFIG")
         finally:
             if tf_path.exists():
@@ -94,14 +88,14 @@ class GaleraBackupCoreTests(unittest.TestCase):
         try:
             # Set mode 0600
             os.chmod(tf_path, 0o600)
-            secrets = self.mod.load_secrets(tf_path, backend_type="s3", enforce_permissions=False)
+            secrets = pipeline.load_secrets(tf_path, backend_type="s3", enforce_permissions=False)
             self.assertEqual(secrets["GALERA_BACKUP_ENCRYPTION_KEY"], "secret-pass-123")
             self.assertEqual(secrets["GALERA_BACKUP_S3_ACCESS_KEY"], "access-key-xyz")
 
             # Group/world readable check
             os.chmod(tf_path, 0o644)
-            with self.assertRaises(self.mod.BackupError) as ctx:
-                self.mod.load_secrets(tf_path, backend_type="s3", enforce_permissions=True)
+            with self.assertRaises(pipeline.BackupError) as ctx:
+                pipeline.load_secrets(tf_path, backend_type="s3", enforce_permissions=True)
             self.assertEqual(ctx.exception.code, "E_SECRETS_PERM")
 
             # Missing required secret
@@ -109,8 +103,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
             os.chmod(tf_path, 0o600)
             with open(tf_path, "w") as f:
                 f.write(bad_content)
-            with self.assertRaises(self.mod.BackupError) as ctx:
-                self.mod.load_secrets(tf_path, backend_type="s3", enforce_permissions=False)
+            with self.assertRaises(pipeline.BackupError) as ctx:
+                pipeline.load_secrets(tf_path, backend_type="s3", enforce_permissions=False)
             self.assertEqual(ctx.exception.code, "E_SECRETS")
         finally:
             if tf_path.exists():
@@ -127,8 +121,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
 
         try:
             os.chmod(tf_path, 0o600)
-            with self.assertRaises(self.mod.BackupError) as ctx:
-                self.mod.load_secrets(
+            with self.assertRaises(pipeline.BackupError) as ctx:
+                pipeline.load_secrets(
                     tf_path,
                     backend_type="s3",
                     require_writer_credentials=True,
@@ -140,7 +134,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
                     'GALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\n'
                     'GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql"\n'
                 )
-            secrets = self.mod.load_secrets(
+            secrets = pipeline.load_secrets(
                 tf_path,
                 backend_type="s3",
                 require_writer_credentials=True,
@@ -152,11 +146,11 @@ class GaleraBackupCoreTests(unittest.TestCase):
     def test_lock_contention(self):
         with tempfile.TemporaryDirectory() as td:
             lock_path = Path(td) / "test.lock"
-            lock1 = self.mod.LockManager(lock_path)
+            lock1 = pipeline.LockManager(lock_path)
             lock1.acquire()
 
-            lock2 = self.mod.LockManager(lock_path)
-            with self.assertRaises(self.mod.BackupError) as ctx:
+            lock2 = pipeline.LockManager(lock_path)
+            with self.assertRaises(pipeline.BackupError) as ctx:
                 lock2.acquire()
             self.assertEqual(ctx.exception.code, "E_LOCKED")
 
@@ -169,7 +163,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             state_file = Path(td) / "state.json"
 
-            sm = self.mod.StateManager("claude-r10b", state_file)
+            sm = pipeline.StateManager("claude-r10b", state_file)
             sm.update_success(command="backup", unixtime=1000, artifact="backup-1")
 
             # Verify initial state
@@ -193,8 +187,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
             corrupt_content = '{"format_version": 1, "last_success": '
             state_file.write_text(corrupt_content, encoding="utf-8")
 
-            state_manager = self.mod.StateManager("claude-r10b", state_file)
-            with self.assertRaises(self.mod.BackupError) as ctx:
+            state_manager = pipeline.StateManager("claude-r10b", state_file)
+            with self.assertRaises(pipeline.BackupError) as ctx:
                 state_manager.read()
 
             self.assertEqual(ctx.exception.code, "E_STATE")
@@ -205,7 +199,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
             payload = Path(td) / "payload.bin"
             payload.write_bytes((b"0123456789abcdef" * 8192) + b"tail")
 
-            digest, size = self.mod.file_sha256_and_size(payload)
+            digest, size = pipeline.file_sha256_and_size(payload)
 
             import hashlib
 
@@ -220,12 +214,12 @@ class GaleraBackupCoreTests(unittest.TestCase):
             (work_dir / "raw-backup").write_text("plaintext", encoding="utf-8")
 
             with patch.object(
-                self.mod.shutil,
+                pipeline.shutil,
                 "rmtree",
                 side_effect=PermissionError("cleanup denied"),
             ):
-                with self.assertRaises(self.mod.BackupError) as ctx:
-                    self.mod.remove_sensitive_work_dir(work_dir, "E_STORAGE")
+                with self.assertRaises(pipeline.BackupError) as ctx:
+                    pipeline.remove_sensitive_work_dir(work_dir, "E_STORAGE")
 
             self.assertEqual(ctx.exception.code, "E_STORAGE")
             self.assertIn("sensitive staging directory", ctx.exception.public_message)
@@ -233,14 +227,14 @@ class GaleraBackupCoreTests(unittest.TestCase):
 
     def test_sql_identifier_quoting_escapes_embedded_backticks(self):
         self.assertEqual(
-            self.mod.quote_sql_identifier("db`name"),
+            pipeline.quote_sql_identifier("db`name"),
             "`db``name`",
         )
 
     def test_secret_cannot_enter_subprocess_argv(self):
-        runner = self.mod.CommandRunner(secret_values={"s3cr3t", "my-pass"})
+        runner = pipeline.CommandRunner(secret_values={"s3cr3t", "my-pass"})
         with patch.object(runner, "_exec") as mock_exec:
-            with self.assertRaises(self.mod.BackupError) as ctx:
+            with self.assertRaises(pipeline.BackupError) as ctx:
                 runner.run(["mount", "-o", "password=s3cr3t"])
             self.assertEqual(ctx.exception.code, "E_SECRET_IN_ARGV")
             self.assertEqual(mock_exec.call_count, 0)
@@ -252,7 +246,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
 
     def test_secret_redaction(self):
         secret_values = {"super-secret-key", "my-password"}
-        redactor = self.mod.SecretRedactor(secret_values)
+        redactor = pipeline.SecretRedactor(secret_values)
 
         raw = "Error connecting with password super-secret-key on host my-password"
         cleaned = redactor.redact(raw)
@@ -262,40 +256,40 @@ class GaleraBackupCoreTests(unittest.TestCase):
 
     def test_metric_label_escaping(self):
         val = 'cluster "name"\nwith\\slash'
-        escaped = self.mod.escape_metric_label(val)
+        escaped = pipeline.escape_metric_label(val)
         self.assertEqual(escaped, 'cluster \\"name\\"\\nwith\\\\slash')
 
     def test_metrics_restore_default_security_context_after_atomic_publish(self):
-        self.assertTrue(hasattr(self.mod, "restore_default_context"))
+        self.assertTrue(hasattr(pipeline, "restore_default_context"))
         with tempfile.TemporaryDirectory() as td:
             metric_path = Path(td) / "backup.prom"
-            manager = self.mod.MetricsManager(metric_path, "pmm-cluster", "logical", "s3")
-            with patch.object(self.mod, "restore_default_context") as restore_context:
+            manager = pipeline.MetricsManager(metric_path, "pmm-cluster", "logical", "s3")
+            with patch.object(pipeline, "restore_default_context") as restore_context:
                 manager.update(last_run_success=1)
             restore_context.assert_called_once_with(metric_path)
 
     def test_metrics_context_restore_failure_is_not_silenced(self):
-        with patch.object(self.mod, "selinux_is_enabled", return_value=True):
-            with patch.object(self.mod.shutil, "which", return_value="/sbin/restorecon"):
+        with patch.object(pipeline, "selinux_is_enabled", return_value=True):
+            with patch.object(pipeline.shutil, "which", return_value="/sbin/restorecon"):
                 with patch.object(
-                    self.mod.subprocess,
+                    pipeline.subprocess,
                     "run",
                     return_value=MagicMock(returncode=1, stderr="permission denied", stdout=""),
                 ):
-                    with self.assertRaises(self.mod.BackupError) as ctx:
-                        self.mod.restore_default_context(Path("/tmp/backup.prom"))
+                    with self.assertRaises(pipeline.BackupError) as ctx:
+                        pipeline.restore_default_context(Path("/tmp/backup.prom"))
         self.assertEqual(ctx.exception.code, "E_METRICS")
         self.assertIn("permission denied", ctx.exception.public_message)
 
     def test_metrics_context_restore_is_skipped_when_selinux_is_disabled(self):
-        with patch.object(self.mod, "selinux_is_enabled", return_value=False):
-            with patch.object(self.mod.subprocess, "run") as run:
-                self.mod.restore_default_context(Path("/tmp/backup.prom"))
+        with patch.object(pipeline, "selinux_is_enabled", return_value=False):
+            with patch.object(pipeline.subprocess, "run") as run:
+                pipeline.restore_default_context(Path("/tmp/backup.prom"))
         run.assert_not_called()
 
 
     def test_active_writer_guard_rejects_scheduler_and_uses_env_password(self):
-        self.assertTrue(hasattr(self.mod, "assert_scheduler_is_not_writer"))
+        self.assertTrue(hasattr(pipeline, "assert_scheduler_is_not_writer"))
         cfg = MagicMock(
             proxysql={
                 "admin_host": "192.168.1.44",
@@ -313,8 +307,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
             "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
         }
 
-        with self.assertRaises(self.mod.BackupError) as ctx:
-            self.mod.assert_scheduler_is_not_writer(
+        with self.assertRaises(pipeline.BackupError) as ctx:
+            pipeline.assert_scheduler_is_not_writer(
                 cfg, secrets, runner, current_hostname="gnode4"
             )
 
@@ -324,7 +318,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
         self.assertEqual(runner.run.call_args.kwargs["env"]["MYSQL_PWD"], "proxysql-secret")
 
     def test_active_writer_guard_fails_closed_on_proxysql_error(self):
-        self.assertTrue(hasattr(self.mod, "assert_scheduler_is_not_writer"))
+        self.assertTrue(hasattr(pipeline, "assert_scheduler_is_not_writer"))
         cfg = MagicMock(
             proxysql={"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
             scheduler_system_address="192.168.1.51",
@@ -338,8 +332,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
             "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
         }
 
-        with self.assertRaises(self.mod.BackupError) as ctx:
-            self.mod.assert_scheduler_is_not_writer(
+        with self.assertRaises(pipeline.BackupError) as ctx:
+            pipeline.assert_scheduler_is_not_writer(
                 cfg, secrets, runner, current_hostname="gnode4"
             )
 
@@ -362,7 +356,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
             "GALERA_BACKUP_S3_ACCESS_KEY": "s3_access_888",
             "GALERA_BACKUP_S3_SECRET_KEY": "s3_secret_777",
         }
-        runner = self.mod.CommandRunner(self.mod.sensitive_secret_values(secrets))
+        runner = pipeline.CommandRunner(pipeline.sensitive_secret_values(secrets))
         cfg = MagicMock(
             proxysql={"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
             scheduler_system_address="192.168.1.51",
@@ -370,10 +364,10 @@ class GaleraBackupCoreTests(unittest.TestCase):
             galera_nodes=["192.168.1.51", "192.168.1.52", "192.168.1.53"],
         )
         with patch.object(
-            self.mod.CommandRunner, "_exec", return_value=(0, "192.168.1.52\n", "")
+            pipeline.CommandRunner, "_exec", return_value=(0, "192.168.1.52\n", "")
         ) as mock_exec:
             # Writer .52 is a cluster node but not the scheduler -> no raise.
-            self.mod.assert_scheduler_is_not_writer(
+            pipeline.assert_scheduler_is_not_writer(
                 cfg, secrets, runner, current_hostname="gnode4"
             )
 
@@ -391,7 +385,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
             "GALERA_BACKUP_SMB_USERNAME": "smbuser",
             "GALERA_BACKUP_SMB_PASSWORD": "smb_pass_111",
         }
-        values = self.mod.sensitive_secret_values(secrets)
+        values = pipeline.sensitive_secret_values(secrets)
         self.assertEqual(
             values,
             {"proxysql_pass_999", "enc_key_999", "s3_secret_777", "smb_pass_111"},
@@ -407,7 +401,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
             "GALERA_BACKUP_S3_SECRET_KEY": "",
             "GALERA_BACKUP_SMB_PASSWORD": "",
         }
-        self.assertEqual(self.mod.sensitive_secret_values(secrets), {"enc_key_999"})
+        self.assertEqual(pipeline.sensitive_secret_values(secrets), {"enc_key_999"})
 
     def test_redactable_secret_values_adds_identifier_halves_but_not_admin_user(self):
         secrets = {
@@ -418,7 +412,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
             "GALERA_BACKUP_S3_SECRET_KEY": "s3_secret_777",
             "GALERA_BACKUP_SMB_USERNAME": "smbuser",
         }
-        values = self.mod.redactable_secret_values(secrets)
+        values = pipeline.redactable_secret_values(secrets)
         for expected in (
             "proxysql_pass_999",
             "enc_key_999",
@@ -437,7 +431,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
             "GALERA_BACKUP_ENCRYPTION_KEY": "enc_key_999",
             "GALERA_BACKUP_S3_SECRET_KEY": "s3_secret_777",
         }
-        redactor = self.mod.SecretRedactor(self.mod.redactable_secret_values(secrets))
+        redactor = pipeline.SecretRedactor(pipeline.redactable_secret_values(secrets))
         # The admin username survives redaction...
         self.assertEqual(
             redactor.redact("connecting as admin to mariadb-admin"),
@@ -462,8 +456,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
             "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
             "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
         }
-        with self.assertRaises(self.mod.BackupError) as ctx:
-            self.mod.assert_scheduler_is_not_writer(
+        with self.assertRaises(pipeline.BackupError) as ctx:
+            pipeline.assert_scheduler_is_not_writer(
                 cfg, secrets, runner, current_hostname="gnode4"
             )
         self.assertEqual(ctx.exception.code, "E_PROXYSQL")
@@ -484,7 +478,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
             "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
         }
         # No raise: a foreign writer is tolerated when the node list is unknown.
-        self.mod.assert_scheduler_is_not_writer(
+        pipeline.assert_scheduler_is_not_writer(
             cfg, secrets, runner, current_hostname="gnode4"
         )
 
@@ -524,8 +518,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
             env_path.write_text('GALERA_BACKUP_S3_ACCESS_KEY="a"\nGALERA_BACKUP_S3_SECRET_KEY="s"\n')
             os.chmod(env_path, 0o600)
 
-            with self.assertRaises(self.mod.BackupError) as ctx:
-                self.mod.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
+            with self.assertRaises(pipeline.BackupError) as ctx:
+                pipeline.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
             self.assertEqual(ctx.exception.code, "E_SECRETS")
 
             state = json.loads((cluster_dir / "state.json").read_text())
@@ -542,8 +536,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
             # format_version != 1 -> load_run_config fails before any paths exist.
             cfg_path.write_text(json.dumps({"format_version": 2, "cluster_name": "claude-r10b"}))
 
-            with self.assertRaises(self.mod.BackupError) as ctx:
-                self.mod.run_backup(
+            with self.assertRaises(pipeline.BackupError) as ctx:
+                pipeline.run_backup(
                     config_path=cfg_path,
                     secrets_path=td_path / "secrets.env",
                     cluster_name="claude-r10b",
@@ -557,15 +551,9 @@ class GaleraBackupCoreTests(unittest.TestCase):
 
 class TemplateContractTests(unittest.TestCase):
     def setUp(self):
-        try:
-            import jinja2
-            self.jinja2 = jinja2
-        except ImportError:
-            self.skipTest("jinja2 not installed")
-
         self.templates_dir = WORKSPACE_ROOT / "roles" / "galera_backup" / "templates"
-        self.env = self.jinja2.Environment(
-            loader=self.jinja2.FileSystemLoader(str(self.templates_dir)),
+        self.env = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(str(self.templates_dir)),
             trim_blocks=True,
             lstrip_blocks=True,
         )
@@ -770,7 +758,7 @@ class CutoverContractTests(unittest.TestCase):
         ]
         files_to_check = []
         for path in WORKSPACE_ROOT.rglob("*"):
-            if path.is_file() and not any(part.startswith(".") for part in path.parts):
+            if path.is_file() and not any(part.startswith(".") for part in path.relative_to(WORKSPACE_ROOT).parts):
                 if path.suffix.lower() in {".md", ".rst", ".txt"}:
                     continue
                 if "tests/unit" in str(path):
@@ -780,12 +768,9 @@ class CutoverContractTests(unittest.TestCase):
         for term in legacy_terms:
             matches = []
             for path in files_to_check:
-                try:
-                    content = path.read_text()
-                    if term in content:
-                        matches.append(str(path.relative_to(WORKSPACE_ROOT)))
-                except Exception:
-                    pass
+                content = path.read_text(encoding="utf-8", errors="replace")
+                if term in content:
+                    matches.append(str(path.relative_to(WORKSPACE_ROOT)))
             self.assertEqual(matches, [], f"Legacy term '{term}' still referenced in files: {matches}")
 
     def test_pmm_probe_expects_galera_backup_metrics(self):

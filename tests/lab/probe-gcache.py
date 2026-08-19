@@ -15,55 +15,59 @@ requires for the IST window, the probe FAILS (a node down for the window would
 fall back to full SST instead of IST).
 """
 
+import math
 import os
 import re
-import subprocess
 import sys
-import math
 
-import yaml
+from _probe_common import ProbeContext, finish, require_hosts, run_ansible
 
-INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
-CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
-ANSIBLE = os.environ.get("ANSIBLE", "ansible")
-_inv = yaml.safe_load(open(INVENTORY))
-GALERA_NODE = list(_inv["all"]["children"]["galera"]["hosts"])[0]
-PROXYSQL_NODE = list(_inv["all"]["children"]["proxysql"]["hosts"])[0]
+CTX = ProbeContext()
+GALERA = CTX.group_hosts("galera")
+PROXYSQL = CTX.group_hosts("proxysql")
 IST_WINDOW_MIN = int(os.environ.get("ISC68_IST_WINDOW_MIN", "30"))
 WORKLOAD_SECONDS = int(os.environ.get("ISC68_WORKLOAD_SECONDS", "20"))
 
 
-def sh(node, script, timeout=120):
-    cmd = [ANSIBLE, node, "-i", INVENTORY, "-m", "ansible.builtin.shell", "-a", script]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+def find_writer(failures, undetermined):
+    if not PROXYSQL:
+        undetermined.append("writer-lookup: inwentarz nie definiuje hostow proxysql")
+        return None
+    if not GALERA:
+        undetermined.append("writer-lookup: inwentarz nie definiuje hostow galera")
+        return None
 
-
-def body(node, result):
-    out = result.stdout
-    m = re.search(rf'^{re.escape(node)}\s*\|\s*\w+\s*\|\s*rc=\d+\s*>>?\s*$', out, re.M)
-    return out[m.end():].strip() if m else out.strip()
-
-
-def find_writer():
-    cfg = yaml.safe_load(open(CONFIG_PATH, encoding="utf-8"))
-    writer_hg = int(cfg.get("proxysql", {}).get("hostgroup_base", 10))
-    r = sh(
-        PROXYSQL_NODE,
+    writer_hg = int(CTX.config.get("proxysql", {}).get("hostgroup_base", 10))
+    query = (
         "mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf "
-        f"-h127.0.0.1 -P6032 -uadmin -N -B -e "
-        f"\"SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id={writer_hg} AND status='ONLINE'\"",
+        "-h127.0.0.1 -P6032 -uadmin -N -B -e "
+        f"\"SELECT hostname FROM runtime_mysql_servers "
+        f"WHERE hostgroup_id={writer_hg} AND status='ONLINE'\""
     )
-    ip = body(PROXYSQL_NODE, r).strip()
-    inv = yaml.safe_load(open(INVENTORY))
-    galera = inv["all"]["children"]["galera"]["hosts"]
-    for host, v in galera.items():
-        if v.get("galera_node_address") == ip:
-            return host
-    return next(iter(galera))
+    result = run_ansible(CTX, PROXYSQL[0], query)
+    require_hosts(result, [PROXYSQL[0]], "writer-lookup", failures, undetermined)
+    if PROXYSQL[0] not in result.bodies:
+        return None
+
+    addresses = {
+        CTX.host_address(host, "galera"): host
+        for host in GALERA
+        if CTX.host_address(host, "galera")
+    }
+    for line in result.body(PROXYSQL[0]).splitlines():
+        writer = addresses.get(line.strip())
+        if writer:
+            return writer
+    undetermined.append(
+        "writer-lookup: ProxySQL nie zwrocil adresu znanego wezla Galery"
+    )
+    return None
 
 
-def measure_write_rate(writer):
-    """Run a write workload on the writer; return bytes/sec from wsrep_replicated_bytes delta."""
+def measure_write_rate(writer, failures, undetermined):
+    """Run a write workload on the writer; return bytes/sec from wsrep delta."""
+    if writer is None:
+        return None
     script = f'''
 SOCK=/var/lib/mysql/mysql.sock
 mariadb --socket=$SOCK -e "CREATE DATABASE IF NOT EXISTS gcache_meas; CREATE TABLE IF NOT EXISTS gcache_meas.w (id INT PRIMARY KEY AUTO_INCREMENT, payload TEXT) ENGINE=InnoDB" 2>/dev/null
@@ -78,51 +82,78 @@ T1=$(mariadb --socket=$SOCK -N -B -e "SHOW STATUS LIKE 'wsrep_replicated_bytes'"
 ELAPSED=$((END-START)); DELTA=$((T1-T0))
 echo "RATE_BPS=$(( (ELAPSED>0 ? DELTA/ELAPSED : 0) )) DELTA=$DELTA ELAPSED=${{ELAPSED}}s"
 '''
-    r = sh(writer, script, timeout=WORKLOAD_SECONDS + 90)
-    m = re.search(r'RATE_BPS=(\d+)', body(writer, r))
-    return int(m.group(1)) if m else 0
+    result = run_ansible(
+        CTX,
+        writer,
+        script,
+        timeout=WORKLOAD_SECONDS + 90,
+    )
+    require_hosts(result, [writer], "write-rate", failures, undetermined)
+    if writer not in result.bodies:
+        return None
+    match = re.search(r"RATE_BPS=(\d+)", result.body(writer))
+    return int(match.group(1)) if match else 0
 
 
-def deployed_gcache():
-    r = sh(GALERA_NODE, "grep -ioE 'gcache.size=[0-9]+[MG]' /etc/my.cnf.d/server.cnf")
-    m = re.search(r'gcache.size=(\d+)([MG])', body(GALERA_NODE, r), re.I)
-    if not m:
+def deployed_gcache(failures, undetermined):
+    if not GALERA:
+        undetermined.append("gcache-deployed: inwentarz nie definiuje hostow galera")
+        return None
+    result = run_ansible(
+        CTX,
+        GALERA[0],
+        "grep -ioE 'gcache.size=[0-9]+[MG]' /etc/my.cnf.d/server.cnf || true",
+    )
+    require_hosts(result, [GALERA[0]], "gcache-deployed", failures, undetermined)
+    if GALERA[0] not in result.bodies:
+        return None
+    match = re.search(r"gcache.size=(\d+)([MG])", result.body(GALERA[0]), re.I)
+    if not match:
         return 0
-    val = int(m.group(1))
-    return val * 1024 if m.group(2).upper() == "G" else val
+    val = int(match.group(1))
+    return val * 1024 if match.group(2).upper() == "G" else val
 
 
 def main():
     failures = []
-    writer = find_writer()
-    rate = measure_write_rate(writer)
-    if rate <= 0:
+    undetermined = []
+    writer = find_writer(failures, undetermined)
+    rate = measure_write_rate(writer, failures, undetermined)
+    if rate is None:
+        required_mb = None
+    elif rate <= 0:
         failures.append("ISC-68 — write rate not measurable (0): no workload data")
         required_mb = 128
     else:
         gcache_bytes = rate * IST_WINDOW_MIN * 60
         required_mb = max(math.ceil(gcache_bytes / (1024 * 1024)), 128)
-    deployed_mb = deployed_gcache()
-    print(f"writer={writer} write_rate={rate} B/s  ist_window={IST_WINDOW_MIN}min")
-    print(f"required gcache={required_mb}M (min 128M)  deployed gcache={deployed_mb}M")
+    deployed_mb = deployed_gcache(failures, undetermined)
+    print(
+        f"writer={writer or 'unknown'} write_rate={rate if rate is not None else 'unknown'} "
+        f"B/s  ist_window={IST_WINDOW_MIN}min"
+    )
+    print(
+        f"required gcache={required_mb if required_mb is not None else 'unknown'}M "
+        f"(min 128M)  deployed gcache="
+        f"{deployed_mb if deployed_mb is not None else 'unknown'}M"
+    )
 
-    if deployed_mb < 128:
-        failures.append(f"ISC-68 — deployed gcache {deployed_mb}M below 128M floor")
-    if deployed_mb < required_mb:
-        failures.append(
-            f"ISC-68 — deployed gcache {deployed_mb}M < required {required_mb}M "
-            f"(write_rate={rate}B/s × {IST_WINDOW_MIN}min): node would need full SST "
-            f"after the IST window"
-        )
+    if deployed_mb is not None:
+        if deployed_mb < 128:
+            failures.append(f"ISC-68 — deployed gcache {deployed_mb}M below 128M floor")
+        if required_mb is not None and deployed_mb < required_mb:
+            failures.append(
+                f"ISC-68 — deployed gcache {deployed_mb}M < required {required_mb}M "
+                f"(write_rate={rate}B/s × {IST_WINDOW_MIN}min): node would need full SST "
+                f"after the IST window"
+            )
 
-    if failures:
-        for f in failures:
-            print(f"FAIL: {f}")
-        return 1
-
-    print(f"PASS: ISC-68 — gcache.size={deployed_mb}M covers write_rate={rate}B/s "
-          f"for {IST_WINDOW_MIN}min IST window (required {required_mb}M)")
-    return 0
+    return finish(
+        failures,
+        undetermined,
+        f"ISC-68 — gcache.size={deployed_mb}M covers write_rate={rate}B/s "
+        f"for {IST_WINDOW_MIN}min IST window (required {required_mb}M)",
+    )
 
 
 if __name__ == "__main__":

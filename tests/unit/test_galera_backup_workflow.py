@@ -1,25 +1,20 @@
 import os
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from tests.unit.galera_backup_testlib import load_galera_backup_module
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "roles" / "galera_backup" / "files"))
+
+from galera_backup import pipeline  # noqa: E402
 
 
 class GaleraBackupWorkflowTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        try:
-            cls.mod = load_galera_backup_module()
-        except Exception:
-            cls.mod = None
-
     def setUp(self):
-        if self.mod is None:
-            self.skipTest("galera-backup executable not implemented yet")
-        self.writer_guard = patch.object(self.mod, "assert_scheduler_is_not_writer")
+        self.writer_guard = patch.object(pipeline, "assert_scheduler_is_not_writer")
         self.writer_guard.start()
 
         def _stop_writer_guard():
@@ -64,8 +59,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             os.chmod(env_path, 0o600)
 
             with patch("socket.gethostname", return_value="current-host"):
-                with self.assertRaises(self.mod.BackupError) as ctx:
-                    self.mod.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
+                with self.assertRaises(pipeline.BackupError) as ctx:
+                    pipeline.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
                 self.assertEqual(ctx.exception.code, "E_GALERA")
 
     def test_run_backup_galera_unhealthy_fails(self):
@@ -102,17 +97,17 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
 
             with patch("socket.gethostname", return_value="gnode4"):
                 fake_backend = MagicMock()
-                with patch.object(self.mod, "get_storage_backend", return_value=fake_backend):
-                    with patch.object(self.mod, "query_galera_vars", return_value={"wsrep_local_state_comment": "Donor/Desynced"}):
-                        with self.assertRaises(self.mod.BackupError) as ctx:
-                            self.mod.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
+                with patch.object(pipeline, "get_storage_backend", return_value=fake_backend):
+                    with patch.object(pipeline, "query_galera_vars", return_value={"wsrep_local_state_comment": "Donor/Desynced"}):
+                        with self.assertRaises(pipeline.BackupError) as ctx:
+                            pipeline.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
                         self.assertEqual(ctx.exception.code, "E_GALERA")
-                        fake_backend.close.side_effect = self.mod.BackupError(
+                        fake_backend.close.side_effect = pipeline.BackupError(
                             "E_STORAGE",
                             "SMB cleanup failed: unmount failed",
                         )
-                        with self.assertRaises(self.mod.BackupError) as cleanup_ctx:
-                            self.mod.run_backup(
+                        with self.assertRaises(pipeline.BackupError) as cleanup_ctx:
+                            pipeline.run_backup(
                                 config_path=cfg_path,
                                 secrets_path=env_path,
                                 cluster_name="claude-r10b",
@@ -190,11 +185,11 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             ]
 
             with patch("socket.gethostname", return_value="gnode4"):
-                with patch.object(self.mod, "query_galera_vars", side_effect=galera_vars_seq):
+                with patch.object(pipeline, "query_galera_vars", side_effect=galera_vars_seq):
                     # Mock backend
                     fake_backend = MagicMock()
-                    with patch.object(self.mod, "get_storage_backend", return_value=fake_backend):
-                        with patch.object(self.mod, "perform_physical_backup") as mock_backup:
+                    with patch.object(pipeline, "get_storage_backend", return_value=fake_backend):
+                        with patch.object(pipeline, "perform_physical_backup") as mock_backup:
                             mock_backup.return_value = ("uuid-123", "456")
                             def fake_exec(cmd, env=None, cwd=None, timeout=None):
                                 # If openssl output file is in cmd, create dummy file
@@ -203,7 +198,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                                         Path(cmd[i+1]).write_bytes(b"dummy-encrypted-payload")
                                 return (0, "", "")
 
-                            with patch.object(self.mod.CommandRunner, "_exec", side_effect=fake_exec):
+                            with patch.object(pipeline.CommandRunner, "_exec", side_effect=fake_exec):
                                 with patch("subprocess.Popen") as mock_popen:
                                     mock_proc = MagicMock()
                                     mock_proc.stdout.read.side_effect = [b"tar-data", b""]
@@ -211,8 +206,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                                     mock_proc.communicate.return_value = (b"", b"")
                                     mock_popen.return_value = mock_proc
 
-                                    with self.assertRaises(self.mod.BackupError) as ctx:
-                                        self.mod.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
+                                    with self.assertRaises(pipeline.BackupError) as ctx:
+                                        pipeline.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
                                     self.assertEqual(ctx.exception.code, "E_FLOW_CONTROL")
                             # Verify publication was NOT called due to flow control excess
                             self.assertEqual(fake_backend.publish.call_count, 0)
@@ -260,7 +255,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             }
 
             fake_backend = MagicMock()
-            fake_backend.publish.return_value = self.mod.PublishedArtifact(
+            fake_backend.publish.return_value = pipeline.PublishedArtifact(
                 backup_name="galera-claude-r10b-20260729-120000",
                 prefix="p",
                 encrypted_sha256="sha",
@@ -285,10 +280,10 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             # assert_scheduler_is_not_writer runs and its argv reaches _exec.
             self.writer_guard.stop()
             with patch("socket.gethostname", return_value="gnode4"):
-                with patch.object(self.mod, "query_galera_vars", return_value=galera_vars):
-                    with patch.object(self.mod, "get_storage_backend", return_value=fake_backend):
-                        with patch.object(self.mod, "perform_physical_backup", return_value=("uuid-1", "100")):
-                            with patch.object(self.mod.CommandRunner, "_exec", side_effect=fake_exec) as mock_exec:
+                with patch.object(pipeline, "query_galera_vars", return_value=galera_vars):
+                    with patch.object(pipeline, "get_storage_backend", return_value=fake_backend):
+                        with patch.object(pipeline, "perform_physical_backup", return_value=("uuid-1", "100")):
+                            with patch.object(pipeline.CommandRunner, "_exec", side_effect=fake_exec) as mock_exec:
                                 # Mock tar file creation
                                 with patch("subprocess.Popen") as mock_popen:
                                     mock_proc = MagicMock()
@@ -297,7 +292,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                                     mock_proc.communicate.return_value = (b"", b"")
                                     mock_popen.return_value = mock_proc
 
-                                    self.mod.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
+                                    pipeline.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
 
             # The writer guard's mariadb argv must have actually reached _exec.
             guard_calls = [
@@ -384,14 +379,14 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "wsrep_flow_control_paused_ns": "1000",
             }
             fake_backend = MagicMock()
-            fake_backend.publish.return_value = self.mod.PublishedArtifact(
+            fake_backend.publish.return_value = pipeline.PublishedArtifact(
                 backup_name="galera-claude-r10b-20260729-120000",
                 prefix="p",
                 encrypted_sha256="sha",
                 encrypted_size=10,
                 unixtime=1000,
             )
-            fake_backend.close.side_effect = self.mod.BackupError(
+            fake_backend.close.side_effect = pipeline.BackupError(
                 "E_STORAGE",
                 "SMB unmount failed",
             )
@@ -403,10 +398,10 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 return (0, "", "")
 
             with patch("socket.gethostname", return_value="gnode4"):
-                with patch.object(self.mod, "query_galera_vars", return_value=galera_vars):
-                    with patch.object(self.mod, "get_storage_backend", return_value=fake_backend):
-                        with patch.object(self.mod, "perform_physical_backup", return_value=("uuid-1", "100")):
-                            with patch.object(self.mod.CommandRunner, "_exec", side_effect=fake_exec):
+                with patch.object(pipeline, "query_galera_vars", return_value=galera_vars):
+                    with patch.object(pipeline, "get_storage_backend", return_value=fake_backend):
+                        with patch.object(pipeline, "perform_physical_backup", return_value=("uuid-1", "100")):
+                            with patch.object(pipeline.CommandRunner, "_exec", side_effect=fake_exec):
                                 with patch("subprocess.Popen") as mock_popen:
                                     mock_proc = MagicMock()
                                     mock_proc.stdout.read.side_effect = [b"tar-data", b""]
@@ -414,8 +409,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                                     mock_proc.communicate.return_value = (b"", b"")
                                     mock_popen.return_value = mock_proc
 
-                                    with self.assertRaises(self.mod.BackupError) as raised:
-                                        self.mod.run_backup(
+                                    with self.assertRaises(pipeline.BackupError) as raised:
+                                        pipeline.run_backup(
                                             config_path=cfg_path,
                                             secrets_path=env_path,
                                             cluster_name="claude-r10b",

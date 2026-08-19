@@ -1,4 +1,5 @@
 import os
+import sys
 import runpy
 import tempfile
 import unittest
@@ -46,14 +47,22 @@ class ProbeBackupInventoryTests(unittest.TestCase):
             cluster_path.write_text(yaml.safe_dump(cluster), encoding="utf-8")
             inventory_path.write_text(yaml.safe_dump(inventory), encoding="utf-8")
             env = {
+                "CLUSTER": "example",
                 "CLUSTER_CONFIG": str(cluster_path),
                 "CLUSTER_INVENTORY": str(inventory_path),
             }
+            # runpy.run_path nie dodaje katalogu skryptu do sys.path (w przeciwienstwie
+            # do `python3 sciezka/sonda.py`), a sonda importuje `_probe_common`
+            # z wlasnego katalogu. Bez tego test lamalby probe, ktora w realnym
+            # uruchomieniu dziala.
+            sys.path.insert(0, str(PROBE_PATH.parent))
             with patch.dict(os.environ, env, clear=False):
                 try:
                     namespace = runpy.run_path(str(PROBE_PATH))
                 except AttributeError as exc:
                     self.fail(f"Alias-only inventory host crashed probe parsing: {exc}")
+                finally:
+                    sys.path.remove(str(PROBE_PATH.parent))
 
         self.assertEqual(namespace["inventory_addresses"]["gnode1"], "127.0.0.1")
 

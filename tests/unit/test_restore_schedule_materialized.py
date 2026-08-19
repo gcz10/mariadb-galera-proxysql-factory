@@ -20,6 +20,8 @@ instalujacego go w roli natychmiast go wywala.
 import unittest
 from pathlib import Path
 
+import yaml
+
 REPO = Path(__file__).resolve().parents[2]
 SCHEMA = REPO / "clusters" / "schema" / "cluster.schema.json"
 ROLE_TASKS = REPO / "roles" / "galera_backup" / "tasks" / "main.yml"
@@ -33,6 +35,30 @@ SCHEDULE_FIELDS = {
     "full_backup_schedule": BACKUP_CRON_TPL,
     "restore_test_schedule": RESTORE_CRON_TPL,
 }
+
+
+def _alert_rules(alerts_path, uid):
+    """Reguly alertow (dict z uid+expr) o dokladnym `uid`.
+
+    Szukanie rekursywne po calej strukturze sprawia, ze przeniesienie listy
+    `f15_rules` w inne miejsce playbooka nie oslabia testu, a yaml.safe_load
+    gubi komentarze — nazwa metryki wpisana tylko w komentarzu nie zaspokoi
+    asercji.
+    """
+    rules = []
+
+    def _walk(node):
+        if isinstance(node, dict):
+            if "uid" in node and "expr" in node:
+                rules.append(node)
+            for value in node.values():
+                _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(yaml.safe_load(alerts_path.read_text(encoding="utf-8")))
+    return [r for r in rules if r.get("uid") == uid]
 
 
 class TestRestoreScheduleMaterialized(unittest.TestCase):
@@ -57,30 +83,56 @@ class TestRestoreScheduleMaterialized(unittest.TestCase):
 
     def test_role_installs_restore_cron(self):
         """Sam szablon nie wystarczy — rola musi go gdzies wdrazac."""
-        tasks = ROLE_TASKS.read_text(encoding="utf-8")
-        self.assertIn(
-            "src: restore-cron.j2",
-            tasks,
+        tasks = yaml.safe_load(ROLE_TASKS.read_text(encoding="utf-8"))
+        cron_jobs = [
+            t for t in tasks if isinstance(t, dict)
+            and t.get("ansible.builtin.template", {}).get("src") == "restore-cron.j2"
+        ]
+        self.assertTrue(
+            cron_jobs,
             "rola galera_backup nie wdraza restore-cron.j2",
         )
-        self.assertIn(
+        # Jeden obiekt zadania musi laczyc src, dest i bramke — trzy trafienia
+        # w roznych zadaniach nie dowodza, ze wpis cron restore powstaje.
+        job = cron_jobs[0]
+        template = job["ansible.builtin.template"]
+        self.assertEqual(
+            template["src"],
+            "restore-cron.j2",
+            "zadanie crona restore ma nieprawidlowy szablon",
+        )
+        self.assertEqual(
+            template["dest"],
             "/etc/cron.d/galera-restore-{{ cluster.name }}",
-            tasks,
             "brak docelowej sciezki cron.d dla restore drill",
         )
+        when = str(job.get("when", ""))
         # Harmonogram wylaczony ('disabled'/pusty) nie moze tworzyc wpisu.
         self.assertIn(
-            "['', 'disabled']",
-            tasks,
+            "restore_test_schedule",
+            when,
+            "bramka zadania nie czyta backup.restore_test_schedule",
+        )
+        self.assertIn(
+            "not in ['', 'disabled']",
+            when,
             "brak bramki na wylaczony harmonogram restore",
         )
 
     def test_alert_metric_is_refreshed_by_the_drill(self):
         """Alert ISC-47 nie moze mierzyc 'kiedy ostatnio puszczono Ansible'."""
-        alerts = ALERTS.read_text(encoding="utf-8")
+        rules = _alert_rules(
+            ALERTS, "isa-{{ cluster_label }}-restore-drill-stale"
+        )
+        self.assertEqual(
+            len(rules),
+            1,
+            "regula ISC-47 (dokladny uid restore-drill-stale) zniknela lub "
+            "jest zduplikowana w f15_alerts.yml",
+        )
         self.assertIn(
             "isa_restore_test_last_success_unixtime",
-            alerts,
+            rules[0]["expr"],
             "alert ISC-47 nie odwoluje sie juz do metryki swiezosci drillu",
         )
         drill = RESTORE_PLAYBOOK.read_text(encoding="utf-8")
