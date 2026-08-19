@@ -1,25 +1,18 @@
 import os
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from tests.unit.galera_backup_testlib import load_galera_backup_module
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "roles" / "galera_backup" / "files"))
+
+from galera_backup import pipeline  # noqa: E402
 
 
 class GaleraBackupRestoreTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        try:
-            cls.mod = load_galera_backup_module()
-        except Exception:
-            cls.mod = None
-
-    def setUp(self):
-        if self.mod is None:
-            self.skipTest("galera-backup executable not implemented yet")
-
     def test_restore_missing_confirm_fails(self):
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -51,8 +44,8 @@ class GaleraBackupRestoreTests(unittest.TestCase):
             os.chmod(env_path, 0o600)
 
             with patch("socket.gethostname", return_value="rnode1"):
-                with self.assertRaises(self.mod.BackupError) as ctx:
-                    self.mod.run_restore(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b", confirm=False)
+                with self.assertRaises(pipeline.BackupError) as ctx:
+                    pipeline.run_restore(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b", confirm=False)
                 self.assertEqual(ctx.exception.code, "E_RESTORE_CONFIRM")
 
     def test_restore_role_or_hostname_mismatch_fails(self):
@@ -87,27 +80,27 @@ class GaleraBackupRestoreTests(unittest.TestCase):
             os.chmod(env_path, 0o600)
 
             with patch("socket.gethostname", return_value="rnode1"):
-                with self.assertRaises(self.mod.BackupError) as ctx:
-                    self.mod.run_restore(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b", confirm=True)
+                with self.assertRaises(pipeline.BackupError) as ctx:
+                    pipeline.run_restore(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b", confirm=True)
                 self.assertEqual(ctx.exception.code, "E_RESTORE_CONFIRM")
 
             # Case B: hostname matches scheduler host gnode4
             cfg_data["local_role"] = "restore"
             cfg_path.write_text(json.dumps(cfg_data))
             with patch("socket.gethostname", return_value="gnode4"):
-                with self.assertRaises(self.mod.BackupError) as ctx:
-                    self.mod.run_restore(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b", confirm=True)
+                with self.assertRaises(pipeline.BackupError) as ctx:
+                    pipeline.run_restore(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b", confirm=True)
                 self.assertEqual(ctx.exception.code, "E_RESTORE_CONFIRM")
 
             # Case C: a concurrent restore is rejected before backend mutation
             with patch("socket.gethostname", return_value="rnode1"):
                 with patch.object(
-                    self.mod.LockManager,
+                    pipeline.LockManager,
                     "acquire",
-                    side_effect=self.mod.BackupError("E_LOCKED", "already running"),
+                    side_effect=pipeline.BackupError("E_LOCKED", "already running"),
                 ):
-                    with self.assertRaises(self.mod.BackupError) as ctx:
-                        self.mod.run_restore(
+                    with self.assertRaises(pipeline.BackupError) as ctx:
+                        pipeline.run_restore(
                             config_path=cfg_path,
                             secrets_path=env_path,
                             cluster_name="claude-r10b",
@@ -167,14 +160,14 @@ class GaleraBackupRestoreTests(unittest.TestCase):
             os.chmod(env_path, 0o600)
 
             backend = MagicMock()
-            backend.preflight.side_effect = self.mod.BackupError(
+            backend.preflight.side_effect = pipeline.BackupError(
                 "E_OWNER_CONFLICT",
                 "Backend belongs to another cluster",
             )
             with patch("socket.gethostname", return_value="rnode1"):
-                with patch.object(self.mod, "get_storage_backend", return_value=backend):
-                    with self.assertRaises(self.mod.BackupError):
-                        self.mod.run_restore(
+                with patch.object(pipeline, "get_storage_backend", return_value=backend):
+                    with self.assertRaises(pipeline.BackupError):
+                        pipeline.run_restore(
                             config_path=cfg_path,
                             secrets_path=env_path,
                             cluster_name="claude-r10b",
@@ -186,14 +179,14 @@ class GaleraBackupRestoreTests(unittest.TestCase):
             self.assertEqual(state["last_failure"]["command"], "restore")
             self.assertEqual(state["last_failure"]["error_code"], "E_OWNER_CONFLICT")
 
-            backend.close.side_effect = self.mod.BackupError(
+            backend.close.side_effect = pipeline.BackupError(
                 "E_STORAGE",
                 "SMB cleanup failed: unmount failed",
             )
             with patch("socket.gethostname", return_value="rnode1"):
-                with patch.object(self.mod, "get_storage_backend", return_value=backend):
-                    with self.assertRaises(self.mod.BackupError) as cleanup_ctx:
-                        self.mod.run_restore(
+                with patch.object(pipeline, "get_storage_backend", return_value=backend):
+                    with self.assertRaises(pipeline.BackupError) as cleanup_ctx:
+                        pipeline.run_restore(
                             config_path=cfg_path,
                             secrets_path=env_path,
                             cluster_name="claude-r10b",
@@ -218,7 +211,7 @@ class GaleraBackupRestoreTests(unittest.TestCase):
         member_safe.ischr.return_value = False
         member_safe.isblk.return_value = False
 
-        self.assertTrue(self.mod.is_safe_tar_member(member_safe))
+        self.assertTrue(pipeline.is_safe_tar_member(member_safe))
 
         # Unsafe cases
         unsafe_names = ["/etc/passwd", "../etc/shadow", "foo/../../bar"]
@@ -229,7 +222,7 @@ class GaleraBackupRestoreTests(unittest.TestCase):
             m.isdir.return_value = False
             m.issym.return_value = False
             m.islnk.return_value = False
-            self.assertFalse(self.mod.is_safe_tar_member(m))
+            self.assertFalse(pipeline.is_safe_tar_member(m))
 
         # Symlink/FIFO unsafe
         m_sym = MagicMock()
@@ -237,19 +230,19 @@ class GaleraBackupRestoreTests(unittest.TestCase):
         m_sym.isreg.return_value = False
         m_sym.isdir.return_value = False
         m_sym.issym.return_value = True
-        self.assertFalse(self.mod.is_safe_tar_member(m_sym))
+        self.assertFalse(pipeline.is_safe_tar_member(m_sym))
 
     def test_mariadb_version_compatibility(self):
         # Equal version is compatible
-        self.assertTrue(self.mod.is_mariadb_version_compatible("11.4.12", "11.4.12"))
+        self.assertTrue(pipeline.is_mariadb_version_compatible("11.4.12", "11.4.12"))
         # Older backup version is compatible
-        self.assertTrue(self.mod.is_mariadb_version_compatible("10.6.18", "11.4.12"))
+        self.assertTrue(pipeline.is_mariadb_version_compatible("10.6.18", "11.4.12"))
         # Newer backup version is incompatible
-        self.assertFalse(self.mod.is_mariadb_version_compatible("11.5.1", "11.4.12"))
+        self.assertFalse(pipeline.is_mariadb_version_compatible("11.5.1", "11.4.12"))
         # Malformed or incomplete versions must fail closed.
-        self.assertFalse(self.mod.is_mariadb_version_compatible("not-a-version", "11.4.12"))
-        self.assertFalse(self.mod.is_mariadb_version_compatible("11", "11.4.12"))
-        self.assertFalse(self.mod.is_mariadb_version_compatible("11.4.12", "invalid"))
+        self.assertFalse(pipeline.is_mariadb_version_compatible("not-a-version", "11.4.12"))
+        self.assertFalse(pipeline.is_mariadb_version_compatible("11", "11.4.12"))
+        self.assertFalse(pipeline.is_mariadb_version_compatible("11.4.12", "invalid"))
 
 
     def test_restore_verification_accepts_empty_tables_after_full_schema_check(self):
@@ -261,7 +254,7 @@ class GaleraBackupRestoreTests(unittest.TestCase):
             (0, "0\n", ""),
         ]
 
-        result = self.mod.verify_restored_database(Path("/run/mariadb.sock"), runner)
+        result = pipeline.verify_restored_database(Path("/run/mariadb.sock"), runner)
 
         self.assertEqual(result, (1, 1, 0))
         self.assertIn("--all-databases", runner.run.call_args_list[0].args[0])
@@ -270,8 +263,8 @@ class GaleraBackupRestoreTests(unittest.TestCase):
         runner = MagicMock()
         runner.run.return_value = (1, "", "table corruption")
 
-        with self.assertRaises(self.mod.BackupError) as ctx:
-            self.mod.verify_restored_database(Path("/run/mariadb.sock"), runner)
+        with self.assertRaises(pipeline.BackupError) as ctx:
+            pipeline.verify_restored_database(Path("/run/mariadb.sock"), runner)
 
         self.assertEqual(ctx.exception.code, "E_INTEGRITY")
         self.assertIn("table corruption", ctx.exception.public_message)
@@ -284,12 +277,12 @@ class GaleraBackupRestoreTests(unittest.TestCase):
             (blocked_directory / "ibdata").write_text("data", encoding="utf-8")
 
             with patch.object(
-                self.mod.shutil,
+                pipeline.shutil,
                 "rmtree",
                 side_effect=PermissionError("deletion denied"),
             ):
-                with self.assertRaises(self.mod.BackupError) as ctx:
-                    self.mod.clear_datadir(datadir)
+                with self.assertRaises(pipeline.BackupError) as ctx:
+                    pipeline.clear_datadir(datadir)
 
             self.assertEqual(ctx.exception.code, "E_INTEGRITY")
             self.assertTrue(blocked_directory.exists())
@@ -305,7 +298,7 @@ class GaleraBackupRestoreTests(unittest.TestCase):
         server_proc.poll.return_value = None
         server_proc.wait.return_value = 0
 
-        self.mod.stop_standalone_server(server_proc, events)
+        pipeline.stop_standalone_server(server_proc, events)
 
         server_proc.terminate.assert_called_once_with()
         server_proc.wait.assert_called_once_with(timeout=60)
@@ -318,7 +311,7 @@ class GaleraBackupRestoreTests(unittest.TestCase):
         server_proc.poll.return_value = 0
         server_proc.wait.return_value = 0
 
-        self.mod.stop_standalone_server(server_proc, events)
+        pipeline.stop_standalone_server(server_proc, events)
 
         server_proc.terminate.assert_not_called()
         server_proc.wait.assert_called_once_with(timeout=60)
@@ -329,11 +322,11 @@ class GaleraBackupRestoreTests(unittest.TestCase):
         server_proc = MagicMock()
         server_proc.poll.return_value = None
         server_proc.wait.side_effect = [
-            self.mod.subprocess.TimeoutExpired(cmd="mariadbd", timeout=60),
+            pipeline.subprocess.TimeoutExpired(cmd="mariadbd", timeout=60),
             -9,
         ]
 
-        self.mod.stop_standalone_server(server_proc, events)
+        pipeline.stop_standalone_server(server_proc, events)
 
         server_proc.terminate.assert_called_once_with()
         server_proc.kill.assert_called_once_with()
@@ -346,7 +339,7 @@ class GaleraBackupRestoreTests(unittest.TestCase):
         server_proc.poll.return_value = None
         server_proc.wait.return_value = 3
 
-        self.mod.stop_standalone_server(server_proc, events)
+        pipeline.stop_standalone_server(server_proc, events)
 
         events.emit.assert_called_once()
         self.assertEqual(events.emit.call_args.args[0], "restore.shutdown_failure")

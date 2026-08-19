@@ -1,27 +1,20 @@
 import os
 import json
 import hashlib
+import sys
 import unittest
 import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from tests.unit.galera_backup_testlib import load_galera_backup_module
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "roles" / "galera_backup" / "files"))
+
+from galera_backup import pipeline  # noqa: E402
 
 
 class GaleraBackupFilesystemsTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        try:
-            cls.mod = load_galera_backup_module()
-        except Exception:
-            cls.mod = None
-
-    def setUp(self):
-        if self.mod is None:
-            self.skipTest("galera-backup executable not implemented yet")
-
     def make_fake_findmnt_info(self, target: str, source: str = "/dev/sdb1", fstype: str = "nfs4", majmin: str = "8:17"):
         return {
             "target": target,
@@ -37,22 +30,22 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
             mount_path = Path(td) / "not_a_mount"
             mount_path.mkdir()
 
-            backend = self.mod.FilesystemBackend(
+            backend = pipeline.FilesystemBackend(
                 mount_point=mount_path,
                 expected_fstype="nfs4",
                 cluster_name="claude-r10b",
             )
 
             # Mock check_mount to simulate not a mount point
-            with patch.object(backend, "_get_mount_info", side_effect=self.mod.BackupError("E_STORAGE", "Not a mount point")):
-                with self.assertRaises(self.mod.BackupError) as ctx:
+            with patch.object(backend, "_get_mount_info", side_effect=pipeline.BackupError("E_STORAGE", "Not a mount point")):
+                with self.assertRaises(pipeline.BackupError) as ctx:
                     backend.preflight()
                 self.assertEqual(ctx.exception.code, "E_STORAGE")
 
     def test_rejects_root_filesystem_or_wrong_fstype(self):
         with tempfile.TemporaryDirectory() as td:
             mount_path = Path(td)
-            backend = self.mod.FilesystemBackend(
+            backend = pipeline.FilesystemBackend(
                 mount_point=mount_path,
                 expected_fstype="nfs4",
                 cluster_name="claude-r10b",
@@ -61,21 +54,21 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
             # Case 1: Root filesystem /
             fake_root = self.make_fake_findmnt_info("/", "/dev/sda1", "ext4")
             with patch.object(backend, "_get_mount_info", return_value=fake_root):
-                with self.assertRaises(self.mod.BackupError) as ctx:
+                with self.assertRaises(pipeline.BackupError) as ctx:
                     backend.preflight()
                 self.assertEqual(ctx.exception.code, "E_STORAGE")
 
             # Case 2: Wrong fstype
             fake_ext4 = self.make_fake_findmnt_info(str(mount_path), "/dev/sdb1", "ext4")
             with patch.object(backend, "_get_mount_info", return_value=fake_ext4):
-                with self.assertRaises(self.mod.BackupError) as ctx:
+                with self.assertRaises(pipeline.BackupError) as ctx:
                     backend.preflight()
                 self.assertEqual(ctx.exception.code, "E_STORAGE")
 
     def test_owner_marker_claim_and_foreign_rejection(self):
         with tempfile.TemporaryDirectory() as td:
             mount_path = Path(td)
-            backend = self.mod.FilesystemBackend(
+            backend = pipeline.FilesystemBackend(
                 mount_point=mount_path,
                 expected_fstype="nfs4",
                 cluster_name="claude-r10b",
@@ -92,7 +85,7 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
 
                 # 2. Foreign owner marker fails
                 owner_file.write_text(json.dumps({"format_version": 1, "cluster_name": "foreign-cluster"}))
-                with self.assertRaises(self.mod.BackupError) as ctx:
+                with self.assertRaises(pipeline.BackupError) as ctx:
                     backend.preflight()
                 self.assertEqual(ctx.exception.code, "E_OWNER_CONFLICT")
 
@@ -101,7 +94,7 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
             mount_path = Path(td)
             work_path = Path(work_td)
 
-            backend = self.mod.FilesystemBackend(
+            backend = pipeline.FilesystemBackend(
                 mount_point=mount_path,
                 expected_fstype="nfs4",
                 cluster_name="claude-r10b",
@@ -129,7 +122,7 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
             }
             metadata_file.write_text(json.dumps(meta))
 
-            art = self.mod.ArtifactSet(
+            art = pipeline.ArtifactSet(
                 backup_name="galera-claude-r10b-20260729-120000",
                 payload_path=payload_file,
                 checksum_path=checksum_file,
@@ -148,7 +141,7 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
                 partial_dir = mount_path / "claude-r10b" / ".partial-galera-claude-r10b-20260729-120000"
                 self.assertFalse(partial_dir.exists())
 
-                with self.assertRaises(self.mod.BackupError) as duplicate_ctx:
+                with self.assertRaises(pipeline.BackupError) as duplicate_ctx:
                     backend.publish(art)
                 self.assertEqual(duplicate_ctx.exception.code, "E_STORAGE")
                 self.assertTrue(final_dir.exists())
@@ -160,7 +153,7 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
     def test_retention_scoped_to_cluster(self):
         with tempfile.TemporaryDirectory() as td:
             mount_path = Path(td)
-            backend = self.mod.FilesystemBackend(
+            backend = pipeline.FilesystemBackend(
                 mount_point=mount_path,
                 expected_fstype="nfs4",
                 cluster_name="claude-r10b",
@@ -202,7 +195,7 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
     def test_retention_delete_failure_is_not_reported_as_success(self):
         with tempfile.TemporaryDirectory() as td:
             mount_path = Path(td)
-            backend = self.mod.FilesystemBackend(
+            backend = pipeline.FilesystemBackend(
                 mount_point=mount_path,
                 expected_fstype="nfs4",
                 cluster_name="claude-r10b",
@@ -228,11 +221,11 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
             now = datetime.fromtimestamp(1785240000, tz=timezone.utc)
             with patch.object(backend, "_get_mount_info", return_value=fake_mount):
                 with patch.object(
-                    self.mod.shutil,
+                    pipeline.shutil,
                     "rmtree",
                     side_effect=PermissionError("retention deletion denied"),
                 ):
-                    with self.assertRaises(self.mod.BackupError) as ctx:
+                    with self.assertRaises(pipeline.BackupError) as ctx:
                         backend.prune(now, retention_days=14)
 
             self.assertEqual(ctx.exception.code, "E_STORAGE")
@@ -244,7 +237,7 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
             with self.subTest(invalid_timestamp=invalid_timestamp):
                 with tempfile.TemporaryDirectory() as td:
                     mount_path = Path(td)
-                    backend = self.mod.FilesystemBackend(
+                    backend = pipeline.FilesystemBackend(
                         mount_point=mount_path,
                         expected_fstype="nfs4",
                         cluster_name="claude-r10b",
@@ -268,7 +261,7 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
                     )
 
                     with patch.object(backend, "_get_mount_info", return_value=fake_mount):
-                        with self.assertRaises(self.mod.BackupError) as ctx:
+                        with self.assertRaises(pipeline.BackupError) as ctx:
                             backend.prune(
                                 datetime.fromtimestamp(1785240000, tz=timezone.utc),
                                 retention_days=14,
@@ -281,7 +274,7 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
             with self.subTest(invalid_timestamp=invalid_timestamp):
                 with tempfile.TemporaryDirectory() as td:
                     mount_path = Path(td)
-                    backend = self.mod.FilesystemBackend(
+                    backend = pipeline.FilesystemBackend(
                         mount_point=mount_path,
                         expected_fstype="nfs4",
                         cluster_name="claude-r10b",
@@ -308,25 +301,15 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
                         encoding="utf-8",
                     )
 
-                    with self.assertRaises(self.mod.BackupError) as ctx:
+                    with self.assertRaises(pipeline.BackupError) as ctx:
                         backend.fetch_latest(Path(td) / "work")
 
                     self.assertEqual(ctx.exception.code, "E_STORAGE")
 
 class ManagedSMBTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        try:
-            cls.mod = load_galera_backup_module()
-        except Exception:
-            cls.mod = None
-
-    def setUp(self):
-        if self.mod is None:
-            self.skipTest("galera-backup executable not implemented yet")
 
     def test_missing_cifs_module_diagnostic_without_mount(self):
-        smb = self.mod.SMBBackend(
+        smb = pipeline.SMBBackend(
             source="//nas/backups",
             mount_point="/mnt/smb",
             options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -338,7 +321,7 @@ class ManagedSMBTests(unittest.TestCase):
 
         with patch.object(smb, "_check_cifs_available", return_value=(False, "6.12.0-211.16.1.el10_2", "6.12.0-211.39.1.el10_2")):
             with patch.object(smb, "_exec_mount") as mock_mount:
-                with self.assertRaises(self.mod.BackupError) as ctx:
+                with self.assertRaises(pipeline.BackupError) as ctx:
                     smb.preflight()
                 self.assertEqual(ctx.exception.code, "E_CIFS_MODULE")
                 self.assertIn("6.12.0-211.16.1.el10_2", ctx.exception.public_message)
@@ -351,14 +334,14 @@ class ManagedSMBTests(unittest.TestCase):
             ["VERS=3.1.1", "seal", "nosuid", "nodev", "noexec"],
         ):
             with self.subTest(options=options):
-                errors = self.mod.validate_smb_options(options)
+                errors = pipeline.validate_smb_options(options)
                 self.assertTrue(errors)
                 self.assertIn("lowercase", " ".join(errors))
 
     def test_runtime_rejects_noncanonical_smb_source_before_mount(self):
         for source in ("//nas/share/", "//nas/share/nested", "//nas", "nas/share"):
             with self.subTest(source=source), tempfile.TemporaryDirectory() as td:
-                smb = self.mod.SMBBackend(
+                smb = pipeline.SMBBackend(
                     source=source,
                     mount_point=Path(td) / "managed",
                     options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -369,7 +352,7 @@ class ManagedSMBTests(unittest.TestCase):
                 )
                 with patch.object(smb, "_check_cifs_available", return_value=(True, "6.12", "6.12")):
                     with patch.object(smb, "_exec_mount") as mount:
-                        with self.assertRaises(self.mod.BackupError) as raised:
+                        with self.assertRaises(pipeline.BackupError) as raised:
                             smb.preflight()
                 self.assertIn("exactly one UNC share", raised.exception.public_message)
                 mount.assert_not_called()
@@ -377,7 +360,7 @@ class ManagedSMBTests(unittest.TestCase):
     def test_credentials_file_and_mount_argv_safety(self):
         with tempfile.TemporaryDirectory() as td:
             mount_path = Path(td)
-            smb = self.mod.SMBBackend(
+            smb = pipeline.SMBBackend(
                 source="//nas/backups",
                 mount_point=mount_path,
                 options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -430,7 +413,7 @@ class ManagedSMBTests(unittest.TestCase):
     def test_managed_smb_creates_missing_mount_point_before_mount(self):
         with tempfile.TemporaryDirectory() as td:
             mount_path = Path(td) / "managed"
-            smb = self.mod.SMBBackend(
+            smb = pipeline.SMBBackend(
                 source="//nas/backups",
                 mount_point=mount_path,
                 options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -466,7 +449,7 @@ class ManagedSMBTests(unittest.TestCase):
             self.assertEqual(mount_observations, [(True, 0o750)])
 
     def test_cleanup_credentials_and_umount_on_failure(self):
-        smb = self.mod.SMBBackend(
+        smb = pipeline.SMBBackend(
             source="//nas/backups",
             mount_point="/mnt/smb",
             options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -487,7 +470,7 @@ class ManagedSMBTests(unittest.TestCase):
         with patch.object(smb, "_check_cifs_available", return_value=(True, "6.12", "6.12")):
             with patch.object(smb, "_check_target_not_mounted"):
                 with patch.object(smb, "_exec_mount", side_effect=fake_exec_mount):
-                    with self.assertRaises(self.mod.BackupError) as ctx:
+                    with self.assertRaises(pipeline.BackupError) as ctx:
                         with smb:
                             smb.preflight()
                     self.assertEqual(ctx.exception.code, "E_STORAGE")
@@ -496,7 +479,7 @@ class ManagedSMBTests(unittest.TestCase):
         for cp in cred_file_created:
             self.assertFalse(os.path.exists(cp))
     def test_missing_mount_cifs_is_reported_as_cifs_unavailable(self):
-        smb = self.mod.SMBBackend(
+        smb = pipeline.SMBBackend(
             source="//nas/backups",
             mount_point="/mnt/smb",
             options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -515,7 +498,7 @@ class ManagedSMBTests(unittest.TestCase):
         self.assertEqual(running_kernel, "6.12.0-test")
 
     def test_missing_mount_cifs_preflight_names_userspace_remediation(self):
-        smb = self.mod.SMBBackend(
+        smb = pipeline.SMBBackend(
             source="//nas/backups",
             mount_point="/mnt/smb",
             options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -528,7 +511,7 @@ class ManagedSMBTests(unittest.TestCase):
 
         with patch("shutil.which", return_value=None):
             with patch("subprocess.run", return_value=probe_result):
-                with self.assertRaises(self.mod.BackupError) as ctx:
+                with self.assertRaises(pipeline.BackupError) as ctx:
                     smb.preflight()
 
         self.assertEqual(ctx.exception.code, "E_CIFS_MODULE")
@@ -538,7 +521,7 @@ class ManagedSMBTests(unittest.TestCase):
 
     def test_preflight_rejects_wrong_observed_smb_source(self):
         with tempfile.TemporaryDirectory() as td:
-            smb = self.mod.SMBBackend(
+            smb = pipeline.SMBBackend(
                 source="//nas/backups",
                 mount_point=td,
                 options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -561,7 +544,7 @@ class ManagedSMBTests(unittest.TestCase):
                     with patch.object(smb, "_exec_mount", return_value=(0, "", "")):
                         with patch.object(smb, "_exec_umount", return_value=(0, "", "")):
                             with patch.object(smb.fs_backend, "_get_mount_info", return_value=observed):
-                                with self.assertRaises(self.mod.BackupError) as raised:
+                                with self.assertRaises(pipeline.BackupError) as raised:
                                     with smb:
                                         smb.preflight()
 
@@ -571,7 +554,7 @@ class ManagedSMBTests(unittest.TestCase):
 
     def test_preflight_normalizes_equivalent_smb_sources(self):
         with tempfile.TemporaryDirectory() as td:
-            smb = self.mod.SMBBackend(
+            smb = pipeline.SMBBackend(
                 source="//NAS/backups",
                 mount_point=td,
                 options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -601,7 +584,7 @@ class ManagedSMBTests(unittest.TestCase):
 
     def test_preflight_rejects_missing_observed_smb_security_option(self):
         with tempfile.TemporaryDirectory() as td:
-            smb = self.mod.SMBBackend(
+            smb = pipeline.SMBBackend(
                 source="//nas/backups",
                 mount_point=td,
                 options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -624,7 +607,7 @@ class ManagedSMBTests(unittest.TestCase):
                     with patch.object(smb, "_exec_mount", return_value=(0, "", "")):
                         with patch.object(smb, "_exec_umount", return_value=(0, "", "")):
                             with patch.object(smb.fs_backend, "_get_mount_info", return_value=observed):
-                                with self.assertRaises(self.mod.BackupError) as raised:
+                                with self.assertRaises(pipeline.BackupError) as raised:
                                     with smb:
                                         smb.preflight()
 
@@ -641,7 +624,7 @@ class ManagedSMBTests(unittest.TestCase):
                 json.dumps({"format_version": 1, "cluster_name": "another-cluster"}),
                 encoding="utf-8",
             )
-            smb = self.mod.SMBBackend(
+            smb = pipeline.SMBBackend(
                 source="//nas/backups",
                 mount_point=mount_path,
                 options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -664,7 +647,7 @@ class ManagedSMBTests(unittest.TestCase):
                     with patch.object(smb, "_exec_mount", return_value=(0, "", "")):
                         with patch.object(smb, "_exec_umount", return_value=(1, "", "target is busy")):
                             with patch.object(smb.fs_backend, "_get_mount_info", return_value=observed):
-                                with self.assertRaises(self.mod.BackupError) as raised:
+                                with self.assertRaises(pipeline.BackupError) as raised:
                                     smb.preflight()
 
             self.assertEqual(raised.exception.code, "E_OWNER_CONFLICT")
@@ -675,7 +658,7 @@ class ManagedSMBTests(unittest.TestCase):
 
     def test_unmount_failure_removes_credentials_and_returns_failure(self):
         with tempfile.TemporaryDirectory() as td:
-            smb = self.mod.SMBBackend(
+            smb = pipeline.SMBBackend(
                 source="//nas/backups",
                 mount_point=td,
                 options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
@@ -689,7 +672,7 @@ class ManagedSMBTests(unittest.TestCase):
             smb._is_mounted = True
 
             with patch.object(smb, "_exec_umount", return_value=(1, "", "target is busy")):
-                with self.assertRaises(self.mod.BackupError) as raised:
+                with self.assertRaises(pipeline.BackupError) as raised:
                     smb.close()
 
             self.assertEqual(raised.exception.code, "E_STORAGE")
@@ -726,14 +709,14 @@ class ManagedSMBTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            artifact = self.mod.ArtifactSet(
+            artifact = pipeline.ArtifactSet(
                 backup_name="galera-claude-r10b-20260729-220000",
                 payload_path=payload,
                 checksum_path=checksum,
                 metadata_path=metadata,
             )
             backend = MagicMock()
-            backend.publish.return_value = self.mod.PublishedArtifact(
+            backend.publish.return_value = pipeline.PublishedArtifact(
                 backup_name=artifact.backup_name,
                 prefix="published",
                 encrypted_sha256=payload_sha,
@@ -762,7 +745,7 @@ class ManagedSMBTests(unittest.TestCase):
             tampered_bytes = bytearray(payload.read_bytes())
             tampered_bytes[0] ^= 1
             tampered_payload.write_bytes(bytes(tampered_bytes))
-            backend.fetch_latest.return_value = self.mod.ArtifactSet(
+            backend.fetch_latest.return_value = pipeline.ArtifactSet(
                 backup_name=artifact.backup_name,
                 payload_path=tampered_payload,
                 checksum_path=checksum,
@@ -851,14 +834,14 @@ class ManagedSMBTests(unittest.TestCase):
             "6.12.0-running",
             "6.12.0-installed",
         )
-        backend.preflight.side_effect = self.mod.BackupError(
+        backend.preflight.side_effect = pipeline.BackupError(
             "E_CIFS_MODULE",
             "CIFS kernel module ('cifs.ko') is unavailable for running kernel "
             "6.12.0-running. Installed kernel with CIFS: 6.12.0-installed.",
         )
         fake_mod = MagicMock()
         fake_mod.SMBBackend.return_value = backend
-        fake_mod.BackupError = self.mod.BackupError
+        fake_mod.BackupError = pipeline.BackupError
 
         with patch.object(probe, "load_installed_runner", return_value=fake_mod):
             ok, details = probe.run_on_node_preflight("claude-r10b")
@@ -889,7 +872,7 @@ class ManagedSMBTests(unittest.TestCase):
             backend._is_mounted = False
             fake_mod = MagicMock()
             fake_mod.SMBBackend.return_value = backend
-            fake_mod.BackupError = self.mod.BackupError
+            fake_mod.BackupError = pipeline.BackupError
 
             with patch.object(probe, "load_installed_runner", return_value=fake_mod):
                 ok, message = probe.run_on_node_full(

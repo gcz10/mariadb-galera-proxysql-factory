@@ -10,7 +10,7 @@
         cluster-app-host lab-app-verify lab-app-bench lab-app-degradation-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
-        lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test \
+        lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify
 
@@ -382,3 +382,25 @@ cluster-alerts:  ## F15 — provision alert rules ISC-47 (quorum/writer/node los
 
 lab-gcache-verify:  ## F0/ISC-68 — zmierz write rate + weryfikuj gcache.size (IST window)
 	$(TARGET_ENV) tests/lab/probe-gcache.py
+
+# Jedno polecenie po zbudowaniu klastra: wszystkie sondy STANU USTALONEGO.
+# Kazda sonda jest fail-closed (tests/lab/_probe_common.py): brak odpowiedzi
+# hosta to UNDETERMINED (exit 2), nie zielone "wszystko OK". Pierwszy niezerowy
+# kod konczy bramke — nie ma sensu mierzyc dalej na klastrze, ktory nie
+# przeszedl kontraktu.
+lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fail-closed
+	$(TARGET_ENV) tests/lab/probe-galera-cluster.py
+	$(TARGET_ENV) tests/lab/probe-proxysql.py
+	$(TARGET_ENV) tests/lab/probe-endpoint.py
+	$(TARGET_ENV) tests/lab/probe-hardening.py
+	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" tests/lab/probe-app-conformance.py
+	$(TARGET_ENV) tests/lab/probe-backup.py
+	$(TARGET_ENV) tests/lab/probe-restore.py
+	$(TARGET_ENV) tests/lab/probe-rolling-restart.py
+	$(TARGET_ENV) tests/lab/probe-upgrade-plan.py
+	$(TARGET_ENV) tests/lab/probe-patch.py
+	$(TARGET_ENV) tests/lab/probe-drift.py
+	$(TARGET_ENV) tests/lab/probe-gcache.py
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	$(TARGET_ENV) PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
+	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone"

@@ -30,23 +30,17 @@ PLAYBOOK = os.path.join(
 
 
 def render_pattern(cluster_label: str, role: str) -> str:
-    """Odtwarza `f15_dereg_pattern` z playbooka dla danej roli.
-
-    Wyrazenie Jinja jest proste (konkatenacja + warunek), wiec zamiast ciagnac
-    caly silnik Ansible wyciagamy je z playbooka i sprawdzamy, ze faktycznie ma
-    oczekiwana strukture, a potem skladamy ten sam wynik.
-    """
+    """Renderuje `f15_dereg_pattern` bezposrednio z playbooka."""
     with open(PLAYBOOK, encoding="utf-8") as handle:
         doc = yaml.safe_load(handle)
     raw = doc[0]["vars"]["f15_dereg_pattern"]
-    # Struktura musi pozostac ta sama: owner dostaje alternatywe z `shared`,
-    # konsument sam swoj namespace. Gdy ktos przepisze wyrazenie inaczej,
-    # ponizsze asercje pekna i zmusza do aktualizacji testu SWIADOMIE.
-    assert "shared" in raw, "wzorzec ownera przestal obejmowac reguly wspoldzielone"
-    assert "cluster_label" in raw, "wzorzec przestal byc namespace'owany etykieta klastra"
-    if role == "owner":
-        return f"^isa-({cluster_label}|shared)-"
-    return f"^isa-{cluster_label}-"
+
+    from jinja2 import Template
+
+    return Template(raw).render(
+        cluster_label=cluster_label,
+        proxysql={"role": role},
+    )
 
 
 class TestDeregisterRulePattern(unittest.TestCase):

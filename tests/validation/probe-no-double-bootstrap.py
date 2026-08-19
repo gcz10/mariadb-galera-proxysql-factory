@@ -15,11 +15,13 @@ Only shell/command task *args* are inspected — a task NAME mentioning "--wsrep
 (e.g. "join, bez --wsrep-new-cluster" = "without") is documentation, not a bootstrap.
 """
 
-import glob
 import re
 import sys
+from pathlib import Path
 
 import yaml
+
+REPO = Path(__file__).resolve().parents[2]
 
 # Dwa sposoby na wystawienie nowego Primary Component: surowa flaga mariadbd
 # i wrapper systemd. Produkcyjna sciezka w bootstrap.yml uzywa wrappera, wiec
@@ -37,17 +39,38 @@ TASK_ATTRS = {
 }
 
 
+TASK_SECTIONS = ("tasks", "pre_tasks", "post_tasks", "handlers")
+
+
+def _walk_tasks(items):
+    """Rekursywne przejscie listy zadan, wchodzac w block/rescue/always.
+
+    Bez tego bootstrap zagniezdzony w `block:` bylby niewidoczny dla sondy
+    (wzorzec _walk_blocks z probe-no-conditional-env.py).
+    """
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if "block" in item:
+            for sub_key in ("block", "rescue", "always"):
+                if sub_key in item:
+                    yield from _walk_tasks(item[sub_key])
+            continue
+        yield item
+
+
 def has_bootstrap_action(play):
     """True if a shell/command task actually invokes --wsrep-new-cluster."""
-    for task in play.get("tasks", []) or []:
-        if not isinstance(task, dict):
-            continue
-        action = next((k for k in task if k not in TASK_ATTRS), None)
-        if action in COMMAND_MODULES:
-            raw = task[action]
-            cmd = " ".join(raw) if isinstance(raw, list) else str(raw)
-            if BOOTSTRAP.search(cmd):
-                return True
+    for section in TASK_SECTIONS:
+        for task in _walk_tasks(play.get(section) or []):
+            action = next((k for k in task if k not in TASK_ATTRS), None)
+            if action in COMMAND_MODULES:
+                raw = task[action]
+                cmd = " ".join(raw) if isinstance(raw, list) else str(raw)
+                if BOOTSTRAP.search(cmd):
+                    return True
     return False
 
 
@@ -83,8 +106,14 @@ def is_single_host(hosts):
 def main():
     violations = []
     bootstrap_plays = []
+    playbooks = sorted((REPO / "playbooks").glob("*.yml"))
+    if not playbooks:
+        # Fail-closed: zero playbookow znaczy zly anchor, nie czysty repo.
+        print(f"FAIL: ISC-65 — brak playbookow w {REPO / 'playbooks'} — "
+              f"sonda nie miala czego sprawdzac")
+        return 1
 
-    for pb in sorted(glob.glob("playbooks/*.yml")):
+    for pb in playbooks:
         try:
             with open(pb, encoding="utf-8") as fh:
                 plays = yaml.safe_load(fh)
@@ -132,7 +161,14 @@ def main():
             print(f"  - {v}")
         return 1
 
-    loc = ", ".join(f"{pb}::{p.get('name', '?')}" for pb, p in bootstrap_plays) or "none"
+    if not bootstrap_plays:
+        # Fail-closed: zero wykrytych bootstrap-play to slepa sonda albo brak
+        # istniejacego bootstrapu — zadne z tego nie jest "bezpieczny repo".
+        print("FAIL: ISC-65 — nie wykryto zadnej play bootstrapujacej — "
+              "sonda nie widzi istniejacego bootstrapu (fail-closed)")
+        return 1
+
+    loc = ", ".join(f"{pb}::{p.get('name', '?')}" for pb, p in bootstrap_plays)
     print(f"PASS: ISC-65 — every bootstrap play is single-host-safe + confirm-gated "
           f"(bootstrap plays: {loc})")
     return 0

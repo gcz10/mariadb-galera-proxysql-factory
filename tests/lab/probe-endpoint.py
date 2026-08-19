@@ -9,86 +9,55 @@ live failover test, not a steady-state probe.
 Reads the endpoint address from cluster.yml.
 """
 
-import os
-import re
-import subprocess
-import sys
-import yaml
+from __future__ import annotations
 
-CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
-INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
-ANSIBLE = os.environ.get("ANSIBLE", "ansible")
+import os
+import sys
+
+from _probe_common import ProbeContext, check, finish, require_hosts, run_ansible
+
 IFACE = os.environ.get("PROXYSQL_ENDPOINT_INTERFACE", "eth0")
 
-with open(CONFIG_PATH, encoding="utf-8") as fh:
-    CLUSTER_CONFIG = yaml.safe_load(fh)
 
-VIP = CLUSTER_CONFIG["proxysql"]["endpoint"]["address"]
-
-
-def run_ansible_query(nodes, script):
-    """Run a shell snippet on nodes via ansible, return {node: body}."""
-    cmd = [
-        ANSIBLE, nodes, "-i", INVENTORY, "-m", "ansible.builtin.shell",
-        "-a", script, "--fork", "5",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    data = {}
-    current_host = None
-    current_body = []
-    for line in result.stdout.splitlines():
-        header = re.match(r'^(\S+)\s*\|\s*\w+\s*\|\s*rc=\d+\s*>>?\s*$', line)
-        if header:
-            if current_host:
-                data[current_host] = "\n".join(current_body).strip()
-            current_host = header.group(1)
-            current_body = []
-        elif current_host:
-            current_body.append(line)
-    if current_host:
-        data[current_host] = "\n".join(current_body).strip()
-    return data
-
-
-def check(condition, message, failures):
-    if not condition:
-        failures.append(message)
-
-
-def main():
-    failures = []
+def main() -> int:
+    failures: list[str] = []
+    undetermined: list[str] = []
+    ctx = ProbeContext()
+    proxysql_hosts = ctx.group_hosts("proxysql")
+    galera_hosts = ctx.group_hosts("galera")
+    vip = ctx.config["proxysql"]["endpoint"]["address"]
 
     # Per-node: does it hold the VIP? is ProxySQL running?
     probe = (
-        f"if ip -o -4 addr show dev {IFACE} | grep -q '{VIP}/'; then echo VIP=1; else echo VIP=0; fi; "
+        f"if ip -o -4 addr show dev {IFACE} | grep -q '{vip}/'; then echo VIP=1; else echo VIP=0; fi; "
         f"if pgrep -x proxysql >/dev/null; then echo PROXYSQL=1; else echo PROXYSQL=0; fi"
     )
-    raw = run_ansible_query("proxysql", probe)
-    if not raw:
-        print("FAIL: no ProxySQL nodes responded to endpoint probe")
-        return 1
+    raw = run_ansible(ctx, "proxysql", probe)
+    # Guard VIP: kazdy host grupy musi dostarczyc stan do pomiaru.
+    require_hosts(raw, proxysql_hosts, "ISC-24/26 VIP+ProxySQL", failures, undetermined)
 
     state = {}
-    for node, body in raw.items():
-        vals = dict(
-            kv.split("=", 1) for kv in body.split() if "=" in kv
-        )
+    for node in proxysql_hosts:
+        if node not in raw.bodies:
+            continue
+        vals = dict(kv.split("=", 1) for kv in raw.body(node).split() if "=" in kv)
         state[node] = {"vip": vals.get("VIP") == "1", "proxysql": vals.get("PROXYSQL") == "1"}
 
     vip_holders = [n for n, s in state.items() if s["vip"]]
 
     # ISC-24: exactly one node holds the VIP
-    check(
-        len(vip_holders) == 1,
-        f"VIP {VIP} held by {len(vip_holders)} nodes {vip_holders} (expected exactly 1)",
-        failures,
-    )
+    if state and len(state) == len(proxysql_hosts):
+        check(
+            len(vip_holders) == 1,
+            f"VIP {vip} held by {len(vip_holders)} nodes {vip_holders} (expected exactly 1)",
+            failures,
+        )
 
     # ISC-26: the VIP holder's ProxySQL must be running
     for holder in vip_holders:
         check(
             state[holder]["proxysql"],
-            f"{holder} holds VIP {VIP} but its ProxySQL is DOWN (ISC-26 violation)",
+            f"{holder} holds VIP {vip} but its ProxySQL is DOWN (ISC-26 violation)",
             failures,
         )
 
@@ -126,34 +95,43 @@ def main():
     # MUSI oferowac TLS (inaczej klienci cicho schodza do plaintextu) i cert MUSI
     # byc wazny z zapasem 30 dni. Brak zaufanego lancucha jest RAPORTOWANY w
     # linii wyniku — stan swiadomie przyjety, ale nie przemilczany.
-    port = CLUSTER_CONFIG["proxysql"]["endpoint"].get("port", 6033)
+    port = ctx.config["proxysql"]["endpoint"].get("port", 6033)
     tls_script = (
         "command -v openssl >/dev/null || { echo NO_OPENSSL; exit 0; }; "
-        f"pem=$(echo | timeout 10 openssl s_client -starttls mysql -connect {VIP}:{port} "
+        f"pem=$(echo | timeout 10 openssl s_client -starttls mysql -connect {vip}:{port} "
         "2>/dev/null | sed -n '/BEGIN CERT/,/END CERT/p'); "
         '[ -n "$pem" ] || { echo NO_TLS; exit 0; }; '
         'echo "$pem" | openssl x509 -noout -subject -issuer | tr "\\n" ";"; echo; '
         'echo "$pem" | openssl x509 -noout -checkend 2592000 >/dev/null '
         "&& echo EXPIRY_OK || echo EXPIRY_SOON"
     )
-    tls_raw = run_ansible_query("galera[0]", tls_script)
+    tls_raw = run_ansible(ctx, "galera[0]", tls_script)
+    # Brak odpowiedzi TLS nie moze zostac cichym "nie zweryfikowano" pod PASS.
+    require_hosts(tls_raw, galera_hosts[:1], "TLS endpoint", failures, undetermined)
     tls_note = "nie zweryfikowano"
-    for node, body in tls_raw.items():
+    for node in galera_hosts[:1]:
+        if node not in tls_raw.bodies:
+            continue
+        body = tls_raw.body(node)
         if "NO_OPENSSL" in body:
-            failures.append(
-                f"{node}: brak openssl — nie da sie sprawdzic TLS endpointu {VIP}:{port}; "
-                f"sonda nie moze potwierdzic wlasciwosci, ktorej pilnuje"
+            check(
+                False,
+                f"{node}: brak openssl — nie da sie sprawdzic TLS endpointu {vip}:{port}; "
+                f"sonda nie moze potwierdzic wlasciwosci, ktorej pilnuje",
+                failures,
             )
             continue
         if "NO_TLS" in body:
-            failures.append(
-                f"endpoint {VIP}:{port} NIE oferuje TLS — klienci schodza do plaintextu "
-                f"(sprawdzone z {node})"
+            check(
+                False,
+                f"endpoint {vip}:{port} NIE oferuje TLS — klienci schodza do plaintextu "
+                f"(sprawdzone z {node})",
+                failures,
             )
             continue
         check(
             "EXPIRY_SOON" not in body,
-            f"certyfikat endpointu {VIP}:{port} wygasa w ciagu 30 dni",
+            f"certyfikat endpointu {vip}:{port} wygasa w ciagu 30 dni",
             failures,
         )
         subject = issuer = "?"
@@ -171,18 +149,12 @@ def main():
         else:
             tls_note = f"TLS obecny, wystawca: {issuer}"
 
-    if failures:
-        print("FAIL: ProxySQL endpoint checks failed:")
-        for f in failures:
-            print(f"  - {f}")
-        return 1
-
-    holder = vip_holders[0]
-    print(
-        f"PASS: ProxySQL endpoint healthy — VIP {VIP} on {holder} "
+    holder = vip_holders[0] if vip_holders else "?"
+    summary = (
+        f"ProxySQL endpoint healthy — VIP {vip} on {holder} "
         f"(ProxySQL running), {len(state)} node(s) evaluated; {tls_note}"
     )
-    return 0
+    return finish(failures, undetermined, summary)
 
 
 if __name__ == "__main__":

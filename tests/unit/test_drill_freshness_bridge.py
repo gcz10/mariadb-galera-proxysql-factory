@@ -22,6 +22,8 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "roles" / "galera_backup" / "files"))
 
@@ -101,15 +103,49 @@ class TestDrillMarkerTrust(unittest.TestCase):
             drill_marker_unixtime(marker, CLUSTER, "t")
 
 
+def _alert_rules(alerts_path, uid):
+    """Reguly alertow (dict z uid+expr) o dokladnym `uid`.
+
+    Szukanie rekursywne po calej strukturze sprawia, ze przeniesienie listy
+    `f15_rules` w inne miejsce playbooka nie oslabia testu, a yaml.safe_load
+    gubi komentarze — nazwa metryki wpisana tylko w komentarzu nie zaspokoi
+    asercji.
+    """
+    rules = []
+
+    def _walk(node):
+        if isinstance(node, dict):
+            if "uid" in node and "expr" in node:
+                rules.append(node)
+            for value in node.values():
+                _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(yaml.safe_load(alerts_path.read_text(encoding="utf-8")))
+    return [r for r in rules if r.get("uid") == uid]
+
+
 class TestPublishedMetricMatchesAlert(unittest.TestCase):
     METRIC = "galera_restore_last_success_unixtime"
 
     def test_metric_name_is_the_one_the_alert_reads(self):
-        alerts = (REPO / "playbooks" / "f15_alerts.yml").read_text(encoding="utf-8")
+        rules = _alert_rules(
+            REPO / "playbooks" / "f15_alerts.yml",
+            "isa-{{ cluster_label }}-restore-drill-stale",
+        )
+        self.assertEqual(
+            len(rules),
+            1,
+            "regula ISC-47 (dokladny uid restore-drill-stale) zniknela lub "
+            "jest zduplikowana w f15_alerts.yml",
+        )
         self.assertIn(
             self.METRIC,
-            alerts,
-            "regula ISC-47 nie czyta metryki, ktora publikuje most — most byłby teatrem",
+            rules[0]["expr"],
+            "regula ISC-47 nie czyta w expr metryki publikowanej przez most — "
+            "most bylby teatrem",
         )
 
     def test_publish_writes_expected_series(self):

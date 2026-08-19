@@ -9,11 +9,13 @@ would drop the Primary Component and take the whole cluster down.
 PASS: no offending play. FAIL: a multi-node Galera play cycles mariadbd without serial:1.
 """
 
-import glob
 import re
 import sys
+from pathlib import Path
 
 import yaml
+
+REPO = Path(__file__).resolve().parents[2]
 
 # mariadbd lifecycle actions (start/stop/kill/bootstrap) — NOT read-only checks
 # like `pgrep -x mariadbd`, which must not trip the guard.
@@ -59,7 +61,13 @@ def play_cycles_mariadbd(play):
 
 def main():
     violations = []
-    for pb in sorted(glob.glob("playbooks/*.yml")):
+    playbooks = sorted((REPO / "playbooks").glob("*.yml"))
+    if not playbooks:
+        # Fail-closed: zero playbookow znaczy zly anchor, nie czysty repo.
+        print(f"FAIL: ISC-31 — brak playbookow w {REPO / 'playbooks'} — "
+              f"sonda nie miala czego sprawdzac")
+        return 1
+    for pb in playbooks:
         try:
             with open(pb, encoding="utf-8") as fh:
                 plays = yaml.safe_load(fh)

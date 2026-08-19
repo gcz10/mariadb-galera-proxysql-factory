@@ -120,15 +120,24 @@ SCRIPT_REMOTE = "/tmp/workload-numbered.sh"
 LOG_REMOTE = "/tmp/workload-proxysql.log"
 
 
-def parse_duration(text, default=120):
-    """'2m'->120, '30s'->30, '1h'->3600, '90'->90. Ten sam parser co chaos-failover."""
-    m = re.match(r"^\s*(\d+)\s*([smh]?)\s*$", str(text or ""))
+def parse_duration(text):
+    """'2m'->120, '30s'->30, '1h'->3600, '90'->90. Bez cichego domyslu.
+
+    Semantyka jak _duration_seconds w chaos-failover.py: nieparsowalne
+    availability.rto_node_failure to brak kontraktu do sprawdzenia — domysl
+    120s pozwolilby przejsc awarie 119s w klastrze deklarujacym RTO 30s,
+    wiec odmawiamy (REFUSED, exit 1) zamiast mierzyc wzgledem zmyslonego SLA.
+    """
+    m = re.fullmatch(r"\s*(\d+)\s*([smh]?)\s*", str(text or ""))
     if not m:
-        return default
+        raise SystemExit(
+            f"REFUSED: nie umiem sparsowac availability.rto_node_failure={text!r} "
+            "(dozwolone formy: '90', '30s', '2m', '1h')"
+        )
     return int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
 
 
-RTO = parse_duration((CLUSTER.get("availability") or {}).get("rto_node_failure"), 120)
+RTO = parse_duration((CLUSTER.get("availability") or {}).get("rto_node_failure"))
 
 
 def sh(host, script, timeout=120, check=False):
@@ -464,6 +473,12 @@ def main():
             failures.append(
                 f"UTRATA DANYCH: klient potwierdzil {len(seqs)} transakcji, "
                 f"po przelaczeniu jest {present}")
+    else:
+        # Pusty log po awarii to nie dowod "nic nie utracono", tylko brak dowodu
+        # w ogole — asercja pkt 3 jest wtedy niewykonalna. Wczesniejsze pominiecie
+        # tej galezi wypelniloby raport PASS-em przy zerowych danych pomiarowych.
+        failures.append(
+            "brak danych workload po awarii - asercja integralnosci niewykonalna")
     sh(APP_HOST, f"rm -f {CNF_REMOTE}", timeout=60)
 
     if failures:

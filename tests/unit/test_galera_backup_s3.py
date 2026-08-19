@@ -1,13 +1,17 @@
 import importlib.util
 import io
 import json
+import sys
 import unittest
 import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from tests.unit.galera_backup_testlib import load_galera_backup_module
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "roles" / "galera_backup" / "files"))
+
+from galera_backup import pipeline  # noqa: E402
 
 
 class FakeMinioClient:
@@ -62,19 +66,10 @@ class FakeMinioClient:
 
 
 class GaleraBackupS3Tests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        try:
-            cls.mod = load_galera_backup_module()
-        except Exception:
-            cls.mod = None
-
     def setUp(self):
-        if self.mod is None:
-            self.skipTest("galera-backup executable not implemented yet")
 
         self.client = FakeMinioClient()
-        self.backend = self.mod.S3Backend(
+        self.backend = pipeline.S3Backend(
             endpoint="192.168.1.47:9000",
             bucket="r10b-galera-backups",
             secure=False,
@@ -85,7 +80,7 @@ class GaleraBackupS3Tests(unittest.TestCase):
         )
 
     def test_missing_owner_marker_fails_closed(self):
-        with self.assertRaises(self.mod.BackupError) as ctx:
+        with self.assertRaises(pipeline.BackupError) as ctx:
             self.backend.preflight()
         self.assertEqual(ctx.exception.code, "E_OWNER_CONFLICT")
         self.assertIn("storage administrator", ctx.exception.public_message)
@@ -101,7 +96,7 @@ class GaleraBackupS3Tests(unittest.TestCase):
         self.client.objects["galera-backup-owner.json"] = json.dumps(
             {"format_version": 1, "cluster_name": "other-cluster"}
         ).encode()
-        with self.assertRaises(self.mod.BackupError) as ctx:
+        with self.assertRaises(pipeline.BackupError) as ctx:
             self.backend.preflight()
         self.assertEqual(ctx.exception.code, "E_OWNER_CONFLICT")
 
@@ -133,7 +128,7 @@ class GaleraBackupS3Tests(unittest.TestCase):
             }
             metadata_file.write_text(json.dumps(meta))
 
-            art = self.mod.ArtifactSet(
+            art = pipeline.ArtifactSet(
                 backup_name="galera-claude-r10b-20260729-120000",
                 payload_path=payload_file,
                 checksum_path=checksum_file,
@@ -172,7 +167,7 @@ class GaleraBackupS3Tests(unittest.TestCase):
                 f"{prefix}backup.tar.enc"
             ]
             payload_file.write_bytes(b"different encrypted payload")
-            with self.assertRaises(self.mod.BackupError) as duplicate_ctx:
+            with self.assertRaises(pipeline.BackupError) as duplicate_ctx:
                 self.backend.publish(art)
             self.assertEqual(duplicate_ctx.exception.code, "E_STORAGE")
             self.assertEqual(
@@ -210,7 +205,7 @@ class GaleraBackupS3Tests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            artifact = self.mod.ArtifactSet(
+            artifact = pipeline.ArtifactSet(
                 backup_name=backup_name,
                 payload_path=payload,
                 checksum_path=checksum,
@@ -225,7 +220,7 @@ class GaleraBackupS3Tests(unittest.TestCase):
                     raise OSError("checksum upload interrupted after write")
 
             self.client.fput_object = fail_checksum
-            with self.assertRaises(self.mod.BackupError) as ctx:
+            with self.assertRaises(pipeline.BackupError) as ctx:
                 self.backend.publish(artifact)
 
             self.assertEqual(ctx.exception.code, "E_STORAGE")
@@ -243,7 +238,7 @@ class GaleraBackupS3Tests(unittest.TestCase):
                 raise OSError("cleanup denied")
 
             self.client.remove_object = refuse_cleanup
-            with self.assertRaises(self.mod.BackupError) as cleanup_ctx:
+            with self.assertRaises(pipeline.BackupError) as cleanup_ctx:
                 self.backend.publish(artifact)
 
             self.assertEqual(cleanup_ctx.exception.code, "E_STORAGE")
@@ -299,7 +294,7 @@ class GaleraBackupS3Tests(unittest.TestCase):
         ).encode()
         self.client.objects[f"{prefix}backup.tar.enc"] = b"old-data"
 
-        with self.assertRaises(self.mod.BackupError) as ctx:
+        with self.assertRaises(pipeline.BackupError) as ctx:
             self.backend.prune(
                 datetime.fromtimestamp(1785240000, tz=timezone.utc),
                 retention_days=14,
@@ -320,7 +315,7 @@ class GaleraBackupS3Tests(unittest.TestCase):
         self.client.objects[f"{prefix}backup.sha256"] = b"sha256  backup.tar.enc\n"
 
         with tempfile.TemporaryDirectory() as td:
-            with self.assertRaises(self.mod.BackupError) as ctx:
+            with self.assertRaises(pipeline.BackupError) as ctx:
                 self.backend.fetch_latest(Path(td))
 
         self.assertEqual(ctx.exception.code, "E_STORAGE")
