@@ -42,7 +42,12 @@ from .fsutil import (
     file_sha256_and_size,
     remove_sensitive_work_dir,
 )
-from .storage.artifacts import ArtifactSet, PublishedArtifact
+from .storage.artifacts import (
+    ArtifactSet,
+    PublishedArtifact,
+    build_drill_marker,
+    drill_marker_unixtime,
+)
 from .storage.filesystem import FilesystemBackend, SMBBackend
 from .storage.s3 import S3Backend
 from .secrets import redactable_secret_values, sensitive_secret_values
@@ -230,6 +235,39 @@ class MetricsManager:
         )
         atomic_write(self.metric_path, content, mode=0o644)
         restore_default_context(self.metric_path)
+
+
+def publish_drill_freshness(
+    metric_path: Path,
+    cluster_label: str,
+    logical_cluster: str,
+    backend_label: str,
+    last_success_unixtime: int,
+) -> None:
+    """Przepisz swiezosc restore drillu ze znacznika backendu do textfile collectora.
+
+    Wolane z hosta SCHEDULERA podczas backupu, bo to on jest scrapowany. Sam drill
+    biegnie na izolowanym hoscie `restore`, ktorego nikt nie odpytuje — bez tego
+    mostka jego sukces nigdy nie dociera do alertu ISC-47.
+
+    Nazwa metryki jest CELOWO ta sama, ktorej uzywa runner na hoscie restore
+    (`galera_restore_last_success_unixtime`): regula alertu bierze `max` po serii,
+    wiec obie sciezki uruchomienia — cron i Ansible — trafiaja w ten sam licznik.
+    """
+    labels = (
+        f'cluster="{escape_metric_label(cluster_label)}",'
+        f'logical_cluster="{escape_metric_label(logical_cluster)}",'
+        f'backend="{escape_metric_label(backend_label)}"'
+    )
+    content = (
+        "# Zrodlo: znacznik restore drill w backendzie kopii (patrz storage/artifacts.py).\n"
+        "# Wartosc 0 oznacza brak potwierdzonego drillu dla tego klastra.\n"
+        "# HELP galera_restore_last_success_unixtime Unix time of the last successful restore drill.\n"
+        "# TYPE galera_restore_last_success_unixtime gauge\n"
+        f"galera_restore_last_success_unixtime{{{labels}}} {int(last_success_unixtime)}\n"
+    )
+    atomic_write(metric_path, content, mode=0o644)
+    restore_default_context(metric_path)
 
 
 def query_galera_vars(socket_path: Path, runner: CommandRunner) -> dict[str, str]:
@@ -690,6 +728,31 @@ def run_backup(
                 {"error_code": "E_STORAGE", "message": str(prune_exc)},
             )
 
+        # Most swiezosci restore drillu: host schedulera JEST scrapowany, izolowany
+        # host `restore` nie jest. Przepisujemy tu znacznik zostawiony przez drill
+        # w backendzie, zeby alert ISC-47 widzial realne wykonanie drillu, a nie
+        # date ostatniego uruchomienia Ansible. Jak retencja wyzej: awaria mostka
+        # jest raportowana zdarzeniem i NIGDY nie degraduje udanego backupu.
+        try:
+            marker = backend.read_drill_marker()
+            publish_drill_freshness(
+                cfg.paths.metric_file.parent / f"galera_restore_drill-{cluster_name}.prom",
+                cfg.metric_cluster_label,
+                cluster_name,
+                b_type,
+                drill_marker_unixtime(marker, cluster_name, "backend drill marker") if marker else 0,
+            )
+        except BackupError as drill_exc:
+            event_mgr.emit(
+                "drill_freshness.failure",
+                {"error_code": drill_exc.code, "message": drill_exc.public_message},
+            )
+        except Exception as drill_exc:
+            event_mgr.emit(
+                "drill_freshness.failure",
+                {"error_code": "E_STORAGE", "message": str(drill_exc)},
+            )
+
         completed_backend = backend
         backend = None
         completed_backend.close()
@@ -1016,8 +1079,33 @@ def run_restore(
             if server_proc:
                 stop_standalone_server(server_proc, event_mgr)
 
+        # Znacznik drillu MUSI powstac, zanim zamkniemy backend — to jedyny kanal
+        # laczacy izolowany host `restore` ze scrapowanym hostem schedulera.
+        # Odtwarzanie juz sie UDALO i zostalo zweryfikowane, wiec awaria samego
+        # znacznika nie moze zdegradowac drillu do porazki: raportujemy ja
+        # zdarzeniem, dokladnie jak robi to retencja po udanym backupie.
+        drill_unixtime = int(time.time())
         completed_backend = backend
         backend = None
+        try:
+            completed_backend.write_drill_marker(
+                build_drill_marker(
+                    cluster_name=cluster_name,
+                    last_success_unixtime=drill_unixtime,
+                    backup_name=art_set.backup_name,
+                    rows_verified=total_rows,
+                )
+            )
+        except BackupError as marker_exc:
+            event_mgr.emit(
+                "drill_marker.failure",
+                {"error_code": marker_exc.code, "message": marker_exc.public_message},
+            )
+        except Exception as marker_exc:
+            event_mgr.emit(
+                "drill_marker.failure",
+                {"error_code": "E_STORAGE", "message": str(marker_exc)},
+            )
         completed_backend.close()
         remove_sensitive_work_dir(work_dir, "E_INTEGRITY")
         work_dir = None

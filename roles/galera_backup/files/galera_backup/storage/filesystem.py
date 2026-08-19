@@ -18,7 +18,12 @@ from typing import Any, Callable, Optional
 from ..errors import BackupError, combine_failures
 from ..fsutil import file_sha256_and_size, remove_tree_or_raise
 from ..textutil import normalize_smb_source, sanitize_cluster_name, validate_smb_options
-from .artifacts import ArtifactSet, PublishedArtifact, metadata_unixtime
+from .artifacts import (
+    ArtifactSet,
+    DRILL_MARKER_FILENAME,
+    PublishedArtifact,
+    metadata_unixtime,
+)
 
 
 class FilesystemBackend:
@@ -293,6 +298,45 @@ class FilesystemBackend:
                     deleted_count += 1
 
         return deleted_count
+
+    # === Znacznik restore drill (patrz storage/artifacts.py) ===
+    # Zwykly PLIK w katalogu klastra. `fetch_latest` i `prune` iteruja wylacznie po
+    # KATALOGACH o prefiksie `galera-<cluster>-`, wiec go nie widza i nie kasuja.
+    def _drill_marker_path(self) -> Path:
+        return self.mount_point / self.cluster_name / DRILL_MARKER_FILENAME
+
+    def write_drill_marker(self, marker: dict[str, Any]) -> None:
+        self._verify_mount_identity()
+        target = self._drill_marker_path()
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Zapis atomowy: podmiana przez rename, zeby rownolegly odczyt nigdy
+            # nie zobaczyl obcietego JSON-a.
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", dir=target.parent, delete=False
+            ) as tmp:
+                json.dump(marker, tmp, indent=2)
+                tmp_path = Path(tmp.name)
+            os.replace(tmp_path, target)
+            os.chmod(target, 0o640)
+        except OSError as exc:
+            raise BackupError(
+                "E_STORAGE",
+                f"Failed to write restore drill marker '{target}': {exc}",
+            ) from exc
+
+    def read_drill_marker(self) -> Optional[dict[str, Any]]:
+        self._verify_mount_identity()
+        source = self._drill_marker_path()
+        if not source.exists():
+            return None
+        try:
+            return json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BackupError(
+                "E_STORAGE",
+                f"Failed to read restore drill marker '{source}': {exc}",
+            ) from exc
 
     def close(self) -> None:
         pass
@@ -607,6 +651,19 @@ class SMBBackend:
     def prune(self, now: datetime, retention_days: int) -> int:
         try:
             return self.fs_backend.prune(now, retention_days)
+        except Exception as exc:
+            self._reraise_after_cleanup(exc)
+
+    # Znacznik restore drill — jak reszta operacji, przez zamontowany udzial.
+    def write_drill_marker(self, marker: dict[str, Any]) -> None:
+        try:
+            self.fs_backend.write_drill_marker(marker)
+        except Exception as exc:
+            self._reraise_after_cleanup(exc)
+
+    def read_drill_marker(self) -> Optional[dict[str, Any]]:
+        try:
+            return self.fs_backend.read_drill_marker()
         except Exception as exc:
             self._reraise_after_cleanup(exc)
 
