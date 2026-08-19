@@ -11,7 +11,7 @@
 #
 # Budowa od zera dotyka scenariuszy, ktorych zbiezny klaster nie sprawdza:
 #   1. `disable-thp.service` musi wystartowac PRZED pierwszym startem mariadbd
-#      (Before=mariadb.service) — na dzialajacym kластrze kolejnosc byla juz nieistotna,
+#      (Before=mariadb.service) — na dzialajacym klastrze kolejnosc byla juz nieistotna,
 #      bo baza chodzila, a THP wylaczalismy pod nia.
 #   2. `wsrep_slave_threads` bierze `ansible_processor_vcpus` z faktow zebranych na
 #      SUROWYM hoscie w F3, przed pierwszym uruchomieniem bazy.

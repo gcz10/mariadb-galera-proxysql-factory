@@ -14,7 +14,12 @@ from typing import Any, Optional
 
 from ..errors import BackupError, combine_failures
 from ..fsutil import file_sha256_and_size
-from .artifacts import ArtifactSet, PublishedArtifact, metadata_unixtime
+from .artifacts import (
+    ArtifactSet,
+    DRILL_MARKER_S3_PREFIX,
+    PublishedArtifact,
+    metadata_unixtime,
+)
 
 
 class S3Backend:
@@ -382,6 +387,49 @@ class S3Backend:
                 deleted_count += 1
 
         return deleted_count
+
+    # === Znacznik restore drill (patrz storage/artifacts.py) ===
+    # Klucz lezy POZA prefiksem `galera-<cluster>-`, ktory skanuja `fetch_latest`
+    # i `prune`, wiec retencja go nie usuwa.
+    def _drill_marker_key(self) -> str:
+        return f"{DRILL_MARKER_S3_PREFIX}/{self.cluster_name}.json"
+
+    def write_drill_marker(self, marker: dict[str, Any]) -> None:
+        key = self._drill_marker_key()
+        payload = json.dumps(marker, indent=2).encode("utf-8")
+        with tempfile.NamedTemporaryFile("wb", suffix=".json", delete=False) as tmp:
+            tmp.write(payload)
+            tmp_path = Path(tmp.name)
+        try:
+            self.client.fput_object(
+                self.bucket,
+                key,
+                str(tmp_path),
+                content_type="application/json",
+            )
+        except Exception as exc:
+            raise BackupError(
+                "E_STORAGE",
+                f"Failed to write restore drill marker '{key}': {exc}",
+            ) from exc
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def read_drill_marker(self) -> Optional[dict[str, Any]]:
+        key = self._drill_marker_key()
+        try:
+            resp = self.client.get_object(self.bucket, key)
+            return json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            # Brak znacznika to normalny stan (klaster bez ani jednego drillu),
+            # a nie blad backupu. Rozrozniamy go po nazwie wyjatku SDK, zeby
+            # awaria uwierzytelnienia albo sieci NIE udawala pustego znacznika.
+            if type(exc).__name__ == "S3Error" and getattr(exc, "code", "") == "NoSuchKey":
+                return None
+            raise BackupError(
+                "E_STORAGE",
+                f"Failed to read restore drill marker '{key}': {exc}",
+            ) from exc
 
     def close(self) -> None:
         pass

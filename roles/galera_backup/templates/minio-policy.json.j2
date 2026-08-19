@@ -32,6 +32,16 @@
       "Resource": [
         "arn:aws:s3:::{{ backup.s3.bucket }}/galera-backup-owner.json"
       ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::{{ backup.s3.bucket }}/drill-state/{{ cluster.name }}.json"
+      ]
     }
   ]
 }
