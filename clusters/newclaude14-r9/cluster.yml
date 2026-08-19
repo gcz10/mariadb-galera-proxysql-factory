@@ -1,43 +1,44 @@
 ---
-# newclaude13-r9 — klaster Galera na Rocky Linux 9 (Proxmox, real VM).
+# newclaude14-r9 - klaster Galera na Rocky Linux 9 (Proxmox, real VM).
 #
-# TRZYNASTY przebieg budowy warstwy Galera od zera.
+# CZTERNASTY przebieg budowy warstwy Galera od zera.
 #
-# Hipoteza: PR #50 wprowadzil parametry produkcyjne wyprowadzone z oficjalnych
-# przewodnikow (THP off przez `disable-thp.service`, `OOMScoreAdjust=-800` w
-# drop-inach systemd, `wsrep_slave_threads` z liczby vCPU, `wsrep_log_conflicts`,
-# gratuitous ARP w keepalived). WSZYSTKO to bylo wdrazane i mierzone na JUZ
-# DZIALAJACYM n12 — na maszynach, ktore mialy za soba bootstrap, SST i restarty.
+# Hipoteza: PR #51 (materializacja `restore_test_schedule` w cronie) i PR #52
+# (most swiezosci drillu przez znacznik w backendzie kopii) powstaly i byly
+# weryfikowane na JUZ DZIALAJACYM n13 - na kliencie MinIO, ktory istnial, i na
+# poswiadczeniu, ktore juz mialo polityke.
 #
-# Budowa od zera dotyka scenariuszy, ktorych zbiezny klaster nie sprawdza:
-#   1. `disable-thp.service` musi wystartowac PRZED pierwszym startem mariadbd
-#      (Before=mariadb.service) — na dzialajacym klastrze kolejnosc byla juz nieistotna,
-#      bo baza chodzila, a THP wylaczalismy pod nia.
-#   2. `wsrep_slave_threads` bierze `ansible_processor_vcpus` z faktow zebranych na
-#      SUROWYM hoscie w F3, przed pierwszym uruchomieniem bazy.
-#   3. Drop-in `OOMScoreAdjust` powstaje w F2, a jednostka mariadb startuje dopiero
-#      w F4/F5 — na n12 kolejnosc byla odwrotna (drop-in dolozony do zywej uslugi).
-#   4. GARP w keepalived na wezlach ownera przy pierwszej rejestracji hostgrup n13.
+# Budowa od zera dotyka sciezek, ktorych zbiezny klaster nie sprawdza:
+#   1. Polityka MinIO ze statementem znacznika musi powstac przy PIERWSZYM
+#      tworzeniu poswiadczenia (`Create scoped credential`), a nie przy
+#      konwergencji na istniejace. Na n13 wlasnie ta roznica dala `AccessDenied`
+#      na `drill-state/<cluster>.json` - polityka byla juz utworzona bez klucza
+#      znacznika, a drill uderzyl w nia przed konwergencja.
+#   2. `/etc/cron.d/galera-restore-<cluster>` musi powstac przy pierwszym
+#      `cluster-backup-configure` na SUROWYM hoscie schedulera; na n13 zadanie
+#      dokladalo sie do hosta, ktory mial juz zainstalowanego runnera.
+#   3. Odczyt znacznika z PUSTEGO bucketa (przed pierwszym drillem) musi dac
+#      uczciwe `0`, a nie awarie backupu - na n13 bucket od dawna mial obiekty.
+#   4. Alert ISC-47 na swiezym klastrze: metryka swiezosci ma istniec od
+#      pierwszego backupu, zanim jakikolwiek drill sie odbyl.
 #
-# Kolejnosc wg README.md:32-38 — F11 przed F6, lab-seed-smoke przed drillem,
+# Kolejnosc wg README.md:32-38 - F11 przed F6, lab-seed-smoke przed drillem,
 # lab-monitoring-verify na samym koncu.
 #
-# Adresacja: n13g1-3 na .164-.166 (VMID 9530-9532), restore n13r1 .167 (9533).
-# Blok potwierdzony AKTYWNYM skanem (ping + 22/8006) po zniszczeniu n12.
-# Skan jest falsyfikowalny: kontrola .179 w tym samym przebiegu wyszla ZYWA
-# (host spoza floty, wpisany w clusters/reserved-addresses.yml).
-# Blok byl uzywany przez n8 (dawno zniszczony), wiec stare klucze SSH w
-# known_hosts sa nieaktualne — czysci je `make cluster-trust-hosts`.
+# Adresacja: n14g1-3 na .168-.170 (VMID 9540-9542), restore n14r1 .171 (9543).
+# Blok potwierdzony AKTYWNYM skanem (ping + 22/8006) juz PO zniszczeniu n13.
+# Celowo NIE bierzemy zwolnionych przed chwila .164-.167: switche i sasiedzi
+# moga trzymac nieswiezy ARP po maszynach n13.
 #
 # WARSTWA WSPOLNA (terraform/shared/): ProxySQL fcp1/fcp2 .131/.132, VIP .133,
-# app fcapp .134, infra .130 (PMM + MinIO). Ten klaster jest jej KONSUMENTEM —
+# app fcapp .134, infra .130 (PMM + MinIO). Ten klaster jest jej KONSUMENTEM -
 # nie tworzy jej, nie niszczy i nie zarzadza VIP-em. Ownerem pary ProxySQL
 # jest finalclaude-r10.
 #
-# ROZLACZNOSC NA WSPOLNYM ProxySQL — bez niej drugi klaster kasuje pierwszego:
-#   hostgroup_base: 730 (writer 730, backup 740, reader 750, offline 760)
+# ROZLACZNOSC NA WSPOLNYM ProxySQL - bez niej drugi klaster kasuje pierwszego:
+#   hostgroup_base: 770 (writer 770, backup 780, reader 790, offline 800)
 #     finalclaude-r10 uzywa 10/20/30/40
-#   app_user: app_user_n13
+#   app_user: app_user_n14
 #     wpis w mysql_users jest globalny, a jego default_hostgroup wybiera klaster
 #   Pilnuje tego tests/validation/probe-proxysql-tenancy.py.
 #
@@ -45,7 +46,7 @@
 # (sciezka przechodnia dla uzytkownika `proxysql`; /etc/proxysql jest 0750 root:root).
 
 cluster:
-  name: "newclaude13-r9"
+  name: "newclaude14-r9"
   environment: "laboratory"
   profile: "laboratory"
   automation_release: "0.1.0"
@@ -59,22 +60,22 @@ versions:
   lock_file: "versions/versions.lock.yml"
 
 galera:
-  # wsrep_cluster_name jest czescia tozsamosci Primary Component — kolizja nazw
+  # wsrep_cluster_name jest czescia tozsamosci Primary Component - kolizja nazw
   # skleilaby dwa niezalezne klastry w jeden.
-  cluster_name: "n13_galera"
+  cluster_name: "n14_galera"
   nodes_expected: 3
 
 proxysql:
   nodes_expected: 2
   max_writers: 1
   read_write_split_enabled: false
-  hostgroup_base: 730
-  app_user: "app_user_n13"
+  hostgroup_base: 770
+  app_user: "app_user_n14"
   # Konsument warstwy wspolnej: NIE instaluje pakietow na fcp1/fcp2/fcinfra ani
   # nie zarzadza VIP-em. Rejestruje tylko wlasne hostgroupy i uzytkownika przez f7.
   # Owner (finalclaude-r10) postawil te wezly na EL10, wiec lockfile EL9 ich nie dotyczy.
   role: "consumer"
-  # Konsument DEKLARUJE, komu ufa na wspolnym endpoincie, ale go NIE wdraza —
+  # Konsument DEKLARUJE, komu ufa na wspolnym endpoincie, ale go NIE wdraza -
   # material frontendu nalezy do ownera. Ta sciezka trafia na host aplikacyjny,
   # zeby klient mogl zweryfikowac lancuch VIP-a. CA jest wspolne, nie klastrowe:
   # jeden cert frontendu obsluguje wszystkie klastry naraz.
@@ -82,7 +83,7 @@ proxysql:
     ca_reference: "tests/lab/tls/shared/ca.pem"
   endpoint:
     type: "keepalived_vip"
-    address: "192.168.1.133"   # VIP warstwy wspolnej — ten sam co finalclaude-r10
+    address: "192.168.1.133"   # VIP warstwy wspolnej - ten sam co finalclaude-r10
     port: 6033
 
 tls:
@@ -91,12 +92,12 @@ tls:
   certificate_source: "file"
   # Lisc i klucz PER WEZEL spod wspolnego CA (node-<host>-{cert,key}.pem).
   # certificate_reference/private_key_reference zostaja jako opis wspolnego
-  # materialu i sa ignorowane przy tej fladze — sciezke liscia wyprowadza
+  # materialu i sa ignorowane przy tej fladze - sciezke liscia wyprowadza
   # tls_certs.yml z katalogu CA i `inventory_hostname`.
   per_node_certificates: true
-  ca_reference: "tests/lab/tls/n13/ca.pem"
-  certificate_reference: "tests/lab/tls/n13/server-cert.pem"
-  private_key_reference: "tests/lab/tls/n13/server-key.pem"
+  ca_reference: "tests/lab/tls/n14/ca.pem"
+  certificate_reference: "tests/lab/tls/n14/server-cert.pem"
+  private_key_reference: "tests/lab/tls/n14/server-key.pem"
   # Wymuszanie TLS na WSZYSTKICH polaczeniach TCP to osobny krok: ProxySQL laczy
   # sie do backendow z use_ssl per serwer, a mysqld_exporter i agent QAN ida TCP
   # na 127.0.0.1:3306. Wlaczenie tego tutaj zshunnowaloby backendy i wygasilo metryki.
@@ -137,32 +138,34 @@ availability:
 backup:
   enabled: true
   destination: "s3"
-  full_backup_schedule: "40 3 * * *"       # rozlaczne z r10 (0 2)
+  full_backup_schedule: "50 3 * * *"       # rozlaczne z r10 (0 2) i n13 (40 3)
   incremental_backup_schedule: "disabled"
   freshness_sla_hours: 26
   retention_days: 14
   encryption_enabled: true
   immutable_or_offsite_copy: true
-  restore_test_schedule: "0 13 * * 0"      # rozlaczne z r10 (0 4)
+  # Materializowany w /etc/cron.d/galera-restore-<cluster> (PR #51). Na swiezym
+  # hoscie schedulera zadanie musi powstac przy pierwszym `configure`.
+  restore_test_schedule: "0 15 * * 0"      # rozlaczne z r10 (0 4) i n13 (0 13)
   scheduler:
     mode: "cron"
-    # Nie moze byc aktywnym writerem ProxySQL — runner odrzuca backup z writera (ISC-39).
-    host: "n13g1"
+    # Nie moze byc aktywnym writerem ProxySQL - runner odrzuca backup z writera (ISC-39).
+    host: "n14g1"
     timezone: "UTC"
   s3:
     endpoint: "192.168.1.130:9000"
-    bucket: "n13-galera-backups"           # rozlaczny z fc10-galera-backups
+    bucket: "n14-galera-backups"           # rozlaczny z fc10-galera-backups
     secure: false
 
 monitoring:
   pmm:
     server_url: "https://192.168.1.130"
     agent_id: "pmm-server"
-    # Namespace regul alertow i folderow w PMM — musi byc rozlaczny z fc10-galera.
-    cluster_name: "n13-galera"
+    # Namespace regul alertow i folderow w PMM - musi byc rozlaczny z fc10-galera.
+    cluster_name: "n14-galera"
     validate_certs: false
     credentials_revision: 1
-  # Wezly Galera dostaja lokalnego pmm-agenta. ProxySQL pomijamy — nalezy do ownera (r10).
+  # Wezly Galera dostaja lokalnego pmm-agenta. ProxySQL pomijamy - nalezy do ownera (r10).
   # To ta sciezka (local-agent) wymaga, by F11 sam usunal anonimowe konta: eksporter
   # laczy sie po TCP na 127.0.0.1, ktore MariaDB resolvuje do 'localhost'.
   agent_groups: ["galera"]
