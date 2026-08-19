@@ -9,14 +9,33 @@
         group: root
         mode: "0700"
 
+    - name: Require URL-safe MinIO root credentials
+      # `mc` czyta userinfo doslownie, wiec te znaki rozjechalyby parsowanie URL-a
+      # i dalyby SignatureDoesNotMatch bez zadnego czytelnego komunikatu.
+      # Percent-encoding NIE jest rozwiazaniem - mc go nie dekoduje.
+      #
+      # Klasa MUSI byc skladnia Pythona (`is search` woła re.search): POSIX-owe
+      # `[:space:]` nie istnieje w `re` i dawaloby klase {/@:[space} + literal ']',
+      # czyli asercje, ktora nie lapie ANI JEDNEGO z tych znakow.
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_USER') is not search('[/@:\s]')
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') is not search('[/@:\s]')
+        fail_msg: >-
+          MINIO_ROOT_USER/MINIO_ROOT_PASSWORD zawieraja znak nielegalny w userinfo
+          URL-a mc (/, @, : lub bialy znak). Zmien poswiadczenia root MinIO.
+        quiet: true
+
     - name: Render root-only MinIO client environment
       ansible.builtin.copy:
         dest: /run/galera-backup-minio-tmp/root.env
         owner: root
         group: root
         mode: "0600"
+        # BEZ `urlencode`: mc nie dekoduje percent-encoding (dokumentacja MinIO
+        # podaje sekret z `+` surowy). Bezpieczenstwo znakow pilnuje asercja wyzej.
         content: >-
-          MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') | urlencode }}:{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') | urlencode }}@localhost:9000
+          MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}:{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}@localhost:9000
       no_log: true
 
     - name: Render policy to temporary file
@@ -188,14 +207,24 @@
           }}
       no_log: true
 
-    - name: Render candidate scoped MinIO client environment
+    # Poswiadczenie NIE jedzie w URL-u. `mc` bierze userinfo DOSLOWNIE - nie
+    # dekoduje percent-encoding (potwierdzone empirycznie i w dokumentacji MinIO,
+    # ktorej kanoniczny przyklad MC_HOST_ ma sekret z `+` surowy). Wczesniejszy
+    # `| urlencode` zamienial `+` na `%2B`, przez co sonda dostawala
+    # SignatureDoesNotMatch, `reuse` bylo zawsze falszem i KAZDY `configure`
+    # kasowal poswiadczenie MinIO oraz tworzyl nowe, przepisujac secrets.env na
+    # wszystkich hostach backupu (a zadanie konwergencji polityki nigdy nie biegalo).
+    # Sam URL tez nie wystarczy: sekrety MinIO uzywaja alfabetu base64, wiec moga
+    # zawierac `/`, ktore w userinfo jest nielegalne niezaleznie od kodowania.
+    - name: Render candidate scoped MinIO credentials
       ansible.builtin.copy:
         dest: /run/galera-backup-minio-tmp/scoped.env
         owner: root
         group: root
         mode: "0600"
-        content: >-
-          MC_HOST_scoped=http://{{ galera_backup_existing_s3_access_key | urlencode }}:{{ galera_backup_existing_s3_secret_key | urlencode }}@localhost:9000
+        content: |
+          GALERA_MC_AK={{ galera_backup_existing_s3_access_key }}
+          GALERA_MC_SK={{ galera_backup_existing_s3_secret_key }}
       when: galera_backup_existing_key_candidate
       no_log: true
 
@@ -209,10 +238,15 @@
           - container:minio
           - --env-file
           - /run/galera-backup-minio-tmp/scoped.env
+          - --entrypoint
+          - sh
           - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - ls
-          - "scoped/{{ backup.s3.bucket }}"
-          - --json
+          - -c
+          # Wartosci rozwija powloka W KONTENERZE, wiec sekret nie trafia do argv
+          # procesu na hoscie (widocznego w `ps`).
+          - >-
+            mc alias set scoped http://localhost:9000 "$GALERA_MC_AK" "$GALERA_MC_SK" >/dev/null 2>&1 &&
+            exec mc ls "scoped/{{ backup.s3.bucket }}" --json
       register: galera_backup_existing_key_probe
       changed_when: false
       failed_when: false
