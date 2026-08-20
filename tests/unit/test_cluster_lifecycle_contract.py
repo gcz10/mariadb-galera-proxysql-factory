@@ -1,19 +1,18 @@
-"""Testy kontraktu lifecycle klastra: cluster-build / cluster-restart.
+"""Testy kontraktu lifecycle klastra: cluster-build / cluster-recover.
 
-Kontrakt sprawdzany na Makefile i playbooks/cluster_restart.yml:
+Kontrakt sprawdzany na Makefile i playbooks/cluster_recover.yml:
 
 1. cluster-build to jedna, jawna orkiestracja ISTNIEJACYCH celow, w kolejnosci
    zaleznosci, zakonczona bramka lab-post-build-gate; CLUSTER/CONFIRM
    propaguja sie na pod-make, a pierwszy blad konczy caly build.
 2. cluster-deploy juz zawiera firewall — cluster-build NIE doklada drugiego
    kroku firewall.
-3. cluster-restart jest confirm-gated: wymaga CLUSTER+CONFIRM=yes, zatrzymuje
-   Galere serialnie, wybiera wezel bootstrap JAWNIE (safe_to_bootstrap=1 albo
-   unikalny najwyzszy seqno; przy remisie wymaga BOOTSTRAP_NODE) i reuse'uje
-   kanoniczny playbooks/bootstrap.yml przez parametry (bootstrap_node,
-   bootstrap_confirm_all_down=true), potem join.
-4. Zadna sciezka restartu nie robi rownoleglego `systemctl restart`
-   (cold restart = stop, nie restart).
+3. cluster-recover jest confirm-gated: wymaga CLUSTER+CONFIRM=yes, odmawia
+   pracy przy zywym Primary, wybiera wezel bootstrap JAWNIE
+   (safe_to_bootstrap=1 albo unikalny najwyzszy seqno; przy remisie wymaga
+   BOOTSTRAP_NODE) i reuse'uje kanoniczny playbooks/bootstrap.yml przez
+   parametry (bootstrap_node, bootstrap_confirm_all_down=true), potem join.
+4. Zadna sciezka recovery nie robi rownoleglego `systemctl restart`.
 """
 
 import base64
@@ -27,6 +26,7 @@ import jinja2
 import yaml
 
 REPO = Path(__file__).resolve().parents[2]
+JOIN_PLAYBOOK = REPO / "playbooks" / "f5_join.yml"
 
 CORE_BUILD_STEPS = [
     "cluster-validate",
@@ -40,9 +40,14 @@ CORE_BUILD_STEPS = [
 ]
 CONDITIONAL_BUILD_STEPS = [
     "lab-seed-smoke",
-    "cluster-backup-configure",
     "cluster-alerts",
     "cluster-app-host",
+]
+BACKUP_BUILD_STEPS = [
+    "cluster-backup-configure",
+    "cluster-backup",
+    "cluster-restore-drill",
+    "cluster-monitoring-refresh",
 ]
 BUILD_GATE = "lab-post-build-gate"
 
@@ -115,6 +120,13 @@ class ClusterBuildContractTests(unittest.TestCase):
         self.lines = recipes.get("cluster-build", [])
         self.joined = "\n".join(self.lines)
 
+    def test_help_is_default_goal(self):
+        self.assertRegex(
+            self.text,
+            r"(?m)^\.DEFAULT_GOAL\s*:?=\s*help\s*$",
+            "samo `make` musi pokazac help, nie uruchamiac destrukcyjnego galera-rebuild",
+        )
+
     def test_target_exists_and_is_phony(self):
         self.assertTrue(self.lines, "cluster-build musi istniec z niepusta recepta")
         phony = phony_blob(self.text)
@@ -147,7 +159,7 @@ class ClusterBuildContractTests(unittest.TestCase):
     def test_conditional_steps_between_endpoint_and_gate(self):
         invoked = sub_make_targets(self.lines)
         self.assertIn(BUILD_GATE, invoked)
-        for step in CONDITIONAL_BUILD_STEPS:
+        for step in CONDITIONAL_BUILD_STEPS + BACKUP_BUILD_STEPS:
             self.assertIn(step, invoked, f"krok warunkowy {step} musi byc w grafie builda")
             self.assertLess(
                 invoked.index("cluster-endpoint"),
@@ -159,6 +171,15 @@ class ClusterBuildContractTests(unittest.TestCase):
                 invoked.index(BUILD_GATE),
                 f"{step} musi isc PRZED {BUILD_GATE}",
             )
+
+    def test_backup_step_materializes_gate_evidence_in_order(self):
+        invoked = sub_make_targets(self.lines)
+        positions = [invoked.index(step) for step in BACKUP_BUILD_STEPS]
+        self.assertEqual(
+            positions,
+            sorted(positions),
+            "backup w cluster-build musi wykonac configure, backup, drill i refresh",
+        )
 
     def test_gate_is_the_last_step(self):
         invoked = sub_make_targets(self.lines)
@@ -199,10 +220,12 @@ class ClusterBuildContractTests(unittest.TestCase):
                 f"krok buildu nie moze maskowac bledu (|| true): {line}",
             )
             if ";;" in line or re.search(r"\bfor\b|\bcase\b", line):
-                self.assertIn(
-                    "|| exit 1",
-                    line,
-                    f"$(MAKE) w petli/konie shell wymaga || exit 1: {line}",
+                make_calls = line.count("$(MAKE)")
+                exit_guards = line.count("|| exit 1")
+                self.assertEqual(
+                    exit_guards,
+                    make_calls,
+                    f"kazde $(MAKE) w petli/case wymaga wlasnego || exit 1: {line}",
                 )
 
     def test_no_second_firewall_step(self):
@@ -220,39 +243,66 @@ class ClusterBuildContractTests(unittest.TestCase):
         )
 
 
-class ClusterRestartMakefileContractTests(unittest.TestCase):
+class ClusterRecoverMakefileContractTests(unittest.TestCase):
     def setUp(self):
         self.text = makefile_text()
         _, recipes = parse_makefile(self.text)
-        self.lines = recipes.get("cluster-restart", [])
+        self.lines = recipes.get("cluster-recover", [])
         self.joined = "\n".join(self.lines)
 
     def test_target_exists_and_is_phony(self):
-        self.assertTrue(self.lines, "cluster-restart musi istniec z niepusta recepta")
+        self.assertTrue(self.lines, "cluster-recover musi istniec z niepusta recepta")
         phony = phony_blob(self.text)
-        self.assertIn("cluster-restart", phony, "cluster-restart musi byc w .PHONY")
+        self.assertIn("cluster-recover", phony, "cluster-recover musi byc w .PHONY")
+        self.assertNotIn(
+            "cluster-restart",
+            parse_makefile(self.text)[0],
+            "mylaca nazwa cluster-restart nie moze zostac jako alias",
+        )
 
     def test_is_cluster_and_confirm_gated(self):
         self.assertIn("$(cluster_guard)", self.joined)
         self.assertIn(
             'test "$(CONFIRM)" = "yes"',
             self.joined,
-            "cold restart jest destrukcyjny — wymaga CONFIRM=yes",
+            "cold recovery jest destrukcyjne — wymaga CONFIRM=yes",
         )
 
     def test_uses_dedicated_stop_and_selection_playbook(self):
-        self.assertIn("playbooks/cluster_restart.yml", self.joined)
+        self.assertIn("playbooks/cluster_recover.yml", self.joined)
 
     def test_passes_state_file_and_bootstrap_node_override(self):
         self.assertIn(
-            "restart_state_file=$(RESTART_STATE_FILE)",
+            "recover_state_file=$(RECOVER_STATE_FILE)",
             self.joined,
             "playbook zapisuje wybrany wezel do jawnej sciezki odczytywanej przez Makefile",
         )
         self.assertIn(
-            "-e restart_bootstrap_node=$(BOOTSTRAP_NODE)",
+            "-e recover_bootstrap_node=$(BOOTSTRAP_NODE)",
             self.joined,
             "BOOTSTRAP_NODE operatora musi trafiac do playboku jako jawny override",
+        )
+
+    def test_bootstrap_node_is_read_after_selection_playbook(self):
+        active_make = "\n".join(
+            line
+            for line in self.text.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        self.assertNotRegex(
+            active_make,
+            r"\$\(\s*shell\s+cat\b",
+            "$(shell cat ...) jest rozwijane przed powstaniem pliku stanu",
+        )
+        self.assertIn(
+            '-e bootstrap_node=$$(cat "$(RECOVER_STATE_FILE)")',
+            self.joined,
+            "shell ma odczytac wybor na linii bootstrapu, po zakonczeniu playbooka",
+        )
+        self.assertIn(
+            'join_bootstrap_node=$$(cat "$(RECOVER_STATE_FILE)")',
+            self.joined,
+            "join musi pominac faktyczny bootstrap, nie zawsze galera[0]",
         )
 
     def test_reuses_canonical_bootstrap_playbook(self):
@@ -260,13 +310,13 @@ class ClusterRestartMakefileContractTests(unittest.TestCase):
         self.assertIn(
             "cluster-bootstrap",
             invoked,
-            "restart reuse'uje istniejacy cel cluster-bootstrap (kanoniczny bootstrap.yml)",
+            "recovery reuse'uje istniejacy cel cluster-bootstrap (kanoniczny bootstrap.yml)",
         )
         self.assertIn("bootstrap_node=", self.joined, "wybrany wezel idzie do bootstrap.yml jako bootstrap_node")
         self.assertIn(
             "bootstrap_confirm_all_down=true",
             self.joined,
-            "po serialnym stopie bootstrap dostaje bootstrap_confirm_all_down=true",
+            "po potwierdzeniu awarii bootstrap dostaje bootstrap_confirm_all_down=true",
         )
         self.assertNotIn("--wsrep-new-cluster", self.joined)
         self.assertNotIn("galera_new_cluster", self.joined)
@@ -277,15 +327,15 @@ class ClusterRestartMakefileContractTests(unittest.TestCase):
         self.assertLess(
             invoked.index("cluster-bootstrap"),
             invoked.index("cluster-join"),
-            "join nastepuje po bootstrap (reuse kolejnosci z builda)",
+            "join nastepuje po bootstrap",
         )
-        self.assertEqual(invoked[-1], "cluster-health", "restart konczy sie kontrola zdrowia")
+        self.assertEqual(invoked[-1], "cluster-health", "recovery konczy sie kontrola zdrowia")
 
 
-class ClusterRestartPlaybookContractTests(unittest.TestCase):
+class ClusterRecoverPlaybookContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.path = REPO / "playbooks" / "cluster_restart.yml"
+        cls.path = REPO / "playbooks" / "cluster_recover.yml"
         cls.raw = cls.path.read_text(encoding="utf-8")
         cls.plays = yaml.safe_load(cls.raw)
 
@@ -299,10 +349,9 @@ class ClusterRestartPlaybookContractTests(unittest.TestCase):
         return None
 
     def test_playbook_exists_and_parses(self):
-        self.assertTrue(self.plays, "cluster_restart.yml musi byc poprawnym playbookiem")
+        self.assertTrue(self.plays, "cluster_recover.yml musi byc poprawnym playbookiem")
 
     def test_no_duplicated_bootstrap_logic(self):
-        # Jedyny kanoniczny bootstrap to playbooks/bootstrap.yml (ISC-65).
         self.assertNotIn("--wsrep-new-cluster", self.raw)
         self.assertNotIn("galera_new_cluster", self.raw)
 
@@ -324,8 +373,22 @@ class ClusterRestartPlaybookContractTests(unittest.TestCase):
             "zywy Primary jest sprawdzany PRZED zatrzymaniem wezlow",
         )
         probe_play = self.play_text(self.plays[probe_index])
-        self.assertIn("restart_live_primary", probe_play)
         self.assertIn("rolling-restart", probe_play, "przy zywym Primary operator odsylany do rolling-restart")
+        classify = next(
+            task
+            for task in self.plays[probe_index]["tasks"]
+            if "recover_live_primary" in task.get("ansible.builtin.set_fact", {})
+        )
+        expression = str(
+            classify["ansible.builtin.set_fact"]["recover_live_primary"]
+        )
+        self.assertIn(
+            "map(attribute='item')",
+            expression,
+            "blad live Primary musi wskazac nazwy wezlow, nie powtorzyc stdout",
+        )
+        self.assertNotIn("map(attribute='stdout')", expression)
+
 
     def test_stop_play_is_serial_and_fail_closed(self):
         stop_index = self.find_play("pkill -x mariadbd")
@@ -344,8 +407,6 @@ class ClusterRestartPlaybookContractTests(unittest.TestCase):
         )
 
     def test_no_parallel_restart_anywhere(self):
-        # Cold restart = stop + bootstrap + join. Zadnego `systemctl restart`
-        # ani state: restarted — to scenariusz rolling-restart, nie restartu.
         self.assertNotIn("systemctl restart", self.raw)
         self.assertNotIn("restarted", self.raw)
 
@@ -364,7 +425,7 @@ class ClusterRestartPlaybookContractTests(unittest.TestCase):
 
     def test_selection_requires_explicit_node_on_tie(self):
         select_play = self.play_text(self.plays[self.find_play("safe_to_bootstrap")])
-        self.assertIn("restart_bootstrap_node", select_play, "jawny override wezla bootstrap")
+        self.assertIn("recover_bootstrap_node", select_play, "jawny override wezla bootstrap")
         self.assertIn(
             "BOOTSTRAP_NODE",
             select_play,
@@ -374,26 +435,79 @@ class ClusterRestartPlaybookContractTests(unittest.TestCase):
     def test_state_file_contract_with_makefile(self):
         select_play = self.play_text(self.plays[self.find_play("safe_to_bootstrap")])
         self.assertIn(
-            "restart_state_file",
+            "recover_state_file",
             select_play,
-            "playbook zapisuje wybrany wezel pod restart_state_file",
+            "playbook zapisuje wybrany wezel pod recover_state_file",
         )
         _, recipes = parse_makefile(makefile_text())
-        restart_recipe = "\n".join(recipes.get("cluster-restart", []))
+        recover_recipe = "\n".join(recipes.get("cluster-recover", []))
         self.assertIn(
-            "restart_state_file=$(RESTART_STATE_FILE)",
-            restart_recipe,
+            "recover_state_file=$(RECOVER_STATE_FILE)",
+            recover_recipe,
             "Makefile przekazuje ta sama sciezke stanu, ktora zapisuje playbook",
         )
 
 
-class ClusterRestartSelectionLogicTests(unittest.TestCase):
+class ClusterJoinBootstrapContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.plays = yaml.safe_load(JOIN_PLAYBOOK.read_text(encoding="utf-8"))
+
+    def find_play(self, fragment):
+        return next(
+            play
+            for play in self.plays
+            if fragment in play.get("name", "")
+        )
+
+    def test_sst_account_is_created_on_actual_bootstrap_node(self):
+        account_play = self.find_play("zapewnij konto SST")
+        hosts = str(account_play.get("hosts", ""))
+        self.assertIn("join_bootstrap_node", hosts)
+        self.assertIn("default('galera[0]')", hosts)
+        self.assertNotIn("groups[", hosts)
+
+    def test_join_skips_actual_bootstrap_node(self):
+        join_play = self.find_play("dołącz węzły do Primary Component")
+        skip = next(
+            task
+            for task in join_play.get("tasks", [])
+            if task.get("ansible.builtin.meta") == "end_host"
+            and "Primary" in task.get("name", "")
+        )
+        condition = str(skip.get("when", ""))
+        self.assertNotIn("galera_node_idx", condition)
+        evaluate = jinja2.Environment().compile_expression(condition)
+        groups = {"galera": ["gnode1", "gnode2", "gnode3"]}
+
+        for host in groups["galera"]:
+            self.assertEqual(
+                bool(
+                    evaluate(
+                        inventory_hostname=host,
+                        join_bootstrap_node="gnode3",
+                        groups=groups,
+                    )
+                ),
+                host == "gnode3",
+                f"override: skip ma objac wylacznie gnode3, nie {host}",
+            )
+
+        for host in groups["galera"]:
+            self.assertEqual(
+                bool(evaluate(inventory_hostname=host, groups=groups)),
+                host == "gnode1",
+                f"domyslnie skip ma objac wylacznie galera[0], nie {host}",
+            )
+
+
+class ClusterRecoverSelectionLogicTests(unittest.TestCase):
     """Wykonuje wyrazenia selekcji z playbooka na macierzy stanow."""
 
     @classmethod
     def setUpClass(cls):
         cls.plays = yaml.safe_load(
-            (REPO / "playbooks" / "cluster_restart.yml").read_text(encoding="utf-8")
+            (REPO / "playbooks" / "cluster_recover.yml").read_text(encoding="utf-8")
         )
         cls.selection_tasks = cls.plays[2]["tasks"]
         cls.env = jinja2.Environment()
@@ -446,11 +560,11 @@ class ClusterRestartSelectionLogicTests(unittest.TestCase):
         results = cls.state_results(states)
         context = {
             "groups": {"galera": [item["item"] for item in results]},
-            "restart_grastate": {"results": results},
-            "restart_state_file": "clusters/test/restart-bootstrap-node",
+            "recover_grastate": {"results": results},
+            "recover_state_file": "clusters/test/recover-bootstrap-node",
         }
         if override is not None:
-            context["restart_bootstrap_node"] = override
+            context["recover_bootstrap_node"] = override
 
         failed_assert = None
         flipped = False
@@ -490,7 +604,7 @@ class ClusterRestartSelectionLogicTests(unittest.TestCase):
             if task.get("ansible.builtin.lineinfile") is not None:
                 flipped = True
 
-        return context.get("restart_bootstrap_choice"), flipped, failed_assert
+        return context.get("recover_bootstrap_choice"), flipped, failed_assert
 
     def test_unique_safe_to_bootstrap_wins_over_seqno(self):
         choice, flipped, failed = self.run_selection([(99, 0), (7, 1), (99, 0)])
@@ -528,6 +642,22 @@ class ClusterRestartSelectionLogicTests(unittest.TestCase):
         self.assertFalse(flipped)
         self.assertIn("poprawny seqno", failed)
 
+    def test_negative_seqno_requires_wsrep_recover_without_override(self):
+        choice, flipped, failed = self.run_selection([(-1, 0), (8, 0), (7, 0)])
+        self.assertIsNone(choice)
+        self.assertFalse(flipped)
+        self.assertIn("wsrep-recover", failed)
+
+    def test_negative_seqno_accepts_explicit_recovered_node(self):
+        choice, flipped, failed = self.run_selection(
+            [(-1, 0), (8, 0), (7, 0)],
+            "gnode1",
+        )
+        self.assertEqual(choice, "gnode1")
+        self.assertTrue(flipped)
+        self.assertIsNone(failed)
+
+
     def test_explicit_lower_seqno_override_fails_closed(self):
         choice, flipped, failed = self.run_selection([(5, 0), (8, 0), (7, 0)], "gnode3")
         self.assertIsNone(choice)
@@ -552,30 +682,38 @@ class MakefileDryRunGraphTests(unittest.TestCase):
     def test_cluster_build_graph_dry_run(self):
         proc = self.run_make("cluster-build")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        for step in CORE_BUILD_STEPS + CONDITIONAL_BUILD_STEPS + [BUILD_GATE]:
+        expected = (
+            CORE_BUILD_STEPS
+            + CONDITIONAL_BUILD_STEPS
+            + BACKUP_BUILD_STEPS
+            + [BUILD_GATE]
+        )
+        for step in expected:
             self.assertIn(step, proc.stdout, f"make -n cluster-build pokazuje krok {step}")
 
     def test_cluster_build_skip_dry_run(self):
-        proc = self.run_make("cluster-build", "BUILD_SKIP=seed app-host")
+        proc = self.run_make(
+            "cluster-build",
+            "BUILD_SKIP=seed backup app-host",
+        )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn(
-            "for step in backup alerts",
+            "for step in alerts",
             proc.stdout,
             "BUILD_SKIP wyklucza kroki z listy warunkowej",
         )
 
-    def test_cluster_restart_graph_dry_run(self):
-        proc = self.run_make("cluster-restart")
+    def test_cluster_recover_graph_dry_run(self):
+        proc = self.run_make("cluster-recover")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("playbooks/cluster_restart.yml", proc.stdout)
+        self.assertIn("playbooks/cluster_recover.yml", proc.stdout)
         self.assertIn("bootstrap_confirm_all_down=true", proc.stdout)
         self.assertIn("cluster-join", proc.stdout)
 
-    def test_cluster_restart_bootstrap_node_override_dry_run(self):
-        proc = self.run_make("cluster-restart", "BOOTSTRAP_NODE=dry-node-2")
+    def test_cluster_recover_bootstrap_node_override_dry_run(self):
+        proc = self.run_make("cluster-recover", "BOOTSTRAP_NODE=dry-node-2")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("-e restart_bootstrap_node=dry-node-2", proc.stdout)
-
+        self.assertIn("-e recover_bootstrap_node=dry-node-2", proc.stdout)
 
 if __name__ == "__main__":
     unittest.main()

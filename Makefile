@@ -1,7 +1,11 @@
 # Makefile — stabilny interfejs operatora.
 # Komendy dodawane INKREMENTALNIE wraz z działającym feature.
 
-.PHONY: cluster-build cluster-restart help lab-up lab-start-services cluster-discover cluster-validate cluster-deploy \
+# Samo `make` pokazuje help — zaden cel (w szczegolnosci destrukcyjny
+# galera-rebuild) nie moze startowac domyslnie.
+.DEFAULT_GOAL := help
+
+.PHONY: cluster-build cluster-recover help lab-up lab-start-services cluster-discover cluster-validate cluster-deploy \
         cluster-bootstrap cluster-health cluster-join cluster-proxysql cluster-endpoint \
         cluster-infra cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan \
@@ -53,13 +57,13 @@ infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM
 	terraform/pve-teardown.sh $(TF_DIR)
 
 
-cluster-deregister:  ## Usuń obiekty klastra z PMM, Grafany i ProxySQL (przed infra-teardown; CONFIRM=yes)
+cluster-deregister:  ## Usuń obiekty PMM/Grafana/ProxySQL i konto MinIO klastra; zachowaj bucket (CONFIRM=yes)
 	$(cluster_guard)
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
-	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (usuwa obiekty klastra $(CLUSTER) z PMM/Grafana/ProxySQL)"; exit 1)
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (usuwa obiekty klastra $(CLUSTER) i konto MinIO; bucket zostaje)"; exit 1)
 	ansible-playbook playbooks/cluster_deregister.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
-cluster-deregister-verify:  ## Zweryfikuj brak sierot po klastrze w PMM, Grafanie i ProxySQL
+cluster-deregister-verify:  ## Zweryfikuj brak sierot w PMM, Grafanie, ProxySQL i kontach MinIO
 	$(TARGET_ENV) python3 tests/lab/probe-orphans.py
 infra-provision:  ## Utwórz VM klastra (parallelism=1 — równoległość wywala locki ZFS na PVE)
 	$(cluster_guard)
@@ -118,6 +122,12 @@ lab-start-services:  ## Lab-only: (re)start ProxySQL po restarcie kontenera (bra
 #
 # Kroki warunkowe (seed/backup/alerts/app-host) da sie pominac bez edycji
 # Makefile: BUILD_SKIP="alerts app-host" make cluster-build CLUSTER=... CONFIRM=yes
+# Zaleznosc seed->backup: na PUSTYM klastrze laboratoryjnym pominiencie seed
+# wymaga pominiencia TEZ backupu — restore drill wymaga danych z seeda, nie ma
+# wtedy czego archiwizowac ani przywracac. Seed pomijaj niezaleznie TYLKO wtedy,
+# gdy user data juz istnieje (np. odtwarzasz klaster z istniejacymi bazami).
+# Backup materializuje dowody bramki po budowie: configure -> backup -> restore
+# drill (CONFIRM=yes) -> odswiezenie metryk swiezosci; kazdy krok fail-fast.
 BUILD_SKIP ?=
 
 cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap→join→proxysql→monitoring→harden→endpoint→warunkowe→bramka (CLUSTER+CONFIRM=yes)
@@ -134,7 +144,10 @@ cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap
 	@for step in $(filter-out $(BUILD_SKIP),seed backup alerts app-host); do \
 		case $$step in \
 			seed) $(MAKE) lab-seed-smoke || exit 1 ;; \
-			backup) $(MAKE) cluster-backup-configure || exit 1 ;; \
+			backup) $(MAKE) cluster-backup-configure || exit 1; \
+				$(MAKE) cluster-backup || exit 1; \
+				$(MAKE) cluster-restore-drill CONFIRM=yes || exit 1; \
+				$(MAKE) cluster-monitoring-refresh || exit 1 ;; \
 			alerts) $(MAKE) cluster-alerts || exit 1 ;; \
 			app-host) $(MAKE) cluster-app-host || exit 1 ;; \
 		esac; \
@@ -373,36 +386,35 @@ lab-rolling-restart-verify:  ## F12 — zweryfikuj rolling restart (ISC-50/51)
 	$(TARGET_ENV) tests/lab/probe-rolling-restart.py
 
 
-# Cold restart CALEGO klastra Galera (planowane okno / pelna awaria), w odroznieniu
+# Cold recovery CALEGO klastra Galera (planowane okno / pelna awaria), w odroznieniu
 # od cluster-rolling-restart (zywy klaster, wezel po wezle). Kontrakt bezpieczenstwa:
-#   1. CLUSTER+CONFIRM=yes (cold restart zatrzymuje caly klaster).
-#   2. playbooks/cluster_restart.yml: odczytuje stan WSZYSTKICH wezlow — przy zywym
+#   1. CLUSTER+CONFIRM=yes (cold recovery zatrzymuje caly klaster).
+#   2. playbooks/cluster_recover.yml: odczytuje stan WSZYSTKICH wezlow — przy zywym
 #      Primary Component konczy procedure (to scenariusz rolling-restart, ISC-65),
 #      zatrzymuje Galere SERIALNIE (czyste zamkniecie zapisuje ostateczny seqno
 #      do grastate.dat) i wybiera wezel bootstrap JAWNIE: jawny BOOTSTRAP_NODE,
 #      wezel z safe_to_bootstrap=1, albo unikalny najwyzszy seqno. Przy remisie
-#      STAJE zamiast zgadywac — wtedy: make cluster-restart ... BOOTSTRAP_NODE=<wezel>.
+#      STAJE zamiast zgadywac — wtedy: make cluster-recover ... BOOTSTRAP_NODE=<wezel>.
 #   3. Bootstrapu NIE dublujemy: wybrany wezel idzie do kanonicznego
 #      playbooks/bootstrap.yml przez istniejacy cel cluster-bootstrap z parametrami
 #      bootstrap_node + bootstrap_confirm_all_down=true, potem join z brama zdrowia.
 #
-# Wezel wybrany przez playbooks/cluster_restart.yml. Sciezka jest ABSOLUTNA:
+# Wezel wybrany przez playbooks/cluster_recover.yml. Sciezka jest ABSOLUTNA:
 # ansible.builtin.copy z delegate_to: localhost zapisuje na hoscie sterujacym,
 # a wzgledny dest moglby wskazac katalog domowy uzytkownika Ansible zamiast
-# repozytorium. Odczyt LAZY (rekursywna zmienna rozwijana w momencie linii
-# recepty), a nie $(shell) przy parsowaniu pliku: state powstaje dopiero w
-# trakcie celu, a make -n nie wykonuje linii bez $(MAKE).
-RESTART_STATE_FILE = $(CURDIR)/clusters/$(CLUSTER)/restart-bootstrap-node
-RESTART_BOOTSTRAP_NODE = $(shell cat $(RESTART_STATE_FILE) 2>/dev/null)
-cluster-restart:  ## Cold restart Galera: serialny stop + bezpieczny bootstrap + join (CLUSTER+CONFIRM=yes; BOOTSTRAP_NODE przy remisie)
+# repozytorium. Wybor odczytuje POWLOKA dopiero na liniach bootstrap/join:
+# `$(shell cat ...)` w zmiennej Make byloby rozwiniete przed uruchomieniem
+# playbooka, czyli zanim plik stanu powstanie.
+RECOVER_STATE_FILE = $(CURDIR)/clusters/$(CLUSTER)/recover-bootstrap-node
+cluster-recover:  ## Cold recovery Galera: serialny stop + bezpieczny bootstrap + join (CLUSTER+CONFIRM=yes; BOOTSTRAP_NODE przy remisie)
 	$(cluster_guard)
-	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (cold restart zatrzymuje caly klaster)"; exit 1)
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (cold recovery zatrzymuje caly klaster)"; exit 1)
 	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/cluster_restart.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e confirm=yes -e restart_state_file=$(RESTART_STATE_FILE) $(if $(BOOTSTRAP_NODE),-e restart_bootstrap_node=$(BOOTSTRAP_NODE)) $(ANSIBLE_OPTS)
-	@test -s $(RESTART_STATE_FILE) || { echo "ERROR: playbooks/cluster_restart.yml nie zapisal wezla bootstrap" >&2; exit 1; }
-	@echo "Bootstrap po restarcie: $$(cat $(RESTART_STATE_FILE)) (kanoniczny playbooks/bootstrap.yml)"
-	$(MAKE) cluster-bootstrap ANSIBLE_OPTS="$(ANSIBLE_OPTS) -e bootstrap_node=$(RESTART_BOOTSTRAP_NODE) -e bootstrap_confirm_all_down=true"
-	$(MAKE) cluster-join
+	ansible-playbook playbooks/cluster_recover.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e confirm=yes -e recover_state_file=$(RECOVER_STATE_FILE) $(if $(BOOTSTRAP_NODE),-e recover_bootstrap_node=$(BOOTSTRAP_NODE)) $(ANSIBLE_OPTS)
+	@test -s $(RECOVER_STATE_FILE) || { echo "ERROR: playbooks/cluster_recover.yml nie zapisal wezla bootstrap" >&2; exit 1; }
+	@echo "Bootstrap po recovery: $$(cat $(RECOVER_STATE_FILE)) (kanoniczny playbooks/bootstrap.yml)"
+	$(MAKE) cluster-bootstrap ANSIBLE_OPTS="$(ANSIBLE_OPTS) -e bootstrap_node=$$(cat "$(RECOVER_STATE_FILE)") -e bootstrap_confirm_all_down=true"
+	$(MAKE) cluster-join ANSIBLE_OPTS="$(ANSIBLE_OPTS) -e join_bootstrap_node=$$(cat "$(RECOVER_STATE_FILE)")"
 	$(MAKE) cluster-health
 
 cluster-upgrade-plan:  ## F12 — wygeneruj read-only plan major upgrade (ISC-53/54/56)

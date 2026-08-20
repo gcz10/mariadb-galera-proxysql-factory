@@ -1,6 +1,6 @@
 ---
 # F5: Dołącz węzły Galera do Primary Component.
-# Wymaga: gnode1 uruchomiony jako Primary Component (F4 bootstrap).
+# Domyślny bootstrap to galera[0]; recovery przekazuje jawny join_bootstrap_node.
 # Satisfies: ISC-14 (SST mariabackup), ISC-29 (auto rejoin).
 # Lab: brak systemd — MariaDB uruchamiana jako daemon.
 
@@ -58,7 +58,7 @@
       when: (tls | default({})).mode | default('disabled') == 'full'
 
 - name: "F5 — zapewnij konto SST na klastrze"
-  hosts: galera[0]
+  hosts: "{{ join_bootstrap_node | default('galera[0]') }}"
   become: true
   vars:
     sst_user: "sst_user"
@@ -156,9 +156,9 @@
     use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   tasks:
-    - name: "Pomiń węzeł Primary (gnode1)"
+    - name: "Pomiń faktyczny węzeł Primary"
       ansible.builtin.meta: end_host
-      when: galera_node_idx | default(1) == 1
+      when: inventory_hostname == (join_bootstrap_node | default(groups['galera'][0]))
 
     - name: "Sprawdź czy MariaDB już działa i jest Synced"
       ansible.builtin.shell: >

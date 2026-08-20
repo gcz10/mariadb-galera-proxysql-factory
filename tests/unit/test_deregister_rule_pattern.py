@@ -33,7 +33,16 @@ def render_pattern(cluster_label: str, role: str) -> str:
     """Renderuje `f15_dereg_pattern` bezposrednio z playbooka."""
     with open(PLAYBOOK, encoding="utf-8") as handle:
         doc = yaml.safe_load(handle)
-    raw = doc[0]["vars"]["f15_dereg_pattern"]
+    patterns = [
+        variables["f15_dereg_pattern"]
+        for play in doc
+        if "f15_dereg_pattern" in (variables := (play.get("vars") or {}))
+    ]
+    if len(patterns) != 1:
+        raise AssertionError(
+            f"oczekiwano jednego f15_dereg_pattern, znaleziono {len(patterns)}"
+        )
+    raw = patterns[0]
 
     from jinja2 import Template
 

@@ -1,0 +1,187 @@
+---
+# deregister_minio.yml — odwolanie konta serwisowego MinIO przy derejestracji klastra.
+#
+# Zakres celowo minimalny i SCIALE per-klaster: znika wylacznie konto nazwane
+# `galera-backup-{{ cluster.name }}` (dokladne dopasowanie po tozsamosci z
+# `mc admin accesskey info`). Bucket, obiekty backupow i owner marker to dane
+# operatora i pozostaja NIETKNIETE — zadne `mc rb`/`mc rm` nie istnieje w tym
+# pliku. Pusta lista kont = idempotentny no-op.
+#
+# Wolane wylacznie przez include_role (tasks_from) z
+# playbooks/cluster_deregister.yml — tak filtry tej roli
+# (minio_service_account_keys, minio_access_keys_named) sa dostepne, a infra
+# host zyje jeszcze przed `infra-teardown`.
+
+- name: Zaladuj lockfile wskazany przez klaster (reprodukowalny obraz mc)
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+    name: lock
+
+- name: Odwolaj konto serwisowe MinIO zalozone przez ten klaster
+  # Jeden block/always: poswiadczenia root zapisane w /run na infra MUSZA znikac
+  # rowniez wtedy, gdy listing, sonda tozsamosci albo samo revoke zawioda.
+  block:
+    - name: Wymagaj poswiadczen root MinIO
+      # Derejestracja bez MINIO_ROOT_USER/MINIO_ROOT_PASSWORD MUSI padac, nie
+      # przechodzic po cichu — konto serwisowe zostaloby sierota na wspoldzielonym
+      # MinIO po zniszczeniu klastra. `mc` czyta userinfo doslownie, wiec znaki
+      # / @ : i biale rozjechalby parsowanie URL-a (SignatureDoesNotMatch bez
+      # czytelnego komunikatu); percent-encoding NIE jest rozwiazaniem, bo mc go
+      # nie dekoduje. Klasa MUSI byc skladnia Pythona (`is search` wola
+      # re.search): POSIX-owe [:space:] nie istnieje w re i dawaloby klase
+      # {/@:[space} + literal ']' — asercje, ktora nie lapie ANI JEDNEGO znaku.
+      # Celowo BEZ `no_log` (w przeciwienstwie do sasiednich zadan): ukrywalby
+      # fail_msg, a asercja i tak wypisuje wylacznie nazwy zmiennych srodowiskowych
+      # i statyczny komunikat, nigdy ich wartosci.
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_USER') | length > 0
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') | length > 0
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_USER') is not search('[/@:\s]')
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') is not search('[/@:\s]')
+        fail_msg: >-
+          MINIO_ROOT_USER/MINIO_ROOT_PASSWORD sa wymagane na kontrolerze
+          (niepuste, bez znakow / @ : i bialych) — bez nich derejestracja nie
+          moze odwolac konta serwisowego zarzadzanego MinIO tego klastra.
+        quiet: true
+
+    - name: Utworz root-only katalog tymczasowy klienta MinIO na infra
+      ansible.builtin.file:
+        path: /run/galera-backup-minio-tmp
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      # Root na infra: play derejestracji jest localhost/become:false, a tu
+      # tworzymy root-owned sciezki w /run i wolamy docker.
+      become: true
+      delegate_to: "{{ groups['infra'][0] }}"
+
+    - name: Zapisz root-only srodowisko klienta MinIO
+      # BEZ `urlencode`: mc nie dekoduje percent-encoding, a bezpieczenstwo
+      # znakow pilnuje asercja wyzej. Identyczny format jak w
+      # provision_minio.yml — localhost:9000, bo kontener mc dzieli sie
+      # siecia z kontenerem minio (`--network container:minio`).
+      ansible.builtin.copy:
+        dest: /run/galera-backup-minio-tmp/root.env
+        owner: root
+        group: root
+        mode: "0600"
+        content: >-
+          MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}:{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}@localhost:9000
+      become: true
+      delegate_to: "{{ groups['infra'][0] }}"
+      no_log: true
+
+    - name: Wypisz wszystkie konta serwisowe MinIO
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - admin
+          - accesskey
+          - list
+          - myminio
+          - --all
+          - --json
+      register: galera_backup_deregister_accesskey_list
+      changed_when: false
+      no_log: true
+      become: true
+      delegate_to: "{{ groups['infra'][0] }}"
+
+    - name: Wyodrebnij klucze wszystkich kont serwisowych MinIO
+      # Filtr roli jest fail-closed: uszkodzone JSON-y lub zmieniony kontrakt
+      # `mc` koncza sie bledem zamiast cicha pusta lista.
+      ansible.builtin.set_fact:
+        galera_backup_deregister_all_access_keys: >-
+          {{ galera_backup_deregister_accesskey_list.stdout | minio_service_account_keys }}
+      no_log: true
+
+    - name: Odczytaj tozsamosci kont serwisowych MinIO
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - admin
+          - accesskey
+          - info
+          - myminio
+          - "{{ item }}"
+          - --json
+      loop: "{{ galera_backup_deregister_all_access_keys }}"
+      register: galera_backup_deregister_accesskey_info
+      changed_when: false
+      no_log: true
+      become: true
+      delegate_to: "{{ groups['infra'][0] }}"
+
+    - name: Wybierz konta MinIO tego klastra
+      # DOKLADNE dopasowanie nazwy `galera-backup-{{ cluster.name }}` po info:
+      # konta innych klastrow na wspoldzielonym MinIO nigdy nie trafiaja na liste.
+      ansible.builtin.set_fact:
+        galera_backup_deregister_access_keys: >-
+          {{
+            galera_backup_deregister_accesskey_info.results
+            | default([])
+            | map(attribute='stdout')
+            | list
+            | minio_access_keys_named('galera-backup-' ~ cluster.name)
+          }}
+      no_log: true
+
+    - name: Odwolaj konta MinIO tego klastra
+      # Kazdy obrot petli usuwa konto serwisowe — mutacja stanu MinIO.
+      # Pusta lista to idempotentny no-op (klaster nigdy nie mial konta
+      # albo zostalo juz odwolane wczesniejszym przebiegiem).
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - admin
+          - accesskey
+          - remove
+          - myminio
+          - "{{ item }}"
+      loop: "{{ galera_backup_deregister_access_keys | default([]) }}"
+      changed_when: true
+      no_log: true
+      become: true
+      delegate_to: "{{ groups['infra'][0] }}"
+
+    - name: Raport derejestracji konta MinIO
+      ansible.builtin.debug:
+        msg: >-
+          Derejestracja MinIO zakonczona dla '{{ cluster.name }}': odwolano
+          {{ galera_backup_deregister_access_keys | default([]) | length }}
+          kont serwisowych o nazwie 'galera-backup-{{ cluster.name }}'.
+          Bucket '{{ backup.s3.bucket }}', owner marker i kopie backupow
+          pozostaja zachowane — to dane operatora.
+
+  always:
+    - name: Usun tymczasowe poswiadczenia root MinIO
+      # Takze po porazce: root.env (0600, root-only) nie moze przetrwac
+      # w /run na infra hostcie.
+      ansible.builtin.file:
+        path: /run/galera-backup-minio-tmp
+        state: absent
+      become: true
+      delegate_to: "{{ groups['infra'][0] }}"
