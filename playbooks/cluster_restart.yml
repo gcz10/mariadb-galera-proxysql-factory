@@ -1,0 +1,278 @@
+---
+# cluster_restart.yml — warstwa bezpiecznego COLD restartu klastra Galera.
+#
+# Robi dokladnie trzy rzeczy (i zadnej wiecej):
+#   1. Odczytuje stan WSZYSTKICH wezlow: przy zywym Primary Component konczy
+#      procedure — zywy klaster to scenariusz cluster-rolling-restart, a
+#      bootstrap przy zywym Primary = drugi Primary = split-brain (ISC-65).
+#   2. Zatrzymuje Galere SERIALNIE (serial:1). Czyste zamkniecie wezla jest
+#      warunkiem poprawnosci nastepnego kroku: grastate.dat dostaje ostateczny
+#      seqno dopiero po czystym zamknieciu.
+#   3. Wybiera wezel bootstrap JAWNIE, po odczycie grastate.dat wszystkich
+#      wezlow: jawny restart_bootstrap_node (operator, np. przy remisie),
+#      wezel z safe_to_bootstrap:1, albo wezel z UNIKALNYM najwyzszym seqno.
+#      Przy remisie STAJE i wymaga BOOTSTRAP_NODE — nie zgaduje.
+#
+# Celowo NIE bootstrapuje: to robi wylacznie kanoniczny playbooks/bootstrap.yml,
+# wywolany przez cel cluster-restart z bootstrap_node=<wybrany wezel> i
+# bootstrap_confirm_all_down=true (klaster zostal wlasnie zatrzymany wyzej).
+#
+# Uruchamiany z Makefile (cel cluster-restart): wymaga CLUSTER+CONFIRM=yes,
+# wybrany wezel zapisuje do -e restart_state_file.
+
+# === Play 1: stan wszystkich wezlow — zywy Primary konczy procedure ===
+- name: "Restart — odczytaj stan wszystkich wezlow Galera"
+  hosts: galera[0]
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  pre_tasks:
+    - name: "Wymagaj jawnego confirm=yes przed zatrzymaniem klastra"
+      ansible.builtin.assert:
+        that:
+          - confirm is defined
+          - confirm | bool
+        fail_msg: "Cold restart wymaga -e confirm=yes. Bez potwierdzenia nie zatrzymujemy Galery."
+
+
+  tasks:
+    - name: "Sonduj wsrep_cluster_status na kazdym wezle Galera"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SHOW STATUS LIKE 'wsrep_cluster_status'"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
+      register: restart_probe
+      changed_when: false
+      failed_when: false
+      ignore_unreachable: true
+
+    - name: "Klasyfikuj wezly: zywy Primary / nieosiagalny SSH / baza stoi"
+      ansible.builtin.set_fact:
+        restart_live_primary: >-
+          {{ restart_probe.results
+             | selectattr('stdout', 'defined')
+             | map(attribute='stdout')
+             | select('search', '(?m)^wsrep_cluster_status\tPrimary$')
+             | list }}
+        restart_ssh_unreachable: >-
+          {{ restart_probe.results
+             | selectattr('unreachable', 'defined')
+             | selectattr('unreachable')
+             | map(attribute='item')
+             | list }}
+
+    - name: "Cold restart wymaga osiagalnosci SSH wszystkich wezlow"
+      ansible.builtin.assert:
+        that:
+          - restart_ssh_unreachable | length == 0
+        fail_msg: >-
+          Nieosiagalne (SSH): {{ restart_ssh_unreachable }}. Bez odczytu ich
+          stanu wybor wezla bootstrap bylby zgadywaniem. Przywroc osiagalnosc
+          (make cluster-trust-hosts CLUSTER=<klaster>) i powtorz.
+
+    - name: "ISC-65: przy zywym Primary NIE robimy cold restartu bootstrapem"
+      ansible.builtin.assert:
+        that:
+          - restart_live_primary | length == 0
+        fail_msg: >-
+          Zywy Primary Component: {{ restart_live_primary }}. Klaster dziala —
+          cold restart z bootstrapem stworzylby drugi Primary (split-brain).
+          Uzyj: make cluster-rolling-restart.
+
+# === Play 2: serialne zatrzymanie Galera (czyste zamkniecie = ostateczny seqno) ===
+- name: "Restart — serialne zatrzymanie Galera (serial:1)"
+  hosts: galera
+  become: true
+  gather_facts: true
+  serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
+  vars:
+    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
+
+  tasks:
+    - name: "Zatrzymaj MariaDB przez systemd (czyste zamkniecie zapisuje grastate.dat)"
+      ansible.builtin.systemd:
+        name: mariadb
+        state: stopped
+      when: use_systemd
+
+    - name: "Zatrzymaj mariadbd i czekaj na zakonczenie procesu (lab: brak systemd)"
+      # SIGTERM = czyste zamkniecie: grastate.dat dostaje ostateczny seqno
+      # i ewentualne safe_to_bootstrap:1 dopiero po czystym zamknieciu.
+      ansible.builtin.shell: |
+        pkill -x mariadbd || true
+        for _ in $(seq 1 60); do
+          pgrep -x mariadbd >/dev/null || exit 0
+          sleep 1
+        done
+        echo "mariadbd nie zakonczyl sie w 60 s" >&2
+        exit 1
+      changed_when: true
+      when: not use_systemd
+
+    - name: "Potwierdz, ze mariadbd stoi na tym wezle"
+      ansible.builtin.command:
+        argv:
+          - pgrep
+          - -x
+          - mariadbd
+      register: restart_stop_verify
+      failed_when: restart_stop_verify.rc == 0
+      changed_when: false
+
+# === Play 3: wybor wezla bootstrap po stanie grastate WSZYSTKICH wezlow ===
+- name: "Restart — wybierz wezel bootstrap ze stanu grastate"
+  hosts: galera[0]
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+
+  tasks:
+    - name: "Wymagaj jawnego restart_state_file (przekazuje go cel cluster-restart)"
+      ansible.builtin.assert:
+        that:
+          - restart_state_file is defined
+          - restart_state_file | length > 0
+        fail_msg: "Przekaz -e restart_state_file=clusters/<klaster>/restart-bootstrap-node."
+
+    - name: "Odczytaj grastate.dat ze wszystkich wezlow Galera"
+      ansible.builtin.slurp:
+        path: /var/lib/mysql/grastate.dat
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
+      register: restart_grastate
+      failed_when: false
+      changed_when: false
+
+    - name: "Parsuj safe_to_bootstrap i seqno per wezel"
+      ansible.builtin.set_fact:
+        restart_nodes_state: >-
+          {{ restart_nodes_state | default([]) + [{
+               'node': item.item,
+               'safe_to_bootstrap': (item.content | b64decode) is search('(?m)^safe_to_bootstrap:\s*1'),
+               'seqno_valid': (item.content | b64decode) is search('(?m)^seqno:\s*-?\d+'),
+               'seqno': ((item.content | b64decode) | regex_findall('(?m)^seqno:\s*(-?\d+)') | last | default('-1', true)) | int
+             }] }}
+      loop: "{{ restart_grastate.results }}"
+      when: item.content is defined
+
+    - name: "Kazdy wezel musi miec czytelny grastate.dat — nie zgadujemy"
+      ansible.builtin.assert:
+        that:
+          - restart_nodes_state | length == groups['galera'] | length
+        fail_msg: >-
+          Brak odczytu grastate.dat z calego klastra (stan znany dla:
+          {{ restart_nodes_state | map(attribute='node') | list }}). Bez dowodu
+          stanu wybor wezla bootstrap bylby zgadywaniem — zbadaj wezly i powtorz.
+
+    - name: "Kazdy wezel musi miec poprawny seqno — nie zgadujemy przy uszkodzonym grastate"
+      ansible.builtin.assert:
+        that:
+          - >-
+            restart_nodes_state | selectattr('seqno_valid') | list | length
+            == groups['galera'] | length
+        fail_msg: >-
+          Co najmniej jeden grastate.dat nie zawiera poprawnego seqno.
+          Nie mozna bezpiecznie wybrac wezla bootstrap — napraw stan i powtorz.
+
+    - name: "Kandydaci: wezly z safe_to_bootstrap=1"
+      ansible.builtin.set_fact:
+        restart_stb_nodes: "{{ restart_nodes_state | selectattr('safe_to_bootstrap') | map(attribute='node') | list }}"
+
+    - name: "Najwyzszy seqno w klastrze"
+      ansible.builtin.set_fact:
+        restart_max_seqno: "{{ restart_nodes_state | map(attribute='seqno') | list | max }}"
+
+    - name: "Kandydaci: wezly z najwyzszym seqno"
+      ansible.builtin.set_fact:
+        restart_top_nodes: >-
+          {{ restart_nodes_state
+             | selectattr('seqno', 'equalto', restart_max_seqno | int)
+             | map(attribute='node') | list }}
+
+    - name: "Jawny override musi wskazywac bezpiecznego kandydata"
+      ansible.builtin.assert:
+        that:
+          - restart_bootstrap_node in restart_stb_nodes or restart_bootstrap_node in restart_top_nodes
+        fail_msg: >-
+          restart_bootstrap_node={{ restart_bootstrap_node }} nie jest wezlem
+          safe_to_bootstrap ani kandydatem z najwyzszym seqno ({{ restart_top_nodes }}).
+          Nie wymuszamy nizszego seqno — wybierz bezpieczny wezel.
+      when: restart_bootstrap_node | default('') | length > 0
+
+    - name: "Jawny wybor operatora musi nalezec do grupy galera"
+      ansible.builtin.assert:
+        that:
+          - restart_bootstrap_node in groups['galera']
+        fail_msg: >-
+          restart_bootstrap_node={{ restart_bootstrap_node }} nie nalezy do grupy
+          galera ({{ groups['galera'] }}).
+      when: restart_bootstrap_node | default('') | length > 0
+
+    - name: "Wybor: jawny restart_bootstrap_node operatora"
+      ansible.builtin.set_fact:
+        restart_bootstrap_choice: "{{ restart_bootstrap_node }}"
+      when: restart_bootstrap_node | default('') | length > 0
+
+    - name: "Wybor: unikalny wezel z safe_to_bootstrap=1"
+      ansible.builtin.set_fact:
+        restart_bootstrap_choice: "{{ restart_stb_nodes | first }}"
+      when:
+        - restart_bootstrap_choice | default('') | length == 0
+        - restart_stb_nodes | length == 1
+
+    - name: "Wybor: unikalny najwyzszy seqno (procedura recovery Galera)"
+      ansible.builtin.set_fact:
+        restart_bootstrap_choice: "{{ restart_top_nodes | first }}"
+      when:
+        - restart_bootstrap_choice | default('') | length == 0
+        - restart_stb_nodes | length == 0
+        - restart_top_nodes | length == 1
+
+    - name: "Remis stanu — wymagaj jawnego BOOTSTRAP_NODE zamiast zgadywac"
+      ansible.builtin.assert:
+        that:
+          - restart_bootstrap_choice | default('') | length > 0
+        fail_msg: >-
+          Niejednoznaczny stan klastra: safe_to_bootstrap=1 na
+          {{ restart_stb_nodes | length }} wezlach ({{ restart_stb_nodes }}),
+          najwyzszy seqno={{ restart_max_seqno }} na {{ restart_top_nodes | length }}
+          wezlach ({{ restart_top_nodes }}). Nie zgadujemy (ISC-65): uruchom
+          make cluster-restart CLUSTER=<klaster> CONFIRM=yes BOOTSTRAP_NODE=<wezel>.
+      when: restart_bootstrap_choice | default('') | length == 0
+
+    - name: "Recovery Galera: wybrany wezel bez safe_to_bootstrap=1 otrzymuje je przed bootstrapem"
+      # Dokumentowana procedura recovery: wezel z najwyzszym seqno (albo jawny
+      # wybor operatora) musi miec safe_to_bootstrap:1 w grastate.dat, inaczej
+      # kanoniczny bootstrap.yml slusznie odmowi (ISC-65).
+      ansible.builtin.lineinfile:
+        path: /var/lib/mysql/grastate.dat
+        regexp: '(?i)^safe_to_bootstrap:\s*\d+'
+        line: "safe_to_bootstrap: 1"
+      delegate_to: "{{ restart_bootstrap_choice }}"
+      when: restart_bootstrap_choice not in restart_stb_nodes
+
+    - name: "Zapisz wybrany wezel do pliku stanu (odczytuje go cel cluster-restart)"
+      ansible.builtin.copy:
+        content: "{{ restart_bootstrap_choice }}\n"
+        dest: "{{ restart_state_file }}"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+
+    - name: "Podsumowanie wyboru wezla bootstrap"
+      ansible.builtin.debug:
+        msg: >-
+          Wezel bootstrap: {{ restart_bootstrap_choice }}
+          (safe_to_bootstrap=1: {{ restart_stb_nodes | join(',') | default('brak', true) }};
+          seqno wezla: {{ restart_nodes_state | selectattr('node', 'equalto', restart_bootstrap_choice)
+          | map(attribute='seqno') | first }}).
+          Bootstrap wykona kanoniczny playbooks/bootstrap.yml z
+          bootstrap_node={{ restart_bootstrap_choice }}.

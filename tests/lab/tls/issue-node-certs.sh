@@ -20,6 +20,13 @@
 # Przyklad:
 #   tests/lab/tls/issue-node-certs.sh n11 n11g1=192.168.1.185,n11g2=192.168.1.186 90
 #
+# Zmienne srodowiskowe (opcjonalne):
+#   CA_FILE  — certyfikat CA podpisujacy; domyslnie <katalog>/ca.pem
+#   CA_KEY   — klucz tego CA; domyslnie <katalog>/ca-key.pem
+# Jawne wskazanie uzywane jest przez rotacje CA (rotate-ca.sh faza reissue
+# wystawia liscie pod ca-next.pem). CA_FILE musi zawierac DOKLADNIE jeden
+# certyfikat — bundle z okna podwojnego zaufania jest tu BLEDEM, nie opcja.
+#
 # Wynik: <katalog>/node-<host>-cert.pem oraz node-<host>-key.pem
 set -euo pipefail
 
@@ -40,9 +47,21 @@ NODES="$2"
 # przed koncem, wiec zostaje 60 dni marginesu i alert ISC-47 w PMM.
 DAYS="${3:-90}"
 
-for f in ca.pem ca-key.pem; do
-  [ -r "$DIR/$f" ] || { echo "FAIL: brak $DIR/$f — najpierw generate.sh" >&2; exit 1; }
+# Domyslne sciezki zachowuja stary interfejs (ca.pem/ca-key.pem z <katalog>).
+CA_FILE="${CA_FILE:-$DIR/ca.pem}"
+CA_KEY="${CA_KEY:-$DIR/ca-key.pem}"
+
+for f in "$CA_FILE" "$CA_KEY"; do
+  [ -r "$f" ] || { echo "FAIL: brak $f — najpierw generate.sh albo faza trust-both rotacji CA" >&2; exit 1; }
 done
+# Podpis pod bundle wielu CA jest dwuznaczny (openssl bralby pierwszy cert z
+# pliku), a weryfikacja -CAfile bundle'a ukrylaby pomylke — odmawiamy jawnie.
+ca_count="$(grep -c 'BEGIN CERTIFICATE' "$CA_FILE" || true)"
+if [ "$ca_count" -ne 1 ]; then
+  echo "FAIL: $CA_FILE zawiera ${ca_count} certyfikatow — podpis wymaga DOKLADNIE jednego CA." >&2
+  echo "      Podczas okna podwojnego zaufania wskaz CA_FILE=<katalog>/ca-next.pem." >&2
+  exit 1
+fi
 
 umask 0077
 IFS=',' read -ra PAIRS <<< "$NODES"
@@ -64,18 +83,19 @@ for pair in "${PAIRS[@]}"; do
     -subj "/CN=${host}" 2>/dev/null
 
   openssl x509 -req -in "$DIR/node-${host}.csr" -sha256 -days "$DAYS" \
-    -CA "$DIR/ca.pem" -CAkey "$DIR/ca-key.pem" -CAcreateserial \
+    -CA "$CA_FILE" -CAkey "$CA_KEY" -CAcreateserial \
     -out "$DIR/node-${host}-cert.pem" \
     -extfile <(printf 'subjectAltName=DNS:%s,IP:%s\nextendedKeyUsage=serverAuth,clientAuth\nbasicConstraints=CA:FALSE\n' "$host" "$addr") \
     2>/dev/null
-
   rm -f "$DIR/node-${host}.csr"
   chmod 0600 "$DIR/node-${host}-key.pem" "$DIR/node-${host}-cert.pem"
-
-  openssl verify -CAfile "$DIR/ca.pem" "$DIR/node-${host}-cert.pem" >/dev/null \
-    || { echo "FAIL: $host — lisc nie weryfikuje sie pod CA klastra" >&2; exit 1; }
+  # Weryfikacja pod TYM SAMYM CA, ktore podpisalo — dowod, ze para
+  # CA_FILE/CA_KEY nalezala do siebie.
+  openssl verify -CAfile "$CA_FILE" "$DIR/node-${host}-cert.pem" >/dev/null \
+    || { echo "FAIL: $host — lisc nie weryfikuje sie pod $CA_FILE" >&2; exit 1; }
   echo "== ${host}: CN=${host} SAN=DNS:${host},IP:${addr} waznosc ${DAYS}d — OK"
 done
 
-rm -f "$DIR/ca.srl"
+# -CAcreateserial odklada .srl obok pliku CA — sprzataj po FAKTYCZNYM CA_FILE.
+rm -f "${CA_FILE%.pem}.srl"
 echo "OK: liscie per wezel w $DIR"

@@ -1,7 +1,7 @@
 # Makefile — stabilny interfejs operatora.
 # Komendy dodawane INKREMENTALNIE wraz z działającym feature.
 
-.PHONY: help lab-up lab-start-services cluster-discover cluster-validate cluster-deploy \
+.PHONY: cluster-build cluster-restart help lab-up lab-start-services cluster-discover cluster-validate cluster-deploy \
         cluster-bootstrap cluster-health cluster-join cluster-proxysql cluster-endpoint \
         cluster-infra cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan \
@@ -109,6 +109,37 @@ lab-start-services:  ## Lab-only: (re)start ProxySQL po restarcie kontenera (bra
 	ansible proxysql -i clusters/$(CLUSTER)/inventory.yml -m shell -a "pgrep -x proxysql >/dev/null || proxysql --idle-threads -c /etc/proxysql.cnf" $(ANSIBLE_OPTS)
 	ansible proxysql -i clusters/$(CLUSTER)/inventory.yml -m wait_for -a "host=127.0.0.1 port=6032 timeout=20" $(ANSIBLE_OPTS)
 
+
+# Jedna, jawna orkiestracja pelnego budowania klastra: kazdy krok to ISTNIEJACY
+# cel, w kolejnosci zaleznosci. cluster-deploy juz robi firewall (f2_install +
+# site + firewall.yml) — tutaj ZADNEGO dodatkowego kroku firewall. CLUSTER i
+# CONFIRM propaguja sie na pod-make przez MAKEFLAGS; make domyslnie zatrzymuje
+# sie na pierwszej porazce linii recepty, wiec build stal na pierwszym bledzie.
+#
+# Kroki warunkowe (seed/backup/alerts/app-host) da sie pominac bez edycji
+# Makefile: BUILD_SKIP="alerts app-host" make cluster-build CLUSTER=... CONFIRM=yes
+BUILD_SKIP ?=
+
+cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap→join→proxysql→monitoring→harden→endpoint→warunkowe→bramka (CLUSTER+CONFIRM=yes)
+	$(cluster_guard)
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (bootstrap tworzy nowy Primary Component)"; exit 1)
+	$(MAKE) cluster-validate
+	$(MAKE) cluster-deploy
+	$(MAKE) cluster-bootstrap
+	$(MAKE) cluster-join
+	$(MAKE) cluster-proxysql
+	$(MAKE) cluster-monitoring
+	$(MAKE) cluster-harden
+	$(MAKE) cluster-endpoint
+	@for step in $(filter-out $(BUILD_SKIP),seed backup alerts app-host); do \
+		case $$step in \
+			seed) $(MAKE) lab-seed-smoke || exit 1 ;; \
+			backup) $(MAKE) cluster-backup-configure || exit 1 ;; \
+			alerts) $(MAKE) cluster-alerts || exit 1 ;; \
+			app-host) $(MAKE) cluster-app-host || exit 1 ;; \
+		esac; \
+	done
+	$(MAKE) lab-post-build-gate
 
 cluster-discover:  ## F0 Discovery — zbierz fakty z hostów (read-only)
 	ansible-playbook playbooks/f0_discovery.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
@@ -340,6 +371,39 @@ cluster-rolling-restart:  ## F12 — rolling restart Galera serial:1 + brama zdr
 
 lab-rolling-restart-verify:  ## F12 — zweryfikuj rolling restart (ISC-50/51)
 	$(TARGET_ENV) tests/lab/probe-rolling-restart.py
+
+
+# Cold restart CALEGO klastra Galera (planowane okno / pelna awaria), w odroznieniu
+# od cluster-rolling-restart (zywy klaster, wezel po wezle). Kontrakt bezpieczenstwa:
+#   1. CLUSTER+CONFIRM=yes (cold restart zatrzymuje caly klaster).
+#   2. playbooks/cluster_restart.yml: odczytuje stan WSZYSTKICH wezlow — przy zywym
+#      Primary Component konczy procedure (to scenariusz rolling-restart, ISC-65),
+#      zatrzymuje Galere SERIALNIE (czyste zamkniecie zapisuje ostateczny seqno
+#      do grastate.dat) i wybiera wezel bootstrap JAWNIE: jawny BOOTSTRAP_NODE,
+#      wezel z safe_to_bootstrap=1, albo unikalny najwyzszy seqno. Przy remisie
+#      STAJE zamiast zgadywac — wtedy: make cluster-restart ... BOOTSTRAP_NODE=<wezel>.
+#   3. Bootstrapu NIE dublujemy: wybrany wezel idzie do kanonicznego
+#      playbooks/bootstrap.yml przez istniejacy cel cluster-bootstrap z parametrami
+#      bootstrap_node + bootstrap_confirm_all_down=true, potem join z brama zdrowia.
+#
+# Wezel wybrany przez playbooks/cluster_restart.yml. Sciezka jest ABSOLUTNA:
+# ansible.builtin.copy z delegate_to: localhost zapisuje na hoscie sterujacym,
+# a wzgledny dest moglby wskazac katalog domowy uzytkownika Ansible zamiast
+# repozytorium. Odczyt LAZY (rekursywna zmienna rozwijana w momencie linii
+# recepty), a nie $(shell) przy parsowaniu pliku: state powstaje dopiero w
+# trakcie celu, a make -n nie wykonuje linii bez $(MAKE).
+RESTART_STATE_FILE = $(CURDIR)/clusters/$(CLUSTER)/restart-bootstrap-node
+RESTART_BOOTSTRAP_NODE = $(shell cat $(RESTART_STATE_FILE) 2>/dev/null)
+cluster-restart:  ## Cold restart Galera: serialny stop + bezpieczny bootstrap + join (CLUSTER+CONFIRM=yes; BOOTSTRAP_NODE przy remisie)
+	$(cluster_guard)
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (cold restart zatrzymuje caly klaster)"; exit 1)
+	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
+	ansible-playbook playbooks/cluster_restart.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e confirm=yes -e restart_state_file=$(RESTART_STATE_FILE) $(if $(BOOTSTRAP_NODE),-e restart_bootstrap_node=$(BOOTSTRAP_NODE)) $(ANSIBLE_OPTS)
+	@test -s $(RESTART_STATE_FILE) || { echo "ERROR: playbooks/cluster_restart.yml nie zapisal wezla bootstrap" >&2; exit 1; }
+	@echo "Bootstrap po restarcie: $$(cat $(RESTART_STATE_FILE)) (kanoniczny playbooks/bootstrap.yml)"
+	$(MAKE) cluster-bootstrap ANSIBLE_OPTS="$(ANSIBLE_OPTS) -e bootstrap_node=$(RESTART_BOOTSTRAP_NODE) -e bootstrap_confirm_all_down=true"
+	$(MAKE) cluster-join
+	$(MAKE) cluster-health
 
 cluster-upgrade-plan:  ## F12 — wygeneruj read-only plan major upgrade (ISC-53/54/56)
 	ansible-playbook playbooks/f12_upgrade_plan.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)

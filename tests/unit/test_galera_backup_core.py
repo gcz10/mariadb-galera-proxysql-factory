@@ -549,6 +549,55 @@ class GaleraBackupCoreTests(unittest.TestCase):
             events = [json.loads(line)["event"] for line in events_file.read_text().splitlines()]
             self.assertIn("state.failure", events)
 
+    def test_pre_lock_sink_failure_does_not_mask_original_error(self):
+        # Sink stanu lamie sie bledem INNYM niz OSError (np. ValueError z
+        # uszkodzonego state.json). Oryginalny E_SECRETS musi przezyc —
+        # best-effort oznacza best-effort dla dowolnego bledu sinka, a nie
+        # tylko dla OSError.
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            cfg_path = td_path / "config.json"
+            env_path = td_path / "secrets.env"
+            cluster_dir = td_path / "clusters" / "claude-r10b"
+            cfg_data = {
+                "format_version": 1,
+                "cluster_name": "claude-r10b",
+                "metric_cluster_label": "r10b-galera",
+                "local_role": "scheduler",
+                "scheduler_system_hostname": "gnode4",
+                "galera_nodes_expected": 3,
+                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
+                "mariadb_version": "11.4.12",
+                "retention_days": 14,
+                "flow_control_threshold_ns": 1000000000,
+                "backend": {"type": "s3", "endpoint": "192.168.1.47:9000", "bucket": "r10b-galera-backups", "secure": False},
+                "paths": {
+                    "install_root": str(td_path),
+                    "cluster_dir": str(cluster_dir),
+                    "staging_root": str(td_path / "staging"),
+                    "datadir": str(td_path / "datadir"),
+                    "socket": str(td_path / "mysql.sock"),
+                    "metric_file": str(td_path / "metrics.prom"),
+                },
+            }
+            cfg_path.write_text(json.dumps(cfg_data))
+            # Brak GALERA_BACKUP_ENCRYPTION_KEY -> load_secrets pada z E_SECRETS.
+            env_path.write_text('GALERA_BACKUP_S3_ACCESS_KEY="a"\nGALERA_BACKUP_S3_SECRET_KEY="s"\n')
+            os.chmod(env_path, 0o600)
+
+            with patch.object(pipeline, "StateManager") as mock_state:
+                mock_state.return_value.update_failure.side_effect = ValueError(
+                    "state sink exploded"
+                )
+                with self.assertRaises(pipeline.BackupError) as ctx:
+                    pipeline.run_backup(
+                        config_path=cfg_path,
+                        secrets_path=env_path,
+                        cluster_name="claude-r10b",
+                    )
+            self.assertEqual(ctx.exception.code, "E_SECRETS")
+
 class TemplateContractTests(unittest.TestCase):
     def setUp(self):
         self.templates_dir = WORKSPACE_ROOT / "roles" / "galera_backup" / "templates"

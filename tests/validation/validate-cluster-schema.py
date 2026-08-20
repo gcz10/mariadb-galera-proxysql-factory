@@ -80,15 +80,6 @@ def main():
     if env == "production" and tls_mode == "disabled":
         print("WARN: tls.mode=disabled in production — ISC-45 requires documented risk acceptance in Decisions")
 
-    # Check: read_write_split must be false (ISC-23)
-    rws = cluster.get("proxysql", {}).get("read_write_split_enabled", None)
-    if rws is True:
-        errors.append("proxysql.read_write_split_enabled=true violates ISC-23 (split requires app analysis)")
-
-    # Check: max_writers must be 1
-    mw = cluster.get("proxysql", {}).get("max_writers", None)
-    if mw is not None and mw != 1:
-        errors.append(f"proxysql.max_writers={mw} violates constraint (must be 1)")
 
     # Check: galera.nodes_expected must be 3 (v1 scope)
     nodes = cluster.get("galera", {}).get("nodes_expected", None)

@@ -66,68 +66,40 @@ locals {
   }
 }
 
-resource "proxmox_virtual_environment_vm" "node" {
-  for_each    = local.vms
-  name        = each.key
-  node_name   = local.node_name
-  vm_id       = each.value.id
-  pool_id     = local.pool_id
-  tags        = ["finalclaude", "shared", "rocky10", each.value.role]
-  description = "finalclaude warstwa wspolna (${each.value.role}) — VMID ${each.value.id}"
+# Definicja VM zyje we wspolnym module pve_vm_set; ten root decyduje wylacznie
+# o skladzie warstwy wspolnej. Blok moved nizej przenosi istniejace adresy
+# stanu, wiec plan po migracji nie zawiera destroy/create.
+module "vms" {
+  source = "../modules/pve_vm_set"
 
-  # F2 instaluje i wlacza qemu-guest-agent; provider nie czeka na raport IP,
-  # bo adresy sa statyczne, a agent moze wystartowac dopiero po restarcie VM.
-  agent {
-    enabled = true
-    type    = "virtio"
-    wait_for_ip { disabled = true }
-  }
-  stop_on_destroy = true
-  started         = true
-  operating_system { type = "l26" }
+  node_name  = local.node_name
+  pool_id    = local.pool_id
+  storage    = local.storage
+  bridge     = local.bridge
+  source_img = local.source_img
+  ssh_pubkey = local.ssh_pubkey
+  gateway    = local.gateway
 
-  cpu {
-    type  = "host"
-    cores = each.value.cpu
-  }
-  memory { dedicated = each.value.ram }
+  vms = local.vms
 
-  disk {
-    datastore_id = local.storage
-    interface    = "virtio0"
-    import_from  = local.source_img
-    size         = each.value.disk
-    discard      = "on"
-  }
+  tags               = ["finalclaude", "shared", "rocky10"]
+  description_prefix = "finalclaude warstwa wspolna"
 
-  initialization {
-    interface    = "scsi1"
-    datastore_id = local.storage
-    # Rocky 10 GenericCloud ma disable_root: true w domyslnym cloud.cfg — klucz
-    # z user_account nie trafia do /root/.ssh/authorized_keys. Snippet wymusza
-    # klucz operatora i konfiguracje sshd.
-    user_data_file_id = "local:snippets/r10-cloud-init.yaml"
-    user_account {
-      username = "root"
-      keys     = [local.ssh_pubkey]
-    }
-    ip_config {
-      ipv4 {
-        address = "192.168.1.${each.value.ip}/24"
-        gateway = local.gateway
-      }
-    }
-    dns { servers = ["1.1.1.1", "8.8.8.8"] }
-  }
+  os_type        = "l26"
+  init_interface = "scsi1"
+  # Rocky 10 GenericCloud ma disable_root: true w domyslnym cloud.cfg — klucz
+  # z user_account nie trafia do /root/.ssh/authorized_keys. Snippet wymusza
+  # klucz operatora i konfiguracje sshd.
+  user_data_file_id = "local:snippets/r10-cloud-init.yaml"
+}
 
-  network_device { bridge = local.bridge }
+moved {
+  from = proxmox_virtual_environment_vm.node
+  to   = module.vms.proxmox_virtual_environment_vm.node
 }
 
 output "vms" {
-  value = { for k, v in local.vms : k => {
-    vmid = v.id, ip = "192.168.1.${v.ip}", role = v.role
-    cpu  = v.cpu, ram_mb = v.ram, disk_gb = v.disk
-  } }
+  value = module.vms.vms
 }
 output "vip" { value = "192.168.1.133" }
 output "pmm_url" { value = "https://192.168.1.130" }

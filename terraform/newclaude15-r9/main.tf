@@ -21,6 +21,8 @@ provider "proxmox" {} # endpoint + api_token + insecure z env PROXMOX_VE_*
 #
 # Rocky 9 GenericCloud NIE wymaga snippetu cloud-init: w przeciwienstwie do EL10
 # nie ma `disable_root: true`, wiec klucz z `user_account` trafia prosto do roota.
+# Z tego samego powodu ten root nie przekazuje init_interface (domysl providera,
+# ide2) ani os_type (pusty blok operating_system w stanie).
 locals {
   node_name = "pve"
   pool_id   = "claude-isa"
@@ -53,85 +55,41 @@ locals {
   }
 }
 
-resource "proxmox_virtual_environment_vm" "node" {
-  for_each    = local.vms
-  name        = each.key
-  node_name   = local.node_name
-  pool_id     = local.pool_id
-  vm_id       = each.value.id
-  description = "newclaude15-r9 Rocky 9 (${each.value.role}) - VMID ${each.value.id}"
-  tags        = ["rocky9", "galera", "newclaude15", each.value.role, "n14"]
+# Definicja VM zyje we wspolnym module pve_vm_set; ten root decyduje wylacznie
+# o skladzie klastra. Blok moved nizej przenosi istniejace adresy stanu,
+# wiec plan po migracji nie zawiera destroy/create.
+module "vms" {
+  source = "../modules/pve_vm_set"
 
-  agent {
-    enabled = true
-    type    = "virtio"
-    # Jak w terraform/shared i finalclaude-r10: provider NIE czeka na raport IP
-    # od qemu-guest-agenta (F2 instaluje go dopiero po apply; bez tego apply
-    # wisialoby do 15 min na wezel).
-    wait_for_ip { disabled = true }
-  }
+  node_name  = local.node_name
+  pool_id    = local.pool_id
+  storage    = local.storage
+  bridge     = local.bridge
+  source_img = local.source_img
+  ssh_pubkey = local.ssh_pubkey
+  gateway    = local.gateway
 
-  started = true
+  vms = local.vms
 
-  stop_on_destroy                      = true
-  delete_unreferenced_disks_on_destroy = true
+  tags               = ["rocky9", "galera", "newclaude15", "n14"]
+  description_prefix = "newclaude15-r9 Rocky 9"
+  description_dash   = "-"
+
+  disk_file_format = "raw"
+  disk_aio         = "io_uring"
+
   purge_on_destroy                     = true
+  delete_unreferenced_disks_on_destroy = true
+}
 
-  cpu {
-    cores   = each.value.cpu
-    type    = "host"
-    sockets = 1
-  }
-
-  memory {
-    dedicated = each.value.ram
-  }
-
-  disk {
-    datastore_id = local.storage
-    import_from  = local.source_img
-    interface    = "virtio0"
-    file_format  = "raw"
-    size         = each.value.disk
-    discard      = "on"
-    aio          = "io_uring"
-  }
-
-  initialization {
-    datastore_id = local.storage
-    ip_config {
-      ipv4 {
-        address = "192.168.1.${each.value.ip}/24"
-        gateway = local.gateway
-      }
-    }
-    user_account {
-      username = "root"
-      keys     = [local.ssh_pubkey]
-    }
-    dns {
-      servers = ["1.1.1.1", "8.8.8.8"]
-    }
-  }
-
-  network_device {
-    bridge = local.bridge
-  }
+moved {
+  from = proxmox_virtual_environment_vm.node
+  to   = module.vms.proxmox_virtual_environment_vm.node
 }
 
 output "vms" {
-  value = {
-    for k, v in local.vms : k => {
-      vmid    = v.id
-      ip      = "192.168.1.${v.ip}"
-      role    = v.role
-      ram_mb  = v.ram
-      cpu     = v.cpu
-      disk_gb = v.disk
-    }
-  }
+  value = module.vms.vms
 }
-
 output "shared_vip" {
   value = "192.168.1.133 (terraform/shared/)"
 }

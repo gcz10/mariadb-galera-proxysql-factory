@@ -7,10 +7,8 @@ cluster:
   name: "example-cluster"
   environment: "laboratory"
   profile: "laboratory"
-  automation_release: "0.1.0"
 
 platform:
-  virtualization: "vmware_esxi"
   rocky_linux_major: 9
 
 versions:
@@ -23,8 +21,6 @@ galera:
 
 proxysql:
   nodes_expected: 2
-  max_writers: 1
-  read_write_split_enabled: false
   endpoint:
     type: "keepalived_vip"
     address: "10.0.0.100"   # PLACEHOLDER — zastąp rzeczywistym VIP z sieci klastra
@@ -32,10 +28,9 @@ proxysql:
 
 # TLS opcjonalne per-klaster. mode=full => serwer prezentuje cert, replikacja Galera
 # + SST + ProxySQL->backend szyfrowane. references = ścieżki na hoście kontrolnym
-# (certificate_source=file) lub artefakty PKI produkcji (jeden cert z SAN wszystkich węzłów+VIP).
+# (references wskazuja sciezki na hoscie kontrolnym lub artefakty PKI produkcji).
 tls:
   mode: "disabled"                    # disabled | full
-  certificate_source: ""             # "file" gdy references to ścieżki na hoście kontrolnym
   ca_reference: ""                   # CA (pem)
   certificate_reference: ""          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
   private_key_reference: ""          # klucz prywatny serwera
@@ -47,16 +42,10 @@ network:
   administration_cidrs: []
   monitoring_cidrs: []
 
-secrets:
-  backend: "ansible_vault"
 
 storage:
   data_directory: "/var/lib/mysql"
-  backup_staging_directory: "/var/tmp/mariadb-backup"
-  filesystem: "xfs"
   expected_database_size_gb: "unknown"
-  expected_growth_gb_per_month: "unknown"
-  available_iops: "unknown"
 
 workload:
   peak_qps: "unknown"
@@ -76,11 +65,7 @@ mariadb_tuning:
   gcache_size: "128M"                 # ISC-68: wylicz z calc-gcache.py; podbij przy realnym write rate
 
 availability:
-  rpo: "0"
   rto_node_failure: "2m"
-  rto_full_cluster_failure: "30m"
-  maintenance_window: "weekend"
-  allowed_service_interruption: "2m"
 
 backup:
   enabled: true
@@ -117,4 +102,3 @@ monitoring:
     email: "alerts@example.invalid"
     folder_uid: "isa-alerts"
     datasource_uid: ""
-  system: "pmm"

@@ -8,10 +8,8 @@ cluster:
   name: "lab2-cluster"
   environment: "laboratory"
   profile: "laboratory"
-  automation_release: "0.1.0"
 
 platform:
-  virtualization: "docker_orbstack"
   rocky_linux_major: 9
 
 versions:
@@ -24,8 +22,6 @@ galera:
 
 proxysql:
   nodes_expected: 2
-  max_writers: 1
-  read_write_split_enabled: false
   endpoint:
     type: "keepalived_vip"
     address: "172.29.0.30"
@@ -50,7 +46,6 @@ proxysql:
 # Nastepnie zaktualizuj *_reference ponizej. Produkcja: uzyj korporacyjnego PKI.
 tls:
   mode: "full"
-  certificate_source: "file"
   ca_reference: "tests/lab/tls/lab2/ca.pem"
   certificate_reference: "tests/lab/tls/lab2/server-cert.pem"
   private_key_reference: "tests/lab/tls/lab2/server-key.pem"
@@ -61,16 +56,10 @@ network:
   administration_cidrs: []
   monitoring_cidrs: []
 
-secrets:
-  backend: "ansible_vault"
 
 storage:
   data_directory: "/var/lib/mysql"
-  backup_staging_directory: "/var/tmp/mariadb-backup"
-  filesystem: "xfs"
   expected_database_size_gb: "unknown"
-  expected_growth_gb_per_month: "unknown"
-  available_iops: "unknown"
 
 workload:
   peak_qps: "unknown"
@@ -81,11 +70,7 @@ workload:
   expected_write_latency_ms: "unknown"
 
 availability:
-  rpo: "0"
   rto_node_failure: "2m"
-  rto_full_cluster_failure: "30m"
-  maintenance_window: "weekend"
-  allowed_service_interruption: "2m"
 
 backup:
   enabled: true
@@ -113,4 +98,3 @@ monitoring:
     cluster_name: "lab2-galera"
     validate_certs: false
     credentials_revision: 2
-  system: "pmm"

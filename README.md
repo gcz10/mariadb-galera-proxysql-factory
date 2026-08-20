@@ -58,13 +58,12 @@ tests/lab/tls/issue-node-certs.sh <klaster> <n1=ip1,n2=ip2,n3=ip3> [dni]
 #     na klastrze bez testów chaos zasiej je jawnie: make lab-seed-smoke CLUSTER=<name>
 #   lab-monitoring-verify sprawdza świeżość backupu i reguły -> na samym końcu
 
-# Firewall — polityka ingress musi byc zalozona PRZED pierwszym bootstrapem.
-# Bez tego klaster moze dzialac do pierwszego rebootu, ale gcomm/SST beda
-# zablokowane przez domyslna public zone firewalld.
-make cluster-firewall CLUSTER=lab-cluster
+# `cluster-deploy` instaluje i przeładowuje politykę firewalld przed bootstrapem.
+# Nie uruchamiaj bootstrapu na własną rękę przed tym krokiem.
 
 # F4 — initial bootstrap: JEDEN węzeł (galera[0]), wymaga jawnego CONFIRM=yes
 make cluster-bootstrap CLUSTER=lab-cluster CONFIRM=yes
+
 
 
 # F5 — dołącz pozostałe węzły (SST mariabackup, serial:1)
@@ -113,11 +112,9 @@ make cluster-alerts CLUSTER=lab-cluster
 make cluster-monitoring-refresh CLUSTER=lab-cluster
 make lab-monitoring-verify
 
-# Pelny restart klastra NIE jest rownowazny rownoleglym `systemctl restart`:
-# Galera wymaga jednego jawnego bootstrapu po utracie calego Primary Component.
-# Uzyj `make cluster-bootstrap CLUSTER=<name> CONFIRM=yes
-# bootstrap_confirm_all_down=true` dopiero po potwierdzeniu, ze wszystkie wezly
-# sa zatrzymane; wybierz wezel z najwyzszym seqno/safe_to_bootstrap.
+# Pelny restart klastra wymaga kontrolowanego stopu i jednego bootstrapu
+# recovery; rownolegly `systemctl restart` zostawia NON_PRIM.
+make cluster-restart CLUSTER=<name> CONFIRM=yes
 #
 # Jedna bramka po budowie (fail-closed):
 # make lab-post-build-gate CLUSTER=<name>

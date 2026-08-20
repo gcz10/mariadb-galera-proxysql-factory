@@ -1,0 +1,20 @@
+---
+- name: "Wymagaj hasla konta monitorujacego"
+  ansible.builtin.assert:
+    that:
+      - pmm_monitor_password | length > 0
+    fail_msg: "Ustaw PMM_MONITOR_PASSWORD poza repozytorium."
+  when: pmm_mode == 'agentless'
+- name: "Utwórz replikowane konto PMM na pierwszym węźle Galera"
+  ansible.mysql.mysql_user:
+    name: "{{ pmm_monitor_user }}"
+    password: "{{ pmm_monitor_password }}"
+    host: "%"
+    priv: "*.*:PROCESS,REPLICATION CLIENT,SELECT,SHOW DATABASES,RELOAD"
+    state: present
+    login_unix_socket: /var/lib/mysql/mysql.sock
+    column_case_sensitive: "{{ true if pmm_mode == 'agentless' else omit }}"
+  when:
+    - inventory_hostname in groups.get('galera', [])
+    - galera_node_idx | default(1) | int == 1
+  no_log: true

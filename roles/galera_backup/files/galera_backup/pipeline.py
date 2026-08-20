@@ -311,6 +311,22 @@ def set_wsrep_desync(socket_path: Path, runner: CommandRunner, enable: bool) -> 
     return True
 
 
+def _flow_control_paused_ns(gal_vars: dict[str, str]) -> int:
+    """Odczytaj wsrep_flow_control_paused_ns; brak zmiennej to jawny E_GALERA.
+
+    Domysl "0" przy braku zmiennej wylaczal zabezpieczenie flow control po
+    cichu: SHOW GLOBAL STATUS bez tej pozycji znaczy "nie wiemy, czy backup
+    nie zatrzymal klastra", a nie "klastra na pewno nie zatrzymal".
+    """
+    raw = gal_vars.get("wsrep_flow_control_paused_ns")
+    if raw is None or str(raw).strip() == "":
+        raise BackupError(
+            "E_GALERA",
+            "Brak wsrep_flow_control_paused_ns w SHOW GLOBAL STATUS; odmawiam backupu bez straznika flow control",
+        )
+    return int(raw)
+
+
 def wait_until_synced(socket_path: Path, runner: CommandRunner, timeout_s: int = 900) -> None:
     """Czekaj az wezel wroci do Synced po wsrep_desync=OFF.
 
@@ -410,8 +426,9 @@ def _record_pre_lock_failure(
 
     Without this, an E_CONFIG/E_SECRETS/E_SECRETS_PERM abort leaves the previous
     night's last_run_success=1 in the textfile and every dashboard stays green.
-    A sink failure must never replace the original error, so every write is
-    guarded and the caller re-raises the original exception.
+    Sink nigdy nie moze zastapic oryginalnego bledu: kazdy sink jest chroniony
+    przed dowolnym zwyklym wyjatkiem (nie tylko OSError), a wywolujacy ponownie
+    rzuca oryginalny wyjatek.
     """
     err_code = exc.code if isinstance(exc, BackupError) else "E_STORAGE"
     err_msg = exc.public_message if isinstance(exc, BackupError) else str(exc)
@@ -420,14 +437,14 @@ def _record_pre_lock_failure(
         StateManager(cluster_name, cluster_dir / "state.json").update_failure(
             command, now_ts, err_code, redactor.redact(err_msg)
         )
-    except OSError:
+    except Exception:
         pass
     try:
         EventManager(cluster_dir / "events.jsonl", redactor).emit(
             "state.failure",
             {"error_code": err_code, "error_message": redactor.redact(err_msg)},
         )
-    except OSError:
+    except Exception:
         pass
     if metrics_mgr is not None:
         try:
@@ -435,15 +452,55 @@ def _record_pre_lock_failure(
             try:
                 last_succ = StateManager(cluster_name, cluster_dir / "state.json").read().get("last_success")
                 last_succ_time = last_succ.get("unixtime", 0) if last_succ else 0
-            except BackupError:
+            except Exception:
                 pass
             metrics_mgr.update(
                 last_success_unixtime=last_succ_time,
                 last_failure_unixtime=now_ts,
                 last_run_success=0,
             )
-        except OSError:
+        except Exception:
             pass
+
+
+def _finalize_success_cleanup(
+    event_mgr: EventManager,
+    backend: Any,
+    work_dir: Optional[Path],
+    work_dir_error_code: str,
+) -> None:
+    """Epilog po zapisanym sukcesie backupu albo restore, wykonywany najlepszym wysilkiem.
+
+    Zamkniecie backendu i usuniecie workdir sa porzadkowaniem po zweryfikowanym
+    sukcesie. Ich porazka nie moze nadpisac state.success ani metryki sukcesu:
+    zapisujemy osobne cleanup.failure z faza, a sam epilog nie rzuca wyjatku.
+    Sink zdarzen tez jest najlepszym wysilkiem, zeby jego awaria nie reaktywowala
+    problemu, ktory ten helper ma usunac.
+    """
+
+    def report(phase: str, cleanup_exc: Exception, default_code: str) -> None:
+        error_code = cleanup_exc.code if isinstance(cleanup_exc, BackupError) else default_code
+        message = cleanup_exc.public_message if isinstance(cleanup_exc, BackupError) else str(cleanup_exc)
+        try:
+            event_mgr.emit(
+                "cleanup.failure",
+                {"error_code": error_code, "message": message, "phase": phase},
+            )
+        except Exception:
+            # Awaria sinka zdarzen tez nie moze zdegradowac zapisanego sukcesu.
+            pass
+
+    if backend is not None:
+        try:
+            backend.close()
+        except Exception as cleanup_exc:
+            report("backend.close", cleanup_exc, "E_STORAGE")
+    if work_dir is not None:
+        try:
+            remove_sensitive_work_dir(work_dir, work_dir_error_code)
+        except Exception as cleanup_exc:
+            report("workdir.remove", cleanup_exc, work_dir_error_code)
+
 
 def run_backup(
     config_path: Optional[Path] = None,
@@ -554,7 +611,7 @@ def run_backup(
                 f"ready={ready}, connected={connected}, size={cluster_size}/{cfg.galera_nodes_expected}"
             )
 
-        fc_initial = int(gal_vars.get("wsrep_flow_control_paused_ns", "0"))
+        fc_initial = _flow_control_paused_ns(gal_vars)
 
         # Free space check
         cfg.paths.staging_root.mkdir(parents=True, exist_ok=True)
@@ -679,7 +736,7 @@ def run_backup(
 
         # Check flow control delta
         gal_vars_final = query_galera_vars(cfg.paths.socket, runner)
-        fc_final = int(gal_vars_final.get("wsrep_flow_control_paused_ns", "0"))
+        fc_final = _flow_control_paused_ns(gal_vars_final)
         fc_delta = fc_final - fc_initial
 
         if fc_delta > cfg.flow_control_threshold_ns:
@@ -753,11 +810,14 @@ def run_backup(
                 {"error_code": "E_STORAGE", "message": str(drill_exc)},
             )
 
+        # Po zapisanym state.success cleanup jest best-effort: jego porazka
+        # dostaje cleanup.failure i nie moze zdegradowac zweryfikowanego
+        # backupu do state.failure.
         completed_backend = backend
         backend = None
-        completed_backend.close()
-        remove_sensitive_work_dir(work_dir, "E_STORAGE")
+        completed_work_dir = work_dir
         work_dir = None
+        _finalize_success_cleanup(event_mgr, completed_backend, completed_work_dir, "E_STORAGE")
         print(f"galera-backup backup for {cluster_name} completed successfully ({backup_name}, {enc_size} bytes)")
     except Exception as exc:
         duration = time.time() - start_time
@@ -1106,9 +1166,11 @@ def run_restore(
                 "drill_marker.failure",
                 {"error_code": "E_STORAGE", "message": str(marker_exc)},
             )
-        completed_backend.close()
-        remove_sensitive_work_dir(work_dir, "E_INTEGRITY")
+        completed_work_dir = work_dir
         work_dir = None
+        # Wspolny epilog backupu i restore: porazka close/usuniecia workdir
+        # jest osobnym cleanup.failure, a nie porazka zweryfikowanego drillu.
+        _finalize_success_cleanup(event_mgr, completed_backend, completed_work_dir, "E_INTEGRITY")
 
         state_mgr.update_success(
             "restore",

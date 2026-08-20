@@ -289,40 +289,6 @@
       changed_when: true
       no_log: true
 
-    - name: Select stale MinIO service accounts for removal
-      ansible.builtin.set_fact:
-        galera_backup_access_keys_to_revoke: >-
-          {{
-            (
-              galera_backup_existing_access_keys
-              | reject('equalto', galera_backup_existing_s3_access_key)
-              | list
-            )
-            if galera_backup_reuse_existing_s3_key
-            else galera_backup_existing_access_keys
-          }}
-      no_log: true
-
-    - name: Revoke stale service accounts owned by this cluster
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - /run/galera-backup-minio-tmp/root.env
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - admin
-          - accesskey
-          - remove
-          - myminio
-          - "{{ item }}"
-      loop: "{{ galera_backup_access_keys_to_revoke }}"
-      # Kazdy obrot petli usuwa konto serwisowe — mutacja stanu MinIO.
-      changed_when: true
-      no_log: true
 
     - name: Create new scoped access key pair
       ansible.builtin.command:
@@ -366,8 +332,66 @@
       when: not galera_backup_reuse_existing_s3_key
       no_log: true
 
+    - name: Renderuj nowe poswiadczenia MinIO
+      ansible.builtin.copy:
+        dest: /run/galera-backup-minio-tmp/scoped-new.env
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          GALERA_MC_AK={{ galera_backup_s3_access_key }}
+          GALERA_MC_SK={{ galera_backup_s3_secret_key }}
+      when: not galera_backup_reuse_existing_s3_key
+      no_log: true
+
+    - name: Potwierdz dostep nowego klucza MinIO do bucketa
+      # "Potwierdzony create": konto powstalo, ale dopiero ta sonda dowodzi, ze
+      # klucz autentykuje i polityka naprawde dopuszcza bucket. Sonda KONTRASTUJE
+      # z sondą kandydata wyzej: tam failed_when:false jest celowe (kandydat moze
+      # byc martwy i wtedy tworzymy nowy klucz), tutaj porazka MUSI wylaczyc
+      # play — niepotwierdzone poswiadczenie nie moze dopuscic do odwolania
+      # starego konta w main.yml.
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/scoped-new.env
+          - --entrypoint
+          - sh
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - -c
+          - >-
+            mc alias set scoped http://localhost:9000 "$GALERA_MC_AK" "$GALERA_MC_SK" >/dev/null 2>&1 &&
+            exec mc ls "scoped/{{ backup.s3.bucket }}" --json
+      when: not galera_backup_reuse_existing_s3_key
+      changed_when: false
+      no_log: true
+
+    - name: Select stale MinIO service accounts for removal
+      # AKTYWNY klucz (reused albo swiezo utworzony i sondowany wyzej) nigdy nie
+      # trafia na liste. Lista powstaje dopiero po potwierdzonym create; samo
+      # odwolanie zyje w main.yml PO zapisaniu nowego secrets.env — dopoki
+      # ktorekolwiek z tych krokow nie doszlo do skutku, stare konto zyje.
+      ansible.builtin.set_fact:
+        galera_backup_access_keys_to_revoke: >-
+          {{
+            galera_backup_existing_access_keys
+            | reject('equalto', galera_backup_s3_access_key)
+            | list
+          }}
+      no_log: true
+
   always:
     - name: Remove root credentials and temporary policy
+      # root.env MUSI przetrwac do revoke w main.yml (revoke biegnie dopiero po
+      # zapisaniu nowego secrets.env), wiec katalog sprzatamy tylko wtedy, gdy
+      # nic nie czeka na odwolanie. Pozostalosc jest root-only (0700/0600),
+      # a kolejny przebieg i tak ja usuwa.
       ansible.builtin.file:
         path: /run/galera-backup-minio-tmp
         state: absent
+      when: (galera_backup_access_keys_to_revoke | default([]) | length) == 0

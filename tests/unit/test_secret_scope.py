@@ -6,8 +6,21 @@ play-level environment blocks where unrelated tasks would inherit them.
 """
 
 import unittest
+from pathlib import Path
+
 import yaml
 
+
+REPO = Path(__file__).resolve().parents[2]
+ROLE_TASKS = REPO / "roles" / "pmm" / "tasks"
+
+
+def load_role_tasks():
+    """Wczytaj zadania roli po przeniesieniu logiki z wrappera."""
+    tasks = []
+    for path in sorted(ROLE_TASKS.glob("*.yml")):
+        tasks.extend(yaml.safe_load(path.read_text(encoding="utf-8")) or [])
+    return tasks
 
 class SecretScopeTests(unittest.TestCase):
     def test_pmm_agent_secret_not_in_play_environment(self):
@@ -23,27 +36,23 @@ class SecretScopeTests(unittest.TestCase):
             )
 
     def test_pmm_agent_setup_task_has_secret_and_no_log(self):
-        with open("playbooks/f11_pmm_agent.yml", encoding="utf-8") as f:
-            plays = yaml.safe_load(f)
-
         found_setup_task = False
-        for play in plays:
-            for task in play.get("tasks", []):
-                name = task.get("name", "")
-                if "Zarejestruj wezel" in name or "pmm-agent setup" in name:
-                    found_setup_task = True
-                    task_env = task.get("environment", {})
-                    self.assertIn(
-                        "PMM_AGENT_SERVER_PASSWORD",
-                        task_env,
-                        "Task must define PMM_AGENT_SERVER_PASSWORD in task-level environment",
-                    )
-                    self.assertTrue(
-                        task.get("no_log"),
-                        "Task with secret environment must have no_log: true",
-                    )
+        for task in load_role_tasks():
+            name = task.get("name", "")
+            if "Zarejestruj wezel" in name or "pmm-agent setup" in name:
+                found_setup_task = True
+                task_env = task.get("environment", {})
+                self.assertIn(
+                    "PMM_AGENT_SERVER_PASSWORD",
+                    task_env,
+                    "Task must define PMM_AGENT_SERVER_PASSWORD in task-level environment",
+                )
+                self.assertTrue(
+                    task.get("no_log"),
+                    "Task with secret environment must have no_log: true",
+                )
 
-        self.assertTrue(found_setup_task, "pmm-agent setup task must be found")
+        self.assertTrue(found_setup_task, "pmm-agent setup task must be found in roles/pmm")
 
 
 if __name__ == "__main__":

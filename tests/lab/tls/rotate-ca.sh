@@ -20,6 +20,8 @@
 #
 #   tests/lab/tls/rotate-ca.sh <cn> <san1,san2,...> reissue
 #   make cluster-tls-rotate CLUSTER=<klaster>          # lisc od NOWEGO CA
+#                                                       (server-cert i wszystkie
+#                                                       liscie per wezel)
 #
 #   tests/lab/tls/rotate-ca.sh <cn> <san1,san2,...> retire-old
 #   make cluster-tls-rotate CLUSTER=<klaster>          # zaufanie tylko do NOWEGO
@@ -37,7 +39,8 @@ fi
 CN="$1"
 SAN_INPUT="$2"
 PHASE="$3"
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/${CN%%-*}"
+BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="$BASE/${CN%%-*}"
 
 [ -d "$DIR" ] || { echo "FAIL: brak katalogu $DIR" >&2; exit 1; }
 umask 0077
@@ -93,19 +96,61 @@ case "$PHASE" in
       -out "$DIR/server-cert.pem" \
       -extfile <(printf 'subjectAltName=%s\nextendedKeyUsage=serverAuth,clientAuth\nbasicConstraints=CA:FALSE\n' "$san_list")
     rm -f "$DIR/server.csr" "$DIR/ca-next.srl"
+    # Liscie PER WEZEL wdrazane sa z tego katalogu (tls_certs.yml wyprowadza
+    # node-<host>-cert.pem z inventory_hostname), wiec NOWE CA musi podpisac
+    # rowniez je — inaczej po retire-old wezly prezentowalyby lisc, ktorego
+    # juz nikt nie ufa. Tozsamosc (host=ip) czytamy ze STAREGO liscia: SAN to
+    # zawsze "DNS:<host>, IP:<ip>" (issue-node-certs.sh), a tekst z -text dziala
+    # i na LibreSSL, i na OpenSSL 3 (-ext subjectAltName nie ma w LibreSSL).
+    node_pairs=""
+    shopt -s nullglob
+    for cert in "$DIR"/node-*-cert.pem; do
+      host="$(basename "$cert" | sed 's/^node-//; s/-cert\.pem$//')"
+      ip="$(openssl x509 -in "$cert" -noout -text \
+        | sed -n '/Subject Alternative Name/{n;p;}' | tr -d ' ' | tr ',' '\n' \
+        | sed -n 's/^IPAddress://p' | head -1)"
+      [ -n "$ip" ] || { echo "FAIL: $cert nie ma SAN IP — nie umiem odtworzyc host=ip do reissue" >&2; exit 1; }
+      node_pairs="${node_pairs},${host}=${ip}"
+    done
+    shopt -u nullglob
+    if [ -n "$node_pairs" ]; then
+      echo "== Reissue lisci per wezel z NOWEGO CA:${node_pairs}"
+      # issue-node-certs.sh to kanoniczny wystawiacz lisci per wezel; jawnie
+      # wskazujemy CA_FILE/CA_KEY na nowe CA (skrypt odmawia bundle'y).
+      CA_FILE="$DIR/ca-next.pem" CA_KEY="$DIR/ca-next-key.pem" \
+        "$BASE/issue-node-certs.sh" "${DIR##*/}" "${node_pairs#,}" >/dev/null
+    fi
     openssl verify -CAfile "$DIR/ca-next.pem" "$DIR/server-cert.pem"
     ;;
 
   retire-old)
     [ -r "$DIR/ca-next.pem" ] || { echo "FAIL: brak $DIR/ca-next.pem" >&2; exit 1; }
     # Brama z dokumentacji: "Do not remove the old CA from trust until every node
-    # has been reissued". Sprawdzamy to na materiale: lisc MUSI juz weryfikowac
-    # sie samym nowym CA, inaczej zdjecie starego odetnie wezly.
-    if ! openssl verify -CAfile "$DIR/ca-next.pem" "$DIR/server-cert.pem" >/dev/null 2>&1; then
-      echo "FAIL: server-cert.pem NIE weryfikuje sie nowym CA — faza reissue nie" >&2
-      echo "      zostala wykonana albo wdrozona. Zdjecie starego CA odcieloby wezly." >&2
-      exit 1
+    # has been reissued". Sprawdzamy CALY material, ktory po tej fazie wdrozy
+    # tls_certs.yml: w trybie per-node liscie node-<host>-cert.pem (WSZYSTKIE —
+    # jeden niedoreissue'niety wezel wystarczy, by odciac go od klastra),
+    # w trybie wspolnym server-cert.pem.
+    verified=0
+    shopt -s nullglob
+    for cert in "$DIR"/node-*-cert.pem; do
+      if ! openssl verify -CAfile "$DIR/ca-next.pem" "$cert" >/dev/null 2>&1; then
+        echo "FAIL: $cert NIE weryfikuje sie nowym CA — ten lisc jest wdrazany na" >&2
+        echo "      wezel, a faza reissue najwyrazniej go pominela. Zdjecie starego" >&2
+        echo "      CA odcieloby ten wezel od klastra." >&2
+        exit 1
+      fi
+      verified=1
+    done
+    shopt -u nullglob
+    if [ -r "$DIR/server-cert.pem" ]; then
+      if ! openssl verify -CAfile "$DIR/ca-next.pem" "$DIR/server-cert.pem" >/dev/null 2>&1; then
+        echo "FAIL: server-cert.pem NIE weryfikuje sie nowym CA — faza reissue nie" >&2
+        echo "      zostala wykonana albo wdrozona. Zdjecie starego CA odcieloby wezly." >&2
+        exit 1
+      fi
+      verified=1
     fi
+    [ "$verified" -eq 1 ] || { echo "FAIL: brak materialu do sprawdzenia (ani server-cert.pem, ani lisci per wezel) — najpierw faza reissue" >&2; exit 1; }
     cp "$DIR/ca-next.pem" "$DIR/ca.pem"
     cp "$DIR/ca-next-key.pem" "$DIR/ca-key.pem"
     rm -f "$DIR/ca-next.pem" "$DIR/ca-next-key.pem" "$DIR/ca-previous.pem"

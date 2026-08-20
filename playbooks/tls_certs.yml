@@ -2,7 +2,7 @@
 # Include z site.yml / bootstrap.yml / f5_join.yml (węzły Galera, owner=mysql)
 #   oraz f7_proxysql.yml (ProxySQL, owner=root, bez klucza prywatnego).
 # Źródło: tls.ca_reference / tls.certificate_reference / tls.private_key_reference
-#   = ścieżki na hoście kontrolnym (certificate_source=file) lub artefakty PKI produkcji.
+#   = sciezki na hoscie kontrolnym albo artefakty PKI produkcji.
 # Zmienne sterujące:
 #   tls_file_owner  (domyślnie 'mysql')  — właściciel plików/katalogu
 #   tls_deploy_key  (domyślnie true)     — czy kopiować klucz prywatny (ProxySQL: false)
