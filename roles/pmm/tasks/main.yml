@@ -1,0 +1,39 @@
+---
+# Dispatcher roli PMM. Sceny maja stale nazwy plikow, aby kontrakt i lint
+# mogly sprawdzic caly graf; pmm_mode rozdziela agent i agentless.
+
+- name: "PMM — odrzuc nieznana kombinacje tryb/scena"
+  ansible.builtin.fail:
+    msg: >-
+      roles/pmm: nieznana kombinacja pmm_mode={{ pmm_mode | default('') }}
+      i pmm_stage={{ pmm_stage | default('') }}.
+      Dozwolone stage: preflight, monitor_account, register, legacy_cleanup, install.
+  when: >-
+    (pmm_mode | default('') not in ['agent', 'agentless'])
+    or (pmm_stage | default('') not in ['preflight', 'monitor_account', 'register', 'legacy_cleanup', 'install'])
+    or ((pmm_mode | default('')) == 'agent' and (pmm_stage | default('')) in ['preflight', 'legacy_cleanup'])
+    or ((pmm_mode | default('')) == 'agentless' and (pmm_stage | default('')) == 'install')
+
+- name: "PMM — wstepna weryfikacja API agentless"
+  ansible.builtin.include_tasks: agentless_preflight.yml
+  when: pmm_mode == 'agentless' and pmm_stage == 'preflight'
+
+- name: "PMM — wspolne konto monitorujace MariaDB"
+  ansible.builtin.include_tasks: monitor_account.yml
+  when: pmm_stage == 'monitor_account'
+
+- name: "PMM — rejestracja obiektow agentless"
+  ansible.builtin.include_tasks: agentless_register.yml
+  when: pmm_mode == 'agentless' and pmm_stage == 'register'
+
+- name: "PMM — sprzatanie legacy agentless"
+  ansible.builtin.include_tasks: agentless_legacy.yml
+  when: pmm_mode == 'agentless' and pmm_stage == 'legacy_cleanup'
+
+- name: "PMM — instalacja i rejestracja agenta"
+  ansible.builtin.include_tasks: agent_install.yml
+  when: pmm_mode == 'agent' and pmm_stage == 'install'
+
+- name: "PMM — rejestracja uslug agenta"
+  ansible.builtin.include_tasks: agent_register.yml
+  when: pmm_mode == 'agent' and pmm_stage == 'register'

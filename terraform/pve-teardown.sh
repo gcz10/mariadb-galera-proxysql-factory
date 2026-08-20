@@ -115,12 +115,61 @@ Aby wykonac, powtorz cel w zmiennej:
 EOF
   exit 1
 fi
+# Terraform odrzuca -target pojedynczej VM, gdy blok moved jest jeszcze tylko
+# w konfiguracji, a state nadal ma adres rootowy. Nie wolno wtedy poszerzac
+# targetu do calego zasobu (zniszczyloby to pozostale wezly); bramka ponizej
+# konczy sie jawnie i wymaga najpierw zapisania migracji adresow.
+if [ "${#NODES[@]}" -gt 0 ] && [ -f "$TF_DIR/terraform.tfstate" ]; then
+  if python3 - "$TF_DIR/terraform.tfstate" "$TF_DIR" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        state = json.load(handle)
+    root = Path(sys.argv[2])
+    has_move = any(
+        re.search(
+            r"\bto\s*=\s*module\.vms\.proxmox_virtual_environment_vm\.node\b",
+            path.read_text(encoding="utf-8"),
+        )
+        for path in root.glob("*.tf")
+    )
+    pending = any(
+        item.get("type") == "proxmox_virtual_environment_vm"
+        and not item.get("module")
+        for item in state.get("resources", [])
+    )
+except (OSError, ValueError, TypeError) as exc:
+    print(f"nie mozna odczytac stanu migracji: {exc}", file=sys.stderr)
+    raise SystemExit(2)
+
+raise SystemExit(0 if pending and has_move else 1)
+PY
+  then
+    cat >&2 <<EOF
+ODMOWA: state nie ma jeszcze zapisanych adresow module.vms (moved).
+Najpierw wykonaj plan migracji i zastosuj go tylko, gdy pokazuje 0/0/0,
+potem ponow teardown per-node.
+EOF
+    exit 1
+  else
+    CHECK_RC=$?
+    if [ "$CHECK_RC" -ge 2 ]; then
+      echo "ODMOWA: nie mozna bezpiecznie sprawdzic stanu migracji adresow." >&2
+      exit 1
+    fi
+  fi
+fi
+
 
 if [ "${#NODES[@]}" -gt 0 ]; then
   echo "=== terraform destroy — TYLKO: ${NODES[*]} ==="
   TARGETS=()
   for n in "${NODES[@]}"; do
-    TARGETS+=(-target="proxmox_virtual_environment_vm.node[\"$n\"]")
+    TARGETS+=(-target="module.vms.proxmox_virtual_environment_vm.node[\"$n\"]")
   done
   ( cd "$TF_DIR" && terraform destroy -auto-approve "${TARGETS[@]}" )
 else

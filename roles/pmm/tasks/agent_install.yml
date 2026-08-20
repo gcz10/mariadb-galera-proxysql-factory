@@ -1,0 +1,168 @@
+---
+- name: "Pomin hosty spoza monitoring.agent_groups"
+  ansible.builtin.meta: end_host
+  when: not (pmm_agent_target | bool)
+
+- name: "Wymagaj hasla PMM poza repozytorium"
+  ansible.builtin.assert:
+    that: pmm_admin_password | length > 0
+    fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium."
+
+# Eksportery tworzone nizej przez API PMM sa walidowane POLACZENIEM: PMM
+# loguje sie jako pmm_monitor i odrzuca zadanie golym HTTP 400, gdy konta
+# nie ma. f11_pmm_client.yml tworzy je tez, ale biegnie PO tym playbooku,
+# wiec na swiezym klastrze bylo za pozno.
+#
+# WYLACZNIE @'%'. Konto @localhost jest w tym repo uznane za legacy i
+# Sciezka agentless usuwa konto legacy; tworzenie go tutaj dawalo ping-pong
+# (agent tworzy, agentless kasuje) i F11 nigdy nie zbiegalo do changed=0.
+#
+# CIEN ANONIMOWYCH KONT: swieza instalacja Mariadb tworzy ''@'localhost'
+# (i ''@'<hostname>'), a MariaDB resolvuje 127.0.0.1 do 'localhost'.
+# Anonim o bardziej konkretnym hoscie WYGRYWA z pmm_monitor@'%' — eksporter
+# laczy sie po TCP na 127.0.0.1 i dostaje "Access denied for user
+# 'pmm_monitor'@'localhost'", a API PMM odrzuca POST golym 400 bez
+# wskazania przyczyny. F6 (ISC-40) usuwa anonimowych, ale biegnie PO F11,
+# wiec na swiezym klastrze kazde tworzenie eksportera pod lokalnym agentem
+# padalo. Tu idzie identyczne SQL jak w F6 — F6 zostaje audytorem, a jego
+# drugi przebieg jest no-op. DDL replikuje sie Galera-wide z jednego wezla.
+- name: "Usun anonimowe konta cieniujace pmm_monitor (to samo SQL co F6)"
+  ansible.builtin.shell: |-
+    set -o pipefail
+    stmts=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SELECT CONCAT('DROP USER IF EXISTS ', QUOTE(user), '@', QUOTE(host), ';') FROM mysql.user WHERE user=''")
+    if [ -n "$stmts" ]; then echo "$stmts" | mariadb --socket=/var/lib/mysql/mysql.sock && echo DROPPED; fi
+  register: pmm_anon_cleanup
+  # Marker, nie tresc SQL: instrukcje DROP ida POTOKIEM do klienta, wiec stdout
+  # zadania jest puste nawet gdy konta faktycznie znikaja. Warunek oparty na
+  # 'DROP USER' w stdout nigdy nie strzelal — zadanie mutowalo stan i meldowalo
+  # `ok`, czyli raport idempotencji klamal. Zmierzone: 1 anonim -> 0, stdout [].
+  changed_when: "'DROPPED' in pmm_anon_cleanup.stdout | default('')"
+  when:
+    - inventory_hostname in groups.get('galera', [])
+    - galera_node_idx | default(1) == 1
+
+- name: "Wspolna rejestracja konta pmm_monitor"
+  ansible.builtin.include_tasks: monitor_account.yml
+
+- name: "Repozytorium Percony"
+  ansible.builtin.dnf:
+    name: "{{ pmm_client.release_rpm }}"
+    state: present
+    disable_gpg_check: true
+  register: pmm_release_rpm
+  changed_when: pmm_release_rpm.changed
+
+- name: "Wlacz komponent pmm3-client"
+  ansible.builtin.command:
+    argv: [percona-release, enable, "{{ pmm_client.repo_component }}"]
+  args:
+    # percona-release dopisuje sufiks `-release` do nazwy pliku; bez niego
+    # `creates` nigdy nie trafial i zadanie raportowalo `changed` co przebieg.
+    creates: "/etc/yum.repos.d/percona-{{ pmm_client.repo_component }}-release.repo"
+
+- name: "Zainstaluj PRZYPIETA wersje pmm-client"
+  ansible.builtin.dnf:
+    name: "{{ pmm_client.package }}"
+    state: present
+    allow_downgrade: true
+
+- name: "Sprawdz, czy agent jest juz skonfigurowany"
+  ansible.builtin.command:
+    # Limit czasu jest KONIECZNY: gdy lokalne API agenta sie zaklinuje,
+    # `pmm-admin status` nie wraca nigdy i caly playbook wisi bez zadnego
+    # komunikatu. Obserwowane zaklinowania mialy zrodlo w eksporterach z
+    # wyczyszczonym haslem (patrz uzgadnianie ponizej) — samo DELETE przez API
+    # sprawdzono i agenta NIE wiesza. Timeout zamienia zwis w czytelna porazke.
+    argv: [timeout, "20", pmm-admin, status, --json]
+  register: pmm_state
+  changed_when: false
+  failed_when: false
+
+- name: "Zarejestruj wezel (haslo przez env, nie argv)"
+  ansible.builtin.command:
+    # Flaga pomijajaca weryfikacje TLS musi znikac z argv, gdy klaster ma
+    # validate_certs=true — inaczej `pmm-agent setup` i tak zestawi kanal
+    # bez sprawdzenia certyfikatu serwera PMM. Lista sklejana warunkowo,
+    # bo `argv` nie przyjmuje `when` na pojedynczym elemencie.
+    argv: >-
+      {{ ['pmm-agent', 'setup', '--force']
+         + ([] if pmm_validate_certs_effective else ['--server-insecure-tls'])
+         + [ansible_host, 'generic', pmm_node_name] }}
+  environment:
+    PMM_AGENT_SERVER_PASSWORD: "{{ pmm_admin_password }}"
+  # Nie wystarczy 'czy zainstalowany': agent moze byc skonfigurowany, ale
+  # jego wezel usuniety po stronie serwera — wtedy status zwraca rc=0,
+  # a agent nigdy sie nie polaczy. Kryterium jest POLACZENIE.
+  when: pmm_state.rc != 0 or not ((pmm_state.stdout | default('{}') | from_json).pmm_agent_status.connected | default(false)) or (pmm_force_resetup |
+    default(false) | bool)
+  changed_when: true
+  no_log: true
+- name: "Wlacz i zrestartuj pmm-agent"
+  ansible.builtin.systemd_service:
+    name: pmm-agent
+    state: restarted
+    enabled: true
+  when: pmm_state.rc != 0 or not ((pmm_state.stdout | default('{}') | from_json).pmm_agent_status.connected | default(false))
+
+- name: "Poczekaj na polaczenie agenta"
+  ansible.builtin.command:
+    argv: [pmm-admin, status, --json]
+  register: pmm_ready
+  until: pmm_ready.rc == 0 and (pmm_ready.stdout | from_json).pmm_agent_status.connected | default(false)
+  retries: 12
+  delay: 5
+  changed_when: false
+
+- name: "Zapamietaj identyfikatory agenta"
+  ansible.builtin.set_fact:
+    pmm_local_agent_id: "{{ (pmm_ready.stdout | from_json).pmm_agent_status.agent_id }}"
+    pmm_local_node_id: "{{ (pmm_ready.stdout | from_json).pmm_agent_status.node_id }}"
+
+# node_exporter niesie teraz pmm-agent. Tarballowy standalone zostawiony
+# dzialalby rownolegle na 9100 i dublowal metryki tego samego hosta.
+- name: "Zatrzymaj samodzielny node_exporter (zastapiony przez agenta)"
+  ansible.builtin.systemd_service:
+    name: node_exporter
+    state: stopped
+    enabled: false
+  failed_when: false
+
+# KRYTYCZNE: runner backupu pisze metryki do /var/lib/node_exporter/textfile_collector
+# (roles/galera_backup/templates/config.json.j2). Ten katalog obslugiwal tarballowy
+# node_exporter, ktory wlasnie zatrzymalismy — node_exporter Z PACZKI czyta wlasne
+# katalogi. Bez tego kroku runner dalej PISZE pliki, ale nikt ich nie czyta:
+# galera_backup_* i isa_restore_test_* znikaja, a alerty backup-failed/backup-stale/
+# restore-drill-stale CICHO przestaja dzialac. To wygaszenie alertowania backupu,
+# nie kosmetyka.
+#
+# Podpinamy KATALOG, nie pliki: runner podmienia pliki atomowym rename (nowy inode),
+# wiec symlink do pliku wskazywalby po pierwszym backupie na usuniety inode.
+# Zweryfikowane: po swiezym backupie unixtime metryki faktycznie rosnie.
+- name: "Sprawdz domyslny katalog textfile PMM"
+  ansible.builtin.stat:
+    path: /usr/local/percona/pmm/collectors/textfile-collector/medium-resolution
+  register: pmm_textfile_stat
+
+- name: "Podepnij katalog textfile runnera pod node_exporter z paczki"
+  vars:
+    pmm_textfile_dir: /usr/local/percona/pmm/collectors/textfile-collector/medium-resolution
+  block:
+    - name: "Zapewnij katalog metryk runnera"
+      ansible.builtin.file:
+        path: /var/lib/node_exporter/textfile_collector
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "Usun domyslny katalog textfile PMM (jesli nie jest juz symlinkiem)"
+      ansible.builtin.file:
+        path: "{{ pmm_textfile_dir }}"
+        state: absent
+      when: pmm_textfile_stat.stat.islnk is not defined or not pmm_textfile_stat.stat.islnk
+
+    - name: "Symlink na katalog metryk runnera"
+      ansible.builtin.file:
+        src: /var/lib/node_exporter/textfile_collector
+        dest: "{{ pmm_textfile_dir }}"
+        state: link

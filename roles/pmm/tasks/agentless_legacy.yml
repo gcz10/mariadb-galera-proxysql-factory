@@ -1,0 +1,39 @@
+---
+- name: "Usuń legacy replikowane konto eksportera"
+  ansible.mysql.mysql_user:
+    name: pmm
+    host: "%"
+    state: absent
+    login_unix_socket: /var/lib/mysql/mysql.sock
+    column_case_sensitive: true
+  when: galera_node_idx | int == 1
+  no_log: true
+
+- name: "Usuń znane legacy lokalne konta eksporterów"
+  ansible.mysql.mysql_user:
+    name: "{{ item }}"
+    host: localhost
+    state: absent
+    login_unix_socket: /var/lib/mysql/mysql.sock
+    column_case_sensitive: true
+  loop:
+    - pmm
+    - pmm_monitor
+  when: galera_node_idx | int == 1
+  no_log: true
+
+- name: "Zatrzymaj legacy standalone mysqld_exporter"
+  ansible.builtin.command:
+    argv:
+      - pkill
+      - -x
+      - mysqld_exporter
+  register: pmm_legacy_exporter_stop
+  changed_when: pmm_legacy_exporter_stop.rc == 0
+  failed_when: pmm_legacy_exporter_stop.rc not in [0, 1]
+  when: inventory_hostname not in pmm_agent_managed_hosts
+
+- name: "Usuń legacy plik danych dostępowych eksportera"
+  ansible.builtin.file:
+    path: /var/lib/mysql/.my.cnf
+    state: absent

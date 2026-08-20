@@ -1,0 +1,76 @@
+---
+# Wspolne domyslne ustawienia roli PMM.
+# pmm_mode wybiera sciezke agent (pmm-agent na hoscie) albo agentless
+# (eksportery zarzadzane przez PMM Server). pmm_stage wybiera scene wrappera.
+pmm_mode: agentless
+pmm_stage: ""
+
+# Auth pochodzi ze srodowiska kontrolera, nigdy ze zmiennych w repo.
+# Agent zachowuje staly login admin jak poprzedni playbook; agentless
+# honoruje opcjonalny PMM_ADMIN_USER.
+pmm_admin_user: "{{ (lookup('ansible.builtin.env', 'PMM_ADMIN_USER') | default('admin', true)) if pmm_mode == 'agentless' else 'admin' }}"
+pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+pmm_monitor_user: "pmm_monitor"
+pmm_monitor_password: "{{ lookup('ansible.builtin.env', 'PMM_MONITOR_PASSWORD') }}"
+pmm_proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+
+# Agentless zachowuje nadpisanie PMM_SERVER_URL z f11_pmm_client.yml.
+# Agent korzysta z monitoring.pmm.server_url jak f11_pmm_agent.yml.
+pmm_api_url: >-
+  {{ (lookup('ansible.builtin.env', 'PMM_SERVER_URL')
+      | default(monitoring.get('pmm', {}).get('server_url', 'https://127.0.0.1:8443'), true))
+     if pmm_mode == 'agentless'
+     else (monitoring.pmm.server_url | regex_replace('/$', '')) }}
+
+# W trybie agentless domyslnie wymagamy TLS; lokalny agent zachowuje stary
+# fallback false. Jawne monitoring.pmm.validate_certs wygrywa w obu trybach.
+pmm_validate_certs_effective: "{{ monitoring.get('pmm', {}).get('validate_certs', pmm_mode == 'agentless') | bool }}"
+
+# Wspolne etykiety i rewizja sekretow.
+pmm_environment_effective: "{{ cluster.environment }}"
+pmm_cluster_name_effective: "{{ monitoring.get('pmm', {}).get('cluster_name', cluster.name) }}"
+pmm_credentials_revision_effective: "{{ monitoring.get('pmm', {}).get('credentials_revision', 1) | string }}"
+
+# Hosty z lokalnym agentem sa wykluczone ze sciezki agentless.
+pmm_agent_managed_hosts: >-
+  {{ (monitoring.agent_groups | default([])) | map('extract', groups) | select('defined')
+     | map('list') | flatten | unique | list }}
+pmm_agent_managed_names: >-
+  {{ pmm_agent_managed_hosts
+     | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}
+
+# Zestawy hostow i nazw dla rejestracji agentless. Konsument wspolnej pary
+# ProxySQL rejestruje tylko wlasne wezly; owner rejestruje Galera i ProxySQL.
+pmm_agent_id_effective: "{{ monitoring.get('pmm', {}).get('agent_id', 'pmm-server') }}"
+pmm_node_hosts: >-
+  {{ ((groups.get('galera', []) if (proxysql.role | default('owner')) == 'consumer'
+      else groups.get('galera', []) + groups.get('proxysql', []))
+      | difference(pmm_agent_managed_hosts)) | unique | list }}
+pmm_node_names: "{{ pmm_node_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
+pmm_mysql_hosts: "{{ (groups.get('galera', []) | difference(pmm_agent_managed_hosts)) | list }}"
+pmm_mysql_names: "{{ pmm_mysql_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
+pmm_external_service_names: "{{ pmm_node_names | map('regex_replace', '$', '-node-exporter') | list }}"
+pmm_mysql_service_names: "{{ pmm_mysql_names | map('regex_replace', '$', '-mysql') | list }}"
+
+# Zmienne instalacji i rejestracji lokalnego agenta.
+pmm_agent_target: >-
+  {{ (group_names | intersect(monitoring.agent_groups | default([])) | length > 0)
+     and not ((proxysql.role | default('owner')) == 'consumer'
+              and (group_names | intersect(['proxysql', 'infra']) | length > 0)) }}
+pmm_server_host: "{{ monitoring.pmm.server_url | regex_replace('^https?://', '') | regex_replace('/$', '') }}"
+pmm_node_name: "{{ monitoring.pmm.cluster_name }}-{{ inventory_hostname }}"
+pmm_qan_agent_key: "qan_mysql_{{ monitoring.qan_source | default('perfschema') }}_agent"
+pmm_local_agent_ids: >-
+  {{ hostvars | dict2items | selectattr('value.pmm_local_agent_id', 'defined')
+     | map(attribute='value.pmm_local_agent_id') | list }}
+pmm_local_exporters: >-
+  {{ [{'type': 'mysqld_exporter', 'push': true,
+       'agents': pmm_agents_now.json.mysqld_exporter | default([])},
+      {'type': 'proxysql_exporter', 'push': true,
+       'agents': pmm_agents_now.json.proxysql_exporter | default([])},
+      {'type': pmm_qan_agent_key, 'push': false,
+       'agents': (pmm_agents_now.json | default({})).get(pmm_qan_agent_key, [])}] }}
+pmm_agent_hosts: >-
+  {{ hostvars | dict2items
+     | selectattr('value.pmm_local_agent_id', 'defined')
+     | map(attribute='key') | list }}

@@ -1,0 +1,30 @@
+---
+- name: "Wymagaj bezpiecznego URL i danych administratora PMM"
+  ansible.builtin.assert:
+    that:
+      - pmm_admin_password | length > 0
+      - pmm_api_url is match('^https://')
+      - cluster.environment != 'production' or pmm_validate_certs_effective
+    fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium oraz użyj PMM URL z https://."
+
+- name: "Potwierdź uwierzytelnienie i dostępność PMM API"
+  ansible.builtin.uri:
+    url: "{{ pmm_api_url }}/v1/inventory/nodes"
+    method: GET
+    status_code: 200
+  no_log: true
+- name: "Pobierz wersję runtime PMM"
+  ansible.builtin.uri:
+    url: "{{ pmm_api_url }}/v1/version"
+    method: GET
+    status_code: 200
+    return_content: true
+  register: pmm_runtime_version
+  changed_when: false
+  no_log: true
+
+- name: "Wymagaj wersji PMM przypiętej w lockfile"
+  ansible.builtin.assert:
+    that:
+      - pmm_runtime_version.json.version == pmm.version
+    fail_msg: "PMM runtime version {{ pmm_runtime_version.json.version | default('unknown') }} nie odpowiada lockfile {{ pmm.version }}."

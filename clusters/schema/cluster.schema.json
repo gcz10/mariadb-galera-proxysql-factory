@@ -11,7 +11,6 @@
     "proxysql",
     "tls",
     "network",
-    "secrets",
     "storage",
     "availability",
     "backup",
@@ -24,8 +23,7 @@
       "required": [
         "name",
         "environment",
-        "profile",
-        "automation_release"
+        "profile"
       ],
       "additionalProperties": false,
       "properties": {
@@ -48,28 +46,16 @@
             "staging",
             "laboratory"
           ]
-        },
-        "automation_release": {
-          "type": "string"
         }
       }
     },
     "platform": {
       "type": "object",
       "required": [
-        "virtualization",
         "rocky_linux_major"
       ],
       "additionalProperties": false,
       "properties": {
-        "virtualization": {
-          "type": "string",
-          "enum": [
-            "vmware_esxi",
-            "proxmox_kvm",
-            "docker_orbstack"
-          ]
-        },
         "rocky_linux_major": {
           "type": "integer",
           "enum": [
@@ -123,8 +109,6 @@
       "type": "object",
       "required": [
         "nodes_expected",
-        "max_writers",
-        "read_write_split_enabled",
         "endpoint"
       ],
       "additionalProperties": false,
@@ -132,14 +116,6 @@
         "nodes_expected": {
           "type": "integer",
           "minimum": 2
-        },
-        "max_writers": {
-          "type": "integer",
-          "const": 1
-        },
-        "read_write_split_enabled": {
-          "type": "boolean",
-          "const": false
         },
         "hostgroup_base": {
           "type": "integer",
@@ -257,9 +233,6 @@
             "full"
           ]
         },
-        "certificate_source": {
-          "type": "string"
-        },
         "ca_reference": {
           "type": "string"
         },
@@ -295,7 +268,6 @@
           },
           "then": {
             "required": [
-              "certificate_source",
               "ca_reference",
               "certificate_reference",
               "private_key_reference"
@@ -344,62 +316,18 @@
         }
       }
     },
-    "secrets": {
-      "type": "object",
-      "required": [
-        "backend"
-      ],
-      "additionalProperties": false,
-      "description": "UWAGA: aktualna implementacja czyta sekrety wyłącznie ze zmiennych środowiskowych (lookup env). backend=ansible_vault jest zadeklarowany do przyszłej integracji; do czasu jej wdrożenia ustawiaj *_PASSWORD / *_KEY w środowisku operatora / BACKUP_SECRETS_FILE.",
-      "properties": {
-        "backend": {
-          "type": "string",
-          "enum": [
-            "ansible_vault",
-            "hashicorp_vault",
-            "external"
-          ]
-        }
-      }
-    },
     "storage": {
       "type": "object",
       "required": [
         "data_directory",
-        "backup_staging_directory",
-        "filesystem",
-        "expected_database_size_gb",
-        "expected_growth_gb_per_month",
-        "available_iops"
+        "expected_database_size_gb"
       ],
       "additionalProperties": false,
       "properties": {
         "data_directory": {
           "type": "string"
         },
-        "backup_staging_directory": {
-          "type": "string"
-        },
-        "filesystem": {
-          "type": "string",
-          "enum": [
-            "xfs",
-            "ext4"
-          ]
-        },
         "expected_database_size_gb": {
-          "type": [
-            "string",
-            "number"
-          ]
-        },
-        "expected_growth_gb_per_month": {
-          "type": [
-            "string",
-            "number"
-          ]
-        },
-        "available_iops": {
           "type": [
             "string",
             "number"
@@ -410,27 +338,11 @@
     "availability": {
       "type": "object",
       "required": [
-        "rpo",
-        "rto_node_failure",
-        "rto_full_cluster_failure",
-        "maintenance_window",
-        "allowed_service_interruption"
+        "rto_node_failure"
       ],
       "additionalProperties": false,
       "properties": {
-        "rpo": {
-          "type": "string"
-        },
         "rto_node_failure": {
-          "type": "string"
-        },
-        "rto_full_cluster_failure": {
-          "type": "string"
-        },
-        "maintenance_window": {
-          "type": "string"
-        },
-        "allowed_service_interruption": {
           "type": "string"
         }
       }
@@ -671,8 +583,7 @@
     "monitoring": {
       "type": "object",
       "required": [
-        "pmm",
-        "system"
+        "pmm"
       ],
       "additionalProperties": false,
       "properties": {
@@ -722,9 +633,6 @@
             ]
           },
           "description": "Grupy hostow, ktore dostaja lokalnego pmm-agenta (pakiet pmm-client) zamiast domyslnego trybu agentless. Pusta lista = cala flota agentless: node_exporter z tarballa, a mysqld_exporter/QAN zdalnie z PMM Server. Wezly wspoldzielone obsluguje wylacznie owner pary ProxySQL."
-        },
-        "system": {
-          "type": "string"
         },
         "alerts": {
           "type": "object",
@@ -843,6 +751,19 @@
           "type": "number",
           "minimum": 0,
           "description": "0 = loguj wszystkie zapytania (wymagane przez QAN slowlog). Domyslnie 10."
+        },
+        "wsrep_slave_threads": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Liczba watkow writesetow uzywana przez server.cnf.j2; domyslnie liczba vCPU wezla."
+        },
+        "wsrep_log_conflicts": {
+          "type": "string",
+          "enum": [
+            "ON",
+            "OFF"
+          ],
+          "description": "Rejestracja kolizji certyfikacji uzywana przez server.cnf.j2; domyslnie ON."
         },
         "wsrep_provider_options_extra": {
           "type": "string",

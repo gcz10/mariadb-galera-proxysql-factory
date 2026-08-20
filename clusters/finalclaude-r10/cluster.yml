@@ -15,10 +15,8 @@ cluster:
   name: "finalclaude-r10"
   environment: "laboratory"
   profile: "laboratory"
-  automation_release: "0.1.0"
 
 platform:
-  virtualization: "proxmox_kvm"
   rocky_linux_major: 10
 
 versions:
@@ -33,8 +31,6 @@ galera:
 
 proxysql:
   nodes_expected: 2
-  max_writers: 1
-  read_write_split_enabled: false
   # Owner warstwy wspolnej: ten klaster INSTALUJE i utrzymuje fcp1/fcp2 oraz
   # fcinfra, i zarzadza VIP-em. Dokladnie jeden klaster na parze moze nim byc —
   # pilnuje tego tests/validation/probe-proxysql-tenancy.py.
@@ -59,7 +55,6 @@ proxysql:
 
 tls:
   mode: "disabled"
-  certificate_source: ""
   ca_reference: ""
   certificate_reference: ""
   private_key_reference: ""
@@ -71,16 +66,10 @@ network:
   administration_cidrs: ["192.168.1.0/24"]
   monitoring_cidrs: ["192.168.1.130/32"]
 
-secrets:
-  backend: "ansible_vault"   # env-only w aktualnej implementacji (patrz opis w schema)
 
 storage:
   data_directory: "/var/lib/mysql"
-  backup_staging_directory: "/var/tmp/mariadb-backup"
-  filesystem: "xfs"
   expected_database_size_gb: "unknown"
-  expected_growth_gb_per_month: "unknown"
-  available_iops: "unknown"
 
 workload:
   peak_qps: "unknown"
@@ -91,13 +80,10 @@ workload:
   expected_write_latency_ms: "unknown"
 
 availability:
-  # RPO 0 opiera sie na synchronicznej replikacji Galery, nie na trwalosci
-  # pojedynczego wezla — patrz innodb_flush_log_at_trx_commit ponizej.
-  rpo: "0"
+  # Trwalosc zatwierdzonej transakcji opiera sie na synchronicznej
+  # replikacji Galery; kompromis pojedynczego wezla wynika z
+  # innodb_flush_log_at_trx_commit ponizej.
   rto_node_failure: "2m"
-  rto_full_cluster_failure: "30m"
-  maintenance_window: "weekend"
-  allowed_service_interruption: "2m"
 
 backup:
   enabled: true
@@ -131,7 +117,6 @@ monitoring:
   # Owner wspolnej pary: to on instaluje pmm-agenta na fcp1/fcp2.
   # Wlasne wezly Galera zostaja AGENTLESS — punkt odniesienia do porownania z r9.
   agent_groups: ["proxysql"]
-  system: "pmm"
   alerts:
     email: "ops@claude.local"
 
