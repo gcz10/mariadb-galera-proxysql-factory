@@ -58,11 +58,14 @@ tests/lab/tls/issue-node-certs.sh <klaster> <n1=ip1,n2=ip2,n3=ip3> [dni]
 #     na klastrze bez testów chaos zasiej je jawnie: make lab-seed-smoke CLUSTER=<name>
 #   lab-monitoring-verify sprawdza świeżość backupu i reguły -> na samym końcu
 
-# F2+F3 — pakiety (wersje z versions.lock.yml) + konfiguracja
-make cluster-deploy CLUSTER=lab-cluster
+# Firewall — polityka ingress musi byc zalozona PRZED pierwszym bootstrapem.
+# Bez tego klaster moze dzialac do pierwszego rebootu, ale gcomm/SST beda
+# zablokowane przez domyslna public zone firewalld.
+make cluster-firewall CLUSTER=lab-cluster
 
 # F4 — initial bootstrap: JEDEN węzeł (galera[0]), wymaga jawnego CONFIRM=yes
 make cluster-bootstrap CLUSTER=lab-cluster CONFIRM=yes
+
 
 # F5 — dołącz pozostałe węzły (SST mariabackup, serial:1)
 make cluster-join CLUSTER=lab-cluster
@@ -95,6 +98,7 @@ make cluster-backup-configure CLUSTER=lab-cluster
 make cluster-backup CLUSTER=lab-cluster                  # ISC-32/33/34/35
 make lab-backup-verify CLUSTER=lab-cluster               # S3: szyfr/checksum/metadata
 make cluster-restore-drill CLUSTER=lab-cluster CONFIRM=yes
+
 make lab-restore-verify CLUSTER=lab-cluster               # integralność i świeżość
 make lab-backup-impact CLUSTER=lab-cluster                # ISC-39, lab-only
 #
@@ -108,6 +112,15 @@ make cluster-alerts CLUSTER=lab-cluster
 # QAN, świeże metryki Galery/lifecycle ORAZ reguły ISC-47
 make cluster-monitoring-refresh CLUSTER=lab-cluster
 make lab-monitoring-verify
+
+# Pelny restart klastra NIE jest rownowazny rownoleglym `systemctl restart`:
+# Galera wymaga jednego jawnego bootstrapu po utracie calego Primary Component.
+# Uzyj `make cluster-bootstrap CLUSTER=<name> CONFIRM=yes
+# bootstrap_confirm_all_down=true` dopiero po potwierdzeniu, ze wszystkie wezly
+# sa zatrzymane; wybierz wezel z najwyzszym seqno/safe_to_bootstrap.
+#
+# Jedna bramka po budowie (fail-closed):
+# make lab-post-build-gate CLUSTER=<name>
 ```
 
 PMM UI laboratorium: `http://127.0.0.1:8080`. Stan usług w PMM jest diagnostyczny: `Down` oznacza rzeczywiście nieosiągalną usługę, a nie błąd rejestracji.
@@ -118,22 +131,22 @@ Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje 6 reguł (node
 
 ## Żywa flota
 
-Szybki start powyżej uczy na `lab-cluster` (kontenery). Realne klastry są dwa i
-chodzą na **tym samym kodzie** — różnicę niesie wyłącznie `versions.lock_file`
+Szybki start powyzej uczy na `lab-cluster` (kontenery). Realne klastry sa dwa i
+chodza na **tym samym kodzie** - roznice niesie wylacznie `versions.lock_file`
 w `cluster.yml`:
 
-| Klaster | OS | Węzły | TLS | Hostgroupy ProxySQL |
+| Klaster | OS | Wezly | TLS | Hostgroupy ProxySQL |
 |---|---|---|---|---|
-| `finalclaude-r9` | Rocky 9 | `f9g1-3` + `f9r1` (restore) | `full`, SST szyfrowany | 110/120/130/140 |
 | `finalclaude-r10` | Rocky 10 | `f10g1-3` + `f10r1` | `disabled` (kontrast platformowy) | 10/20/30/40 |
+| `newclaude15-r9` | Rocky 9 | `n15g1-3` + `n15r1` (restore) | `full`, SST szyfrowany | 810/820/830/840 |
 
-Warstwa wspólna dla obu: `fcp1`/`fcp2` (ProxySQL w HA, VIP `192.168.1.133:6033`)
-oraz `fcinfra` (PMM, MinIO, maildev). Jedna para ProxySQL obsługuje całą flotę,
-a klastry rozdziela wyłącznie rozłączność hostgroup i użytkowników — pilnuje jej
+Warstwa wspolna dla obu: `fcp1`/`fcp2` (ProxySQL w HA, VIP `192.168.1.133:6033`)
+oraz `fcinfra` (PMM, MinIO, maildev). Jedna para ProxySQL obsluguje cala flote,
+a klastry rozdziela wylacznie rozlacznosc hostgroup i uzytkownikow - pilnuje jej
 sonda `make verify-proxysql-tenancy`.
 
 Każda komenda ze Szybkiego startu działa na nich przez `CLUSTER=<nazwa>`, np.
-`make cluster-backup CLUSTER=finalclaude-r9`. Aktualny stan maszyn, adresy i
+`make cluster-backup CLUSTER=newclaude15-r9`. Aktualny stan maszyn, adresy i
 dowody z żywej instalacji: `docs/infrastructure-state.md`.
 
 ## Struktura

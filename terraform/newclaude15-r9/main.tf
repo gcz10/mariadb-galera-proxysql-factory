@@ -10,14 +10,11 @@ terraform {
 
 provider "proxmox" {} # endpoint + api_token + insecure z env PROXMOX_VE_*
 
-# newclaude14-r9 - warstwa BAZODANOWA czternastego przebiegu budowy od zera.
+# newclaude15-r9 - warstwa BAZODANOWA czternastego przebiegu budowy od zera.
 #
-# Cel: naturalny dowod mostu swiezosci drillu (PR #52) i materializacji
-# harmonogramu restore (PR #51). Oba powstaly na DZIALAJACYM n13: polityka MinIO
-# byla juz utworzona i tylko konwergowana, a runner backupu byl juz na hoscie.
-# Tutaj jedno i drugie musi powstac POPRAWNIE ZA PIERWSZYM RAZEM - polityka ze
-# statementem znacznika przy tworzeniu poswiadczenia, cron restore na surowym
-# hoscie schedulera, odczyt znacznika z pustego bucketa jako uczciwe zero.
+# Cel: pierwszy klaster budowany pod protokol fail-closed (PR #55). Cala
+# weryfikacja stanu ustalonego przez `make lab-post-build-gate`; sonda, ktora
+# nie umie sprawdzic, konczy UNDETERMINED (exit 2), nigdy zielono.
 #
 # ProxySQL, VIP, PMM, MinIO i host aplikacyjny sa wspoldzielone i mieszkaja
 # w terraform/shared/ - ten katalog ich nie tworzy ani nie niszczy.
@@ -34,7 +31,7 @@ locals {
 
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
-  # VMID 9540-9543 wolne (sprawdzone przez API na pelnej liscie VM klastra PVE).
+  # VMID 9550-9553 wolne (sprawdzone przez API na pelnej liscie VM klastra PVE).
   # IP .168-.171 potwierdzone AKTYWNYM skanem sieci (ping + port 22/8006) juz PO
   # zniszczeniu n13, wiec blok jest realnie pusty, a nie tylko zwolniony w planie.
   #
@@ -49,10 +46,10 @@ locals {
   # innodb_buffer_pool_size zjezdza do 768M, zeby zostal zapas na mariabackup
   # podczas SST i backupu.
   vms = {
-    n14g1 = { id = 9540, ip = 168, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n14g2 = { id = 9541, ip = 169, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n14g3 = { id = 9542, ip = 170, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n14r1 = { id = 9543, ip = 171, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    n15g1 = { id = 9550, ip = 172, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n15g2 = { id = 9551, ip = 173, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n15g3 = { id = 9552, ip = 174, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n15r1 = { id = 9553, ip = 175, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
 
@@ -62,13 +59,19 @@ resource "proxmox_virtual_environment_vm" "node" {
   node_name   = local.node_name
   pool_id     = local.pool_id
   vm_id       = each.value.id
-  description = "newclaude14-r9 Rocky 9 (${each.value.role}) - VMID ${each.value.id}"
-  tags        = ["rocky9", "galera", "newclaude14", each.value.role, "n14"]
+  description = "newclaude15-r9 Rocky 9 (${each.value.role}) - VMID ${each.value.id}"
+  tags        = ["rocky9", "galera", "newclaude15", each.value.role, "n14"]
 
   agent {
     enabled = true
-    timeout = "15m"
+    type    = "virtio"
+    # Jak w terraform/shared i finalclaude-r10: provider NIE czeka na raport IP
+    # od qemu-guest-agenta (F2 instaluje go dopiero po apply; bez tego apply
+    # wisialoby do 15 min na wezel).
+    wait_for_ip { disabled = true }
   }
+
+  started = true
 
   stop_on_destroy                      = true
   delete_unreferenced_disks_on_destroy = true

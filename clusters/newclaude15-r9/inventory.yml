@@ -1,9 +1,9 @@
 ---
-# newclaude14-r9 - klaster Galera na Rocky Linux 9 (Proxmox, real VM).
+# newclaude15-r9 - klaster Galera na Rocky Linux 9 (Proxmox, real VM).
 # Logowanie jako root przez klucz cloud-init; become:true jest wtedy no-opem.
 #
-# VM Galera i restore tworzy terraform/newclaude14-r9/:
-#   n14g1-3 (VMID 9540-9542, IP .168-.170), n14r1 (9543, .171).
+# VM Galera i restore tworzy terraform/newclaude15-r9/:
+#   n15g1-3 (VMID 9550-9552, IP .168-.170), n15r1 (9553, .171).
 # ProxySQL fcp1/fcp2 (.131/.132), app fcapp (.134) i infra fcinfra (.130)
 # NALEZA do terraform/shared/ i sa tu tylko deklarowane - ten katalog ich
 # nie tworzy ani nie niszczy. VIP .133.
@@ -23,18 +23,18 @@ all:
       vars:
         galera_role: "galera"
       hosts:
-        n14g1:
-          ansible_host: "192.168.1.168"
+        n15g1:
+          ansible_host: "192.168.1.172"
           galera_node_idx: 1
-          galera_node_address: "192.168.1.168"
-        n14g2:
-          ansible_host: "192.168.1.169"
+          galera_node_address: "192.168.1.172"
+        n15g2:
+          ansible_host: "192.168.1.173"
           galera_node_idx: 2
-          galera_node_address: "192.168.1.169"
-        n14g3:
-          ansible_host: "192.168.1.170"
+          galera_node_address: "192.168.1.173"
+        n15g3:
+          ansible_host: "192.168.1.174"
           galera_node_idx: 3
-          galera_node_address: "192.168.1.170"
+          galera_node_address: "192.168.1.174"
 
     proxysql:
       vars:
@@ -53,9 +53,9 @@ all:
       vars:
         restore_role: "restore"
       hosts:
-        n14r1:
-          ansible_host: "192.168.1.171"
-          restore_node_address: "192.168.1.171"
+        n15r1:
+          ansible_host: "192.168.1.175"
+          restore_node_address: "192.168.1.175"
 
     # Host APLIKACYJNY warstwy wspolnej: laczy sie do klastra tak, jak zrobilaby
     # to aplikacja (po sieci, przez VIP). Nie jest wezlem bazy i nie liczy sie do
