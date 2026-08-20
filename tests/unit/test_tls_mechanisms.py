@@ -19,8 +19,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TLS_SCRIPTS = REPO_ROOT / "tests" / "lab" / "tls"
+TLS_ROTATE_PLAYBOOK = REPO_ROOT / "playbooks" / "tls_rotate.yml"
 
 HOSTS = ("nlabg1", "nlabg2")
 IPS = {"nlabg1": "10.0.0.1", "nlabg2": "10.0.0.2"}
@@ -251,6 +254,33 @@ class TlsMechanismsTests(unittest.TestCase):
         self.assertEqual(self.cert_count(ca), 1)
         self.assertTrue(self.verify(ca, shared / "server-cert.pem"))
         self.assertFalse(list(shared.glob("node-*-cert.pem")))
+
+
+class TlsDeploymentContractTests(unittest.TestCase):
+    def test_ca_rotation_updates_application_trust_in_same_run(self):
+        plays = yaml.safe_load(TLS_ROTATE_PLAYBOOK.read_text(encoding="utf-8"))
+        app_plays = [play for play in plays if play.get("hosts") == "app"]
+        self.assertEqual(
+            len(app_plays),
+            1,
+            "rotacja CA musi aktualizowac zaufanie klientow grupy app",
+        )
+        includes = [
+            task
+            for task in app_plays[0].get("tasks", [])
+            if task.get("ansible.builtin.include_tasks") == "tls_certs.yml"
+        ]
+        self.assertEqual(len(includes), 1)
+        vars_ = includes[0].get("vars", {})
+        self.assertEqual(vars_.get("tls_file_owner"), "root")
+        self.assertEqual(vars_.get("tls_deploy_key"), False)
+        self.assertEqual(
+            vars_.get("tls_dir"),
+            "/etc/mysql/app/{{ cluster.name }}",
+        )
+        condition = str(includes[0].get("when", ""))
+        self.assertIn(".mode", condition)
+        self.assertIn("'full'", condition)
 
 
 if __name__ == "__main__":

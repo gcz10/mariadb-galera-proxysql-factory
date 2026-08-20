@@ -139,3 +139,28 @@
         msg: >-
           {{ inventory_hostname }}: CA klastra {{ cluster.name }}
           {{ 'zaktualizowane' if (tls_files_changed | default(false)) | bool else 'bez zmian' }}
+
+# Host aplikacyjny utrzymuje wlasna kopie CA klastra. Samo zrotowanie Galery i
+# ProxySQL zostawia klienta ze starym zaufaniem: po fazie reissue polaczenie
+# zweryfikowane pada na "self-signed certificate in certificate chain".
+# Aktualizujemy ten sam katalog co app_host.yml w kazdej fazie, aby klient mial
+# bundle przed nowymi liscmi i pojedyncze nowe CA po retire-old.
+- name: "TLS — zaktualizuj zaufanie hostow aplikacyjnych do klastra"
+  hosts: app
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: "Podmień CA klastra na hoście aplikacyjnym (atomowo)"
+      ansible.builtin.include_tasks: tls_certs.yml
+      vars:
+        tls_file_owner: root
+        tls_deploy_key: false
+        tls_dir: "/etc/mysql/app/{{ cluster.name }}"
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
+    - name: "Raport zaufania hosta aplikacyjnego"
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: CA klastra {{ cluster.name }}
+          {{ 'zaktualizowane' if (tls_files_changed | default(false)) | bool else 'bez zmian' }}

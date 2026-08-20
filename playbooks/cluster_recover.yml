@@ -1,0 +1,338 @@
+---
+# cluster_recover.yml — warstwa bezpiecznego COLD recovery klastra Galera.
+#
+# Robi dokladnie trzy rzeczy (i zadnej wiecej):
+#   1. Odczytuje stan WSZYSTKICH wezlow: przy zywym Primary Component konczy
+#      procedure — zywy klaster to scenariusz cluster-rolling-restart, a
+#      bootstrap przy zywym Primary = drugi Primary = split-brain (ISC-65).
+#   2. Zatrzymuje Galere SERIALNIE (serial:1). Czyste zamkniecie wezla jest
+#      warunkiem poprawnosci nastepnego kroku: grastate.dat dostaje ostateczny
+#      seqno dopiero po czystym zamknieciu.
+#   3. Wybiera wezel bootstrap JAWNIE, po odczycie grastate.dat wszystkich
+#      wezlow: jawny recover_bootstrap_node (operator, np. przy remisie),
+#      wezel z safe_to_bootstrap:1, albo wezel z UNIKALNYM najwyzszym seqno.
+#      Przy remisie STAJE i wymaga BOOTSTRAP_NODE — nie zgaduje.
+#      seqno:-1 to pozycja NIEZNANA, nieporownywalna: automat jej nie porownuje
+#      i nie wybiera na jej podstawie — bez jawnego BOOTSTRAP_NODE staje
+#      i kieruje operatora do mariadbd --wsrep-recover na KAZDYM wezle;
+#      wezel z -1 wolno wskazac jawnie dopiero PO recznym odzyskaniu
+#      i porownaniu pozycji przez operatora.
+#
+# Celowo NIE bootstrapuje: to robi wylacznie kanoniczny playbooks/bootstrap.yml,
+# wywolany przez cel cluster-recover z bootstrap_node=<wybrany wezel> i
+# bootstrap_confirm_all_down=true (klaster zostal wlasnie zatrzymany wyzej).
+#
+# Uruchamiany z Makefile (cel cluster-recover): wymaga CLUSTER+CONFIRM=yes,
+# wybrany wezel zapisuje do -e recover_state_file.
+
+# === Play 1: stan wszystkich wezlow — zywy Primary konczy procedure ===
+- name: "Recovery — odczytaj stan wszystkich wezlow Galera"
+  hosts: galera[0]
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  pre_tasks:
+    - name: "Wymagaj jawnego confirm=yes przed zatrzymaniem klastra"
+      ansible.builtin.assert:
+        that:
+          - confirm is defined
+          - confirm | bool
+        fail_msg: "Cold recovery wymaga -e confirm=yes. Bez potwierdzenia nie zatrzymujemy Galery."
+
+
+  tasks:
+    - name: "Sonduj wsrep_cluster_status na kazdym wezle Galera"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SHOW STATUS LIKE 'wsrep_cluster_status'"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
+      register: recover_probe
+      changed_when: false
+      failed_when: false
+      ignore_unreachable: true
+
+    - name: "Klasyfikuj wezly: zywy Primary / nieosiagalny SSH / baza stoi"
+      ansible.builtin.set_fact:
+        recover_live_primary: >-
+          {{ recover_probe.results
+             | selectattr('stdout', 'defined')
+             | selectattr('stdout', 'search', '(?m)^wsrep_cluster_status\tPrimary$')
+             | map(attribute='item')
+             | list }}
+        recover_ssh_unreachable: >-
+          {{ recover_probe.results
+             | selectattr('unreachable', 'defined')
+             | selectattr('unreachable')
+             | map(attribute='item')
+             | list }}
+
+    - name: "Cold recovery wymaga osiagalnosci SSH wszystkich wezlow"
+      ansible.builtin.assert:
+        that:
+          - recover_ssh_unreachable | length == 0
+        fail_msg: >-
+          Nieosiagalne (SSH): {{ recover_ssh_unreachable }}. Bez odczytu ich
+          stanu wybor wezla bootstrap bylby zgadywaniem. Przywroc osiagalnosc
+          (make cluster-trust-hosts CLUSTER=<klaster>) i powtorz.
+
+    - name: "ISC-65: przy zywym Primary NIE robimy cold recovery bootstrapem"
+      ansible.builtin.assert:
+        that:
+          - recover_live_primary | length == 0
+        fail_msg: >-
+          Zywy Primary Component: {{ recover_live_primary }}. Klaster dziala —
+          cold recovery z bootstrapem stworzylby drugi Primary (split-brain).
+          Uzyj: make cluster-rolling-restart.
+
+# === Play 2: serialne zatrzymanie Galera (czyste zamkniecie = ostateczny seqno) ===
+- name: "Recovery — serialne zatrzymanie Galera (serial:1)"
+  hosts: galera
+  become: true
+  gather_facts: true
+  serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
+  vars:
+    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
+
+  tasks:
+    - name: "Zatrzymaj MariaDB przez systemd (czyste zamkniecie zapisuje grastate.dat)"
+      ansible.builtin.systemd:
+        name: mariadb
+        state: stopped
+      when: use_systemd
+
+    - name: "Zatrzymaj mariadbd i czekaj na zakonczenie procesu (lab: brak systemd)"
+      # SIGTERM = czyste zamkniecie: grastate.dat dostaje ostateczny seqno
+      # i ewentualne safe_to_bootstrap:1 dopiero po czystym zamknieciu.
+      ansible.builtin.shell: |
+        pkill -x mariadbd || true
+        for _ in $(seq 1 60); do
+          pgrep -x mariadbd >/dev/null || exit 0
+          sleep 1
+        done
+        echo "mariadbd nie zakonczyl sie w 60 s" >&2
+        exit 1
+      changed_when: true
+      when: not use_systemd
+
+    - name: "Potwierdz, ze mariadbd stoi na tym wezle"
+      ansible.builtin.command:
+        argv:
+          - pgrep
+          - -x
+          - mariadbd
+      register: recover_stop_verify
+      failed_when: recover_stop_verify.rc == 0
+      changed_when: false
+
+# === Play 3: wybor wezla bootstrap po stanie grastate WSZYSTKICH wezlow ===
+- name: "Recovery — wybierz wezel bootstrap ze stanu grastate"
+  hosts: galera[0]
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+
+  tasks:
+    - name: "Wymagaj jawnego recover_state_file (przekazuje go cel cluster-recover)"
+      ansible.builtin.assert:
+        that:
+          - recover_state_file is defined
+          - recover_state_file | length > 0
+        fail_msg: "Przekaz -e recover_state_file=clusters/<klaster>/recover-bootstrap-node."
+
+    - name: "Odczytaj grastate.dat ze wszystkich wezlow Galera"
+      ansible.builtin.slurp:
+        path: /var/lib/mysql/grastate.dat
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
+      register: recover_grastate
+      failed_when: false
+      changed_when: false
+
+    - name: "Parsuj grastate.dat per wezel — osobne fakty: parseable / known / wartosc"
+      # Trzy rozdzielone fakty zamiast jednego zdominowanego domyslna wartoscia:
+      # seqno_parseable = token calkowitoliczbowy istnieje SYNTAKTYCZNIE,
+      # seqno_known     = pozycja ZNANA i porownywalna (nieujemna),
+      # seqno           = wartosc calkowita (uzywana dopiero po bramce parseable).
+      ansible.builtin.set_fact:
+        recover_nodes_state: >-
+          {{ recover_nodes_state | default([]) + [{
+               'node': item.item,
+               'safe_to_bootstrap': (item.content | b64decode) is search('(?m)^safe_to_bootstrap:\s*1'),
+               'seqno_parseable': (item.content | b64decode) is search('(?m)^seqno:\s*-?\d+'),
+               'seqno_known': (((item.content | b64decode) is search('(?m)^seqno:\s*-?\d+')) and ((((item.content | b64decode) | regex_findall('(?m)^seqno:\s*(-?\d+)') | last | default('', true)) | int) >= 0)),
+               'seqno': (((item.content | b64decode) | regex_findall('(?m)^seqno:\s*(-?\d+)') | last | default('', true)) | int)
+             }] }}
+      loop: "{{ recover_grastate.results }}"
+      when: item.content is defined
+
+    - name: "Kazdy wezel musi miec czytelny grastate.dat — nie zgadujemy"
+      ansible.builtin.assert:
+        that:
+          - recover_nodes_state | length == groups['galera'] | length
+        fail_msg: >-
+          Brak odczytu grastate.dat z calego klastra (stan znany dla:
+          {{ recover_nodes_state | map(attribute='node') | list }}). Bez dowodu
+          stanu wybor wezla bootstrap bylby zgadywaniem — zbadaj wezly i powtorz.
+
+    - name: "Kazdy wezel musi miec poprawny seqno — nie zgadujemy przy uszkodzonym grastate"
+      ansible.builtin.assert:
+        that:
+          - >-
+            recover_nodes_state | selectattr('seqno_parseable') | list | length
+            == groups['galera'] | length
+        fail_msg: >-
+          Co najmniej jeden grastate.dat nie zawiera poprawnego (calkowitoliczbowego)
+          seqno. Nie mozna bezpiecznie wybrac wezla bootstrap — napraw stan i powtorz.
+
+    - name: "Kazdy wezel musi miec seqno >= -1 — wartosc ponizej -1 to uszkodzony stan"
+      # -1 to jedyna dopuszczalna wartosc ujemna (pozycja nieznana po crashu).
+      # Wartosci ponizej -1 nie sa zadnym stanem Galerze znanym — odrzucamy zawsze.
+      ansible.builtin.assert:
+        that:
+          - >-
+            recover_nodes_state
+            | selectattr('seqno_parseable') | selectattr('seqno', 'lt', -1) | list | length == 0
+        fail_msg: >-
+          Co najmniej jeden grastate.dat ma seqno < -1 — to uszkodzony/niespojny
+          stan, nie pozycja do porownania. Nie mozna bezpiecznie wybrac wezla
+          bootstrap — zbadaj wezly (mariadbd --wsrep-recover) i powtorz.
+
+    - name: "Kandydaci: wezly z safe_to_bootstrap=1"
+      ansible.builtin.set_fact:
+        recover_stb_nodes: "{{ recover_nodes_state | selectattr('safe_to_bootstrap') | map(attribute='node') | list }}"
+
+    - name: "Wezly z nieznana pozycja (seqno: -1) — do rozstrzygniecia przez wsrep-recover"
+      ansible.builtin.set_fact:
+        recover_unknown_nodes: >-
+          {{ recover_nodes_state
+             | selectattr('seqno_parseable')
+             | selectattr('seqno', 'equalto', -1)
+             | map(attribute='node') | list }}
+
+    - name: "Najwyzszy ZNANY seqno w klastrze (-1 nigdy nie porownujemy)"
+      ansible.builtin.set_fact:
+        recover_max_seqno: >-
+          {{ recover_nodes_state | selectattr('seqno_known') | map(attribute='seqno') | list | max
+             if (recover_nodes_state | selectattr('seqno_known') | list | length > 0)
+             else none }}
+
+    - name: "Kandydaci: wezly ze znanym najwyzszym seqno"
+      ansible.builtin.set_fact:
+        recover_top_nodes: >-
+          {{ recover_nodes_state
+             | selectattr('seqno_known')
+             | selectattr('seqno', 'equalto', recover_max_seqno | int)
+             | map(attribute='node') | list }}
+
+    - name: "Nieznana pozycja (seqno: -1) wymaga wsrep-recover — automat nie wybiera na podstawie -1"
+      # Oficjalna procedura (galera-cluster/high-availability/resetting-the-quorum-
+      # cluster-bootstrap): pozycje odzyskuje operator na KAZDYM wezle i porownuje
+      # je recznie. -1 jest nieporownywalne, wiec bez jawnego BOOTSTRAP_NODE stajemy.
+      ansible.builtin.assert:
+        that:
+          - recover_unknown_nodes | length == 0
+        fail_msg: >-
+          Nieznana pozycja (seqno: -1) na wezlach: {{ recover_unknown_nodes }}.
+          Wartosc -1 jest nieporownywalna — automat nie porownuje jej ani nie
+          wybiera wezla bootstrap na jej podstawie. Uruchom mariadbd --wsrep-recover
+          na KAZDYM wezle klastra, porownaj odzyskane pozycje (Recovered position)
+          i wybierz wezel z NAJWYZSZA pozycja, a nastepnie powtorz z jawnym wyborem:
+          make cluster-recover CLUSTER=<klaster> CONFIRM=yes BOOTSTRAP_NODE=<wezel>.
+      when: recover_bootstrap_node | default('') | length == 0
+
+    - name: "Jawny wybor operatora musi nalezec do grupy galera"
+      ansible.builtin.assert:
+        that:
+          - recover_bootstrap_node in groups['galera']
+        fail_msg: >-
+          recover_bootstrap_node={{ recover_bootstrap_node }} nie nalezy do grupy
+          galera ({{ groups['galera'] }}).
+      when: recover_bootstrap_node | default('') | length > 0
+
+    - name: "Jawny override musi wskazywac bezpiecznego kandydata"
+      # Dopuszczalni kandydaci jawni: safe_to_bootstrap=1, ZNANY najwyzszy seqno,
+      # albo wezel z nieznana pozycja (-1) wskazany SWIADOMIE — dopiero po tym,
+      # jak operator odzyskal i porownal pozycje (wsrep-recover). Nizszego
+      # znanego seqno nie wymuszamy — to bylaby cicha utrata transakcji.
+      ansible.builtin.assert:
+        that:
+          - >-
+            recover_bootstrap_node in recover_stb_nodes
+            or recover_bootstrap_node in recover_top_nodes
+            or recover_bootstrap_node in recover_unknown_nodes
+        fail_msg: >-
+          recover_bootstrap_node={{ recover_bootstrap_node }} nie jest wezlem
+          safe_to_bootstrap, kandydatem ze znanym najwyzszym seqno
+          ({{ recover_top_nodes }}), ani wezlem o nieznanej pozycji (-1) po
+          recznym wsrep-recover ({{ recover_unknown_nodes }}). Nie wymuszamy
+          nizszego znanego seqno — wybierz bezpieczny wezel.
+      when: recover_bootstrap_node | default('') | length > 0
+
+    - name: "Wybor: jawny recover_bootstrap_node operatora"
+      ansible.builtin.set_fact:
+        recover_bootstrap_choice: "{{ recover_bootstrap_node }}"
+      when: recover_bootstrap_node | default('') | length > 0
+
+    - name: "Wybor: unikalny wezel z safe_to_bootstrap=1"
+      ansible.builtin.set_fact:
+        recover_bootstrap_choice: "{{ recover_stb_nodes | first }}"
+      when:
+        - recover_bootstrap_choice | default('') | length == 0
+        - recover_stb_nodes | length == 1
+
+    - name: "Wybor: unikalny najwyzszy seqno (procedura recovery Galera)"
+      ansible.builtin.set_fact:
+        recover_bootstrap_choice: "{{ recover_top_nodes | first }}"
+      when:
+        - recover_bootstrap_choice | default('') | length == 0
+        - recover_stb_nodes | length == 0
+        - recover_top_nodes | length == 1
+
+    - name: "Remis stanu — wymagaj jawnego BOOTSTRAP_NODE zamiast zgadywac"
+      ansible.builtin.assert:
+        that:
+          - recover_bootstrap_choice | default('') | length > 0
+        fail_msg: >-
+          Niejednoznaczny stan klastra: safe_to_bootstrap=1 na
+          {{ recover_stb_nodes | length }} wezlach ({{ recover_stb_nodes }}),
+          najwyzszy seqno={{ recover_max_seqno }} na {{ recover_top_nodes | length }}
+          wezlach ({{ recover_top_nodes }}). Nie zgadujemy (ISC-65): uruchom
+          make cluster-recover CLUSTER=<klaster> CONFIRM=yes BOOTSTRAP_NODE=<wezel>.
+      when: recover_bootstrap_choice | default('') | length == 0
+
+    - name: "Recovery Galera: wybrany wezel bez safe_to_bootstrap=1 otrzymuje je przed bootstrapem"
+      # Dokumentowana procedura recovery: wezel z najwyzszym seqno (albo jawny
+      # wybor operatora) musi miec safe_to_bootstrap:1 w grastate.dat, inaczej
+      # kanoniczny bootstrap.yml slusznie odmowi (ISC-65).
+      ansible.builtin.lineinfile:
+        path: /var/lib/mysql/grastate.dat
+        regexp: '(?i)^safe_to_bootstrap:\s*\d+'
+        line: "safe_to_bootstrap: 1"
+      delegate_to: "{{ recover_bootstrap_choice }}"
+      when: recover_bootstrap_choice not in recover_stb_nodes
+
+    - name: "Zapisz wybrany wezel do pliku stanu (odczytuje go cel cluster-recover)"
+      ansible.builtin.copy:
+        content: "{{ recover_bootstrap_choice }}\n"
+        dest: "{{ recover_state_file }}"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+
+    - name: "Podsumowanie wyboru wezla bootstrap"
+      ansible.builtin.debug:
+        msg: >-
+          Wezel bootstrap: {{ recover_bootstrap_choice }}
+          (safe_to_bootstrap=1: {{ recover_stb_nodes | join(',') | default('brak', true) }};
+          seqno wezla: {{ recover_nodes_state | selectattr('node', 'equalto', recover_bootstrap_choice)
+          | map(attribute='seqno') | first }}).
+          Bootstrap wykona kanoniczny playbooks/bootstrap.yml z
+          bootstrap_node={{ recover_bootstrap_choice }}.

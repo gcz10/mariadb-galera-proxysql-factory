@@ -107,14 +107,15 @@ make lab-backup-impact CLUSTER=lab-cluster                # ISC-39, lab-only
 # F15 — reguły alertów (ISC-47); adres e-mail z monitoring.alerts.email w cluster.yml
 make cluster-alerts CLUSTER=lab-cluster
 
-# Kontrakt końcowy: PMM 3.8.1, 5 nodes, 5 node_exporter 1.12.1, 3 MySQL services,
-# QAN, świeże metryki Galery/lifecycle ORAZ reguły ISC-47
+# Kontrakt końcowy: PMM Server i pmm-client z aktywnego lockfile'a (oba 3.9.0);
+# oczekiwane nodes/services wynikają z inventory i cluster.yml, dalej QAN,
+# świeże metryki Galery/lifecycle ORAZ reguły ISC-47
 make cluster-monitoring-refresh CLUSTER=lab-cluster
 make lab-monitoring-verify
 
-# Pelny restart klastra wymaga kontrolowanego stopu i jednego bootstrapu
-# recovery; rownolegly `systemctl restart` zostawia NON_PRIM.
-make cluster-restart CLUSTER=<name> CONFIRM=yes
+# Pelna awaria klastra (cold recovery) wymaga kontrolowanego stopu i jednego
+# bootstrapu; rownolegly `systemctl restart` zostawia NON_PRIM.
+make cluster-recover CLUSTER=<name> CONFIRM=yes
 #
 # Jedna bramka po budowie (fail-closed):
 # make lab-post-build-gate CLUSTER=<name>
@@ -122,7 +123,7 @@ make cluster-restart CLUSTER=<name> CONFIRM=yes
 
 PMM UI laboratorium: `http://127.0.0.1:8080`. Stan usług w PMM jest diagnostyczny: `Down` oznacza rzeczywiście nieosiągalną usługę, a nie błąd rejestracji.
 `GF_SECURITY_ADMIN_PASSWORD` inicjalizuje tylko czysty `pmm-data`; istniejący volume zachowuje zapisane hasło. Rotację wykonaj w PMM UI, po czym ustaw tę samą wartość w `PMM_ADMIN_PASSWORD`.
-Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje 6 reguł (node loss, quorum loss, node not Synced, brak writera, ostatni backup nieudany, backup przeterminowany). Krytyczne reguły używają `noDataState: Alerting`; brak metryk nie przechodzi cicho. Contact point i notification policy (`managed_by=ansible` → e-mail) biorą adres z `monitoring.alerts.email` w `cluster.yml`. W laboratorium poczta trafia do `maildev`.
+Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje reguły zdrowia Galery, writera ProxySQL, backupu i restore, zamrożonych metryk oraz — gdy TLS jest włączony — ważności certyfikatu; owner wspólnej pary ProxySQL zarządza także regułą warstwy wspólnej. Krytyczne reguły używają `noDataState: Alerting`; brak metryk nie przechodzi cicho. Contact point i notification policy (`managed_by=ansible` → e-mail) biorą adres z `monitoring.alerts.email` w `cluster.yml`. W laboratorium poczta trafia do `maildev`.
 
 `lab-backup-verify` weryfikuje backend S3 i wymaga przypiętego SDK (`minio.sdk_version` z lockfile). Zarządzany SMB oraz wcześniej zamontowany filesystem weryfikuje `tests/live/probe-galera-backup-backends.py`; procedury i ograniczenia opisuje `docs/runbooks/backup.md`.
 

@@ -1,22 +1,83 @@
 ---
-# cluster_deregister.yml — pelna derejestracja klastra z monitoringu, alertingu i ProxySQL.
+# cluster_deregister.yml — pelna derejestracja klastra z monitoringu, alertingu, ProxySQL
+# oraz konta serwisowego zarzadzanego MinIO.
 #
-# DOKLADNA ODWROTNOSC faz F11 (monitoring), F15 (alerty) oraz F7 (ProxySQL per-klaster).
+# DOKLADNA ODWROTNOSC faz F11 (monitoring), F15 (alerty) oraz F7 (ProxySQL
+# per-klaster); odwolywane jest tez konto serwisowe MinIO z F10 (backup).
 # Wolana PRZED `infra-teardown` (zniszczeniem maszyn).
 #
 # Zapobiega powstawaniu "sierot":
 #   1. Wylaczone/zniszczone maszyny nie generuja falszywych alertow w Grafanie.
 #   2. Inwentarz PMM nie zawiera martwych wezlow ani uslug.
 #   3. Wspoldzielona para ProxySQL nie trzyma martwych backendow ani uzytkownikow.
+#   4. Wspoldzielone MinIO nie trzyma konta serwisowego `galera-backup-<cluster>`
+#      klastra, ktory juz nie istnieje.
 #
 # Bezpieczenstwo wspoldzielenia:
 #   - Czyszczenie PMM i Grafany jest scisle filtrowane po `monitoring.pmm.cluster_name`.
 #   - Czyszczenie ProxySQL jest scisle ograniczone do hostgroup klastra (hg_base..hg_base+30),
 #     app_user klastra oraz per-klaster certyfikatu CA.
-#   - Zasoby innych klastrow na wspolnym PMM i ProxySQL pozostaja NIETKNIETE.
+#   - Odwolanie konta MinIO dotyczy WYLACZNIE dokladnej nazwy `galera-backup-<cluster>`;
+#     bucket, obiekty backupow i owner marker pozostaja nietkniete (dane operatora).
+#   - Zasoby innych klastrow na wspolnym PMM, ProxySQL i MinIO pozostaja NIETKNIETE.
 #
 # Uruchomienie:
 #   ansible-playbook playbooks/cluster_deregister.yml -i clusters/<name>/inventory.yml -e @clusters/<name>/cluster.yml
+
+- name: "Preflight F10 — sprawdz poswiadczenia zarzadzanego MinIO przed mutacjami"
+  # Pierwszy play calosci, celowo PRZED PMM/Grafana/ProxySQL: brak lub niebezpieczne
+  # MINIO_ROOT_USER/MINIO_ROOT_PASSWORD musi wywolic derejestracje ZANIM cokolwiek
+  # zostanie zmutowane — po naprawie poswiadczen operator odpala caly playbook od
+  # nowa, zamiast dostac polsprzatany stan w polowie faz.
+  hosts: localhost
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: "Ustal czy klaster korzysta z zarzadzanego MinIO"
+      # Ten sam predykat "zarzadzane MinIO" co w roles/galera_backup/tasks/main.yml,
+      # ale CELOWO bez `backup.enabled`: klaster, ktorego backup wylaczono PRZED
+      # teardownem, nadal moze posiadac konto z czasow, gdy backup dzialal. Tez
+      # celowo bez `galera_backup_provision_s3` — derejestracja sprzata konto
+      # zawsze, gdy endpoint wskazuje na infra tego inventory. Endpoint porownujemy
+      # po odcieciu portu, bo operator moze wpisac host:9000. set_fact na localhost
+      # trwa przez caly przebieg playbooka — play F10 na dole reuzywa tego faktu.
+      ansible.builtin.set_fact:
+        galera_backup_managed_minio: >-
+          {{
+            backup.destination == 's3'
+            and groups['infra'] is defined
+            and (groups['infra'] | length) > 0
+            and (
+              (backup.s3.endpoint | regex_replace(':[0-9]+$', ''))
+              == (hostvars[groups['infra'][0]].ansible_host | string)
+            )
+          }}
+
+    - name: "Preflight MinIO — wymagaj poswiadczen root zarzadzanego MinIO"
+      # Widoczna, nie-sekretna diagnostyka: `quiet: true` i bez `no_log` — asercja
+      # wypisuje wylacznie statyczny fail_msg i nazwy zmiennych srodowiskowych,
+      # nigdy wartosci. `mc` czyta userinfo doslownie, wiec znaki / @ : i biale
+      # rozjechalby parsowanie URL-a (SignatureDoesNotMatch bez czytelnego
+      # komunikatu); percent-encoding NIE jest rozwiazaniem, bo mc go nie dekoduje.
+      # Klasa MUSI byc skladnia Pythona (`is search` wola re.search): POSIX-owe
+      # [:space:] nie istnieje w re i dawaloby klase {/@:[space} + literal ']'.
+      # Rola galera_backup trzyma ten sam guard defensywnie — preflight chroni
+      # caly przebieg derejestracji, guard w roli chroni jej bezposrednie wywolania.
+      # Zewnetrzne S3/SMB/filesystem nie spelniaja predykatu i przechodza dalej
+      # bez jakichkolwiek poswiadczen MinIO.
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_USER') | length > 0
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') | length > 0
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_USER') is not search('[/@:\s]')
+          - lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') is not search('[/@:\s]')
+        fail_msg: >-
+          MINIO_ROOT_USER/MINIO_ROOT_PASSWORD sa wymagane na kontrolerze
+          (niepuste, bez znakow / @ : i bialych) — bez nich derejestracja nie
+          moze odwolac konta serwisowego zarzadzanego MinIO tego klastra.
+        quiet: true
+      when: galera_backup_managed_minio | bool
 
 - name: "F15/F11 — usun reguly alertow, contact point, folder i inwentarz PMM"
   hosts: localhost
@@ -321,3 +382,29 @@
     - name: "Raport czyszczenia ProxySQL"
       ansible.builtin.debug:
         msg: "ProxySQL oczyszczone z hostgroup {{ galera_writer_hg }}-{{ galera_offline_hg }} i usera {{ galera_app_user }} na {{ inventory_hostname }}."
+
+- name: "F10 — odwolaj konto serwisowe zarzadzanego MinIO tego klastra"
+  # BEZ `connection: local` (precedens f13_remove_node.yml: przy nim zadania z
+  # `delegate_to` wykonywaly sie NA KONTROLERZE, potwierdzone empirycznie).
+  # Niejawny localhost i tak laczy sie lokalnie, a delegacja na infra dostaje
+  # polaczenie wezla z inventory. Zadania delegowane maja wlasne `become: true`
+  # (play-level `become: false` dotyczy wylacznie zadan kontrolera).
+  # Predykat `galera_backup_managed_minio` NIE jest tu przepisywany: pochodzi
+  # z preflightu (play 1) jako set_fact na localhost i trwa przez caly przebieg
+  # playbooka, wiec `when` nizej po prostu go reuzywa.
+  hosts: localhost
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: "Odwolaj konto MinIO wylacznie dla zarzadzanej instancji tego inventory"
+      # include_role (a nie include_tasks) po to, zeby filtry roli —
+      # minio_service_account_keys i minio_access_keys_named — byly dostepne
+      # w tasks_from: deregister_minio.yml. Rola odwoluje wylacznie konto
+      # 'galera-backup-<cluster>'; bucket, owner marker i kopie pozostaja
+      # danymi operatora. Zewnetrzne S3/SMB/filesystem spelniaja warunek
+      # destination/endpoint i przechodza po cichu.
+      ansible.builtin.include_role:
+        name: galera_backup
+        tasks_from: deregister_minio.yml
+      when: galera_backup_managed_minio | bool

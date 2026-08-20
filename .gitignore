@@ -41,8 +41,8 @@ terraform/**/*.tfplan
 # SSH known_hosts - artefakt klienta
 clusters/**/known_hosts
 clusters/*/known_hosts.old
-# Wybrany wezel bootstrap po cold restarcie (artefakt playboku, odczytuje go Makefile)
-clusters/*/restart-bootstrap-node
+# Wybrany wezel bootstrap po cold recovery (artefakt playbooku, odczytuje go Makefile)
+clusters/*/recover-bootstrap-node
 
 # Isolated execution worktrees
 .worktrees/

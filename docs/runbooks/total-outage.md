@@ -29,6 +29,21 @@ Objaw: `mariadb.service` jest `enabled`, próbuje wstać i pada po ~35 s;
 `grastate.dat` na KAŻDYM węźle ma `seqno: -1` i `safe_to_bootstrap: 0`.
 To poprawne zachowanie — Galera odmawia zgadywania, który węzeł ma najświeższy stan.
 
+**Ścieżka zautomatyzowana:** `make cluster-recover CLUSTER=<name> CONFIRM=yes`
+(odmawia przy żywym Primary, zatrzymuje klaster serialnie, wybiera węzeł bootstrap
+z `grastate.dat`, reuse'uje kanoniczny `playbooks/bootstrap.yml`, potem join).
+Automat STAJE PRZED wyborem węzła, gdy jakikolwiek `grastate.dat` ma `seqno: -1`
+lub wartość uszkodzoną: `-1` to pozycja nieznana, nieporównywalna — automat
+nie porównuje jej i nie wybiera na jej podstawie. Operator uruchamia wtedy
+`mariadbd --wsrep-recover` na KAŻDYM węźle (krok 1 poniżej), porównuje
+odzyskane pozycje i wybiera węzeł z NAJWYŻSZĄ, po czym powtarza
+`make cluster-recover CLUSTER=<name> CONFIRM=yes BOOTSTRAP_NODE=<węzeł>`
+(jawne wskazanie węzła z `-1` jest dopuszczalne właśnie i tylko po tym
+odzyskaniu). Także przy remisie znanych seqno/safe_to_bootstrap automat staje
+i wymaga `BOOTSTRAP_NODE=<węzeł>` — kroki poniżej to procedura ręczna
+dla przypadków, których `grastate.dat` nie rozstrzyga (np. pozycje
+odzyskane z journala po nieczystym zamknięciu).
+
 1. **Odczytaj odzyskane pozycje.** `mariadbd --wsrep-recover` uruchomione ręcznie
    NIE wypisuje pozycji (kończy się po jednej linii `[Note]`). Pozycję wylicza
    `ExecStartPre` unitu i loguje ją do journala — dlatego czytamy stamtąd:
