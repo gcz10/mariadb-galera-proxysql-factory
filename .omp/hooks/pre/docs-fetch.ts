@@ -106,6 +106,13 @@ export function inspectCommand(command: string): Verdict {
       Object.keys(DOC_HOST_EXACT).some((known) => host.endsWith("." + known));
     if (!docHost && !DOC_PATH.test(parsed.pathname)) continue;
 
+    const mariadbDiscovery =
+      host === "mariadb.com" || host.endsWith(".mariadb.com")
+        ? "Indeks aktualnych stron technicznych MariaDB: " +
+          "read('https://mariadb.com/docs/llms.txt'). Uzyj go jako resolvera " +
+          "dokladnego URL .md, a cytuj tresc wskazanej strony — nie opis z indeksu.\n"
+        : "";
+
     return {
       block: true,
       url: raw,
@@ -116,6 +123,7 @@ export function inspectCommand(command: string): Verdict {
             "ktory reguly nazywaja i ktory zwraca menu nawigacyjne zamiast tresci.\n"
           : "") +
         "Kolejnosc wg RULES.md: Context7 (mcp__context_query_docs) -> " +
+        mariadbDiscovery +
         `read('${raw}') -> API projektu -> scraping na samym koncu.\n` +
         "`read` robi negocjacje tresci i ekstrakcje reader-mode, wiec zwraca " +
         "tabele i tresc, ktorych regex po surowym HTML nie znajduje.",
