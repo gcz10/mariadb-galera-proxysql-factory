@@ -25,6 +25,12 @@ export MINIO_ROOT_PASSWORD='<minio-s3-secret>'
 # Uruchom lab; PMM na czystym volume dostaje powyższe hasło, a orphans są usuwane
 make lab-up
 
+# WARSTWA WSPOLNA — musi istniec ZANIM powstanie pierwszy klaster. Najemca
+# zaklada dzialajaca pare ProxySQL i wdrozony `admin-check.cnf`; bez nich
+# zatrzymuje sie na jawnej bramce, nie na przypadkowym bledzie SQL.
+make platform-trust-hosts
+make platform-build
+
 # Discovery i walidacja wybranego klastra
 make cluster-discover CLUSTER=lab-cluster
 make cluster-validate CLUSTER=lab-cluster
@@ -36,7 +42,8 @@ make cluster-validate CLUSTER=lab-cluster
 tests/lab/tls/generate.sh <klaster> <n1,n2,n3,ip1,ip2,ip3>
 #   2) CA + cert WSPÓLNEGO endpointu ProxySQL (proxysql.frontend_tls). CA jest
 #      wspólne dla całej floty, nie klastrowe: jedna para ProxySQL serwuje
-#      wszystkie klastry JEDNYM certem frontendu. Wdraża go wyłącznie owner;
+#      wszystkie klastry JEDNYM certem frontendu. Wdraza go wylacznie warstwa
+#      wspolna (`make platform-proxysql`); klaster deklaruje tylko `ca_reference`.
 #      SAN musi pokrywać VIP i adresy węzłów ProxySQL.
 tests/lab/tls/generate.sh shared-proxysql fcp1,fcp2,<ip-fcp1>,<ip-fcp2>,<ip-vip>
 #   3) Certyfikaty PER WĘZEŁ (tls.per_node_certificates=true). Po kroku 1 wystaw
@@ -127,6 +134,44 @@ PMM UI laboratorium: `http://127.0.0.1:8080`. Stan usług w PMM jest diagnostycz
 Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje reguły zdrowia Galery, writera ProxySQL, backupu i restore, zamrożonych metryk oraz — gdy TLS jest włączony — ważności certyfikatu; owner wspólnej pary ProxySQL zarządza także regułą warstwy wspólnej. Krytyczne reguły używają `noDataState: Alerting`; brak metryk nie przechodzi cicho. Contact point i notification policy (`managed_by=ansible` → e-mail) biorą adres z `monitoring.alerts.email` w `cluster.yml`. W laboratorium poczta trafia do `maildev`.
 
 `lab-backup-verify` weryfikuje backend S3 i wymaga przypiętego SDK (`minio.sdk_version` z lockfile). Zarządzany SMB oraz wcześniej zamontowany filesystem weryfikuje `tests/live/probe-galera-backup-backends.py`; procedury i ograniczenia opisuje `docs/runbooks/backup.md`.
+
+## Warstwa wspolna
+
+ProxySQL `fcp1`/`fcp2`, VIP `192.168.1.133:6033`, `fcinfra` (PMM + MinIO +
+maildev) i host aplikacyjny `fcapp` to **jednostka niezalezna od klastrow**,
+opisana w `platform/shared/` (`platform.yml` + `inventory.yml`). Klastry Galera
+sa jej **najemcami**: `make cluster-proxysql` rejestruje ich hostgroupy
+i uzytkownika, i tylko tyle.
+
+Do 2026-08-21 wlascicielem warstwy byl klaster (`proxysql.role: owner`), wiec
+jego skasowanie osierocilo by ProxySQL, VIP, PMM i MinIO. Pole `role` juz nie
+istnieje; jego powrotu pilnuje `make verify-proxysql-tenancy`.
+
+| Cel | Co robi |
+|---|---|
+| `make platform-validate` | schemat + inwarianty inwentarza + preflight |
+| `make platform-trust-hosts` | re-skan kluczy SSH po re-provision |
+| `make platform-deploy` | pakiety ProxySQL wg lockfile EL10 (sha256 + GPG) |
+| `make platform-infra` | PMM, MinIO, maildev na `fcinfra` |
+| `make platform-proxysql` | konfiguracja pary: TLS frontendu, tozsamosc admina, monitor |
+| `make platform-endpoint` | Keepalived VIP — **wylacznie tutaj**, nigdy z klastra |
+| `make platform-monitoring` | rejestracja wezlow i eksporterow w PMM |
+| `make platform-alerts` | reguly `isa-shared-*` |
+| `make platform-verify` | sonda warstwy jako calosci |
+| `make platform-build` | wszystko powyzej jednym poleceniem |
+| `make platform-adopt CONFIRM=yes` | migracja: przejmuje wpisy PMM po bylym ownerze |
+
+**Kolejnosc jest wymogiem: `platform-build` przed pierwszym `cluster-build`.**
+
+Warstwa daje sie zweryfikowac **bez ani jednego klastra** — `probe-platform.py`
+nie loguje sie do bazy, tylko sprawdza lancuch certyfikatu endpointu przez
+`openssl`, bo platforma z zerem najemcow nie ma zadnych uzytkownikow.
+Udowodnione odbudowa od zera: `fcp1`/`fcp2` zniszczone Terraformem, postawione
+jednym `make platform-build`, konfiguracja koncowa identyczna z baseline.
+
+Odbudowa wspolnych hostow uniewaznia `known_hosts` **kazdego** najemcy (osobny
+plik per klaster) — przed pierwszym `cluster-proxysql` uruchom
+`make cluster-trust-hosts CLUSTER=<nazwa>`.
 
 ## Żywa flota
 
