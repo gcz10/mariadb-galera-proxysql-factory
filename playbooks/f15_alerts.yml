@@ -117,10 +117,34 @@
       # dawal 0 i regula palila sie na stale jako critical, mimo dzialajacego writera.
       # Wlasciwym dyskryminatorem najemcy jest hostgroup: ID sa globalnie rozlaczne na
       # wspolnej parze, co wymusza tests/validation/probe-proxysql-tenancy.py.
-      - uid: "isa-{{ cluster_label }}-no-writer"
-        title: "ProxySQL no ONLINE writer (writer hostgroup empty)"
-        expr: "(count(proxysql_connection_pool_status{hostgroup=\"{{ galera_writer_hg }}\"} == 1) or vector(0)) < bool 1"
-        summary: "No ONLINE backend in ProxySQL writer hostgroup {{ galera_writer_hg }} — writes will fail"
+      - uid: "isa-{{ cluster_label }}-backends-offline"
+        title: "ProxySQL moved Galera backends to the offline hostgroup"
+        # ZASTAPILA regule `no-writer`, ktora NIE MOGLA ZADZIALAC.
+        #
+        # Tamta brzmiala `count(...{hostgroup=<writer>} == 1) < 1`, czyli
+        # "hostgroup writera jest pusty". Zmierzone 2026-08-21 na newclaude16-r9:
+        # nie udalo sie jej zapalic w ZADNYM z trzech scenariuszy —
+        #   1. jeden wezel poza kworum (partycja 4567): wypada do offline_hg,
+        #      pozostale przejmuja role,
+        #   2. CALKOWITA utrata kworum (wszystkie trzy non-Primary,
+        #      primary_partition=NO, wsrep_local_state=0),
+        #   3. wszystkie backendy nieosiagalne dla monitora (martwy port).
+        # Za kazdym razem ProxySQL zostawial JEDEN wezel ONLINE w hostgroupie
+        # writera. To polityka "last man standing": ProxySQL nie oprozni tej
+        # hostgrupy do zera. Dokumentacja produktu tego nie opisuje — kryteria
+        # sa wylacznie w schematach blokowych (obrazki na stronie Galera
+        # Configuration), wiec zachowanie jest ZMIERZONE, nie zacytowane.
+        # Efekt: 151 probek w oknie obu awarii, zero zapalen.
+        #
+        # Ta wersja mierzy DECYZJE ROUTINGOWA samego ProxySQL, ktora realnie sie
+        # zmienia: 0 wezlow w offline_hostgroup przy zdrowym klastrze, N przy
+        # awarii (zmierzone: 0 -> 1 -> 2 -> 4). Utrate kworum po stronie Galery
+        # pokrywaja osobno `quorum-loss` i `not-synced` — obie zapalily sie
+        # w tym samym oknie, wiec operator nie byl slepy; slepy byl ten alert.
+        expr: "(count(proxysql_connection_pool_status{hostgroup=\"{{ galera_offline_hg }}\"}) or vector(0)) > bool 0"
+        summary: >-
+          ProxySQL przeniosl backendy klastra do offline hostgroup {{ galera_offline_hg }} —
+          ruch nie jest do nich kierowany. Sprawdz Primary Component i stan wezlow Galery.
         severity: "critical"
         noDataState: "Alerting"
 
@@ -371,6 +395,51 @@
         status_code: [200, 201, 202]
       loop: "{{ f15_effective_rules }}"
       no_log: true
+
+    # Rekoncyliacja: skasuj reguly ZARZADZANE przez ten zakres, ktorych juz nie
+    # ma w definicji. Bez tego kroku kazda usunieta albo przemianowana regula
+    # zostawala w Grafanie NA ZAWSZE — zmierzone 2026-08-21: po zastapieniu
+    # `no-writer` przez `backends-offline` obie istnialy obok siebie, a stara
+    # nie miala juz zadnego wlasciciela. Ta sama klasa sieroty co wezly PMM po
+    # bylym ownerze warstwy wspolnej.
+    #
+    # Zawezenie po `managed_by` I `cluster` jest konieczne: bez niego jeden
+    # najemca skasowalby reguly pozostalym oraz `isa-shared-*`, czyli powtorzylby
+    # blad, ktory repo naprawialo juz przy wzorcu derejestracji i koncie MinIO.
+    - name: "Pobierz aktualne reguły po provisioningu"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/alert-rules"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        return_content: true
+        status_code: 200
+      register: f15_rules_after
+      no_log: true
+
+    - name: "Usuń osierocone reguły tego zakresu (nie ma ich już w definicji)"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/graph/api/v1/provisioning/alert-rules/{{ item }}"
+        method: DELETE
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs }}"
+        status_code: [200, 202, 204, 404]
+      loop: >-
+        {{ f15_rules_after.json
+           | selectattr('labels', 'defined')
+           | selectattr('labels.managed_by', 'defined')
+           | selectattr('labels.managed_by', 'equalto', 'ansible')
+           | selectattr('labels.cluster', 'defined')
+           | selectattr('labels.cluster', 'equalto', cluster_label)
+           | map(attribute='uid')
+           | reject('in', f15_effective_rules | map(attribute='uid') | list)
+           | list }}
+      loop_control:
+        label: "{{ item }}"
 
     # === BLK-5: email contact point + notification policy (delivery) ===
     - name: "Pobierz istniejące contact points"
