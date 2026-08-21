@@ -34,6 +34,7 @@ def load_probe(tmp):
     inv.write_text(yaml.safe_dump(inventory), encoding="utf-8")
     env = {
         "CLUSTER": "newclaude16-r9",
+        "CONFIRM": "yes",
         "CLUSTER_CONFIG": str(config),
         "CLUSTER_INVENTORY": str(inv),
         "APP_DB_PASSWORD": "hunter2",
@@ -68,6 +69,40 @@ class TargetGuardTests(unittest.TestCase):
         self.assertTrue(any("inventory path" in error for error in errors))
 
 
+    def test_missing_or_wrong_confirm_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        errors_no = ns["validate_target"](
+            "newclaude16-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
+            {"n16g1", "n16g2", "n16g3"}, {"fcp1", "fcp2"}, {"fcapp"},
+            confirm="no",
+        )
+        self.assertTrue(any("CONFIRM" in error for error in errors_no))
+
+        errors_empty = ns["validate_target"](
+            "newclaude16-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
+            {"n16g1", "n16g2", "n16g3"}, {"fcp1", "fcp2"}, {"fcapp"},
+            confirm="",
+        )
+        self.assertTrue(any("CONFIRM" in error for error in errors_empty))
+
+    def test_missing_or_wrong_operator_cluster_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        errors_wrong = ns["validate_target"](
+            "newclaude16-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
+            {"n16g1", "n16g2", "n16g3"}, {"fcp1", "fcp2"}, {"fcapp"},
+            operator_cluster="other-cluster",
+        )
+        self.assertTrue(any("CLUSTER" in error for error in errors_wrong))
+
+        errors_empty = ns["validate_target"](
+            "newclaude16-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
+            {"n16g1", "n16g2", "n16g3"}, {"fcp1", "fcp2"}, {"fcapp"},
+            operator_cluster="",
+        )
+        self.assertTrue(any("CLUSTER" in error for error in errors_empty))
+
 class SafeRunnerTests(unittest.TestCase):
     def test_timeout_becomes_structured_failure(self):
         with tempfile.TemporaryDirectory() as td:
@@ -88,6 +123,16 @@ class SafeRunnerTests(unittest.TestCase):
         self.assertEqual(result["output"], "")
         self.assertIn("FileNotFoundError", result["error"])
 
+
+    def test_keyboard_interrupt_becomes_structured_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        with patch.object(subprocess, "run", side_effect=KeyboardInterrupt):
+            result = ns["safe_sh"]("n16g1", "true", timeout=1)
+        self.assertFalse(result["ok"])
+        self.assertIsNone(result["rc"])
+        self.assertEqual(result["output"], "")
+        self.assertIn("KeyboardInterrupt", result["error"])
 
 class SecretTransportTests(unittest.TestCase):
     def test_app_write_uses_profile_not_password_or_setup(self):
@@ -233,6 +278,27 @@ class MutationLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ns = load_probe(Path(td))
         self.assertEqual(tuple(ns["STOPPED"]), ("n16g2", "n16g3"))
+
+    def test_cleanup_attempts_all_hosts_even_if_run_raises_keyboard_interrupt(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        calls = []
+
+        def run(host, script, timeout=120):
+            calls.append((host, script))
+            if host == "n16g2":
+                raise KeyboardInterrupt("simulated interrupt on first host")
+            return {"ok": True, "rc": 0, "output": "ABSENT" if "test ! -e" in script else "", "error": ""}
+
+        result = ns["cleanup_nodes"](
+            ("n16g2", "n16g3"), {"n16g2": "on-abnormal", "n16g3": "on-abnormal"}, run=run
+        )
+        self.assertIn("n16g2", result)
+        self.assertIn("n16g3", result)
+        self.assertFalse(result["n16g2"]["remove_ok"])
+        self.assertTrue(any("KeyboardInterrupt" in err for err in result["n16g2"]["errors"]))
+        self.assertTrue(result["n16g3"]["remove_ok"])
+        self.assertTrue(result["n16g3"]["dropin_absent"])
 
 class RecordAndArtifactTests(unittest.TestCase):
     def test_new_record_initializes_all_local_acceptance_flags_to_false(self):
@@ -403,6 +469,54 @@ class OrchestrationTests(unittest.TestCase):
         with patch.dict(ns["main"].__globals__, {
             "CONTRACT": "invalid_contract_mode",
             "validate_target": lambda *a, **kw: [],
+            "install_app_profile": fake_install,
+            "run_measurement": fake_run_measurement,
+        }):
+            exit_code = ns["main"]()
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(install_calls, [])
+        self.assertEqual(measurement_calls, [])
+
+    def test_main_refuses_when_confirm_not_yes_before_install_or_mutation(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        install_calls = []
+        measurement_calls = []
+
+        def fake_install():
+            install_calls.append(True)
+
+        def fake_run_measurement(record):
+            measurement_calls.append(record)
+            return record
+
+        with patch.dict(ns["main"].__globals__, {
+            "CONFIRM": "no",
+            "install_app_profile": fake_install,
+            "run_measurement": fake_run_measurement,
+        }):
+            exit_code = ns["main"]()
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(install_calls, [])
+        self.assertEqual(measurement_calls, [])
+
+    def test_main_refuses_when_operator_cluster_mismatch_before_install_or_mutation(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        install_calls = []
+        measurement_calls = []
+
+        def fake_install():
+            install_calls.append(True)
+
+        def fake_run_measurement(record):
+            measurement_calls.append(record)
+            return record
+
+        with patch.dict(ns["main"].__globals__, {
+            "OPERATOR_CLUSTER": "other-cluster",
             "install_app_profile": fake_install,
             "run_measurement": fake_run_measurement,
         }):

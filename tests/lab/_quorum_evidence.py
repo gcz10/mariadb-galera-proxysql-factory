@@ -110,10 +110,13 @@ def _symbol_map(record):
     return mapping
 
 
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+
 def _symbolise(text, record):
     for needle, replacement in sorted(_symbol_map(record).items(), key=lambda item: len(item[0]), reverse=True):
         text = text.replace(needle, replacement)
-    return text
+    return _IPV4_RE.sub("[IP-REDACTED]", text)
 
 
 def render_record(record):

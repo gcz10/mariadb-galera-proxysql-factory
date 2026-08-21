@@ -92,7 +92,8 @@ INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
 APP_PW = os.environ.get("APP_DB_PASSWORD", "")
 CONTRACT = os.environ.get("APP_QUORUM_ERROR_CONTRACT", "degraded")
-
+OPERATOR_CLUSTER = os.environ.get("CLUSTER", "")
+CONFIRM = os.environ.get("CONFIRM", "")
 with open(CONFIG_PATH, encoding="utf-8") as fh:
     CLUSTER = yaml.safe_load(fh)
 with open(INVENTORY, encoding="utf-8") as fh:
@@ -159,8 +160,25 @@ class EvidenceError(RuntimeError):
     pass
 
 
-def validate_target(cluster_name, config_path, inventory_path, galera_hosts, proxy_hosts, app_hosts):
+def validate_target(
+    cluster_name,
+    config_path,
+    inventory_path,
+    galera_hosts,
+    proxy_hosts,
+    app_hosts,
+    operator_cluster=None,
+    confirm=None,
+):
+    if operator_cluster is None:
+        operator_cluster = OPERATOR_CLUSTER
+    if confirm is None:
+        confirm = CONFIRM
     errors = []
+    if operator_cluster != EXPECTED_CLUSTER:
+        errors.append(f"CLUSTER must be {EXPECTED_CLUSTER}, got {operator_cluster!r}")
+    if confirm != "yes":
+        errors.append(f"CONFIRM must be 'yes', got {confirm!r}")
     if cluster_name != EXPECTED_CLUSTER:
         errors.append(f"cluster name must be {EXPECTED_CLUSTER}, got {cluster_name}")
     if Path(config_path).resolve() != EXPECTED_CONFIG:
@@ -179,7 +197,6 @@ def validate_target(cluster_name, config_path, inventory_path, galera_hosts, pro
         errors.append("QUORUM_RUN_ID must be exactly 32 lowercase hex characters")
     return errors
 
-
 def sh(host, script, timeout=120):
     cmd = [ANSIBLE, host, "-i", INVENTORY, "-m", "ansible.builtin.shell", "-a", script]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -195,7 +212,7 @@ def safe_sh(host, script, timeout=120):
         rc, output = sh(host, script, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         return {"ok": False, "rc": None, "output": "", "error": f"timeout after {exc.timeout}s"}
-    except Exception as exc:
+    except BaseException as exc:
         return {"ok": False, "rc": None, "output": "", "error": f"{type(exc).__name__}: {exc}"}
     return {
         "ok": rc == 0,
@@ -238,15 +255,24 @@ def install_app_profile():
 def remove_app_profile(attempts=3):
     history = []
     for attempt in range(1, attempts + 1):
-        remove = safe_sh(APP_HOST, f"rm -f {APP_CNF}", timeout=60)
-        verify = safe_sh(APP_HOST, f"test ! -e {APP_CNF} && echo ABSENT || echo PRESENT", timeout=60)
-        history.append({"attempt": attempt, "remove": remove, "verify": verify})
-        if verify["ok"] and verify["output"] == "ABSENT":
-            return {"absent": True, "history": history}
-        time.sleep(2)
+        try:
+            remove = safe_sh(APP_HOST, f"rm -f {APP_CNF}", timeout=60)
+            verify = safe_sh(APP_HOST, f"test ! -e {APP_CNF} && echo ABSENT || echo PRESENT", timeout=60)
+            history.append({"attempt": attempt, "remove": remove, "verify": verify})
+            if verify["ok"] and verify["output"] == "ABSENT":
+                return {"absent": True, "history": history}
+            if attempt < attempts:
+                try:
+                    time.sleep(2)
+                except BaseException:
+                    pass
+        except BaseException as exc:
+            history.append({
+                "attempt": attempt,
+                "remove": {"ok": False, "rc": None, "output": "", "error": f"{type(exc).__name__}: {exc}"},
+                "verify": {"ok": False, "rc": None, "output": "", "error": f"{type(exc).__name__}: {exc}"},
+            })
     return {"absent": False, "history": history}
-
-
 def app_query(sql):
     return safe_sh(
         APP_HOST,
@@ -427,26 +453,38 @@ def arm_node(host, run=safe_sh):
 def cleanup_nodes(hosts, restart_before, run=safe_sh):
     results = {}
     for host in hosts:
-        remove = run(host, f"rm -f {DROPIN}", timeout=60)
-        reload_result = run(host, "systemctl daemon-reload", timeout=60)
-        start = run(host, "systemctl start --no-block mariadb", timeout=60)
-        absent = run(host, f"test ! -e {DROPIN} && echo ABSENT || echo PRESENT", timeout=60)
-        policy = run(host, "systemctl show mariadb -p Restart --value", timeout=60)
-        results[host] = {
-            "remove_ok": remove["ok"],
-            "reload_ok": reload_result["ok"],
-            "start_enqueued": start["ok"],
-            "dropin_absent": absent["ok"] and absent["output"] == "ABSENT",
-            "restart_policy_before": restart_before.get(host),
-            "restart_policy_after": policy["output"] if policy["ok"] else None,
-            "restart_policy_restored": (
-                policy["ok"] and policy["output"] == restart_before.get(host)
-            ),
-            "errors": [
-                item["error"] for item in (remove, reload_result, start, absent, policy)
-                if not item["ok"]
-            ],
-        }
+        try:
+            remove = run(host, f"rm -f {DROPIN}", timeout=60)
+            reload_result = run(host, "systemctl daemon-reload", timeout=60)
+            start = run(host, "systemctl start --no-block mariadb", timeout=60)
+            absent = run(host, f"test ! -e {DROPIN} && echo ABSENT || echo PRESENT", timeout=60)
+            policy = run(host, "systemctl show mariadb -p Restart --value", timeout=60)
+            results[host] = {
+                "remove_ok": remove["ok"],
+                "reload_ok": reload_result["ok"],
+                "start_enqueued": start["ok"],
+                "dropin_absent": absent["ok"] and absent["output"] == "ABSENT",
+                "restart_policy_before": restart_before.get(host),
+                "restart_policy_after": policy["output"] if policy["ok"] else None,
+                "restart_policy_restored": (
+                    policy["ok"] and policy["output"] == restart_before.get(host)
+                ),
+                "errors": [
+                    item["error"] for item in (remove, reload_result, start, absent, policy)
+                    if not item["ok"]
+                ],
+            }
+        except BaseException as exc:
+            results[host] = {
+                "remove_ok": False,
+                "reload_ok": False,
+                "start_enqueued": False,
+                "dropin_absent": False,
+                "restart_policy_before": restart_before.get(host),
+                "restart_policy_after": None,
+                "restart_policy_restored": False,
+                "errors": [f"cleanup interrupted: {type(exc).__name__}: {exc}"],
+            }
     return results
 
 

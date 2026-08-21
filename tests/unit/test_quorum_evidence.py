@@ -146,6 +146,17 @@ class AcceptanceAndRenderingTests(unittest.TestCase):
         self.assertIn("measured, not documented", draft)
         self.assertIn("sameness with #1596 is not established", draft)
 
+    def test_issue_redacts_residual_unrelated_ips(self):
+        record = sample_record()
+        record["failure"]["proxysql_log"] = (
+            "2026-08-21 error 1047 backend 192.168.1.172 from client 10.200.42.99 WSREP has not yet prepared node"
+        )
+        draft = qe.render_issue_draft(record)
+        self.assertNotIn("10.200.42.99", draft)
+        self.assertNotIn("192.168.1.172", draft)
+        self.assertIn("[IP-REDACTED]", draft)
+        self.assertIn("db1", draft)
+
 
 if __name__ == "__main__":
     unittest.main()

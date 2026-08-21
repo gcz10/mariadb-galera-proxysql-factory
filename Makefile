@@ -377,6 +377,7 @@ lab-app-degradation-test:  ## P2 quorum loss (TYLKO newclaude16-r9, destrukcyjny
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (SIGKILL na n16g2/n16g3)"; exit 1)
 	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" \
 	  QUORUM_RUN_ID="$${QUORUM_RUN_ID}" \
+	  CONFIRM="$${CONFIRM}" \
 	  APP_QUORUM_ERROR_CONTRACT="$${APP_QUORUM_ERROR_CONTRACT:-degraded}" \
 	  tests/lab/chaos-app-degradation.py
 
