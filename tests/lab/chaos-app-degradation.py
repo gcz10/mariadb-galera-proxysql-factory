@@ -722,6 +722,8 @@ def main():
     )
     if not APP_PW:
         guard_errors.append("APP_DB_PASSWORD is missing")
+    if CONTRACT not in (OUTCOME_DEGRADED, OUTCOME_CLEAN):
+        guard_errors.append(f"APP_QUORUM_ERROR_CONTRACT must be 'degraded' or 'clean', got {CONTRACT!r}")
     if guard_errors:
         for error in guard_errors:
             print(f"REFUSED: {error}")

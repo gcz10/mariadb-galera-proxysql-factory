@@ -386,5 +386,30 @@ class OrchestrationTests(unittest.TestCase):
         rec = written_records[0]
         self.assertTrue(any("credential/setup: copy failed" in err for err in rec["errors"]))
 
+
+    def test_main_refuses_invalid_contract_before_profile_or_mutation(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        install_calls = []
+        measurement_calls = []
+
+        def fake_install():
+            install_calls.append(True)
+
+        def fake_run_measurement(record):
+            measurement_calls.append(record)
+            return record
+
+        with patch.dict(ns["main"].__globals__, {
+            "CONTRACT": "invalid_contract_mode",
+            "validate_target": lambda *a, **kw: [],
+            "install_app_profile": fake_install,
+            "run_measurement": fake_run_measurement,
+        }):
+            exit_code = ns["main"]()
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(install_calls, [])
+        self.assertEqual(measurement_calls, [])
 if __name__ == "__main__":
     unittest.main()
