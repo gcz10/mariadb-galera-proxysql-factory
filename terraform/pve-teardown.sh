@@ -10,15 +10,28 @@
 # Uzycie: terraform/pve-teardown.sh <katalog-terraform>
 #   np.   terraform/pve-teardown.sh terraform/claude-r10
 #
-# Wymaga w srodowisku: PROXMOX_VE_ENDPOINT, PROXMOX_VE_USERNAME, PROXMOX_VE_PASSWORD
-# (te same, ktorych uzywa provider terraform).
+# Wymaga w srodowisku: PROXMOX_VE_ENDPOINT oraz PROXMOX_VE_API_TOKEN ALBO pary
+# PROXMOX_VE_USERNAME + PROXMOX_VE_PASSWORD (to samo, co provider terraform
+# i bramka `pve_auth_guard` w Makefile).
 set -euo pipefail
 
 TF_DIR="${1:?Uzycie: pve-teardown.sh <katalog-terraform>}"
 [ -d "$TF_DIR" ] || { echo "Brak katalogu: $TF_DIR" >&2; exit 1; }
 : "${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
-: "${PROXMOX_VE_USERNAME:?Ustaw PROXMOX_VE_USERNAME}"
-: "${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_PASSWORD}"
+# Token ALBO uzytkownik+haslo — ten sam kontrakt co `pve_auth_guard`. Provider
+# bpg/proxmox uwierzytelnia sie tokenem, wiec twardy wymog hasla czynil
+# skodyfikowany teardown niewykonalnym dla operatora uzywajacego tokena, a bez
+# sprzatania sierot ZFS kolejny apply na tych samych VMID pada.
+if [ -z "${PROXMOX_VE_API_TOKEN:-}" ]; then
+  : "${PROXMOX_VE_USERNAME:?Ustaw PROXMOX_VE_API_TOKEN albo PROXMOX_VE_USERNAME i PROXMOX_VE_PASSWORD}"
+  : "${PROXMOX_VE_PASSWORD:?Ustaw PROXMOX_VE_API_TOKEN albo PROXMOX_VE_USERNAME i PROXMOX_VE_PASSWORD}"
+fi
+
+# Endpoint bywa podany z ukosnikiem na koncu (tak trzyma go .env i tak przyjmuje
+# provider). Bez normalizacji sklejamy `//api2/json/...`, na co PVE odpowiada
+# HTTP 500 "no such file". Provider tego nie zauwaza, ten skrypt cicho pomijal
+# przez to CALE sprzatanie sierot.
+PVE_API=$(printf '%s' "$PROXMOX_VE_ENDPOINT" | sed 's#/*$##')
 
 # --- Zabezpieczenie 1: katalog musi byc konfiguracja terraform Z TEGO repo ---
 # Skrypt kasuje maszyny bezpowrotnie. Bez tej walidacji `pve-teardown.sh /`
@@ -180,51 +193,91 @@ fi
 [ "${#VMIDS[@]}" -eq 0 ] && exit 0
 
 echo "=== sprzatanie sierot ZFS dla VMID: ${VMIDS[*]} ==="
-AUTH=$(curl -sk --max-time 20 -X POST "${PROXMOX_VE_ENDPOINT}/api2/json/access/ticket" \
-  --data-urlencode "username=${PROXMOX_VE_USERNAME}" \
-  --data-urlencode "password=${PROXMOX_VE_PASSWORD}")
-# Bez sprawdzenia bilet bywa pusty (zle haslo, API nieosiagalne), a skrypt
-# leci dalej z pustym cookie i sypie kaskada nieczytelnych 401.
-if ! TICKET=$(printf '%s' "$AUTH" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["ticket"])' 2>/dev/null) \
-   || [ -z "$TICKET" ]; then
-  echo "BLAD: uwierzytelnianie w PVE API nie powiodlo sie (sprawdz PROXMOX_VE_*)." >&2
+# Naglowki uwierzytelniajace. Wedlug dokumentacji Proxmox VE API ("API Tokens")
+# token nie wymaga CSRF przy DELETE, a naglowek nalezy podawac PLIKIEM: token
+# jest dlugowieczny, a argv widzi kazdy uzytkownik przez `ps` (ticket zyje 2 h,
+# wiec jego dotychczasowa sciezka zostaje bez zmian).
+AUTH_ARGS=()
+if [ -n "${PROXMOX_VE_API_TOKEN:-}" ]; then
+  AUTH_HEADER_FILE=$(mktemp)
+  chmod 600 "$AUTH_HEADER_FILE"
+  trap 'rm -f "$AUTH_HEADER_FILE"' EXIT
+  printf 'Authorization: PVEAPIToken=%s\n' "$PROXMOX_VE_API_TOKEN" > "$AUTH_HEADER_FILE"
+  AUTH_ARGS=(-H @"$AUTH_HEADER_FILE")
+else
+  AUTH=$(curl -sk --max-time 20 -X POST "${PVE_API}/api2/json/access/ticket" \
+    --data-urlencode "username=${PROXMOX_VE_USERNAME}" \
+    --data-urlencode "password=${PROXMOX_VE_PASSWORD}")
+  # Bez sprawdzenia bilet bywa pusty (zle haslo, API nieosiagalne), a skrypt
+  # leci dalej z pustym cookie i sypie kaskada nieczytelnych 401.
+  if ! TICKET=$(printf '%s' "$AUTH" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["ticket"])' 2>/dev/null) \
+     || [ -z "$TICKET" ]; then
+    echo "BLAD: uwierzytelnianie w PVE API nie powiodlo sie (sprawdz PROXMOX_VE_*)." >&2
+    echo "Maszyny zostaly usuniete, ale sieroty ZFS dla VMID ${VMIDS[*]} trzeba sprzatnac recznie." >&2
+    exit 1
+  fi
+  CSRF=$(printf '%s' "$AUTH" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["CSRFPreventionToken"])')
+  AUTH_ARGS=(-b "PVEAuthCookie=${TICKET}" -H "CSRFPreventionToken: ${CSRF}")
+fi
+
+CONTENT_FILE=$(mktemp)
+trap 'rm -f "$CONTENT_FILE" ${AUTH_HEADER_FILE:+"$AUTH_HEADER_FILE"}' EXIT
+
+# Lista wolumenow MUSI byc sprawdzona. Wczesniej kazdy VMID parsowal odpowiedz
+# osobno z `2>/dev/null`, wiec HTML zamiast JSON-a konczyl sie komunikatem
+# "usunietych sierot: 0" i kodem 0 — sprzatanie nie odbywalo sie wcale, a
+# dowiadywalismy sie o tym dopiero przy nastepnym `apply` na tym samym VMID.
+CONTENT_CODE=$(curl -sk --max-time 30 "${AUTH_ARGS[@]}" \
+  -o "$CONTENT_FILE" -w '%{http_code}' \
+  "${PVE_API}/api2/json/nodes/${PVE_NODE}/storage/${PVE_STORAGE}/content")
+if [ "$CONTENT_CODE" != "200" ]; then
+  echo "BLAD: PVE API zwrocilo HTTP $CONTENT_CODE przy liscie wolumenow." >&2
   echo "Maszyny zostaly usuniete, ale sieroty ZFS dla VMID ${VMIDS[*]} trzeba sprzatnac recznie." >&2
   exit 1
 fi
-CSRF=$(printf '%s' "$AUTH" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["CSRFPreventionToken"])')
 
-CONTENT=$(curl -sk --max-time 30 -b "PVEAuthCookie=${TICKET}" \
-  "${PROXMOX_VE_ENDPOINT}/api2/json/nodes/${PVE_NODE}/storage/${PVE_STORAGE}/content")
+if ! VOLS_RAW=$(VMIDS_CSV="$(printf '%s,' "${VMIDS[@]}")" python3 -c '
+import json, os, sys
+want = [v for v in os.environ["VMIDS_CSV"].split(",") if v]
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle).get("data") or []
+for item in data:
+    volid = item.get("volid", "")
+    if any("vm-%s-" % vmid in volid for vmid in want):
+        print(volid)
+' "$CONTENT_FILE"); then
+  echo "BLAD: odpowiedz PVE API nie jest poprawnym JSON-em — nie wiadomo, czy zostaly sieroty." >&2
+  echo "Maszyny zostaly usuniete, ale sieroty ZFS dla VMID ${VMIDS[*]} trzeba sprzatnac recznie." >&2
+  exit 1
+fi
+
+VOLS=()
+while IFS= read -r line; do
+  [ -n "$line" ] && VOLS+=("$line")
+done <<< "$VOLS_RAW"
 
 removed=0
-for vmid in "${VMIDS[@]}"; do
-  # Wolumeny osierocone po tym konkretnym VMID (cloudinit, disk-N, ...).
-  VOLS=()
-  while IFS= read -r line; do
-    [ -n "$line" ] && VOLS+=("$line")
-  done < <(
-    printf '%s' "$CONTENT" | python3 -c "
-import sys, json
-data = json.load(sys.stdin).get('data', []) or []
-for item in data:
-    volid = item.get('volid', '')
-    if 'vm-${vmid}-' in volid:
-        print(volid)
-"
-  )
-  # "${VOLS[@]}" z pusta tablica + set -u wywala sie na bash 3.2 (macOS)
-  [ "${#VOLS[@]}" -gt 0 ] || continue
+failed=0
+# "${VOLS[@]}" z pusta tablica + set -u wywala sie na bash 3.2 (macOS)
+if [ "${#VOLS[@]}" -gt 0 ]; then
   for vol in "${VOLS[@]}"; do
-    [ -n "$vol" ] || continue
     code=$(curl -sk --max-time 60 -o /dev/null -w '%{http_code}' -X DELETE \
-      -b "PVEAuthCookie=${TICKET}" -H "CSRFPreventionToken: ${CSRF}" \
-      "${PROXMOX_VE_ENDPOINT}/api2/json/nodes/${PVE_NODE}/storage/${PVE_STORAGE}/content/${vol}")
+      "${AUTH_ARGS[@]}" \
+      "${PVE_API}/api2/json/nodes/${PVE_NODE}/storage/${PVE_STORAGE}/content/${vol}")
     if [ "$code" = "200" ]; then
       echo "  usunieto sierote: $vol"
       removed=$((removed + 1))
     else
-      echo "  UWAGA: nie udalo sie usunac $vol (HTTP $code)" >&2
+      echo "  BLAD: nie udalo sie usunac $vol (HTTP $code)" >&2
+      failed=$((failed + 1))
     fi
   done
-done
+fi
+
+# Pozostawiona sierota wywali nastepny `terraform apply` na tym VMID, wiec
+# konczymy bledem zamiast raportowac sukces czesciowy.
+if [ "$failed" -gt 0 ]; then
+  echo "BLAD: nie usunieto $failed wolumenow — sprzataj recznie przed kolejnym apply." >&2
+  exit 1
+fi
 echo "=== teardown zakonczony (usunietych sierot: $removed) ==="

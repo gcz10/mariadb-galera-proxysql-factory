@@ -1,15 +1,18 @@
 ---
-# newclaude15-r9 - klaster Galera na Rocky Linux 9 (Proxmox, real VM).
+# newclaude16-r9 - klaster Galera na Rocky Linux 9 (Proxmox, real VM).
 # Logowanie jako root przez klucz cloud-init; become:true jest wtedy no-opem.
 #
-# VM Galera i restore tworzy terraform/newclaude15-r9/:
-#   n15g1-3 (VMID 9550-9552, IP .168-.170), n15r1 (9553, .171).
+# VM Galera i restore tworzy terraform/newclaude16-r9/:
+#   n16g1-3 (VMID 9550-9552, IP .172-.174), n16r1 (9553, .175).
 # ProxySQL fcp1/fcp2 (.131/.132), app fcapp (.134) i infra fcinfra (.130)
 # NALEZA do terraform/shared/ i sa tu tylko deklarowane - ten katalog ich
 # nie tworzy ani nie niszczy. VIP .133.
 #
 # Nazwy hostow sa globalnie rozlaczne w calej flocie: trafiaja do PMM Inventory
-# jako <pmm.cluster_name>-<host> oraz do hostname VM.
+# jako <pmm.cluster_name>-<host> oraz do hostname VM. Adresy sa reuzyte po
+# zderejestrowanym i zniszczonym newclaude15-r9, ale nazwy juz nie - dzieki
+# temu jakikolwiek niedosprzatany obiekt po n15 wyszedlby jako kolizja, a nie
+# jako cichy zlepek dwoch klastrow.
 
 all:
   vars:
@@ -23,15 +26,15 @@ all:
       vars:
         galera_role: "galera"
       hosts:
-        n15g1:
+        n16g1:
           ansible_host: "192.168.1.172"
           galera_node_idx: 1
           galera_node_address: "192.168.1.172"
-        n15g2:
+        n16g2:
           ansible_host: "192.168.1.173"
           galera_node_idx: 2
           galera_node_address: "192.168.1.173"
-        n15g3:
+        n16g3:
           ansible_host: "192.168.1.174"
           galera_node_idx: 3
           galera_node_address: "192.168.1.174"
@@ -53,7 +56,7 @@ all:
       vars:
         restore_role: "restore"
       hosts:
-        n15r1:
+        n16r1:
           ansible_host: "192.168.1.175"
           restore_node_address: "192.168.1.175"
 
