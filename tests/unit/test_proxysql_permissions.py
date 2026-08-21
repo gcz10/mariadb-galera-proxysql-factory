@@ -12,11 +12,24 @@ import yaml
 
 
 class ProxySQLFilePermissionsTests(unittest.TestCase):
-    """Tests file permissions in f7_proxysql.yml."""
+    """Tests file permissions in playbooks configuring the ProxySQL pair.
+
+    Instance-level files belong to the platform layer (platform_proxysql.yml);
+    f7_proxysql.yml is the tenant registration playbook. The invariants are
+    about the shared instance, so every task is looked up across both files —
+    whichever of them owns the task must keep the exact permission contract.
+    """
+
+    PLAYBOOKS = (
+        "playbooks/platform_proxysql.yml",
+        "playbooks/f7_proxysql.yml",
+    )
 
     def setUp(self):
-        with open("playbooks/f7_proxysql.yml", encoding="utf-8") as f:
-            self.plays = yaml.safe_load(f)
+        self.plays = []
+        for path in self.PLAYBOOKS:
+            with open(path, encoding="utf-8") as f:
+                self.plays.extend(yaml.safe_load(f))
 
     def get_file_task(self, target_path: str):
         for play in self.plays:

@@ -35,29 +35,27 @@ CLUSTER = PMM_CONFIG["cluster_name"]
 INVENTORY_GROUPS = INVENTORY["all"]["children"]
 GALERA_HOSTS = INVENTORY_GROUPS["galera"]["hosts"]
 PROXYSQL_HOSTS = INVENTORY_GROUPS["proxysql"]["hosts"]
-# Wezly ProxySQL sa WSPOLNE dla floty i rejestruje je w PMM wylacznie owner pary.
-# Konsument nie ma tam wlasnych eksporterow — pmm-agent ma jedna tozsamosc node
-# per host, wiec oczekiwanie ich pod etykieta konsumenta bylo by zadaniem stanu,
-# ktory NIE POWINIEN istniec (i ktorego f11 celowo nie tworzy).
-OWNS_SHARED_TIER = (
-    (CLUSTER_CONFIG.get("proxysql") or {}).get("role", "owner") == "owner"
-)
+# Wezly ProxySQL sa WSPOLNE dla floty i rejestruje je w PMM wylacznie warstwa
+# wspolna (`make platform-monitoring`). Do 2026-08-21 robil to klaster
+# z `proxysql.role: owner` i ta sonda miala galaz ownera z domyslna wartoscia
+# `owner` — po usunieciu pola KAZDY najemca bylby uznany za ownera i sonda
+# wymagalaby od niego wezlow `<cluster>-fcp1/2`, ktorych f11 slusznie nie
+# tworzy. Najemca nie ma tam wlasnych eksporterow: pmm-agent ma jedna tozsamosc
+# node per host, wiec rejestracja pod etykieta najemcy dublowalaby metryki
+# tej samej maszyny (pilnuje tego `tests/lab/probe-platform.py`).
+#
 # Hosty z LOKALNYM pmm-agentem (monitoring.agent_groups) sa w PMM wezlami
 # NATYWNYMI: node_exporter pochodzi z paczki pmm-client, nie z tarballa, i nie
 # ma dla nich uslugi `external`. Kontrakt jest wiec dwutrybowy — mieszanie go
 # dawaloby falszywe FAIL na kazdym zmigrowanym hoscie.
 AGENT_GROUPS = set((CLUSTER_CONFIG.get("monitoring") or {}).get("agent_groups") or [])
-_GROUPS = {"galera": GALERA_HOSTS, "proxysql": PROXYSQL_HOSTS}
+_GROUPS = {"galera": GALERA_HOSTS}
 AGENT_HOSTS = {
     host
     for group in AGENT_GROUPS
     for host in _GROUPS.get(group, {})
-    if OWNS_SHARED_TIER or group != "proxysql"
 }
-PROXYSQL_VIA_AGENT = bool(AGENT_GROUPS & {"proxysql"}) and OWNS_SHARED_TIER
-_ALL_MONITORED = (
-    {**GALERA_HOSTS, **PROXYSQL_HOSTS} if OWNS_SHARED_TIER else dict(GALERA_HOSTS)
-)
+_ALL_MONITORED = dict(GALERA_HOSTS)
 # Zbior WEZLOW jest wspolny dla obu trybow: pmm-agent rejestruje wezel generic
 # tak samo jak sciezka agentless, wiec asercja zbioru wezlow i zapytania o metryki
 # (filtrowane po node_name) MUSZA obejmowac wszystkie monitorowane hosty. Zawezenie
@@ -100,13 +98,9 @@ AGENT_NODES = {f"{CLUSTER}-{host}" for host in _ALL_MONITORED if host in AGENT_H
 AGENTLESS_NODES = {f"{CLUSTER}-{host}" for host in AGENTLESS_HOSTS}
 # Pierwszy wezel Galera wg inventory — NIE zaszyte "gnode1".
 FIRST_GALERA_NODE = f"{CLUSTER}-{next(iter(GALERA_HOSTS))}"
-# Nazwa uslugi jest ta sama w obu trybach; rozni sie TYP (external vs native),
-# wiec sprawdzenie ponizej wybiera odpowiednia liste uslug.
-EXPECTED_PROXYSQL = (
-    {f"{CLUSTER}-{host_name}-proxysql" for host_name in PROXYSQL_HOSTS}
-    if OWNS_SHARED_TIER
-    else set()
-)
+# Eksportery metryk ProxySQL naleza do warstwy wspolnej i sonda NAJEMCY nigdy
+# ich nie oczekuje. Weryfikuje je `probe-platform.py` z `make platform-verify`.
+EXPECTED_PROXYSQL: set[str] = set()
 EXPECTED_CREDENTIALS_REVISION = str(PMM_CONFIG["credentials_revision"])
 EXPECTED_NODE_EXPORTER_VERSION = str(VERSION_LOCK["node_exporter"]["version"])
 EXPECTED_PMM_VERSION = str(VERSION_LOCK["pmm"]["version"])
@@ -254,12 +248,13 @@ def main():
             rule_suffixes.append(suffix)
     if not rule_suffixes:
         raise SystemExit(f"FAIL: nie odczytano zadnej reguly z {alerts_playbook}")
-    is_owner = (CLUSTER_CONFIG.get("proxysql", {}).get("role", "owner") == "owner")
     tls_full = (CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled") == "full")
     expected_alert_rules = {f"isa-{_cl}-{suffix}" for suffix in rule_suffixes}
-    if is_owner:
-        # Warstwa wspolna: pare ProxySQL opisuje owner i tylko on.
-        expected_alert_rules |= {f"isa-shared-{suffix}" for suffix in shared_suffixes}
+    # Reguly `isa-shared-*` opisuja wspolna pare ProxySQL i naleza do warstwy
+    # wspolnej (`make platform-alerts`). Do 2026-08-21 wdrazal je klaster
+    # z `proxysql.role: owner`, a ta sonda domyslnie zakladala ownera. Po
+    # wyniesieniu warstwy takie zalozenie kazaloby jej wymagac tych regul od
+    # KAZDEGO najemcy — czyli swiecic na czerwono na poprawnej konfiguracji.
     if tls_full:
         # Bez TLS metryka wygasania ma wartosc 0 i regula nie ma sensu.
         expected_alert_rules |= {f"isa-{_cl}-{suffix}" for suffix in tls_suffixes}
@@ -274,6 +269,17 @@ def main():
         managed_uids == expected_alert_rules,
         f"ISC-47 managed alert rules differ: got {sorted(managed_uids)}, "
         f"expected {sorted(expected_alert_rules)}",
+        failures,
+    )
+    # Falsyfikowalny straznik odwrotnego kierunku: gdyby najemca nazwal sie
+    # `shared` albo ktos przywrocil galaz ownera, jego reguly wchlonelyby
+    # przestrzen warstwy wspolnej — i teardown tego najemcy zabralby alerty
+    # calej flocie. Ta sama klasa bledu, ktora repo naprawialo przy koncie MinIO.
+    leaked = managed_uids & {f"isa-shared-{suffix}" for suffix in shared_suffixes}
+    check(
+        not leaked,
+        f"najemca {CLUSTER} zarzadza regulami warstwy wspolnej {sorted(leaked)} — "
+        f"naleza do `make platform-alerts`",
         failures,
     )
 

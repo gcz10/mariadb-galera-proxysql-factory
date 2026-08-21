@@ -1,0 +1,293 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "platform.yml schema",
+  "description": "Schemat definicji warstwy wspolnej (platform/<name>/platform.yml). Warstwa wspolna — para ProxySQL z VIP, host infra i host aplikacyjny — jest wlasnoscia ZADNEGO klastra Galera, dlatego schemat celowo nie ma pol galera/backup/tls klastrowych. To tutaj zyje PELNY material TLS frontendu: skoro zadnemu najemcy wolno deklarowac cert+klucz (cluster.schema.json odrzuca je w proxysql.frontend_tls), brak materialu w definicji platformy oznaczalby endpoint bez tozsamosci.",
+  "type": "object",
+  "required": [
+    "platform",
+    "versions",
+    "proxysql",
+    "monitoring"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "platform": {
+      "type": "object",
+      "required": [
+        "name",
+        "environment",
+        "rocky_linux_major"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Nazwa warstwy wspolnej. Uzywana w komunikatach i sciezkach make platform-*."
+        },
+        "environment": {
+          "type": "string",
+          "enum": [
+            "production",
+            "staging",
+            "laboratory"
+          ]
+        },
+        "rocky_linux_major": {
+          "type": "integer",
+          "enum": [
+            9,
+            10
+          ],
+          "description": "Major Rocky Linux maszyn warstwy wspolnej. Do 2026-08-21 pakiety wspolnej pary ProxySQL wybieral lockfile klastra-wlasciciela, wiec przy dwoch najemcach na roznych EL major kazdy przebieg ownera nadpisywal pakiety drugiego — stad major jest tu wlasnoscia platformy, nie najemcy."
+        }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "required": [
+        "policy",
+        "lock_file"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "policy": {
+          "type": "string",
+          "enum": [
+            "locked",
+            "candidate",
+            "research-only"
+          ]
+        },
+        "lock_file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Lockfile pakietow warstwy wspolnej (np. versions/versions-el10.lock.yml). Puste odnosnik zostawilby flote na pakietach z repozytoriow domyslnych, czyli na wersjach, ktorych nikt nie zatwierdzil."
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "required": [
+        "application_cidrs",
+        "database_cluster_cidrs",
+        "administration_cidrs",
+        "monitoring_cidrs"
+      ],
+      "additionalProperties": false,
+      "description": "Polityka ingress hostow warstwy wspolnej. Te same klucze co w cluster.yml najemcow — import firewall.yml i filtr DOCKER-USER w infra_services.yml czytaja jeden format w obu kontekstach, wiec druga konwencja rozwidlilaby wspolny playbook. database_cluster_cidrs oznacza tu CIDR-y, z ktorych KLASTRY lacza sie do uslug hosta wspolnego (PMM 443, MinIO 9000).",
+      "properties": {
+        "application_cidrs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "database_cluster_cidrs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "administration_cidrs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "monitoring_cidrs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "proxysql": {
+      "type": "object",
+      "required": [
+        "nodes_expected",
+        "frontend_tls",
+        "endpoint"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "nodes_expected": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "Wspolny endpoint serwuje CALA flote, wiec pojedynczy wezel ProxySQL bylby jednym punktem awarii wszystkich klastrow naraz — stad minimum 2."
+        },
+        "frontend_tls": {
+          "type": "object",
+          "required": [
+            "ca_reference",
+            "certificate_reference",
+            "private_key_reference"
+          ],
+          "additionalProperties": false,
+          "description": "PELNy material tozsamosci WSPOLNEGO endpointu. To jedyna definicja w repo, ktora go wolno deklarowac (cluster.schema.json dopuszcza u najemcy wylacznie ca_reference). Brak ktoregokolwiek referencji oznaczalby endpoint bez certu albo cert bez klucza — dlatego wszystkie trzy sa required.",
+          "properties": {
+            "ca_reference": {
+              "type": "string",
+              "minLength": 1,
+              "description": "CA, ktorym klient najemcy weryfikuje wspolny endpoint; najemcy dostaja go od platformy na hosty aplikacyjne."
+            },
+            "certificate_reference": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Certyfikat frontendu ProxySQL (SAN musi pokrywac VIP i adresy wezlow ProxySQL). Wdraza go wylacznie warstwa wspolna."
+            },
+            "private_key_reference": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Klucz prywatny certyfikatu frontendu. Wdraza go wylacznie warstwa wspolna."
+            }
+          }
+        },
+        "endpoint": {
+          "type": "object",
+          "required": [
+            "type",
+            "address",
+            "port"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "external_load_balancer",
+                "keepalived_vip",
+                "dns"
+              ]
+            },
+            "address": {
+              "type": "string",
+              "minLength": 1,
+              "not": {
+                "pattern": "PLACEHOLDER"
+              },
+              "description": "Adres aplikacyjny pary ProxySQL. Ten sam adres deklaruja najemcy w proxysql.endpoint — tests/validation/probe-proxysql-tenancy.py sprawdza, ze dla niego istnieje dokladnie ta jedna definicja platformy."
+            },
+            "port": {
+              "type": "integer",
+              "default": 6033
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "keepalived_vip"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "address": {
+                    "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "required": [
+        "pmm",
+        "agent_groups",
+        "alerts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "pmm": {
+          "type": "object",
+          "required": [
+            "server_url",
+            "agent_id",
+            "cluster_name",
+            "validate_certs",
+            "credentials_revision"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "server_url": {
+              "type": "string",
+              "pattern": "^https://"
+            },
+            "agent_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cluster_name": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Namespace PMM warstwy wspolnej (np. 'shared'). Musi byc rozlaczny od namespace'ow najemcow: nazwa najemcy sprawilaby, ze jego deregistracja zabrala by monitoring calej wspolnej pary."
+            },
+            "validate_certs": {
+              "type": "boolean"
+            },
+            "credentials_revision": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "agent_groups": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "proxysql",
+              "infra",
+              "app"
+            ]
+          },
+          "contains": {
+            "const": "proxysql"
+          },
+          "description": "Grupy hostow warstwy wspolnej z lokalnym pmm-agentem. minItems i contains('proxysql') sa celowe: pusta lista albo lista bez grupy proxysql oznaczalaby flote bez monitoringu wlasnej pary ProxySQL — awaria wspoldzielona ze wszystkimi najemcami, a niewidoczna w PMM. Grupy galera/restore tu nie wystepuja: te hosty naleza do najemcow."
+        },
+        "alerts": {
+          "type": "object",
+          "required": [
+            "email"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "email": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Adresat regul alertowych warstwy wspolnej. Required, bo brak adresata to reguly, ktore bija w niktogo — cicha utrata alerty o awarii endpointu calej floty."
+            },
+            "folder_uid": {
+              "type": "string"
+            },
+            "datasource_uid": {
+              "type": "string"
+            }
+          }
+        },
+        "qan_source": {
+          "type": "string",
+          "enum": [
+            "perfschema",
+            "slowlog"
+          ],
+          "description": "Zrodlo danych QAN. Analogicznie jak w cluster.schema.json: 'slowlog' wymaga lokalnego pmm-agenta, wiec wybor musi byc zgodny z agent_groups."
+        }
+      }
+    }
+  }
+}

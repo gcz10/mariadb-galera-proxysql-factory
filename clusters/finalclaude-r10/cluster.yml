@@ -31,23 +31,15 @@ galera:
 
 proxysql:
   nodes_expected: 2
-  # Owner warstwy wspolnej: ten klaster INSTALUJE i utrzymuje fcp1/fcp2 oraz
-  # fcinfra, i zarzadza VIP-em. Dokladnie jeden klaster na parze moze nim byc —
-  # pilnuje tego tests/validation/probe-proxysql-tenancy.py.
+  # Najemca warstwy wspolnej: ten klaster rejestruje przez f7 WYLACZNIE wlasne
+  # hostgroupy i uzytkownika aplikacyjnego. Pakiety na fcp1/fcp2/fcinfra, VIP i
+  # material TLS frontendu wdraza platform/shared/platform.yml (make platform-*).
   # Hostgroupy zostaja domyslne (10/20/30/40), app_user domyslny.
-  role: "owner"
-  # Tozsamosc TLS WSPOLNEGO endpointu. Ten klaster jest ownerem pary ProxySQL,
-  # wiec jako jedyny WDRAZA ten material (f7 kopiuje go do /var/lib/proxysql
-  # i robi `PROXYSQL RELOAD TLS`). Konsumenci deklaruja samo `ca_reference`.
-  #
-  # CA jest WSPOLNE, nie klastrowe, i to jest celowe: jedna para ProxySQL serwuje
-  # wszystkie klastry JEDNYM certem frontendu, wiec podpisanie go CA najemcy
-  # zmusiloby klientow pozostalych do zaufania cudzemu CA, a zniszczenie tego
-  # najemcy uniewaznialoby endpoint calej floty.
+  # Najemca deklaruje TYLKO komu ufa na wspolnym endpoincie. Material frontendu
+  # (cert+klucz) nalezy do platform/shared — gdyby zyl w definicji najemcy,
+  # zniszczenie tego klastra uniewazniloby endpoint calej floty.
   frontend_tls:
     ca_reference: "tests/lab/tls/shared/ca.pem"
-    certificate_reference: "tests/lab/tls/shared/server-cert.pem"
-    private_key_reference: "tests/lab/tls/shared/server-key.pem"
   endpoint:
     type: "keepalived_vip"
     address: "192.168.1.133"   # VIP warstwy wspolnej
@@ -114,9 +106,10 @@ monitoring:
     cluster_name: "fc10-galera"
     validate_certs: false
     credentials_revision: 3
-  # Owner wspolnej pary: to on instaluje pmm-agenta na fcp1/fcp2.
-  # Wlasne wezly Galera zostaja AGENTLESS — punkt odniesienia do porownania z r9.
-  agent_groups: ["proxysql"]
+  # fcp1/fcp2 rejestruje w PMM warstwa wspolna (platform/shared) — najemca nie
+  # ma tu nic do wdrozenia, dlatego agent_groups zostaje puste. Wlasne wezly
+  # Galera zostaja AGENTLESS — punkt odniesienia do porownania z r9.
+  agent_groups: []
   alerts:
     email: "ops@claude.local"
 

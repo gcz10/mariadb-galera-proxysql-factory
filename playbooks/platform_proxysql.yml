@@ -1,0 +1,340 @@
+---
+# Platform: konfiguracja WSPOOLDZIELONEJ pary ProxySQL (fcp1/fcp2).
+#
+# Playbook WYLACZNIE warstwy wspolnej (make platform-proxysql). Instancja
+# ProxySQL obsluguje cala flote, wiec wszystko, co jest globalne dla instancji —
+# cykl zycia daemona, uprawnienia plikow, tozsamosc administratora (lokalna i
+# zdalna), globalne zmienne monitora oraz material TLS frontendu — musi byc
+# zarzadzane z definicji platformy, a nie przez najemce. Do 2026-08-21 zadania
+# te siedzialy w f7_proxysql.yml: dowolny klaster nadpisywal je na wspolnej
+# parze, a ostatnio uruchomiony build wygrywal (np. rotacja hasla admina przez
+# jednego najemce odcinala pozostalych).
+#
+# Najemca (playbooks/f7_proxysql.yml, make cluster-proxysql) rejestruje tylko
+# wlasne zasoby: hostgroupy, backendy, app_user i CA backendu.
+
+- name: "Platform — uruchom i skonfiguruj wspoldzielona pare ProxySQL"
+  hosts: proxysql
+  become: true
+  # Jeden wezel naraz: ta para serwuje cala flote, wiec nigdy nie moga oba
+  # wezly jednoczesnie kierowac ruchem w stanie czesciowo skonfigurowanym.
+  serial: 1
+  max_fail_percentage: 0
+  vars_files:
+    # Te same wspolne stale co dla najemcy: proxysql_remote_admin_user MUSI byc
+    # zapisany tu raz (platforma), a czytany przez f10_backup.yml na wezle
+    # Galera — dwie rozne nazwy rozwiazalyby brame ISC-39. Zmienne galera_*
+    # pozostaja tu nieuzywane (leniwa evaluacja).
+    - vars/proxysql_hostgroups.yml
+  vars:
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    proxysql_monitor_user: "proxysql_monitor"
+    proxysql_monitor_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_PASSWORD') }}"
+    proxysql_admin_password_sql: >-
+      {{ proxysql_admin_password | replace("'", "''") }}
+    proxysql_monitor_password_sql: >-
+      {{ proxysql_monitor_password | replace("'", "''") }}
+    # Tozsamosc administratora wdraza platforma; najemcy korzystaja z niej
+    # przez defaults-extra-file, wiec sekret nigdy nie przechodzi przez argv.
+    proxysql_admin_cli:
+      - mariadb
+      - --defaults-extra-file=/etc/proxysql/admin-check.cnf
+      - -h127.0.0.1
+      - -P6032
+      - -uadmin
+      - -N
+      - -B
+    # Material frontendu wdraza definicja, ktora podala kompletny material
+    # (cert + klucz) — czyli wylacznie platforma, wlascicel pary. Najemca
+    # deklaruje tylko ca_reference (dla wlasnego hosta aplikacyjnego), wiec
+    # bez zadnej dodatkowej flagi nie dotyka wspolnego endpointu i nie moze
+    # nadpisac tozsamosci serwowanej pozostalym najemcom.
+    proxysql_frontend_managed: >-
+      {{ ((proxysql.frontend_tls | default({})).certificate_reference | default('')) | length > 0
+         and ((proxysql.frontend_tls | default({})).private_key_reference | default('')) | length > 0 }}
+
+  pre_tasks:
+    # Instancja nalezy do warstwy wspolnej, a nie do zadnego klastra, wiec
+    # uruchomienie z definicji najemcy jest bledem operatora — i musi wywalc
+    # sie od razu, zanim cokolwiek dotknie wspolnej pary fcp1/fcp2. Dwa
+    # rozrozniki, bo kazdy z osobna daje sie oszukac: definicja najemcy MOZE
+    # deklarowac proxysql.* (rejestruje sie w parze), a plik niebedacy platforma
+    # moze nie miec bloku galera. platform.name jest kluczem definicji
+    # platformy — najemca ma blok platform tylko z rocky_linux_major.
+    - name: "Odrzuc uruchomienie z definicja inna niz platforma"
+      ansible.builtin.assert:
+        that:
+          - platform.name is defined
+          - platform.name | length > 0
+          - galera is not defined
+        fail_msg: >-
+          Ten playbook zarzadza warstwa wspolna i wymaga definicji platformy
+          (platform/shared/platform.yml) — definicja klastra (blok galera)
+          oznacza najemce, a najemca nie zarzadza ta warstwa.
+          Uruchom: make platform-proxysql
+
+    - name: "Wymagaj haseł administratora i monitora"
+      ansible.builtin.assert:
+        that:
+          - proxysql_admin_password | length > 0
+          - proxysql_monitor_password | length > 0
+        fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD i PROXYSQL_MONITOR_PASSWORD poza repozytorium."
+
+  tasks:
+    - name: "Sprawdź dostępność systemd"
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: proxysql_systemd
+
+    - name: "Włącz i uruchom ProxySQL przez systemd"
+      ansible.builtin.systemd:
+        name: proxysql
+        state: started
+        enabled: true
+        daemon_reload: true
+      when: proxysql_systemd.stat.exists
+
+    - name: "Sprawdź proces ProxySQL bez systemd"
+      ansible.builtin.command: pgrep -x proxysql
+      register: proxysql_process
+      changed_when: false
+      failed_when: false
+      when: not proxysql_systemd.stat.exists
+
+    - name: "Uruchom ProxySQL bez systemd (lab)"
+      ansible.builtin.command: proxysql --idle-threads -c /etc/proxysql.cnf
+      when:
+        - not proxysql_systemd.stat.exists
+        - proxysql_process.rc != 0
+      changed_when: true
+
+    - name: "Czekaj na admin port ProxySQL (6032)"
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6032
+        timeout: 20
+
+    - name: "Katalog /etc/proxysql (ProxySQL ma tylko plik /etc/proxysql.cnf)"
+      ansible.builtin.file:
+        path: /etc/proxysql
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: "Zabezpiecz uprawnienia katalogu danych ProxySQL"
+      ansible.builtin.file:
+        path: /var/lib/proxysql
+        state: directory
+        owner: proxysql
+        group: proxysql
+        mode: "0700"
+
+    - name: "Zabezpiecz uprawnienia pliku konfiguracyjnego /etc/proxysql.cnf"
+      ansible.builtin.file:
+        path: /etc/proxysql.cnf
+        owner: root
+        group: proxysql
+        mode: "0640"
+
+    - name: "Wdróż prywatny profil klienta administratora ProxySQL"
+      ansible.builtin.copy:
+        content: |
+          [client]
+          password = {{ proxysql_admin_password | to_json }}
+        dest: /etc/proxysql/admin-check.cnf
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: "Sprawdź czy hasło ProxySQL jest już ustawione"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: "SELECT 1;"
+      register: proxysql_pw_check
+      changed_when: false
+      failed_when: false
+
+    - name: "Ustaw hasło administratora ProxySQL (jeśli jeszcze domyślne)"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - -h127.0.0.1
+          - -P6032
+          - -uadmin
+          - -N
+          - -B
+        stdin: |
+          UPDATE global_variables SET variable_value='admin:{{ proxysql_admin_password_sql }}'
+          WHERE variable_name='admin-admin_credentials';
+          LOAD ADMIN VARIABLES TO RUNTIME;
+          SAVE ADMIN VARIABLES TO DISK;
+      environment:
+        MYSQL_PWD: admin
+      no_log: true
+      when: proxysql_pw_check.rc != 0
+      changed_when: true
+
+    # ProxySQL odrzuca uzytkownika `admin` spoza loopbacku ("ERROR 1040: User
+    # 'admin' can only connect locally"), a runner backupu na wezle Galera musi
+    # odpytac writer hostgroup przez siec (ISC-39). admin-admin_credentials
+    # przyjmuje liste `user:pass;user:pass` — dokladamy druga tozsamosc o innej
+    # nazwie, z tym samym poziomem uprawnien i tym samym sekretem, i zostawiamy
+    # lokalne `admin` nietkniete.
+    - name: "Sprawdź zdalną tożsamość administracyjną ProxySQL"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: >-
+          SELECT COUNT(*) FROM global_variables
+          WHERE variable_name='admin-admin_credentials'
+            AND variable_value='admin:{{ proxysql_admin_password_sql }};{{ proxysql_remote_admin_user }}:{{ proxysql_admin_password_sql }}';
+      register: proxysql_remote_admin_check
+      changed_when: false
+      no_log: true
+
+    - name: "Ustaw zdalną tożsamość administracyjną ProxySQL (dla strażnika writera)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          UPDATE global_variables
+          SET variable_value='admin:{{ proxysql_admin_password_sql }};{{ proxysql_remote_admin_user }}:{{ proxysql_admin_password_sql }}'
+          WHERE variable_name='admin-admin_credentials';
+          LOAD ADMIN VARIABLES TO RUNTIME;
+          SAVE ADMIN VARIABLES TO DISK;
+      when: proxysql_remote_admin_check.stdout | trim != '1'
+      no_log: true
+      changed_when: true
+
+    # mysql-monitor_username/password sa GLOBALNE dla instancji, a jedna para
+    # ProxySQL monitoruje backendy WSZYSTKICH najemcow — wiec ustawia je
+    # platforma. Gdyby kazdy najemca pisal te zmienne w swoim f7, ostatnio
+    # uruchomiony klaster nadpisalby credential monitora i ProxySQL przestalby
+    # monitorowac backendy pozostalych. Konto proxysql_monitor na backendach
+    # zaklada nadal najemca (f7, play na galera[0]) tym samym sekretem ze
+    # zmiennej srodowiskowej.
+    - name: "Sprawdź ustawienia monitora"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          SELECT COUNT(*) FROM global_variables
+          WHERE (variable_name='mysql-monitor_username' AND variable_value='{{ proxysql_monitor_user }}')
+             OR (variable_name='mysql-monitor_password' AND variable_value='{{ proxysql_monitor_password_sql }}');
+      register: current_monitor_settings
+      changed_when: false
+      no_log: true
+
+    - name: "Ustaw monitor"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          UPDATE global_variables SET variable_value='{{ proxysql_monitor_user }}'
+          WHERE variable_name='mysql-monitor_username';
+          UPDATE global_variables SET variable_value='{{ proxysql_monitor_password_sql }}'
+          WHERE variable_name='mysql-monitor_password';
+          LOAD MYSQL VARIABLES TO RUNTIME;
+          SAVE MYSQL VARIABLES TO DISK;
+      when: current_monitor_settings.stdout | trim != '2'
+      no_log: true
+      changed_when: true
+
+    # === Certyfikat FRONTENDU wspolnego endpointu ===
+    #
+    # Do tej pory ProxySQL serwowal aplikacjom auto-cert
+    # (CN=ProxySQL_Auto_Generated_Server_Certificate), ktorego nie podpisalo
+    # zadne nasze CA. Klient MariaDB 11.4 weryfikuje lancuch DOMYSLNIE, wiec
+    # aplikacja szla przez VIP tylko z wylaczona weryfikacja — szyfrowanie bylo,
+    # uwierzytelnienie serwera nie.
+    #
+    # CA jest WSPOLNE (proxysql.frontend_tls), nie klastrowe. Ta para ProxySQL
+    # serwuje cala flote JEDNYM certem frontendu, wiec podpisanie go CA najemcy
+    # zmusiloby klientow pozostalych do zaufania cudzemu CA, a teardown tego
+    # najemcy uniewaznialby endpoint wszystkim. Material wdraza WYLACZNIE
+    # platforma; najemca deklaruje tylko ca_reference, ktore trafia na jego
+    # host aplikacyjny.
+    #
+    # Nazwy plikow sa narzucone przez ProxySQL — dokumentacja (ssl-support)
+    # wymienia dokladnie proxysql-ca.pem / proxysql-cert.pem / proxysql-key.pem
+    # w datadir i mowi, ze "these files can be replaced with custom ones".
+    - name: "TLS frontendu: rozwiąż referencje materiału wspólnego endpointu"
+      ansible.builtin.set_fact:
+        proxysql_frontend_src: >-
+          {{ {
+               'proxysql-ca.pem': proxysql.frontend_tls.ca_reference,
+               'proxysql-cert.pem': proxysql.frontend_tls.certificate_reference,
+               'proxysql-key.pem': proxysql.frontend_tls.private_key_reference,
+             } }}
+      when: proxysql_frontend_managed | bool
+
+    - name: "TLS frontendu: wdróż materiał do datadir ProxySQL (atomowo)"
+      ansible.builtin.copy:
+        src: "{{ (playbook_dir ~ '/../' ~ item.value) | realpath }}"
+        dest: "/var/lib/proxysql/{{ item.key }}"
+        owner: proxysql
+        group: proxysql
+        # Klucz prywatny frontendu widzi TYLKO uzytkownik uslugi.
+        mode: "{{ '0600' if item.key.endswith('-key.pem') else '0640' }}"
+      loop: "{{ proxysql_frontend_src | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: proxysql_frontend_files
+      when: proxysql_frontend_managed | bool
+
+    # RELOAD TLS dziala od ProxySQL 2.3.0 i dotyczy TYLKO nowych polaczen
+    # przychodzacych — istniejace sesje aplikacji nie sa zrywane, wiec podmiana
+    # jest bezprzestojowa. Dokumentacja kaze po niej sprawdzic error log, bo
+    # blad zaladowania materialu NIE jest zwracany w odpowiedzi na komende.
+    - name: "TLS frontendu: przeładuj certyfikaty (PROXYSQL RELOAD TLS)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: "PROXYSQL RELOAD TLS;"
+      when:
+        - proxysql_frontend_managed | bool
+        - proxysql_frontend_files is changed
+      changed_when: true
+
+    # `-starttls mysql` jest OBOWIAZKOWE: protokol MySQL nie zaczyna od TLS,
+    # tylko od powitania serwera, a TLS jest negocjowane dopiero potem. Bez tej
+    # flagi openssl nie widzi zadnego certyfikatu ("Could not find certificate
+    # from <stdin>") i brama wywala sie na wlasnym bledzie, a nie na produkcie.
+    - name: "TLS frontendu: potwierdź serwowany certyfikat (a nie tylko plik na dysku)"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        pem=$(echo | timeout 10 openssl s_client -starttls mysql
+        -connect 127.0.0.1:{{ proxysql.endpoint.port | default(6033) }} 2>/dev/null
+        | sed -n '/BEGIN CERT/,/END CERT/p');
+        [ -n "$pem" ] || { echo NO_TLS; exit 0; };
+        echo "$pem" | openssl x509 -noout -issuer
+      args:
+        executable: /bin/bash
+      register: proxysql_frontend_served
+      changed_when: false
+      when: proxysql_frontend_managed | bool
+
+    # Falsyfikowalna brama: plik moze lezec na dysku, a ProxySQL nadal serwowac
+    # auto-cert (np. gdy RELOAD TLS cicho odrzucil material). Sprawdzamy to, co
+    # widzi klient, a nie to, co lezy w katalogu.
+    - name: "TLS frontendu: odrzuć auto-cert po przeładowaniu"
+      ansible.builtin.assert:
+        that:
+          - "'ProxySQL_Auto_Generated' not in proxysql_frontend_served.stdout"
+          # Brak TLS musi byc bledem, nie cichym przejsciem: gdyby ProxySQL
+          # przestal serwowac TLS, warunek na sam brak auto-certu bylby
+          # spelniony i brama przepuscilaby nieszyfrowany endpoint.
+          - "'NO_TLS' not in proxysql_frontend_served.stdout"
+        fail_msg: >-
+          ProxySQL nadal serwuje auto-cert ({{ proxysql_frontend_served.stdout | trim }})
+          mimo wdrozenia materialu z proxysql.frontend_tls. Sprawdz error log ProxySQL —
+          dokumentacja ostrzega, ze RELOAD TLS nie zglasza bledu w odpowiedzi.
+        success_msg: >-
+          Frontend serwuje material wspolnego endpointu:
+          {{ proxysql_frontend_served.stdout | trim }}
+      when: proxysql_frontend_managed | bool
+
+    - name: "Zabezpiecz uprawnienia bazy SQLite proxysql.db"
+      ansible.builtin.file:
+        path: /var/lib/proxysql/proxysql.db
+        owner: proxysql
+        group: proxysql
+        mode: "0600"
+  handlers: []

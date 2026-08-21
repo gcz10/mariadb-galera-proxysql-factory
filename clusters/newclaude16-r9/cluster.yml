@@ -54,14 +54,14 @@ proxysql:
   nodes_expected: 2
   hostgroup_base: 810
   app_user: "app_user_n16"
-  # Konsument warstwy wspolnej: NIE instaluje pakietow na fcp1/fcp2/fcinfra ani
+  # Najemca warstwy wspolnej: NIE instaluje pakietow na fcp1/fcp2/fcinfra ani
   # nie zarzadza VIP-em. Rejestruje tylko wlasne hostgroupy i uzytkownika przez f7.
-  # Owner (finalclaude-r10) postawil te wezly na EL10, wiec lockfile EL9 ich nie dotyczy.
-  role: "consumer"
-  # Konsument DEKLARUJE, komu ufa na wspolnym endpoincie, ale go NIE wdraza -
-  # material frontendu nalezy do ownera. Ta sciezka trafia na host aplikacyjny,
-  # zeby klient mogl zweryfikowac lancuch VIP-a. CA jest wspolne, nie klastrowe:
-  # jeden cert frontendu obsluguje wszystkie klastry naraz.
+  # Wezly wspolne postawila warstwa platform na EL10, wiec lockfile EL9 najemcy
+  # ich nie dotyczy.
+  # Najemca DEKLARUJE, komu ufa na wspolnym endpoincie, ale go NIE wdraza -
+  # material frontendu nalezy do platform/shared/platform.yml. Ta sciezka trafia
+  # na host aplikacyjny, zeby klient mogl zweryfikowac lancuch VIP-a. CA jest
+  # wspolne, nie klastrowe: jeden cert frontendu obsluguje wszystkie klastry naraz.
   frontend_tls:
     ca_reference: "tests/lab/tls/shared/ca.pem"
   endpoint:
@@ -137,7 +137,8 @@ monitoring:
     cluster_name: "n16-galera"
     validate_certs: false
     credentials_revision: 1
-  # Wezly Galera dostaja lokalnego pmm-agenta. ProxySQL pomijamy - nalezy do ownera (r10).
+  # Wezly Galera dostaja lokalnego pmm-agenta. ProxySQL pomijamy - to wezly
+  # warstwy wspolnej i rejestruje je platform/shared w PMM.
   # To ta sciezka (local-agent) wymaga, by F11 sam usunal anonimowe konta: eksporter
   # laczy sie po TCP na 127.0.0.1, ktore MariaDB resolvuje do 'localhost'.
   agent_groups: ["galera"]

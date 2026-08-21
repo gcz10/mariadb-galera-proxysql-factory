@@ -3,9 +3,10 @@
 # Satisfies: ISC-48.
 
 - name: "F11 - skonfiguruj rotację logów monitoringu i baz"
-  # Konsument konfiguruje rotacje tylko na WLASNYCH hostach — wezly ProxySQL
-  # i infra naleza do ownera pary i on nimi zarzadza.
-  hosts: "{{ 'galera:restore' if (proxysql.role | default('owner')) == 'consumer' else 'all' }}"
+  # Klaster jest najemca warstwy wspolnej, wiec rotacje logow konfiguruje
+  # tylko na wlasnych hostach — wezly ProxySQL i infra naleza do warstwy
+  # wspolnej i zarzadza nimi platforma (make platform-*).
+  hosts: "galera:restore"
   become: true
   serial: 1
 

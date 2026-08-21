@@ -16,15 +16,19 @@ cienkimi wrapperami. Ten test pilnuje kontraktu refaktoru:
 4. DEDUPLIKACJA AUTH: zadne zadanie uri w roli nie nosi danych uwierzytelniajacych
    bezposrednio — auth wylacznie przez module_defaults na wywolaniu roli.
 5. SEMANTIKA: monitoring.agent_groups, credentials_revision, QAN wg
-   monitoring.qan_source, owner/consumer ProxySQL oraz push/pull zostaly
-   zachowane w odpowiednich trybach.
+   monitoring.qan_source oraz push/pull zostaly zachowane w odpowiednich
+   trybach. Podzial owner/consumer ProxySQL zostal ZASTAPIONY najemnictwem:
+   wezly wspolne (grupa proxysql) rejestruje w PMM platforma z
+   platform/shared, najemca wylacznie wlasne wezly (PlatformTenancyDefaultsTests).
 6. SEKRET SETUP: zadanie "Zarejestruj wezel" ma sekret w task-level
    environment z no_log (lustrzane wymaganie do test_secret_scope).
 """
 
 import os
+import re
 import unittest
 
+import jinja2
 import yaml
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -245,19 +249,117 @@ class SemanticsPreservedTests(unittest.TestCase):
         agent = read_text(os.path.join(ROLE_TASKS, "agent_register.yml"))
         self.assertIn("monitoring.qan_source", agent, "agent_register.yml musi tworzyc QAN wg monitoring.qan_source")
 
-    def test_proxysql_owner_consumer_split_preserved(self):
-        defaults = read_text(ROLE_DEFAULTS)
-        self.assertIn(
-            "proxysql.role | default('owner')",
-            defaults,
-            "defaults musi zachowac wykluczenie wezlow ProxySQL konsumenta",
-        )
 
     def test_push_metrics_only_in_agent_mode(self):
         agent = read_text(os.path.join(ROLE_TASKS, "agent_register.yml"))
         agentless = read_text(os.path.join(ROLE_TASKS, "agentless_register.yml"))
         self.assertIn("push_metrics", agent, "tryb agenta wymusza push (pull = cichy up=0 za firewallem)")
         self.assertNotIn("push_metrics", agentless, "sciezka agentless nie ustawia push_metrics")
+
+
+class PlatformTenancyDefaultsTests(unittest.TestCase):
+    """Od 2026-08-21 wezly wspolne rejestruje w PMM warstwa wspolna.
+
+    Kazdy klaster jest najemca: rejestruje w PMM wylacznie wlasne wezly Galera.
+    Powrot grupy proxysql do pmm_node_hosts oznacza, ze najemca znow stawia
+    pmm-agenta na fcp1/fcp2 i zdubluje eksportery postawione przez platforme
+    (playbooks/f11_proxysql_metrics.yml z platform/shared). Dlatego ten test
+    WYKONUJE wyrazenie z defaults na makiecie inwentarza najemcy — pilnuje
+    efektu, nie samej skladni.
+    """
+
+    GROUPS = {
+        "galera": ["f10g1", "f10g2", "f10g3"],
+        "proxysql": ["fcp1", "fcp2"],
+        "restore": ["f10r1"],
+        "infra": ["fcinfra"],
+        "app": ["fcapp"],
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        cls.defaults = load_yaml(ROLE_DEFAULTS)
+        cls.env = jinja2.Environment()
+        cls.env.filters["extract"] = cls._extract
+        cls.env.filters["difference"] = (
+            lambda seq, other: [item for item in seq if item not in set(other)]
+        )
+        cls.env.filters["unique"] = lambda seq: list(dict.fromkeys(seq))
+        cls.env.filters["flatten"] = lambda seq: [
+            item for sub in seq for item in (sub if isinstance(sub, list) else [sub])
+        ]
+        cls.env.filters["regex_replace"] = (
+            lambda value, pattern, replacement="": re.sub(pattern, replacement, str(value))
+        )
+
+    @staticmethod
+    def _extract(key, container, morekeys=None, default=None):
+        """Odpowiednik filtra Ansible: container[key], Undefined przy braku klucza.
+
+        Domyslne wyrazenie robi map('extract', groups) | select('defined') —
+        grupy wymienione w agent_groups, ktorych nie ma w inwentarzu, maja
+        odpasc po cichu, a nie wywalic calego renderowania.
+        """
+        try:
+            result = container[key]
+            for extra in morekeys or []:
+                result = result[extra]
+            return result
+        except (KeyError, IndexError, TypeError):
+            if default is not None:
+                return default
+            return jinja2.Undefined(name=f"extract:{key}")
+
+    @classmethod
+    def eval_default(cls, name, **context):
+        """Wolanie wyrazenia z defaults na podanym kontekscie (jak w playbooku)."""
+        expression = str(cls.defaults[name]).strip()
+        if not (expression.startswith("{{") and expression.endswith("}}")):
+            raise AssertionError(f"defaults.{name} nie jest wyrazeniem Jinja: {expression!r}")
+        return cls.env.compile_expression(expression[2:-2])(**context)
+
+    def node_hosts_for(self, agent_groups):
+        context = {"groups": dict(self.GROUPS), "monitoring": {"agent_groups": agent_groups}}
+        managed = self.eval_default("pmm_agent_managed_hosts", **context)
+        return self.eval_default(
+            "pmm_node_hosts", **dict(context, pmm_agent_managed_hosts=managed)
+        )
+
+    def test_pmm_node_hosts_covers_only_tenant_galera_nodes(self):
+        result = self.node_hosts_for([])
+        self.assertEqual(
+            set(result),
+            set(self.GROUPS["galera"]),
+            "najemca rejestruje agentless wylacznie wlasne wezly galera",
+        )
+        for host in self.GROUPS["proxysql"]:
+            self.assertNotIn(
+                host,
+                result,
+                "fcp1/fcp2 rejestruje warstwa wspolna — najemca zdublowalby eksportery",
+            )
+
+    def test_pmm_node_hosts_stays_off_proxysql_when_galera_local(self):
+        result = self.node_hosts_for(["galera"])
+        self.assertEqual(
+            result, [], "wezly galera z lokalnym agentem odpadaja z listy agentless"
+        )
+        for host in self.GROUPS["proxysql"]:
+            self.assertNotIn(
+                host,
+                result,
+                "fcp1/fcp2 rejestruje warstwa wspolna — najemca zdublowalby eksportery",
+            )
+
+    def test_proxysql_role_variable_stays_deleted(self):
+        defaults = read_text(ROLE_DEFAULTS)
+        self.assertNotIn(
+            "proxysql.role",
+            defaults,
+            "proxysql.role przestalo istniec razem z pojeciem ownera; "
+            "default('owner') w klasycznym warunku zamaskowalby brak zmiennej "
+            "i cichy powrot wlasciciela warstwy wspolnej",
+        )
 
 
 class SecretRegistrationTaskTests(unittest.TestCase):

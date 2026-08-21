@@ -45,21 +45,30 @@
     # `or vector(0)` NIE widzi .prom, które node_exporter podaje bez zmian (zamrożony
     # plik textfile po padniętym runnerze/kolektorze), więc mtime/last_success
     # porównujemy z time() jawnie — to jedyny sygnał tego trybu awarii.
-    # Konsument dostaje wylacznie swoje reguly; wspoldzielone sa domena ownera.
+    # Wlasciciela regul rozstrzyga DEFINICJA, nie flaga konfiguracyjna: blok
+    # `galera` oznacza klaster (najemce), jego brak — definicje platformy.
+    # Klaster wdraza wylacznie reguly klastrowe, platforma wylacznie
+    # `isa-shared-*`. Wczesniej rozwidlenie robila flaga roli w cluster.yml i to
+    # wlasnie ona czynila reguly warstwy wspolnej wlasnoscia jednego klastra.
+    # Dwie osobne listy, a nie znaczniki na wspolnej liscie: reguly klastrowe
+    # czytaja `{{ galera.* }}` i `{{ backup.* }}`, ktorych definicja platformy
+    # nie ma, a Jinja evaluuje wylacznie brana galez wyrazenia warunkowego —
+    # wiec przy definicji platformy szablony klastrowe nie sa nawet dotykane.
+    # Filtr na wspolnej liscie tez by przeszedl (Ansible odklada render
+    # zagniezdzonych szablonow do uzycia wartosci), ale zostawialby martwe
+    # reguly klastrowe o jeden `map(attribute='expr')` od wywalenia przebiegu
+    # platformy — granice wlasciciela pilnujemy struktura, nie konwencja.
     # Reguly oznaczone `requires_tls` powstaja tylko przy tls.mode=full: przy
     # wylaczonym TLS f11_freshness publikuje isa_tls_cert_expiry_unixtime=0, wiec
     # regula liczaca "ile zostalo do wygasniecia" widzialaby cert przeterminowany
     # o pol wieku i palila sie wiecznie na klastrze, ktory certu nie ma.
-    # Reguly bez markera dostaje kazdy; `shared` tylko owner, `requires_tls`
-    # tylko klaster z wlaczonym TLS.
     f15_effective_rules: >-
-      {{ (f15_rules | rejectattr('shared', 'defined')
-                    | rejectattr('requires_tls', 'defined') | list)
-         + (f15_rules | selectattr('shared', 'defined') | list
-            if (proxysql.role | default('owner')) == 'owner' else [])
-         + (f15_rules | selectattr('requires_tls', 'defined') | list
-            if ((tls | default({})).mode | default('disabled')) == 'full' else []) }}
-    f15_rules:
+      {{ f15_shared_rules
+         if galera is not defined
+         else ((f15_cluster_rules | rejectattr('requires_tls', 'defined') | list)
+               + (f15_cluster_rules | selectattr('requires_tls', 'defined') | list
+                  if ((tls | default({})).mode | default('disabled')) == 'full' else [])) }}
+    f15_cluster_rules:
       - uid: "isa-{{ cluster_label }}-node-loss"
         title: "Galera node loss (cluster size < expected)"
         expr: "(min(mysql_global_status_wsrep_cluster_size{cluster=\"{{ cluster_label }}\"}) or vector(0)) < bool {{ galera.nodes_expected }}"
@@ -101,33 +110,6 @@
         severity: "critical"
         noDataState: "Alerting"
 
-      # === Alert WARSTWY WSPOLNEJ — tylko owner (patrz f15_shared_rules ponizej) ===
-      #
-      # Luka znaleziona przy testach failoveru endpointu: gdy pada JEDEN wezel
-      # ProxySQL, keepalived przenosi VIP i aplikacja dziala dalej — wiec zadna
-      # istniejaca regula nie zapala sie NIGDY. Para po cichu degraduje sie do
-      # jednego proxy i zostaje tak do momentu, az padnie drugi. Wtedy nie ma juz
-      # dokad przeniesc VIP-a i awaria jest natychmiastowa i pelna.
-      #
-      # Liczymy ZDROWE instancje, a nie `min(proxysql_up) != 1`. Przy utracie
-      # calej maszyny eksporter znika razem z nia i seria PRZESTAJE ISTNIEC —
-      # `min()` po pozostalych daje wtedy 1, czyli "zdrowo". Zliczanie wylapuje
-      # oba tryby: wygaszony proces (proxysql_up=0) i zniknieta maszyne.
-      # Zmierzone na fcp1/fcp2: `proxysql_up` ma etykiete node_name per wezel.
-      - uid: "isa-shared-proxysql-down"
-        # `shared: true` => regula NALEZY DO WARSTWY WSPOLNEJ, nie do klastra.
-        # Tworzy ja i kasuje wylacznie owner pary ProxySQL. Gdyby tworzyl ja kazdy
-        # konsument, jedno padniecie fcp1 wyslaloby N identycznych maili, a UID
-        # bez namespace'u i tak trzymalby tylko jedna kopie — czyli ostatni
-        # uruchomiony klaster cicho nadpisywalby regule pozostalym.
-        shared: true
-        title: "ProxySQL instance down (shared endpoint pair degraded)"
-        expr: "(count(proxysql_up == 1) or vector(0)) < bool {{ proxysql.nodes_expected }}"
-        summary: >-
-          Zdrowych instancji ProxySQL mniej niz {{ proxysql.nodes_expected }} —
-          endpoint dziala, ale stracil redundancje. Kolejna awaria zdejmie VIP bez zapasu.
-        severity: "critical"
-        noDataState: "Alerting"
       - uid: "isa-{{ cluster_label }}-backup-failed"
         title: "Backup run failed"
         expr: "(min(galera_backup_last_run_success{cluster=\"{{ cluster_label }}\"}) or vector(0)) != bool 1"
@@ -185,6 +167,36 @@
         severity: "critical"
         noDataState: "Alerting"
 
+    f15_shared_rules:
+      # === Alert WARSTWY WSPOLNEJ — patrz komentarz przy samej regule ===
+      #
+      # Luka znaleziona przy testach failoveru endpointu: gdy pada JEDEN wezel
+      # ProxySQL, keepalived przenosi VIP i aplikacja dziala dalej — wiec zadna
+      # istniejaca regula nie zapala sie NIGDY. Para po cichu degraduje sie do
+      # jednego proxy i zostaje tak do momentu, az padnie drugi. Wtedy nie ma juz
+      # dokad przeniesc VIP-a i awaria jest natychmiastowa i pelna.
+      #
+      # Liczymy ZDROWE instancje, a nie `min(proxysql_up) != 1`. Przy utracie
+      # calej maszyny eksporter znika razem z nia i seria PRZESTAJE ISTNIEC —
+      # `min()` po pozostalych daje wtedy 1, czyli "zdrowo". Zliczanie wylapuje
+      # oba tryby: wygaszony proces (proxysql_up=0) i zniknieta maszyne.
+      # Zmierzone na fcp1/fcp2: `proxysql_up` ma etykiete node_name per wezel.
+      - uid: "isa-shared-proxysql-down"
+        # UID bez etykiety klastra jest zamierzony: regula NIE NALEZY do zadnego
+        # klastra, tylko do warstwy wspolnej — tworzy ja i kasuje wylacznie
+        # platforma (make platform-alerts), a derejestracja najemcy omija ja
+        # wzorcem `^isa-<cluster_label>-`. Gdyby wzial ja najemca, jedno
+        # padniecie fcp1 wyslaloby N identycznych maili, a UID trzyma tylko
+        # jedna kopie — ostatnio uruchomiony klaster cicho nadpisywalby regule
+        # pozostalym.
+        title: "ProxySQL instance down (shared endpoint pair degraded)"
+        expr: "(count(proxysql_up == 1) or vector(0)) < bool {{ proxysql.nodes_expected }}"
+        summary: >-
+          Zdrowych instancji ProxySQL mniej niz {{ proxysql.nodes_expected }} —
+          endpoint dziala, ale stracil redundancje. Kolejna awaria zdejmie VIP bez zapasu.
+        severity: "critical"
+        noDataState: "Alerting"
+
   pre_tasks:
     - name: "Wymagaj PMM_ADMIN_PASSWORD i adresu alertów"
       ansible.builtin.assert:
@@ -192,7 +204,7 @@
           - pmm_admin_password | length > 0
           - f15_email | length > 3
           - "'@' in f15_email"
-        fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium i monitoring.alerts.email w cluster.yml."
+        fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium i monitoring.alerts.email w definicji (cluster.yml albo platform.yml)."
 
   tasks:
     # === Zapewnij folder ISA Alerts ===

@@ -1,0 +1,47 @@
+---
+# Warstwa wspolna floty ISA — hosty tworzone przez terraform/shared/.
+#
+# Ten inwentarz NIE zawiera zadnego wezla Galera. To jest cala pointa: warstwa
+# wspolna daje sie utrzymywac bez istnienia jakiegokolwiek klastra bazodanowego.
+# Kazdy klaster ma te same hosty w swoim inwentarzu jako cel rejestracji najemcy
+# (f7) i dystrybucji CA na host aplikacyjny — ale ich CYKLEM ZYCIA zarzadza
+# wylacznie `make platform-*`.
+
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: tests/lab/ssh_key
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        fcp1:
+          ansible_host: "192.168.1.131"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.131"
+        fcp2:
+          ansible_host: "192.168.1.132"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.132"
+
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        fcinfra:
+          ansible_host: "192.168.1.130"
+          infra_node_address: "192.168.1.130"
+
+    # Host aplikacyjny: baza klienta nalezy do warstwy wspolnej, ale CA
+    # testowanego klastra rozprowadza najemca przez `make cluster-app-host`.
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        fcapp:
+          ansible_host: "192.168.1.134"
+          app_node_address: "192.168.1.134"

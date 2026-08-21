@@ -1,18 +1,25 @@
 ---
-# F2: Repozytoria + instalacja pakietów z lockfile
+# F2: Repozytoria + instalacja pakietow z lockfile — wylacznie wezly klastra
 # Satisfies: ISC-3 (wersje zgodne z lockfile), ISC-63 (no state:latest)
-# Instaluje: MariaDB 11.4 + galera-4 + mariadb-backup (Galera nodes), ProxySQL 3.0.9 (ProxySQL nodes)
+# Instaluje: MariaDB 11.4 + galera-4 + mariadb-backup (galera/restore).
+# Sciezka ProxySQL (RPM + GPG + drop-in) mieszkala tutaj jako prerogatywa
+# klastra-"ownera" pary — od wydzielenia warstwy wspolnej instaluje ja
+# wylacznie platform_install.yml z lockfile platformy.
 
 - name: F2 Instalacja repozytoriow i pakietow
-  hosts: all
+  # Najemca instaluje WYLACZNIE na wlasnych wezlach (galera/restore). Zakres
+  # `all` liczyl tez fcp1/fcp2/fcinfra/fcapp z inwentarza klastra, wiec
+  # chrony czy qemu-guest-agent ladowaly na hostach, ktorych cyklem zycia
+  # zarzadza `make platform-*` — dokladnie to wlasnosciowe sprzezenie,
+  # ktore mialo zniknac.
+  hosts: galera:restore
   become: true
   serial: 1
   max_fail_percentage: 0
   # R1: usunieto martwe zmienne tego play'a (zero uzyc, a niosly hardcode):
   #  - mariadb_version ("11.4")  -> repo konfiguruje lock.mariadb.repo_setup_args
-  #  - proxysql_repo_baseurl     -> wskazywalo na 404 (sciezka `rocky/9` nie istnieje)
-  #  - proxysql_repo_gpgkey      -> ProxySQL idzie bezposrednim RPM-em z sha256,
-  #    a /etc/yum.repos.d/proxysql.repo jest celowo usuwany nizej.
+  # Wzmianki o martwych zmiennych ProxySQL przeniesly sie razem z ta sciezka
+  # do platform_install.yml.
 
   tasks:
     # Załaduj lockfile do namespace `lock` (nie kolizjonuje z proxysql/mariadb z cluster.yml).
@@ -206,100 +213,6 @@
       when:
         - "'galera' in group_names"
         - ansible_facts['service_mgr'] == 'systemd'
-    # === ProxySQL nodes: RPM z realna weryfikacja podpisu wydawcy (audit#6) ===
-    # Wczesniej stalo tu `disable_gpg_check: true` z komentarzem, ze klucz jest
-    # binarny i nieimportowalny. To bylo nieprawda: `repo_pub_key.gpg` faktycznie
-    # jest binarny, ale `repo_pub_key` (bez rozszerzenia) to ASCII-armored blok,
-    # ktory `rpm --import` przyjmuje bez problemu. sha256 z lockfile chroni tylko
-    # przed bledem pobierania — podmiana pliku na serwerze wydawcy przechodzila.
-    - name: "ProxySQL - wymagaj sha256 RPM dla aktualnej arch w lockfile"
-      ansible.builtin.assert:
-        that:
-          - (lock.proxysql.rpm_sha256 | default({})).get(ansible_architecture) is defined
-        fail_msg: >-
-          Brak sha256 dla ProxySQL {{ lock.proxysql.version }} arch {{ ansible_architecture }}
-          w versions.lock.yml (proxysql.rpm_sha256). Dodaj przed instalacją (audit#6).
-      when: >-
-        'proxysql' in group_names
-        and (proxysql.role | default('owner')) == 'owner'
-
-    - name: "ProxySQL - pobierz RPM z weryfikacją sha256 (audit#6)"
-      ansible.builtin.get_url:
-        url: "{{ proxysql_rpm_url | default('https://repo.proxysql.com/ProxySQL/proxysql-' ~ lock.proxysql.series ~ '.x/centos/' ~ lock.rocky_linux.major ~ '/proxysql-' ~ lock.proxysql.version ~ '-' ~ lock.proxysql.rpm_release ~ '-centos' ~ lock.rocky_linux.major ~ '.' ~ ansible_architecture ~ '.rpm') }}"
-        dest: "/var/tmp/proxysql-{{ lock.proxysql.version }}-{{ lock.proxysql.rpm_release }}.{{ ansible_architecture }}.rpm"
-        checksum: "sha256:{{ (lock.proxysql.rpm_sha256 | default({})).get(ansible_architecture) }}"
-        mode: "0644"
-      register: proxysql_rpm_dl
-      when: >-
-        'proxysql' in group_names
-        and (proxysql.role | default('owner')) == 'owner'
-
-    - name: "ProxySQL - usun stary repo file (jesli istnieje)"
-      ansible.builtin.file:
-        path: /etc/yum.repos.d/proxysql.repo
-        state: absent
-      when: >-
-        'proxysql' in group_names
-        and (proxysql.role | default('owner')) == 'owner'
-
-    - name: "ProxySQL - zaimportuj klucz GPG wydawcy (ASCII-armored)"
-      ansible.builtin.rpm_key:
-        key: "{{ proxysql_gpg_key_url | default('https://repo.proxysql.com/ProxySQL/proxysql-' ~ lock.proxysql.series ~ '.x/repo_pub_key') }}"
-        fingerprint: "{{ proxysql_gpg_fingerprint | default('653F85BB38256DF8A96206C3E8CA2E8D8217C97E') }}"
-        state: present
-      when: >-
-        'proxysql' in group_names
-        and (proxysql.role | default('owner')) == 'owner'
-    - name: "ProxySQL - instaluj RPM (sha256 z lockfile + podpis GPG wydawcy)"
-      ansible.builtin.dnf:
-        name: "{{ proxysql_rpm_dl.dest }}"
-        state: present
-      when: >-
-        'proxysql' in group_names
-        and (proxysql.role | default('owner')) == 'owner'
-    - name: "ProxySQL - instaluj klienta mariadb (wymagany do admin port 6032)"
-      ansible.builtin.dnf:
-        name: mariadb
-        state: present
-      when: >-
-        'proxysql' in group_names
-        and (proxysql.role | default('owner')) == 'owner'
-
-    - name: "Katalog drop-in proxysql.service"
-      ansible.builtin.file:
-        path: /etc/systemd/system/proxysql.service.d
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-      when:
-        - "'proxysql' in group_names"
-        - ansible_facts['service_mgr'] == 'systemd'
-
-    - name: "ProxySQL - drop-in LimitNOFILE"
-      ansible.builtin.copy:
-        content: |
-          [Service]
-          LimitNOFILE=1048576
-          # Rekomendacja produkcyjna: OOMScoreAdjust=-800 chroni ProxySQL
-          # przed ubiciem przez kernel OOM killer.
-          OOMScoreAdjust=-800
-        dest: /etc/systemd/system/proxysql.service.d/limits.conf
-        owner: root
-        group: root
-        mode: "0644"
-      when:
-        - "'proxysql' in group_names"
-        - ansible_facts['service_mgr'] == 'systemd'
-      register: proxysql_limits_conf
-
-    - name: "ProxySQL - daemon-reload po zmianie limitów systemd"
-      ansible.builtin.systemd:
-        daemon_reload: true
-      when:
-        - "'proxysql' in group_names"
-        - ansible_facts['service_mgr'] == 'systemd'
-        - proxysql_limits_conf.changed
     # === Tuning jądra OS (sysctl) dla baz danych i load balancerów ===
     - name: "Wdróż konfigurację sysctl dla baz danych i ProxySQL"
       ansible.builtin.copy:
@@ -348,9 +261,7 @@
         owner: root
         group: root
         mode: "0644"
-      when:
-        - ansible_facts['service_mgr'] == 'systemd'
-        - "('galera' in group_names or 'proxysql' in group_names or 'restore' in group_names)"
+      when: ansible_facts['service_mgr'] == 'systemd'
       register: thp_service_unit
 
     - name: "THP — włącz i uruchom disable-thp.service"
@@ -359,9 +270,7 @@
         enabled: true
         state: started
         daemon_reload: "{{ thp_service_unit.changed }}"
-      when:
-        - ansible_facts['service_mgr'] == 'systemd'
-        - "('galera' in group_names or 'proxysql' in group_names or 'restore' in group_names)"
+      when: ansible_facts['service_mgr'] == 'systemd'
     # === Wspolne: time sync ===
     - name: Instaluj i wlacz chrony
       ansible.builtin.dnf:

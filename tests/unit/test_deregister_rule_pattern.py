@@ -29,7 +29,7 @@ PLAYBOOK = os.path.join(
 )
 
 
-def render_pattern(cluster_label: str, role: str) -> str:
+def render_pattern(cluster_label: str) -> str:
     """Renderuje `f15_dereg_pattern` bezposrednio z playbooka."""
     with open(PLAYBOOK, encoding="utf-8") as handle:
         doc = yaml.safe_load(handle)
@@ -46,43 +46,52 @@ def render_pattern(cluster_label: str, role: str) -> str:
 
     from jinja2 import Template
 
-    return Template(raw).render(
-        cluster_label=cluster_label,
-        proxysql={"role": role},
-    )
+    return Template(raw).render(cluster_label=cluster_label)
 
 
 class TestDeregisterRulePattern(unittest.TestCase):
-    OWNER = "fc10-galera"
-    CONSUMER = "n11-galera"
+    # `fc10-galera` bylo do 2026-08-21 ownerem warstwy wspolnej i jako jedyne
+    # kasowalo tez reguly `isa-shared-*`. Zostaje tu jako etykieta testowa
+    # WLASNIE dlatego: gdyby ktos przywrocil gałąź ownera, ten test ma paść.
+    EX_OWNER = "fc10-galera"
+    TENANT = "n11-galera"
 
     def test_pattern_is_valid_regex(self):
         """Niezbalansowany nawias to wlasnie ten blad — regexp MUSI sie kompilowac."""
-        for label, role in ((self.OWNER, "owner"), (self.CONSUMER, "consumer")):
-            with self.subTest(role=role):
-                re.compile(render_pattern(label, role))
+        for label in (self.EX_OWNER, self.TENANT):
+            with self.subTest(label=label):
+                re.compile(render_pattern(label))
 
-    def test_consumer_matches_only_own_rules(self):
-        pat = re.compile(render_pattern(self.CONSUMER, "consumer"))
+    def test_tenant_matches_only_own_rules(self):
+        pat = re.compile(render_pattern(self.TENANT))
         self.assertTrue(pat.search("isa-n11-galera-node-loss"))
         self.assertTrue(pat.search("isa-n11-galera-tls-cert-expiring"))
-        # Cudze reguly i wspoldzielone musza przezyc teardown konsumenta.
+        # Cudze reguly i wspoldzielone musza przezyc teardown najemcy.
         self.assertFalse(pat.search("isa-fc10-galera-node-loss"))
         self.assertFalse(pat.search("isa-shared-proxysql-down"))
 
-    def test_owner_also_matches_shared_rules(self):
-        pat = re.compile(render_pattern(self.OWNER, "owner"))
-        self.assertTrue(pat.search("isa-fc10-galera-node-loss"))
-        self.assertTrue(pat.search("isa-shared-proxysql-down"))
-        # Ale NIE reguly innego najemcy — owner sprzata warstwe wspolna i siebie,
-        # nie cudze klastry.
-        self.assertFalse(pat.search("isa-n11-galera-node-loss"))
+    def test_no_tenant_can_delete_shared_rules(self):
+        """Najmocniejsza gwarancja tego pliku po wyniesieniu warstwy wspolnej.
+
+        Kazdy klaster jest teraz najemca, wiec ZADEN nie ma prawa skasowac
+        `isa-shared-*`. Wczesniej owner to robil — i dokladnie stad brala sie
+        klasa bledu, ktora repo naprawialo juz raz przy koncie MinIO: teardown
+        jednego najemcy zabieral zasob calej floty.
+        """
+        for label in (self.EX_OWNER, self.TENANT):
+            with self.subTest(label=label):
+                pat = re.compile(render_pattern(label))
+                self.assertFalse(
+                    pat.search("isa-shared-proxysql-down"),
+                    f"{label}: derejestracja najemcy kasuje reguly warstwy wspolnej",
+                )
+                self.assertTrue(pat.search(f"isa-{label}-node-loss"))
 
     def test_pattern_is_anchored(self):
         """Bez kotwicy `^` wzorzec lapalby UID-y z etykieta w srodku."""
-        for label, role in ((self.OWNER, "owner"), (self.CONSUMER, "consumer")):
-            with self.subTest(role=role):
-                pat = re.compile(render_pattern(label, role))
+        for label in (self.EX_OWNER, self.TENANT):
+            with self.subTest(label=label):
+                pat = re.compile(render_pattern(label))
                 self.assertFalse(pat.search(f"legacy-isa-{label}-node-loss"))
 
 

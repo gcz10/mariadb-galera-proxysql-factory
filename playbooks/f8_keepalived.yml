@@ -1,5 +1,13 @@
 ---
 # F8: Redundantny endpoint ProxySQL — Keepalived VIP.
+#
+# Playbook WYLACZNIE warstwy wspolnej (make platform-endpoint). VIP .133 jest
+# wspoldzielony przez cala flote, wiec zaden klaster Galera nie moze go
+# konfigurowac: build dowolnego najemcy nadpisalby VRRP pozostalym, a teardown
+# najemcy zdjalby endpoint wszystkim. Do niedawna nie bylo tu bramki wlasciciela
+# i kazdy `make cluster-endpoint` odpalal ten playbook przeciw wspolnej parze
+# fcp1/fcp2 — dlatego ponizej definicja platformy jest sprawdzana jawnie.
+#
 # Satisfies: ISC-24 (VIP działa gdy oba ProxySQL zdrowe),
 # ISC-25 (awaria aktywnego ProxySQL < RTO węzła — klient wznawia przez VIP),
 # ISC-26 (VIP nie kieruje ruchu do niesprawnej instancji).
@@ -18,6 +26,26 @@
     keepalived_auth_pass: "{{ lookup('ansible.builtin.env', 'KEEPALIVED_AUTH_PASS') }}"
 
   pre_tasks:
+    # VIP jest wlasnoscia warstwy wspolnej, a nie zadnego klastra, wiec
+    # uruchomienie z definicji najemcy jest bledem operatora — i musi wywalc
+    # sie od razu, zanim cokolwiek dotknie wspolnej pary fcp1/fcp2. Dwa
+    # rozrozniki, bo kazdy z osobna daje sie oszukac: definicja najemcy MOZE
+    # deklarowac proxysql.endpoint (deklaruje go, zeby wiedziec, gdzie sie
+    # laczyc), a plik niebedacy platforma moze nie miec bloku galera.
+    # platform.name jest kluczem definicji platformy — najemca ma blok
+    # platform tylko z rocky_linux_major.
+    - name: "Odrzuc uruchomienie z definicja inna niz platforma"
+      ansible.builtin.assert:
+        that:
+          - platform.name is defined
+          - platform.name | length > 0
+          - galera is not defined
+        fail_msg: >-
+          Ten playbook zarzadza warstwa wspolna i wymaga definicji platformy
+          (platform/shared/platform.yml) — definicja klastra (blok galera)
+          oznacza najemce, a najemca nie zarzadza ta warstwa.
+          Uruchom: make platform-endpoint
+
     - name: "Wymagaj endpointu typu keepalived_vip"
       ansible.builtin.assert:
         that:

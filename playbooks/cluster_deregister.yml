@@ -89,14 +89,15 @@
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     cluster_label: "{{ (monitoring | default({})).get('pmm', {}).get('cluster_name', cluster.name) }}"
     f15_folder_uid: "{{ (monitoring | default({})).get('alerts', {}).get('folder_uid', 'isa-alerts-' ~ cluster_label) }}"
-    # Jeden wzorzec, jedno miejsce. Owner kasuje swoje reguly ORAZ wspoldzielone;
-    # konsument wylacznie swoje. `cluster_label` zawiera myslniki (np. n11-galera),
-    # co w regexpie jest nieszkodliwe, ale nawiasy MUSZA byc zbalansowane —
-    # sklejanie ich warunkowo w miejscu uzycia juz raz dalo cichy blad.
+    # Jeden wzorzec, jedno miejsce. Derejestracja NAJEMCY kasuje wylacznie reguly
+    # wlasnego namespace'u `^isa-<cluster_label>-`: reguly `isa-shared-*` naleza
+    # do warstwy wspolnej, ktora zyje dluzej niz kazdy klaster, wiec jej koniec
+    # zycia obsluguje wylacznie platforma. To ta sama klasa bledu co konto MinIO
+    # w deregister_minio.yml: sprzatanie zasobu wspoldzielonego przez najemce
+    # osierocalo by go dla calej floty. `cluster_label` zawiera myslniki
+    # (np. n11-galera), co w tym regexpie jest nieszkodliwe.
     f15_dereg_pattern: >-
-      {{ ('^isa-(' ~ cluster_label ~ '|shared)-')
-         if (proxysql.role | default('owner')) == 'owner'
-         else ('^isa-' ~ cluster_label ~ '-') }}
+      {{ '^isa-' ~ cluster_label ~ '-' }}
     f15_contact_uid: "email-isa-{{ cluster_label }}"
     f15_contact_name: "ISA Email Alerts ({{ cluster_label }})"
 
@@ -129,10 +130,11 @@
         force_basic_auth: true
         validate_certs: false
         status_code: [200, 204, 404]
-      # Owner sprzata TAKZE reguly warstwy wspolnej (`isa-shared-*`). Nikt inny
-      # tego nie zrobi: konsument ich nie tworzy i nie ma prawa ich kasowac, a
-      # zostawiona bez wlasciciela regula `critical` alarmowalaby o endpoincie,
-      # ktorego juz nikt nie utrzymuje.
+      # Najemca NIGDY nie zdejmuje regul `isa-shared-*`: naleza do warstwy
+      # wspolnej i kasuje je wylacznie jej wlasny cykl zycia. Gdyby kazdy
+      # klaster zabieral je przy swoim teardownie, pierwsza derejestracja
+      # zgasilaby alerty endpointu dla calej floty — wlasciwym wlascicielem
+      # jest platforma, nie "kto odchodzi ostatni".
       #
       # Wzorzec jest budowany w JEDNYM miejscu (`f15_dereg_pattern` w varsach),
       # a nie sklejany w wyrazeniu `loop`. Poprzednia wersja skladala nawiasy
