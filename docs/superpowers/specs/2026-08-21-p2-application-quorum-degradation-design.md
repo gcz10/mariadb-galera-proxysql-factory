@@ -1,7 +1,7 @@
 # Application Quorum Degradation Measurement Design
 
 **Date:** 2026-08-21
-**Status:** Approved in conversation; awaiting review of this written specification
+**Status:** Approved; implementation plan: `docs/superpowers/plans/2026-08-21-p2-application-quorum-degradation.md`
 
 ## Goal
 
