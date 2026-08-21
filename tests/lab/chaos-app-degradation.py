@@ -42,12 +42,44 @@ APP_QUORUM_ERROR_CONTRACT:
 Wymaga APP_DB_PASSWORD. Odmawia uruchomienia na profilu produkcyjnym (ISC-64).
 """
 
+import datetime
+import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 import yaml
+
+from _quorum_evidence import (
+    LOCAL_ACCEPTANCE,
+    OUTCOME_CLEAN,
+    OUTCOME_DEGRADED,
+    OUTCOME_UNRESOLVED,
+    acceptance_failures,
+    classify_outcome,
+    option_file_quote,
+    parse_client_error,
+    parse_tsv,
+    proxy_log_proves_backend_error,
+    recovery_complete,
+)
+
+__all__ = (
+    "LOCAL_ACCEPTANCE",
+    "OUTCOME_CLEAN",
+    "OUTCOME_DEGRADED",
+    "OUTCOME_UNRESOLVED",
+    "acceptance_failures",
+    "classify_outcome",
+    "datetime",
+    "json",
+    "parse_client_error",
+    "proxy_log_proves_backend_error",
+    "recovery_complete",
+)
 
 CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
 INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
@@ -69,6 +101,34 @@ GALERA = list(INV["all"]["children"]["galera"]["hosts"].keys())
 _app = (INV["all"]["children"].get("app") or {}).get("hosts") or {}
 APP_HOST = next(iter(_app)) if _app else None
 
+CLUSTER_NAME = CLUSTER["cluster"]["name"]
+NODES_EXPECTED = int(CLUSTER["galera"]["nodes_expected"])
+PROXYSQL_HOSTS = list(((INV["all"]["children"].get("proxysql") or {}).get("hosts") or {}))
+GALERA_ADDR = {
+    host: (values or {}).get("ansible_host", host)
+    for host, values in INV["all"]["children"]["galera"]["hosts"].items()
+}
+PROXYSQL_ADDR = {
+    host: (values or {}).get("ansible_host", host)
+    for host, values in ((INV["all"]["children"].get("proxysql") or {}).get("hosts") or {}).items()
+}
+HG_BASE = int(CLUSTER["proxysql"]["hostgroup_base"])
+WRITER_HG = HG_BASE
+OFFLINE_HG = HG_BASE + 30
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+EXPECTED_CLUSTER = "newclaude16-r9"
+EXPECTED_CONFIG = (REPO_ROOT / "clusters/newclaude16-r9/cluster.yml").resolve()
+EXPECTED_INVENTORY = (REPO_ROOT / "clusters/newclaude16-r9/inventory.yml").resolve()
+EXPECTED_GALERA = {"n16g1", "n16g2", "n16g3"}
+EXPECTED_PROXYSQL = {"fcp1", "fcp2"}
+EXPECTED_APP = {"fcapp"}
+APP_CNF = "/run/isa-app-degradation.cnf"
+PROXYSQL_LOG = "/var/lib/proxysql/proxysql.log"
+ADMIN_CLIENT = ("mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf "
+                "-h127.0.0.1 -P6032 -uadmin -N -B")
+RUN_ID = os.environ.get("QUORUM_RUN_ID", "")
+
 # Gasimy WSZYSTKIE poza jednym: zostaje mniejszosc 1 z N.
 #
 # MUSI to byc wyjscie NAGLE (SIGKILL), nie `systemctl stop`. Przy lagodnym
@@ -89,6 +149,31 @@ DROPIN_DIR = "/etc/systemd/system/mariadb.service.d"
 DROPIN = f"{DROPIN_DIR}/zz-chaos-norestart.conf"
 
 
+class EvidenceError(RuntimeError):
+    pass
+
+
+def validate_target(cluster_name, config_path, inventory_path, galera_hosts, proxy_hosts, app_hosts):
+    errors = []
+    if cluster_name != EXPECTED_CLUSTER:
+        errors.append(f"cluster name must be {EXPECTED_CLUSTER}, got {cluster_name}")
+    if Path(config_path).resolve() != EXPECTED_CONFIG:
+        errors.append(f"config path must resolve to {EXPECTED_CONFIG}")
+    if Path(inventory_path).resolve() != EXPECTED_INVENTORY:
+        errors.append(f"inventory path must resolve to {EXPECTED_INVENTORY}")
+    if set(galera_hosts) != EXPECTED_GALERA:
+        errors.append(f"Galera hosts must be {sorted(EXPECTED_GALERA)}")
+    if set(proxy_hosts) != EXPECTED_PROXYSQL:
+        errors.append(f"ProxySQL hosts must be {sorted(EXPECTED_PROXYSQL)}")
+    if set(app_hosts) != EXPECTED_APP:
+        errors.append(f"app hosts must be {sorted(EXPECTED_APP)}")
+    if ENVIRONMENT != "laboratory":
+        errors.append(f"environment must be laboratory, got {ENVIRONMENT!r}")
+    if not re.fullmatch(r"[0-9a-f]{32}", RUN_ID):
+        errors.append("QUORUM_RUN_ID must be exactly 32 lowercase hex characters")
+    return errors
+
+
 def sh(host, script, timeout=120):
     cmd = [ANSIBLE, host, "-i", INVENTORY, "-m", "ansible.builtin.shell", "-a", script]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -99,14 +184,211 @@ def sh(host, script, timeout=120):
     return int(m.group(1)), out[m.end():].strip()
 
 
+def safe_sh(host, script, timeout=120):
+    try:
+        rc, output = sh(host, script, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        return {"ok": False, "rc": None, "output": "", "error": f"timeout after {exc.timeout}s"}
+    return {
+        "ok": rc == 0,
+        "rc": rc,
+        "output": output.strip(),
+        "error": "" if rc == 0 else output.strip()[:300],
+    }
+
+
+def must_output(host, script, label, timeout=120):
+    result = safe_sh(host, script, timeout=timeout)
+    if not result["ok"]:
+        raise EvidenceError(f"{label} on {host}: {result['error']}")
+    return result["output"]
+
+
+def install_app_profile():
+    fd, local_path = tempfile.mkstemp(prefix="isa-app-degradation-", suffix=".cnf", text=True)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(
+                "[client]\n"
+                f"user={option_file_quote(APP_USER)}\n"
+                f"password={option_file_quote(APP_PW)}\n"
+            )
+        command = [
+            ANSIBLE, APP_HOST, "-i", INVENTORY,
+            "-m", "ansible.builtin.copy",
+            "-a", f"src={local_path} dest={APP_CNF} owner=root group=root mode=0600",
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            raise EvidenceError((result.stdout + result.stderr).strip()[:300])
+    finally:
+        if os.path.exists(local_path):
+            os.unlink(local_path)
+
+
+def remove_app_profile(attempts=3):
+    history = []
+    for attempt in range(1, attempts + 1):
+        remove = safe_sh(APP_HOST, f"rm -f {APP_CNF}", timeout=60)
+        verify = safe_sh(APP_HOST, f"test ! -e {APP_CNF} && echo ABSENT || echo PRESENT", timeout=60)
+        history.append({"attempt": attempt, "remove": remove, "verify": verify})
+        if verify["ok"] and verify["output"] == "ABSENT":
+            return {"absent": True, "history": history}
+        time.sleep(2)
+    return {"absent": False, "history": history}
+
+
+def app_query(sql):
+    return safe_sh(
+        APP_HOST,
+        f"timeout 25 mariadb --defaults-extra-file={APP_CNF} "
+        f"-h {VIP} -P {VIP_PORT} --ssl-verify-server-cert=0 --connect-timeout=5 "
+        f"isa_test -e \"{sql}\" 2>&1",
+        timeout=40,
+    )
+
+
+def app_setup():
+    return app_query(
+        "CREATE TABLE IF NOT EXISTS app_degradation "
+        "(id BIGINT AUTO_INCREMENT PRIMARY KEY, ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+    )
+
+
 def app_write():
-    """Proba zapisu aplikacji przez VIP. Zwraca (udalo_sie, tresc_bledu)."""
-    sql = "CREATE TABLE IF NOT EXISTS app_degradation (id BIGINT AUTO_INCREMENT PRIMARY KEY, " \
-          "ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP); INSERT INTO app_degradation () VALUES ()"
-    rc, out = sh(APP_HOST,
-                 f"MYSQL_PWD='{APP_PW}' timeout 25 mariadb -h {VIP} -P {VIP_PORT} -u {APP_USER} "
-                 f"--ssl-verify-server-cert=0 --connect-timeout=5 isa_test -e \"{sql}\" 2>&1")
-    return rc == 0, out.strip()
+    return app_query("INSERT INTO app_degradation () VALUES ()")
+
+
+def admin_rows(host, sql, columns):
+    output = must_output(host, f'{ADMIN_CLIENT} -e "{sql}" 2>&1', "ProxySQL admin query", timeout=60)
+    return parse_tsv(output, columns)
+
+
+def galera_state(host):
+    output = must_output(
+        host,
+        "timeout 15 mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e \""
+        "SHOW STATUS WHERE Variable_name IN ('wsrep_cluster_status',"
+        "'wsrep_cluster_size','wsrep_local_state')\" 2>&1",
+        "Galera state",
+        timeout=30,
+    )
+    values = {}
+    for row in parse_tsv(output, ("name", "value")):
+        values[row["name"]] = row["value"]
+    return (f"{values.get('wsrep_cluster_status', '?')}/"
+            f"{values.get('wsrep_cluster_size', '?')}/"
+            f"{values.get('wsrep_local_state', '?')}")
+
+
+def os_version(host):
+    return must_output(
+        host,
+        '. /etc/os-release && printf "%s; kernel %s" "$PRETTY_NAME" "$(uname -r)"',
+        "OS version",
+        timeout=30,
+    )
+
+
+def vip_holder():
+    holders = []
+    for host in PROXYSQL_HOSTS:
+        result = safe_sh(host, f"ip -br addr show | grep -q '{VIP}/' && echo HOLDER || echo NO", timeout=30)
+        if not result["ok"]:
+            raise EvidenceError(f"VIP probe failed on {host}: {result['error']}")
+        if result["output"] == "HOLDER":
+            holders.append(host)
+    if len(holders) != 1:
+        raise EvidenceError(f"expected exactly one VIP holder, got {holders}")
+    return holders[0]
+
+
+def runtime_snapshot(host):
+    rows = admin_rows(
+        host,
+        f"SELECT hostgroup_id, hostname, status FROM runtime_mysql_servers "
+        f"WHERE hostgroup_id IN ({WRITER_HG}, {OFFLINE_HG}) ORDER BY hostgroup_id, hostname",
+        ("hostgroup_id", "hostname", "status"),
+    )
+    for row in rows:
+        row["hostgroup_id"] = int(row["hostgroup_id"])
+    return rows
+
+
+def collect_versions():
+    proxy_versions = {}
+    proxy_os = {}
+    for host in PROXYSQL_HOSTS:
+        rows = admin_rows(
+            host,
+            "SELECT variable_value FROM global_variables WHERE variable_name='admin-version'",
+            ("version",),
+        )
+        if len(rows) != 1 or not rows[0]["version"]:
+            raise EvidenceError(f"missing admin-version on {host}")
+        proxy_versions[host] = rows[0]["version"]
+        proxy_os[host] = os_version(host)
+    mariadb = must_output(
+        SURVIVOR,
+        "timeout 15 mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e \"SELECT VERSION()\"",
+        "MariaDB version",
+        timeout=30,
+    )
+    client = must_output(APP_HOST, "mariadb --version", "client version", timeout=30)
+    return {
+        "proxysql": proxy_versions,
+        "mariadb": mariadb,
+        "client": client,
+        "os_proxysql": proxy_os,
+        "os_backend": os_version(SURVIVOR),
+    }
+
+
+def log_mark(host):
+    output = must_output(host, f"stat -Lc '%i\\t%s' {PROXYSQL_LOG}", "ProxySQL log mark", timeout=30)
+    rows = parse_tsv(output, ("inode", "size"))
+    if len(rows) != 1:
+        raise EvidenceError(f"invalid log mark on {host}: {output!r}")
+    return {"inode": int(rows[0]["inode"]), "size": int(rows[0]["size"])}
+
+
+def log_delta(host, mark):
+    output = must_output(host, f"stat -Lc '%i\\t%s' {PROXYSQL_LOG}", "ProxySQL log recheck", timeout=30)
+    rows = parse_tsv(output, ("inode", "size"))
+    if len(rows) != 1:
+        raise EvidenceError(f"invalid log recheck on {host}: {output!r}")
+    inode, size = int(rows[0]["inode"]), int(rows[0]["size"])
+    if inode != mark["inode"]:
+        raise EvidenceError(f"ProxySQL log rotated on {host}: inode {mark['inode']} -> {inode}")
+    if size < mark["size"]:
+        raise EvidenceError(f"ProxySQL log shrank on {host}: {mark['size']} -> {size}")
+    delta = must_output(
+        host,
+        f"tail -c +{mark['size'] + 1} {PROXYSQL_LOG} 2>/dev/null",
+        "ProxySQL log delta",
+        timeout=60,
+    )
+    lines = delta.splitlines()
+    if len(lines) > 200:
+        lines = [f"[pominieto {len(lines) - 200} wczesniejszych linii]"] + lines[-200:]
+    return "\n".join(lines)
+
+
+def monitor_row(host, survivor_address):
+    rows = admin_rows(
+        host,
+        "SELECT hostname, time_start_us, primary_partition, wsrep_local_state, "
+        "COALESCE(error, '') FROM mysql_server_galera_log "
+        f"WHERE hostname='{survivor_address}' ORDER BY time_start_us DESC LIMIT 1",
+        ("hostname", "time_start_us", "primary_partition", "wsrep_local_state", "error"),
+    )
+    if len(rows) != 1:
+        raise EvidenceError(f"missing latest monitor row for {survivor_address} on {host}")
+    row = rows[0]
+    row["time_start_us"] = int(row["time_start_us"])
+    row["wsrep_local_state"] = int(row["wsrep_local_state"])
+    return row
 
 
 def node_write_direct(host):
