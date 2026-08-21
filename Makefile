@@ -185,9 +185,19 @@ platform-endpoint:  ## Redundantny endpoint ProxySQL (Keepalived VIP) — WYLACZ
 	@: "$${KEEPALIVED_AUTH_PASS:?Ustaw KEEPALIVED_AUTH_PASS poza repozytorium}"
 	ansible-playbook playbooks/f8_keepalived.yml $(PLATFORM_OPTS)
 
+# `monitoring.agent_groups` w platform.yml bylo POLEM-WIDMEM: deklarowalo
+# ["proxysql"], ale zaden krok go nie konsumowal, bo cel uruchamial wylacznie
+# rejestracje external (restapi 6070). Natywny pmm-agent na fcp1/fcp2 istnial
+# wczesniej tylko ubocznie — bo owner `finalclaude-r10` mial to pole u siebie.
+# Gdy PR #60 slusznie zabral je najemcy, zniknelo jedyne zrodlo metryk
+# `proxysql_connection_pool_*`, od ktorych zalezy regula ISC-47 "no ONLINE
+# writer". Z `noDataState: Alerting` palila sie odtad na stale, czyli przestala
+# odrozniac sprawny klaster od zepsutego. Wykryte przy odbudowie pary od zera.
 platform-monitoring:  ## Zarejestruj wezly i eksportery warstwy wspolnej w PMM
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	@: "$${PMM_MONITOR_PASSWORD:?Ustaw PMM_MONITOR_PASSWORD poza repozytorium}"
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	ansible-playbook playbooks/f11_pmm_agent.yml $(PLATFORM_OPTS)
 	ansible-playbook playbooks/f11_proxysql_metrics.yml $(PLATFORM_OPTS)
 
 platform-alerts:  ## Reguly alertowe warstwy wspolnej (namespace isa-shared-*)

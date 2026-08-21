@@ -27,8 +27,21 @@ pmm_api_url: >-
 pmm_validate_certs_effective: "{{ monitoring.get('pmm', {}).get('validate_certs', pmm_mode == 'agentless') | bool }}"
 
 # Wspolne etykiety i rewizja sekretow.
-pmm_environment_effective: "{{ cluster.environment }}"
-pmm_cluster_name_effective: "{{ monitoring.get('pmm', {}).get('cluster_name', cluster.name) }}"
+#
+# Rola obsluguje DWIE definicje: najemce (blok `cluster`) i warstwe wspolna
+# (blok `platform`). Dyskryminatorem jest `platform.name` — samo istnienie bloku
+# `platform` nie wystarcza, bo kazdy cluster.yml tez go ma (rocky_linux_major).
+#
+# `cluster_name` NIE moze uzywac `.get('cluster_name', cluster.name)`: Jinja
+# oblicza argument domyslny ZACHLANNIE, wiec pod definicja platformy wyrazenie
+# wywalalo sie na `'cluster' is undefined` mimo obecnego klucza.
+pmm_is_platform: "{{ (platform | default({})).name is defined }}"
+pmm_environment_effective: >-
+  {{ (platform | default({})).environment if (pmm_is_platform | bool)
+     else cluster.environment }}
+pmm_cluster_name_effective: >-
+  {{ monitoring.get('pmm', {}).get('cluster_name')
+     | default((platform | default({})).name if (pmm_is_platform | bool) else cluster.name, true) }}
 pmm_credentials_revision_effective: "{{ monitoring.get('pmm', {}).get('credentials_revision', 1) | string }}"
 
 # Hosty z lokalnym agentem sa wykluczone ze sciezki agentless.
