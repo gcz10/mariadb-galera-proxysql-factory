@@ -1,22 +1,69 @@
-"""Unit tests for check_proxysql.sh healthcheck logic (ISC-26).
+"""Kontrakt bramki zdrowia check_proxysql.sh (ISC-26).
 
-Verifies the SQL predicate for ProxySQL health reporting across single and
-multi-tenant clusters, including offline failover and partial outages.
+Bramka rozroznia DWA stany, ktore do 2026-08-21 byly sklejone w jeden:
+
+  (a) ZERO aktywnych grup Galera — warstwa wspolna stoi, ale nie ma jeszcze
+      zadnego najemcy. Legalny stan swiezo zbudowanej platformy: nie istnieje
+      klient, ktoremu mozna by zle skierowac ruch. ZDROWY.
+  (b) SA aktywne grupy, ale zaden writer nie jest ONLINE. To awaria, ktorej
+      ISC-26 pilnuje: VIP nie moze wskazywac instancji odpowiadajacej bledem
+      na kazde zapytanie. NIEZDROWY.
+
+Stara wersja zwracala 1 takze w (a), przez co Keepalived nigdy nie bral VIP-a
+na swiezej parze i `make platform-build` nie mogl sie skonczyc bez uprzedniego
+zarejestrowania klastra — czyli warstwa NIE byla niezalezna od najemcow.
+
+Zapytanie jest CZYTANE ZE SKRYPTU, nie kopiowane. Poprzednia wersja tego pliku
+trzymala wlasna kopie SQL i dlatego przespala zmiane skryptu: testy dalej byly
+zielone, mimo ze `test_zero_groups_is_unhealthy` bronil juz nieprawdziwego
+kontraktu. Ta sama lekcja co w test_deregister_rule_pattern.py.
 """
 
+import os
 import sqlite3
 import unittest
 
+SCRIPT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "roles", "proxysql_endpoint", "files", "check_proxysql.sh",
+)
+
+
+def script_queries() -> tuple[str, str]:
+    """Wyciaga ze skryptu podzapytania liczace grupy i ONLINE writerow.
+
+    Licznik nawiasow, nie regexp: `COUNT(*)` samo zawiera nawiasy, wiec kazdy
+    leniwy wzorzec konczy sie w zlym miejscu.
+    """
+    with open(SCRIPT, encoding="utf-8") as handle:
+        body = handle.read()
+    marker = "(SELECT COUNT(*)"
+    found: list[str] = []
+    idx = body.find(marker)
+    while idx != -1:
+        depth = 0
+        for pos in range(idx, len(body)):
+            if body[pos] == "(":
+                depth += 1
+            elif body[pos] == ")":
+                depth -= 1
+                if depth == 0:
+                    found.append(body[idx + 1:pos].strip())
+                    break
+        idx = body.find(marker, idx + 1)
+    if len(found) != 2:
+        raise AssertionError(
+            f"oczekiwano 2 podzapytan COUNT w {SCRIPT}, znaleziono {len(found)}"
+        )
+    return found[0], found[1]
+
 
 class CheckProxysqlQueryTests(unittest.TestCase):
-    """Tests the SQL query used in check_proxysql.sh against sqlite3."""
+    """Sprawdza predykaty SQL bramki na sqlite3, na danych z realnych scenariuszy."""
 
-    QUERY = """
-    SELECT COUNT(*) FROM runtime_mysql_servers s
-      JOIN runtime_mysql_galera_hostgroups g
-        ON s.hostgroup_id = g.writer_hostgroup
-     WHERE g.active = 1 AND s.status = 'ONLINE'
-    """
+    @classmethod
+    def setUpClass(cls):
+        cls.groups_query, cls.writers_query = script_queries()
 
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")
@@ -44,12 +91,33 @@ class CheckProxysqlQueryTests(unittest.TestCase):
         self.conn.close()
 
     def run_query(self) -> int:
-        self.cursor.execute(self.QUERY)
+        """Liczba ONLINE writerow — czlon (b) predykatu."""
+        self.cursor.execute(self.writers_query)
         return self.cursor.fetchone()[0]
 
-    def test_zero_groups_is_unhealthy(self):
-        """No active Galera groups configured -> 0 online writers -> fails check."""
+    def active_groups(self) -> int:
+        self.cursor.execute(self.groups_query)
+        return self.cursor.fetchone()[0]
+
+    def healthy(self) -> bool:
+        """Odwzorowuje decyzje skryptu: przy zerze grup nie ma czego wymagac."""
+        return self.active_groups() == 0 or self.run_query() >= 1
+
+    def test_zero_groups_is_healthy(self):
+        """Swieza warstwa bez najemcow MUSI byc zdrowa — inaczej VIP nigdy nie wstanie."""
+        self.assertEqual(self.active_groups(), 0)
+        self.assertTrue(self.healthy())
+
+    def test_active_group_without_online_writer_is_unhealthy(self):
+        """Jest najemca, nie ma writera — dokladnie ten stan chroni ISC-26."""
+        self.cursor.execute(
+            "INSERT INTO runtime_mysql_galera_hostgroups VALUES (10, 20, 30, 40, 1)")
+        self.cursor.execute(
+            "INSERT INTO runtime_mysql_servers VALUES (40, '10.0.0.1', 3306, 'ONLINE')")
+        self.conn.commit()
+        self.assertEqual(self.active_groups(), 1)
         self.assertEqual(self.run_query(), 0)
+        self.assertFalse(self.healthy())
 
     def test_single_healthy_cluster(self):
         """1 active cluster with 1 ONLINE writer -> count=1 -> healthy."""
