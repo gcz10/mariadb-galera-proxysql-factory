@@ -28,6 +28,10 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 JOIN_PLAYBOOK = REPO / "playbooks" / "f5_join.yml"
 
+# `cluster-endpoint` znikl z tej listy 2026-08-21 wraz z wyniesieniem warstwy
+# wspolnej: VIP nalezy do `platform/shared/`, a nie do najemcy. Zostawienie go
+# tutaj bylo bledem projektowym — build KAZDEGO klastra dotykal Keepalived na
+# wspoldzielonej parze fcp1/fcp2, bez zadnej bramki wlasciciela.
 CORE_BUILD_STEPS = [
     "cluster-validate",
     "cluster-deploy",
@@ -36,7 +40,6 @@ CORE_BUILD_STEPS = [
     "cluster-proxysql",
     "cluster-monitoring",
     "cluster-harden",
-    "cluster-endpoint",
 ]
 CONDITIONAL_BUILD_STEPS = [
     "lab-seed-smoke",
@@ -156,15 +159,23 @@ class ClusterBuildContractTests(unittest.TestCase):
             f"kolejnosc krokow builda niezgodna z grafem: {invoked}",
         )
 
-    def test_conditional_steps_between_endpoint_and_gate(self):
+    def test_conditional_steps_between_core_and_gate(self):
+        """Kroki warunkowe leza miedzy ostatnim krokiem rdzenia a brama.
+
+        Kotwica jest wyliczana z `CORE_BUILD_STEPS`, nie wpisana na sztywno:
+        poprzednia wersja pinowala `cluster-endpoint` i przy wyniesieniu VIP-a
+        do warstwy wspolnej test pekal na nazwie kroku zamiast na kolejnosci,
+        ktorej faktycznie broni.
+        """
         invoked = sub_make_targets(self.lines)
         self.assertIn(BUILD_GATE, invoked)
+        last_core = CORE_BUILD_STEPS[-1]
         for step in CONDITIONAL_BUILD_STEPS + BACKUP_BUILD_STEPS:
             self.assertIn(step, invoked, f"krok warunkowy {step} musi byc w grafie builda")
             self.assertLess(
-                invoked.index("cluster-endpoint"),
+                invoked.index(last_core),
                 invoked.index(step),
-                f"{step} musi isc PO cluster-endpoint",
+                f"{step} musi isc PO {last_core}",
             )
             self.assertLess(
                 invoked.index(step),

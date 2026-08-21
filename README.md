@@ -83,8 +83,9 @@ make cluster-monitoring CLUSTER=lab-cluster
 make cluster-harden CLUSTER=lab-cluster
 make lab-hardening-verify
 
-# F8 — redundantny endpoint (Keepalived VIP, unicast VRRP, failover < RTO)
-make cluster-endpoint CLUSTER=lab-cluster
+# F8 — redundantny endpoint (Keepalived VIP, unicast VRRP, failover < RTO).
+# NALEZY DO WARSTWY WSPOLNEJ, nie do klastra — patrz sekcja "Warstwa wspolna".
+make platform-endpoint
 make lab-endpoint-verify
 
 # F9 — testy chaos (destrukcyjne, tylko poza produkcją); zasiewają też isa_test

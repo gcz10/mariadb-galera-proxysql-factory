@@ -128,18 +128,10 @@
           "minLength": 1,
           "description": "Nazwa użytkownika aplikacyjnego. Domyślnie app_user. mysql_users w ProxySQL jest tabelą globalną, a default_hostgroup tego wpisu wybiera klaster — na wspólnej parze ProxySQL nazwy MUSZĄ być rozłączne."
         },
-        "role": {
-          "type": "string",
-          "enum": [
-            "owner",
-            "consumer"
-          ],
-          "description": "Kto zarządza WĘZŁAMI ProxySQL/infra: 'owner' instaluje i utrzymuje warstwę wspólną, 'consumer' tylko rejestruje w niej swoje hostgroupy przez f7. Domyślnie owner. Na wspólnej parze DOKŁADNIE JEDEN klaster może być ownerem — drugi owner nadpisałby pakiety ProxySQL wersją ze swojego lockfile (inny EL major) i zdublował eksportery w PMM."
-        },
         "frontend_tls": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Tożsamość TLS WSPÓLNEGO endpointu ProxySQL (port aplikacyjny). Świadomie NIE pochodzi z CA żadnego klastra: jedna para ProxySQL serwuje wszystkie klastry jednym certyfikatem frontendu (/var/lib/proxysql/proxysql-cert.pem), więc podpisanie go CA jednego najemcy zmusiłoby klientów pozostałych do zaufania cudzemu CA i unieważniłoby endpoint przy zniszczeniu tego klastra. Owner deklaruje cały materiał i go wdraża; konsument deklaruje samo 'ca_reference', bo musi jedynie ufać wspólnemu endpointowi.",
+          "description": "Tozsamosc TLS WSPOLNEGO endpointu ProxySQL (port aplikacyjny). Kazdy klaster jest najemca warstwy wspolnej, wiec definicja klastra deklaruje WYLACZNIE ca_reference — komu ufa. Material frontendu (cert+klucz) wdraza platform/<name>/platform.yml; cert zapisany w definicji najemcy wiazalby zywotnosc endpointu calej floty z zyciem jednego klastra. additionalProperties:false odrzuca wiec tutaj certificate_reference/private_key_reference.",
           "required": [
             "ca_reference"
           ],
@@ -147,27 +139,8 @@
             "ca_reference": {
               "type": "string",
               "minLength": 1,
-              "description": "CA warstwy wspólnej, którym klient weryfikuje endpoint ProxySQL. Trafia na hosty aplikacyjne."
-            },
-            "certificate_reference": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Certyfikat frontendu ProxySQL (SAN musi pokrywać VIP i adresy węzłów ProxySQL). Wdrażany WYŁĄCZNIE przez ownera."
-            },
-            "private_key_reference": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Klucz prywatny certyfikatu frontendu. Wdrażany WYŁĄCZNIE przez ownera."
+              "description": "CA warstwy wspolnej, ktorym klient najemcy weryfikuje endpoint ProxySQL. Trafia na hosty aplikacyjne."
             }
-          },
-          "_comment_dependencies": "Ten schemat deklaruje draft-07 ($schema u gory), gdzie slowo kluczowe nazywa sie 'dependencies'. 'dependentRequired' pochodzi z draft 2019-09 i walidator draft-07 IGNORUJE nieznane slowa kluczowe po cichu — ograniczenie bylo atrapa, dopoki nie zlapala tego proba falsyfikacyjna (cert bez klucza przechodzil).",
-          "dependencies": {
-            "certificate_reference": [
-              "private_key_reference"
-            ],
-            "private_key_reference": [
-              "certificate_reference"
-            ]
           }
         },
         "endpoint": {
@@ -627,12 +600,10 @@
             "type": "string",
             "enum": [
               "galera",
-              "proxysql",
-              "restore",
-              "infra"
+              "restore"
             ]
           },
-          "description": "Grupy hostow, ktore dostaja lokalnego pmm-agenta (pakiet pmm-client) zamiast domyslnego trybu agentless. Pusta lista = cala flota agentless: node_exporter z tarballa, a mysqld_exporter/QAN zdalnie z PMM Server. Wezly wspoldzielone obsluguje wylacznie owner pary ProxySQL."
+          "description": "Grupy hostow, ktore dostaja lokalnego pmm-agenta (pakiet pmm-client) zamiast domyslnego trybu agentless. Pusta lista = cala flota agentless. Grupy wezlow wspoldzielonych (proxysql, infra) celowo NIE wystepuja w enumie: rejestruje je wylacznie warstwa wspolna z platform/<name>/platform.yml, a najemca instalujacy agenta na cudzych wezlach zdublowalby eksportery postawione przez platforme."
         },
         "alerts": {
           "type": "object",

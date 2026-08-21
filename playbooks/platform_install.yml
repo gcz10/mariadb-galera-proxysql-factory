@@ -1,0 +1,214 @@
+---
+# Instalacja pakietow warstwy wspolnej na wezlach ProxySQL (fcp1/fcp2).
+# Satisfies: ISC-3 (wersje zgodne z lockfile), ISC-63 (no state:latest)
+#
+# Ta sciezka mieszkala w f2_install.yml jako prerogatywa klastra-"ownera"
+# pary — czyli instalacja NAJEMCY na hostach, ktore dzis naleza do platformy.
+# Wydzielenie warstwy wspolnej czyni ja wylacznie platformowa: zaden klaster
+# nie ma tu czego szukac, a lockfile (EL10) wybiera platform.yml, nie
+# cluster.yml najemcy — wlasnie ten rozjazd byl objawem sprzezenia
+# wlascicielskiego, ktore usuwamy.
+
+- name: Platform Install - pakiety warstwy wspolnej (ProxySQL)
+  hosts: proxysql
+  become: true
+  gather_facts: true
+  serial: 1
+  max_fail_percentage: 0
+
+  tasks:
+    # Lockfile platformy (EL10), nie najemcy: wezly warstwy wspolnej moga stac
+    # na innym EL major niz bazy klastrow najemcow i to jest stan zamierzony,
+    # nie blad konfiguracji.
+    - name: "Zaladuj lockfile platformy (reprodukowalne wersje)"
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
+    # GenericCloud startuje z hostname "localhost" i PVE go nie nadpisuje, gdy
+    # user-data pochodzi z cicustom. Efekt: journald na KAZDYM wezle pisze
+    # "localhost", co uniemozliwia korelacje logow miedzy hostami przy
+    # incydencie. Wczesniej robil to f2_install klastra-wlasciciela (hosts: all);
+    # po ograniczeniu tego play'u do galera:restore wlascicielem tej czynnosci
+    # na wezlach wspolnych jest platforma.
+    - name: "Ustaw hostname zgodny z inventory (korelacja logow)"
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+      when: ansible_service_mgr == 'systemd'
+
+    # === ProxySQL: RPM z realna weryfikacja podpisu wydawcy (audit#6) ===
+    # Wczesniej stalo tu `disable_gpg_check: true` z komentarzem, ze klucz jest
+    # binarny i nieimportowalny. To bylo nieprawda: `repo_pub_key.gpg` faktycznie
+    # jest binarny, ale `repo_pub_key` (bez rozszerzenia) to ASCII-armored blok,
+    # ktory `rpm --import` przyjmuje bez problemu. sha256 z lockfile chroni tylko
+    # przed bledem pobierania — podmiana pliku na serwerze wydawcy przechodzila.
+    # hosts: proxysql jest jedynym zakresem tego play'u, wiec zadne when-grupy
+    # nie sa potrzebne (w f2_install.yml chronily przed najemca na tych hostach).
+    # R1 (przeniesione z f2_install.yml): martwe zmienne proxysql_repo_baseurl
+    # (wskazywal na 404 — sciezka `rocky/<major>` u wydawcy nie istnieje) i
+    # proxysql_repo_gpgkey padly razem z podejsciem repo-file: ProxySQL idzie
+    # bezposrednim RPM-em z sha256, a stary /etc/yum.repos.d/proxysql.repo
+    # jest celowo usuwany nizej.
+    - name: "ProxySQL - wymagaj sha256 RPM dla aktualnej arch w lockfile"
+      ansible.builtin.assert:
+        that:
+          - (lock.proxysql.rpm_sha256 | default({})).get(ansible_architecture) is defined
+        fail_msg: >-
+          Brak sha256 dla ProxySQL {{ lock.proxysql.version }} arch {{ ansible_architecture }}
+          w lockfile platformy (proxysql.rpm_sha256). Dodaj przed instalacja (audit#6).
+
+    - name: "ProxySQL - pobierz RPM z weryfikacja sha256 (audit#6)"
+      ansible.builtin.get_url:
+        url: "{{ proxysql_rpm_url | default('https://repo.proxysql.com/ProxySQL/proxysql-' ~ lock.proxysql.series ~ '.x/centos/' ~ lock.rocky_linux.major ~ '/proxysql-' ~ lock.proxysql.version ~ '-' ~ lock.proxysql.rpm_release ~ '-centos' ~ lock.rocky_linux.major ~ '.' ~ ansible_architecture ~ '.rpm') }}"
+        dest: "/var/tmp/proxysql-{{ lock.proxysql.version }}-{{ lock.proxysql.rpm_release }}.{{ ansible_architecture }}.rpm"
+        checksum: "sha256:{{ (lock.proxysql.rpm_sha256 | default({})).get(ansible_architecture) }}"
+        mode: "0644"
+      register: proxysql_rpm_dl
+
+    # RPM z repo.proxysql.com jest podpisywany, ale repo NIE jest uzywane jako
+    # zrodlo dnf (instalacja idzie z pobranego pliku) — plik repo pozostawiony
+    # przez starsze wdrozenia wprowadzalby cichy drugi kanal wersji.
+    - name: "ProxySQL - usun stary repo file (jesli istnieje)"
+      ansible.builtin.file:
+        path: /etc/yum.repos.d/proxysql.repo
+        state: absent
+
+    - name: "ProxySQL - zaimportuj klucz GPG wydawcy (ASCII-armored)"
+      ansible.builtin.rpm_key:
+        key: "{{ proxysql_gpg_key_url | default('https://repo.proxysql.com/ProxySQL/proxysql-' ~ lock.proxysql.series ~ '.x/repo_pub_key') }}"
+        fingerprint: "{{ proxysql_gpg_fingerprint | default('653F85BB38256DF8A96206C3E8CA2E8D8217C97E') }}"
+        state: present
+
+    - name: "ProxySQL - instaluj RPM (sha256 z lockfile + podpis GPG wydawcy)"
+      ansible.builtin.dnf:
+        name: "{{ proxysql_rpm_dl.dest }}"
+        state: present
+
+    - name: "ProxySQL - instaluj klienta mariadb (wymagany do admin port 6032)"
+      ansible.builtin.dnf:
+        name: mariadb
+        state: present
+
+    - name: "Katalog drop-in proxysql.service"
+      ansible.builtin.file:
+        path: /etc/systemd/system/proxysql.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: ansible_facts['service_mgr'] == 'systemd'
+
+    - name: "ProxySQL - drop-in LimitNOFILE"
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          LimitNOFILE=1048576
+          # Rekomendacja produkcyjna: OOMScoreAdjust=-800 chroni ProxySQL
+          # przed ubiciem przez kernel OOM killer.
+          OOMScoreAdjust=-800
+        dest: /etc/systemd/system/proxysql.service.d/limits.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: ansible_facts['service_mgr'] == 'systemd'
+      register: proxysql_limits_conf
+
+    - name: "ProxySQL - daemon-reload po zmianie limitow systemd"
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when:
+        - ansible_facts['service_mgr'] == 'systemd'
+        - proxysql_limits_conf.changed
+
+    # === Tuning OS wezlow warstwy wspolnej ===
+    # Sysctl/THP/chrony/qemu-guest-agent dostarczal tym hostom f2_install
+    # najemcy (zakres `all`). Po ograniczeniu tego play'u do galera:restore
+    # nikt inny nie robi tej maintencji — bez przeniesienia wezly wspolne
+    # stracilyby time sync i wylaczony THP przy pierwszej odbudowie z
+    # terraform/shared.
+    - name: "Wdroz konfiguracje sysctl dla load balancerow"
+      ansible.builtin.copy:
+        content: |
+          # ISA ProxySQL sysctl tuning
+          vm.swappiness = 10
+          net.core.somaxconn = 4096
+          net.ipv4.tcp_max_syn_backlog = 4096
+          fs.file-max = 2097152
+        dest: /etc/sysctl.d/90-database-tuning.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: ansible_facts['service_mgr'] == 'systemd'
+      register: platform_sysctl_conf
+
+    - name: "Zastosuj parametry sysctl"
+      ansible.builtin.command: sysctl --system
+      when:
+        - ansible_facts['service_mgr'] == 'systemd'
+        - platform_sysctl_conf.changed
+      changed_when: true
+
+    # === Transparent Huge Pages (THP) — wylaczenie dla silnika pamieci ProxySQL ===
+    # Silnik pamieci ProxySQL ma rzadki dostep do pamieci. THP alokuje 2MB ciagle
+    # strony i przy braku ciaglej pamieci wywoluje defragmentacje synchroniczna
+    # w jadrze, co powoduje skoki opoznien (latency spikes) i fragmentacje RAM.
+    # Oficjalne przewodniki Percona zalecaja wylaczenie THP (never).
+    - name: "THP - wdroz usluge systemd wylaczajaca Transparent Huge Pages"
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Disable Transparent Huge Pages (THP) for Database Performance
+          DefaultDependencies=no
+          After=sysinit.target local-fs.target
+          Before=mongod.service mariadb.service mysql.service mysqld.service proxysql.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled && echo never > /sys/kernel/mm/transparent_hugepage/defrag'
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=basic.target
+        dest: /etc/systemd/system/disable-thp.service
+        owner: root
+        group: root
+        mode: "0644"
+      when: ansible_facts['service_mgr'] == 'systemd'
+      register: thp_service_unit
+
+    - name: "THP - wlacz i uruchom disable-thp.service"
+      ansible.builtin.systemd:
+        name: disable-thp
+        enabled: true
+        state: started
+        daemon_reload: "{{ thp_service_unit.changed }}"
+      when: ansible_facts['service_mgr'] == 'systemd'
+
+    # === Wspolne: time sync ===
+    - name: Instaluj i wlacz chrony
+      ansible.builtin.dnf:
+        name: chrony
+        state: present
+
+    - name: Wlacz chrony (jesli systemd dostepny)
+      ansible.builtin.systemd:
+        name: chronyd
+        state: started
+        enabled: true
+      when: ansible_facts['service_mgr'] == 'systemd'
+
+    - name: "Zainstaluj qemu-guest-agent (Proxmox widzi IP VM + graceful shutdown)"
+      ansible.builtin.dnf:
+        name: qemu-guest-agent
+        state: present
+
+    - name: "Wlacz qemu-guest-agent (gdy systemd; nieblokujace — wymaga kanalu virtio-serial)"
+      ansible.builtin.systemd:
+        name: qemu-guest-agent
+        state: started
+        enabled: true
+      when: ansible_facts['service_mgr'] == 'systemd'
+      failed_when: false
+      changed_when: false
+
+  handlers: []

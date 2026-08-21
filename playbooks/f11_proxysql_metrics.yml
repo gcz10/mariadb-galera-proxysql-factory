@@ -1,15 +1,24 @@
 ---
-# F11 — ProxySQL metrics: włącz restapi + zarejestruj w PMM Inventory.
+# F11 — ProxySQL metrics WARSTWY WSPOLNEJ: restapi + rejestracja w PMM Inventory.
 # Satisfies: ISC-46 (ProxySQL metrics do PMM).
 #
-# Galera + MariaDB są już pokryte (mysqld_exporter + QAN w f11_pmm_client.yml).
-# ProxySQL (wbudowany w F7) wystawia metryki Prometheus przez restapi (:6070/metrics).
-# Ten playbook:
-#   1. włącza admin-restapi_enabled=true na każdym węźle ProxySQL (LOAD + SAVE = trwałe),
-#   2. rejestruje usługę external (group=proxysql) + external_exporter agent (port 6070)
-#      w PMM Inventory, reużywając generic nodes utworzonych przez f11_pmm_client.yml.
+# Playbook PLATFORMY — uruchamiany wylacznie z platform/shared/
+# (make platform-monitoring). Wezly ProxySQL naleza do warstwy wspolnej, wiec
+# to ona wlacza restapi i rejestruje eksportery w PMM; najemca (klaster Galera)
+# nie ma tu czego szukac — pilnuje tego asercja fail-closed w pre_tasks obu
+# playow. Kiedys te czynnosc wykonywal klaster z rola ownera w swoim cluster.yml,
+# co czynilo monitoring pary wlasnoscia jednego klastra.
 #
-# Zależność: uruchamiać PO f11_pmm_client.yml (generic nodes muszą istnieć).
+# Galera + MariaDB najemcy pokrywa f11_pmm_client.yml / f11_pmm_agent.yml
+# uruchamiane z definicji klastra.
+#
+# Ten playbook:
+#   1. wlacza admin-restapi_enabled=true na kazdym wezle ProxySQL (LOAD + SAVE = trwale),
+#   2. tworzy brakujace generic nodes, rejestruje usluge external (group=proxysql)
+#      + external_exporter agent (port 6070) w PMM Inventory.
+#
+# Kolejnosc: po platform-deploy (pakiety ProxySQL) i platform-proxysql
+# (konfiguracja pary); PMM Server zyje po platform-infra.
 
 # === Play 1: włącz restapi na węzłach ProxySQL ===
 - name: "F11 — włącz restapi ProxySQL (metryki Prometheus :6070)"
@@ -23,6 +32,18 @@
     MYSQL_PWD: "{{ proxysql_admin_password }}"
 
   pre_tasks:
+    - name: "Odrzuc uruchomienie z definicja inna niz platforma"
+      ansible.builtin.assert:
+        that:
+          - platform.name is defined
+          - platform.name | length > 0
+          - galera is not defined
+        fail_msg: >-
+          Ten playbook zarzadza warstwa wspolna i wymaga definicji platformy
+          (platform/shared/platform.yml) — definicja klastra (blok galera)
+          oznacza najemce, a najemca nie zarzadza ta warstwa.
+          Uruchom: make platform-monitoring
+
     - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
       ansible.builtin.assert:
         that:
@@ -30,17 +51,6 @@
         fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
 
   tasks:
-    # Metryki wspolnej pary ProxySQL rejestruje JEJ owner. Konsument, ktory by
-    # je zarejestrowal ponownie pod wlasna etykieta, zdublowalby eksporter na
-    # tym samym porcie 6070 i rozjechal tozsamosc node w pmm-agent.
-    - name: "Konsument warstwy wspolnej — pomin metryki ProxySQL"
-      ansible.builtin.meta: end_play
-      # Pomijamy takze, gdy wezly ProxySQL maja LOKALNEGO pmm-agenta: metryki
-      # dostarcza wtedy natywny proxysql_exporter (f11_pmm_agent.yml), a ta
-      # sciezka przez restapi:6070 i usluge `external` bylaby duplikatem.
-      when: >-
-        (proxysql.role | default('owner')) == 'consumer'
-        or 'proxysql' in (monitoring.agent_groups | default([]))
 
     - name: "Sprawdź aktualny stan admin-restapi_enabled (runtime)"
       ansible.builtin.command:
@@ -111,14 +121,28 @@
     pmm_admin_user: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_USER') | default('admin', true) }}"
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     pmm_validate_certs_effective: "{{ monitoring.get('pmm', {}).get('validate_certs', true) | bool }}"
-    pmm_cluster_name_effective: "{{ monitoring.get('pmm', {}).get('cluster_name', cluster.name) }}"
-    pmm_environment_effective: "{{ cluster.environment }}"
+    # Namespace PMM warstwy wspolnej ("shared") — NIE etykieta najemcy: wezly
+    # pary nie moga znikac z PMM razem z derejestracja jakiegos klastra.
+    pmm_cluster_name_effective: "{{ monitoring.pmm.cluster_name }}"
+    pmm_environment_effective: "{{ platform.environment }}"
     pmm_proxysql_hosts: "{{ groups.get('proxysql', []) }}"
     pmm_proxysql_node_names: "{{ pmm_proxysql_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
     pmm_proxysql_service_names: "{{ pmm_proxysql_node_names | map('regex_replace', '$', '-proxysql') | list }}"
     proxysql_metrics_port: 6070
 
   pre_tasks:
+    - name: "Odrzuc uruchomienie z definicja inna niz platforma"
+      ansible.builtin.assert:
+        that:
+          - platform.name is defined
+          - platform.name | length > 0
+          - galera is not defined
+        fail_msg: >-
+          Ten playbook zarzadza warstwa wspolna i wymaga definicji platformy
+          (platform/shared/platform.yml) — definicja klastra (blok galera)
+          oznacza najemce, a najemca nie zarzadza ta warstwa.
+          Uruchom: make platform-monitoring
+
     - name: "Wymagaj danych dostępowych PMM"
       ansible.builtin.assert:
         that:
@@ -128,17 +152,47 @@
         fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium oraz użyj PMM URL z https://."
 
   tasks:
-    - name: "Konsument warstwy wspolnej — pomin rejestracje ProxySQL w PMM"
-      ansible.builtin.meta: end_play
-      # Pomijamy takze, gdy wezly ProxySQL maja LOKALNEGO pmm-agenta: metryki
-      # dostarcza wtedy natywny proxysql_exporter (f11_pmm_agent.yml), a ta
-      # sciezka przez restapi:6070 i usluge `external` bylaby duplikatem.
-      when: >-
-        (proxysql.role | default('owner')) == 'consumer'
-        or 'proxysql' in (monitoring.agent_groups | default([]))
 
     # === Pobierz node IDs dla węzłów ProxySQL ===
     - name: "Pobierz PMM node inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes"
+        method: GET
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        return_content: true
+      register: pmm_nodes
+      no_log: true
+
+    # Generic nodes dla wezlow pary wczesniej tworzyl f11_pmm_client.yml ownera.
+    # Po wyniesieniu warstwy wspolnej z definicji klastrow platforma nie ma skad
+    # ich wziac, wiec playbook jest samowystarczalny: tworzy brakujace wezly
+    # we wlasnym namespace'u, a asercja nizej pilnuje efektu end-to-end.
+    - name: "Utworz generic nodes dla wezlow ProxySQL (jesli brak)"
+      ansible.builtin.uri:
+        url: "{{ pmm_api_url }}/v1/inventory/nodes"
+        method: POST
+        url_username: "{{ pmm_admin_user }}"
+        url_password: "{{ pmm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate_certs_effective }}"
+        body_format: json
+        body:
+          generic:
+            node_name: "{{ pmm_cluster_name_effective }}-{{ item }}"
+            address: "{{ hostvars[item].proxysql_node_address | default(hostvars[item].ansible_host) }}"
+            distro: "rocky-{{ platform.rocky_linux_major }}"
+            custom_labels:
+              cluster: "{{ pmm_cluster_name_effective }}"
+              environment: "{{ pmm_environment_effective }}"
+        status_code: 200
+      loop: "{{ pmm_proxysql_hosts }}"
+      when: (pmm_cluster_name_effective ~ '-' ~ item) not in (pmm_nodes.json.generic | default([]) | map(attribute='node_name') | list)
+      no_log: true
+
+    - name: "Odswiez PMM node inventory po tworzeniu"
       ansible.builtin.uri:
         url: "{{ pmm_api_url }}/v1/inventory/nodes"
         method: GET
@@ -160,7 +214,7 @@
       ansible.builtin.assert:
         that:
           - (pmm_proxysql_node_ids | default({}) | length) == (pmm_proxysql_node_names | length)
-        fail_msg: "Brak generic nodes ProxySQL w PMM — uruchom najpierw f11_pmm_client.yml."
+        fail_msg: "Brak generic nodes ProxySQL w PMM po probie utworzenia — sprawdz odpowiedzi PMM Inventory API nad zadaniem tworzenia."
 
     # === Cleanup starych usług ProxySQL o złym przypisaniu ===
     - name: "Pobierz PMM service inventory"

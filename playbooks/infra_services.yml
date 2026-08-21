@@ -1,6 +1,10 @@
 ---
-# Usługi wspierające klastra na dedykowanym hoście infra.
+# Uslugi wspierajace FLOTE na hoscie infra warstwy wspolnej (fcinfra):
+# PMM serwuje monitoring wszystkim najemcom, MinIO backupy, Maildev alerty.
 # Zakres: Docker CE + PMM Server + MinIO + Maildev. Bez Samby.
+# Odpalane z definicji platformy (`make platform-infra`, -e @platform.yml):
+# host infra nalezy do warstwy wspolnej, wiec playbook nie czyta ZADNEJ
+# zmiennej z cluster.yml najemcy (kiedy robil to jako cel cluster-infra).
 
 - name: "Infra — wymuś dokładną politykę host firewall przed uruchomieniem usług"
   ansible.builtin.import_playbook: firewall.yml
@@ -51,7 +55,7 @@
     - name: "Wymagaj kompletnej konfiguracji infra"
       ansible.builtin.assert:
         that:
-          - cluster.environment != 'production'
+          - platform.environment != 'production'
           - groups['infra'] | length == 1
           - ansible_facts.architecture == 'x86_64'
           - pmm_admin_password | length >= 12

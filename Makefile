@@ -6,7 +6,7 @@
 .DEFAULT_GOAL := help
 
 .PHONY: cluster-build cluster-recover help lab-up lab-start-services cluster-discover cluster-validate cluster-deploy \
-        cluster-bootstrap cluster-health cluster-join cluster-proxysql cluster-endpoint \
+        cluster-bootstrap cluster-health cluster-join cluster-proxysql \
         cluster-infra cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan \
         cluster-drift cluster-remove-node-plan cluster-remove-node cluster-alerts \
@@ -16,11 +16,21 @@
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision \
-        infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify
+        infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify \
+        platform-validate platform-trust-hosts platform-deploy platform-infra platform-proxysql platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
 
 CLUSTER ?= example-cluster
 ANSIBLE_OPTS ?=
 TARGET_ENV = CLUSTER=$(CLUSTER) CLUSTER_CONFIG=clusters/$(CLUSTER)/cluster.yml CLUSTER_INVENTORY=clusters/$(CLUSTER)/inventory.yml
+
+# Warstwa wspolna (ProxySQL fcp1/fcp2 + VIP + fcinfra + fcapp) jest jednostka
+# NIEZALEZNA od klastrow. Wczesniej jej wlascicielem byl klaster Galera przez
+# `proxysql.role: owner`, wiec skasowanie tego klastra osierocalo cala warstwe.
+# Nie ma tu odpowiednika `cluster_guard`: definicja jest dokladnie jedna, wiec
+# nie da sie przypadkiem trafic w cudza.
+PLATFORM ?= shared
+PLATFORM_DIR = platform/$(PLATFORM)
+PLATFORM_OPTS = -i $(PLATFORM_DIR)/inventory.yml -e @$(PLATFORM_DIR)/platform.yml $(ANSIBLE_OPTS)
 
 # Cel mutujący wymaga jawnego CLUSTER= (command line/env), nie domyślnego example-cluster.
 cluster_guard = @case "$(origin CLUSTER)" in file|default|undefined) echo "ERROR: ten cel jest mutujący — podaj CLUSTER=... (domyślny example-cluster niedozwolony)" >&2; exit 1;; esac
@@ -130,6 +140,82 @@ lab-start-services:  ## Lab-only: (re)start ProxySQL po restarcie kontenera (bra
 # drill (CONFIRM=yes) -> odswiezenie metryk swiezosci; kazdy krok fail-fast.
 BUILD_SKIP ?=
 
+# ---------------------------------------------------------------------------
+# WARSTWA WSPOLNA — cele niezalezne od jakiegokolwiek klastra Galera.
+#
+# Kolejnosc w platform-build nie jest dowolna: pakiety musza istniec zanim
+# skonfigurujemy pare, para musi odpowiadac zanim Keepalived uzna ja za zdrowa,
+# a rejestracja w PMM ma sens dopiero gdy eksportery maja co zbierac.
+# ---------------------------------------------------------------------------
+
+platform-validate:  ## Waliduj definicje warstwy wspolnej (schema + invarianty inwentarza + preflight)
+	python3 tests/validation/validate-platform.py $(PLATFORM_DIR)/platform.yml platform/schema/platform.schema.json $(PLATFORM_DIR)/inventory.yml
+	ansible-playbook playbooks/platform_preflight.yml $(PLATFORM_OPTS)
+
+platform-trust-hosts:  ## Re-skanuj klucze hostow warstwy wspolnej do known_hosts
+	@ok=0; total=0; \
+	for ip in $$(grep -oE 'ansible_host:[[:space:]]+"?[0-9.]+"?' $(PLATFORM_DIR)/inventory.yml | grep -oE '[0-9.]+' | sort -u); do \
+		total=$$((total+1)); good=0; \
+		for try in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+			ssh-keygen -R $$ip -f $(PLATFORM_DIR)/known_hosts >/dev/null 2>&1 || true; \
+			if ssh-keyscan -T 5 -H $$ip 2>/dev/null | grep -q .; then \
+				ssh-keyscan -T 5 -H $$ip 2>/dev/null >> $(PLATFORM_DIR)/known_hosts; good=1; break; \
+			fi; \
+			sleep 5; \
+		done; \
+		[ $$good -eq 1 ] && ok=$$((ok+1)) || echo "UWAGA: $$ip nie odpowiada po 12 probach"; \
+	done; \
+	echo "known_hosts: $$ok/$$total hostow zweryfikowanych (ssh OK)"; \
+	test $$ok -eq $$total
+
+platform-deploy:  ## Instaluj pakiety warstwy wspolnej (ProxySQL wg lockfile EL10)
+	ansible-playbook playbooks/platform_install.yml $(PLATFORM_OPTS)
+
+platform-infra:  ## Uslugi wspierajace na fcinfra: PMM + MinIO + Maildev
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	@: "$${MINIO_ROOT_USER:?Ustaw MINIO_ROOT_USER poza repozytorium}"
+	@: "$${MINIO_ROOT_PASSWORD:?Ustaw MINIO_ROOT_PASSWORD poza repozytorium}"
+	ansible-playbook playbooks/infra_services.yml $(PLATFORM_OPTS)
+
+platform-proxysql:  ## Konfiguruj sama pare ProxySQL (frontend TLS, ustawienia globalne)
+	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	ansible-playbook playbooks/platform_proxysql.yml $(PLATFORM_OPTS)
+
+platform-endpoint:  ## Redundantny endpoint ProxySQL (Keepalived VIP) — WYLACZNIE tutaj
+	@: "$${KEEPALIVED_AUTH_PASS:?Ustaw KEEPALIVED_AUTH_PASS poza repozytorium}"
+	ansible-playbook playbooks/f8_keepalived.yml $(PLATFORM_OPTS)
+
+platform-monitoring:  ## Zarejestruj wezly i eksportery warstwy wspolnej w PMM
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	ansible-playbook playbooks/f11_proxysql_metrics.yml $(PLATFORM_OPTS)
+
+platform-alerts:  ## Reguly alertowe warstwy wspolnej (namespace isa-shared-*)
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	ansible-playbook playbooks/f15_alerts.yml $(PLATFORM_OPTS)
+
+# Migracja istniejacej floty: usuwa z PMM wezly zarejestrowane pod adresami
+# warstwy przez bylego ownera. Swiezy deployment tego nie potrzebuje.
+platform-adopt:  ## Przejmij rejestracje PMM zrobione przez bylego ownera (CONFIRM=yes)
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (usuwa wezly z PMM Inventory)"; exit 1)
+	ansible-playbook playbooks/platform_adopt.yml $(PLATFORM_OPTS) -e confirm=yes
+
+platform-verify:  ## Sondy warstwy wspolnej: para ProxySQL, VIP, TLS endpointu, rejestracja w PMM
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	CLUSTER=$(PLATFORM) CLUSTER_CONFIG=$(PLATFORM_DIR)/platform.yml CLUSTER_INVENTORY=$(PLATFORM_DIR)/inventory.yml \
+	  PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-platform.py
+
+platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→infra→proxysql→endpoint→monitoring→alerts→sonda
+	$(MAKE) platform-validate
+	$(MAKE) platform-deploy
+	$(MAKE) platform-infra
+	$(MAKE) platform-proxysql
+	$(MAKE) platform-endpoint
+	$(MAKE) platform-monitoring
+	$(MAKE) platform-alerts
+	$(MAKE) platform-verify
+
 cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap→join→proxysql→monitoring→harden→endpoint→warunkowe→bramka (CLUSTER+CONFIRM=yes)
 	$(cluster_guard)
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (bootstrap tworzy nowy Primary Component)"; exit 1)
@@ -140,7 +226,6 @@ cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap
 	$(MAKE) cluster-proxysql
 	$(MAKE) cluster-monitoring
 	$(MAKE) cluster-harden
-	$(MAKE) cluster-endpoint
 	@for step in $(filter-out $(BUILD_SKIP),seed backup alerts app-host); do \
 		case $$step in \
 			seed) $(MAKE) lab-seed-smoke || exit 1 ;; \
@@ -212,10 +297,11 @@ cluster-proxysql:  ## F7 — skonfiguruj ProxySQL (mysql_galera_hostgroups)
 lab-proxysql-verify:  ## Zweryfikuj routing ProxySQL (ISC-18/19/20/21/22/23)
 	$(TARGET_ENV) tests/lab/probe-proxysql.py
 
-cluster-endpoint:  ## F8 — redundantny endpoint ProxySQL (Keepalived VIP)
-	$(cluster_guard)
-	@: "$${KEEPALIVED_AUTH_PASS:?Ustaw KEEPALIVED_AUTH_PASS poza repozytorium}"
-	ansible-playbook playbooks/f8_keepalived.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+# `cluster-endpoint` USUNIETY 2026-08-21. VIP .133 nalezy do warstwy wspolnej,
+# a ten cel pozwalal dowolnemu najemcy odpalic Keepalived na cudzej parze —
+# na newclaude16-r9 wyszlo to jako `changed=0`, ale bramki nie bylo zadnej.
+# Zastapiony przez `make platform-endpoint`; f8_keepalived.yml odrzuca teraz
+# definicje klastra asercja fail-closed.
 
 lab-endpoint-verify:  ## Zweryfikuj endpoint VIP ProxySQL (ISC-24/26)
 	$(TARGET_ENV) tests/lab/probe-endpoint.py
@@ -357,15 +443,18 @@ cluster-harden:  ## F6 — hardening MariaDB: usuń anon/test, root localhost-on
 lab-hardening-verify:  ## Zweryfikuj hardening MariaDB (ISC-40/41/42)
 	$(TARGET_ENV) tests/lab/probe-hardening.py
 
+# Najemca rejestruje WYLACZNIE wlasne wezly. Eksportery ProxySQL (fcp1/fcp2)
+# rejestruje `make platform-monitoring` — nalezą do warstwy wspolnej, a gdy
+# robil to najemca, deregistracja tego klastra zabierala monitoring calej pary.
+# Z tego samego powodu znika stad straznik PROXYSQL_ADMIN_PASSWORD: zadny
+# z pozostalych krokow nie laczy sie juz z portem admina ProxySQL.
 cluster-monitoring:  ## F11 — zarejestruj hosty i usługi w natywnym PMM Inventory
 	$(cluster_guard)
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	@: "$${PMM_MONITOR_PASSWORD:?Ustaw PMM_MONITOR_PASSWORD poza repozytorium}"
-	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
 	ansible-playbook playbooks/f11_node_exporter.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 	ansible-playbook playbooks/f11_pmm_agent.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 	ansible-playbook playbooks/f11_pmm_client.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
-	ansible-playbook playbooks/f11_proxysql_metrics.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 	ansible-playbook playbooks/f11_freshness.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 	ansible-playbook playbooks/f11_log_lifecycle.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 

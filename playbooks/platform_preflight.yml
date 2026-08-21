@@ -1,0 +1,67 @@
+---
+# Preflight warstwy wspolnej: bramka preconditions przed mutacja hostow
+# platformy (platform_install.yml na proxysql, infra_services.yml na infra).
+# Wzorowany strukturalnie na f2_preflight.yml najemcy — ale bez zaladunku
+# klastrowego: lockfile platformy (EL10) opisuje hosty fcp1/fcp2/fcinfra,
+# a definicja platform.yml jest jedynym wejsciem.
+
+- name: "Platform Preflight - walidacja preconditions warstwy wspolnej"
+  hosts: "proxysql:infra"
+  become: true
+  gather_facts: true
+  serial: 1
+  max_fail_percentage: 0
+
+  tasks:
+    # Lockfile wybiera platform.yml (versions.lock_file), nie cluster.yml
+    # najemcy — to rozdzial zalozeniowy: warstwa wspolna nie moze dziedziczyc
+    # wersji po najemcy, ktory ja przypadkiem postawil.
+    - name: "Zaladuj lockfile platformy (reprodukowalne wersje)"
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
+    # platform.rocky_linux_major jest deklaracja zrodla prawdy (terraform/shared
+    # stawia te hosty z Rocky 10); spojnosc z lockfile chroni przed rozjazdem
+    # definicji z warstwa pakietowa — instalacja bralaby RPM-y dla innego EL,
+    # niz stoi na hoscie, i to dopiero przy dnf.
+    - name: "Preflight - wymagany Rocky Linux wg platformy ({{ platform.rocky_linux_major }})"
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Rocky"
+          - ansible_distribution_major_version | int == platform.rocky_linux_major | int
+          - platform.rocky_linux_major | int == lock.rocky_linux.major | int
+        fail_msg: >-
+          Host musi byc Rocky Linux {{ platform.rocky_linux_major }} (wg platform.yml
+          i lockfile {{ lock.rocky_linux.major }}), jest {{ ansible_distribution }}
+          {{ ansible_distribution_major_version }}.
+
+    # Minor OS dopuszczony przez lockfile — ta sama bramka co u najemcy:
+    # patchlevel z poza allowed_minors nie jest pokryty sumami w lockfile.
+    - name: "Preflight - minor OS dopuszczony przez lockfile"
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution_version in lock.rocky_linux.allowed_minors
+        fail_msg: >-
+          Minor {{ ansible_distribution_version }} nie jest w allowed_minors
+          {{ lock.rocky_linux.allowed_minors }} - zaktualizuj hosty albo lockfile.
+
+    - name: "Preflight - minimal RAM 2GB"
+      ansible.builtin.assert:
+        that:
+          - ansible_memtotal_mb >= 2048
+        fail_msg: "Minimum 2GB RAM required, got {{ ansible_memtotal_mb }}MB"
+
+    # To samo zabezpieczenie co w platform_install.yml, tylko PRZED mutacja:
+    # bez sha256 dla aktualnej arch pobranie RPM polegna dopiero na hoscie,
+    # po czesciowym wdrozeniu. Fails closed na etapie bramki.
+    - name: "Preflight - wymagaj sha256 RPM ProxySQL dla arch hostow"
+      ansible.builtin.assert:
+        that:
+          - (lock.proxysql.rpm_sha256 | default({})).get(ansible_architecture) is defined
+        fail_msg: >-
+          Brak sha256 dla ProxySQL {{ lock.proxysql.version }} arch {{ ansible_architecture }}
+          w lockfile platformy (proxysql.rpm_sha256). Dodaj przed instalacja (audit#6).
+      when: "'proxysql' in group_names"
+
+  handlers: []

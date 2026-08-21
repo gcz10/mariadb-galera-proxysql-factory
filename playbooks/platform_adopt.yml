@@ -1,0 +1,117 @@
+---
+# Przejecie przez warstwe wspolna rejestracji PMM zrobionych wczesniej przez
+# najemce.
+#
+# DLACZEGO ISTNIEJE: do 2026-08-21 pare ProxySQL rejestrowal w PMM klaster
+# z `proxysql.role: owner` — na zywej flocie byly to wezly `fc10-galera-fcp1`
+# i `fc10-galera-fcp2`. Po wyniesieniu warstwy `make platform-monitoring`
+# tworzy `shared-fcp1`/`shared-fcp2`, ale STARE wpisy zostaja i wskazuja TEN
+# SAM adres: PMM liczy metryki jednej maszyny dwa razy, a po odebraniu
+# najemcy wlasnosci nikt tych wpisow juz nie posprzata.
+#
+# Regula jest ADRESOWA, nie po nazwie — bo to wlasnie nazwa sie rozjechala.
+# Ten sam warunek egzekwuje `tests/lab/probe-platform.py`, wiec skutek dziala
+# sie zweryfikowac niezaleznie od tego playbooka.
+#
+# Cel jest DESTRUKCYJNY (usuwa obiekty z PMM), wiec wymaga CONFIRM=yes tak jak
+# kazdy inny destrukcyjny cel w tym repo.
+
+- name: "Warstwa wspolna - przejmij rejestracje PMM zrobione przez najemce"
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+  vars:
+    pmm_url: "{{ monitoring.pmm.server_url | regex_replace('/$', '') }}"
+    pmm_user: "admin"
+    pmm_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    pmm_validate: "{{ monitoring.pmm.validate_certs | default(false) }}"
+    # Adres -> jedyna dozwolona nazwa wezla w PMM.
+    platform_expected: >-
+      {{ dict(groups['proxysql']
+              | map('extract', hostvars, 'proxysql_node_address')
+              | zip(groups['proxysql']
+                    | map('regex_replace', '^', monitoring.pmm.cluster_name ~ '-'))) }}
+
+  tasks:
+    - name: "Wymagaj definicji platformy (najemca nie przejmuje tej warstwy)"
+      ansible.builtin.assert:
+        that:
+          - platform.name is defined
+          - platform.name | length > 0
+          - galera is not defined
+        fail_msg: >-
+          Ten playbook zarzadza warstwa wspolna i wymaga definicji platformy
+          (platform/shared/platform.yml). Uruchom: make platform-adopt CONFIRM=yes
+
+    - name: "Wymagaj jawnego potwierdzenia (usuwa obiekty z PMM)"
+      ansible.builtin.assert:
+        that:
+          - confirm | default('') == 'yes'
+        fail_msg: "Wymaga CONFIRM=yes — cel usuwa wezly z PMM Inventory"
+
+    - name: "Pobierz PMM Inventory"
+      ansible.builtin.uri:
+        url: "{{ pmm_url }}/v1/inventory/nodes"
+        method: GET
+        user: "{{ pmm_user }}"
+        password: "{{ pmm_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate }}"
+        return_content: true
+      register: pmm_nodes
+      no_log: true
+
+    - name: "Wyznacz sieroty: wezly pod adresem warstwy o cudzej nazwie"
+      ansible.builtin.set_fact:
+        platform_orphans: >-
+          {{ pmm_nodes.json.generic | default([])
+             | selectattr('address', 'in', platform_expected.keys() | list)
+             | rejectattr('node_name', 'in', platform_expected.values() | list)
+             | list }}
+
+    - name: "Raport przed usunieciem"
+      ansible.builtin.debug:
+        msg: >-
+          {{ platform_orphans | length }} sierot do przejecia:
+          {{ platform_orphans | map(attribute='node_name') | list }}
+          (oczekiwane nazwy warstwy: {{ platform_expected.values() | list }})
+
+    - name: "Usun sierote wraz z jej uslugami i agentami"
+      ansible.builtin.uri:
+        url: "{{ pmm_url }}/v1/inventory/nodes/{{ item.node_id }}?force=true"
+        method: DELETE
+        user: "{{ pmm_user }}"
+        password: "{{ pmm_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate }}"
+        status_code: [200, 204, 404]
+      loop: "{{ platform_orphans }}"
+      loop_control:
+        label: "{{ item.node_name }}"
+      no_log: true
+
+    - name: "Potwierdz, ze pod kazdym adresem warstwy zostal dokladnie jeden wezel"
+      ansible.builtin.uri:
+        url: "{{ pmm_url }}/v1/inventory/nodes"
+        method: GET
+        user: "{{ pmm_user }}"
+        password: "{{ pmm_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ pmm_validate }}"
+        return_content: true
+      register: pmm_after
+      no_log: true
+
+    - name: "Bramka: zero sierot po przejeciu"
+      ansible.builtin.assert:
+        that:
+          - >-
+            (pmm_after.json.generic | default([])
+             | selectattr('address', 'in', platform_expected.keys() | list)
+             | rejectattr('node_name', 'in', platform_expected.values() | list)
+             | list | length) == 0
+        fail_msg: >-
+          Po przejeciu nadal istnieja wezly spoza warstwy pod jej adresami —
+          usuwanie nie zadzialalo, sprawdz uprawnienia konta PMM.
+        success_msg: "Kazdy adres warstwy ma w PMM dokladnie jeden wezel"

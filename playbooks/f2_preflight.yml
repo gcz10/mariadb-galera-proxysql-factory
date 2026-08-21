@@ -4,28 +4,17 @@
 # Depends: F0 (discovery), F1 (lockfile)
 
 - name: "F2 Preflight - walidacja preconditions"
-  hosts: all
+  # Preflight najemcy dotyczy WYLACZNIE wezlow klastra (galera/restore).
+  # Hosty warstwy wspolnej (proxysql/infra/app) zyja na EL majorze platformy,
+  # nie najemcy: lockfile klastra nie opisuje ich systemu, a w zakresie `all`
+  # kazdy z nich musialby byc recznie wylaczany z tych asercji. Ich bramka
+  # preconditions to platform_preflight.yml z lockfile platformy — stad
+  # jawnie zamkniety zakres zamiast filtra per host.
+  hosts: galera:restore
   become: true
   gather_facts: true
   serial: 1
   max_fail_percentage: 0
-  vars:
-    # Hosty warstwy wspolnej (proxysql/infra) naleza do OWNERA pary ProxySQL.
-    # Konsument nie instaluje tam pakietow, wiec jego lockfile nie opisuje ich
-    # systemu — wspolne ProxySQL moze stac na innym EL major niz baza tego
-    # klastra i to jest poprawne, a nie blad konfiguracji.
-    #
-    # Host aplikacyjny (grupa `app`) jest wylaczony BEZWARUNKOWO, takze dla
-    # ownera: nalezy do warstwy wspolnej, przezywa przebudowy klastrow i zaden
-    # klaster nie instaluje na nim swoich pakietow. Klienta stawia app_host.yml,
-    # ktory wybiera lockfile po majorze HOSTA (`app_lock_by_major`) wlasnie
-    # dlatego, ze platforma hosta jest niezalezna od platformy klastra.
-    # Bez tego `cluster-validate` kazdego klastra EL9 pada na fcapp (Rocky 10) —
-    # zmierzone na v11, defekt wprowadzony razem z grupa `app`.
-    f2_lockfile_applies: >-
-      {{ 'app' not in group_names
-         and ((proxysql.role | default('owner')) == 'owner'
-              or not ('proxysql' in group_names or 'infra' in group_names)) }}
   tasks:
     # R1/A1: lockfile wskazywany per klaster (versions.lock_file z cluster.yml),
     # nie ścieżka wpisana na sztywno. Ten sam wzorzec co f2_install — jedna konwencja w repo.
@@ -42,7 +31,6 @@
         fail_msg: >-
           Host musi byc Rocky Linux {{ lock.rocky_linux.major }} (wg lockfile),
           jest {{ ansible_distribution }} {{ ansible_distribution_major_version }}
-      when: f2_lockfile_applies | bool
 
     # R1/D: allowed_minors bylo martwa dana. compatibility-report.md deklarowal
     # kontrole minora "w F2 preflight", ktorej nie bylo w kodzie. Teraz jest.
@@ -53,7 +41,6 @@
         fail_msg: >-
           Minor {{ ansible_distribution_version }} nie jest w allowed_minors
           {{ lock.rocky_linux.allowed_minors }} - zaktualizuj hosty albo lockfile
-      when: f2_lockfile_applies | bool
 
     # R1: spojnosc wewnetrzna lockfile. `repo_setup_args` i `version` to dwa niezalezne
     # pola opisujace te sama serie MariaDB - rozjechanie sie ich instaluje inna wersje,

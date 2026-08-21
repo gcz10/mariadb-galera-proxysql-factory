@@ -86,9 +86,19 @@ Rozdział idzie **po użytkowniku, nie po porcie** — oba klastry współdziel�
 `VIP:6033`, a o trafieniu decyduje konto, którym loguje się aplikacja.
 Routing po porcie wymagałby zarządzania `mysql-interfaces` i restartu ProxySQL.
 
-Dokładnie jeden klaster na parze ma `proxysql.role: owner` — instaluje pakiety
-na węzłach wspólnych, zarządza VIP-em i rejestruje je w PMM. Konsument robi
-tylko `f7`. Pilnuje tego `tests/validation/probe-proxysql-tenancy.py`.
+Warstwa wspólna **nie należy do żadnego klastra**. Opisuje ją
+`platform/shared/` (`platform.yml` + `inventory.yml`), a jej cyklem życia
+zarządzają wyłącznie cele `make platform-*`. Klastry są **najemcami**:
+`make cluster-proxysql` rejestruje ich hostgroupy i użytkownika, i tylko tyle.
+
+Do 2026-08-21 właścicielem warstwy był klaster Galera (`finalclaude-r10` miał
+`proxysql.role: owner`), więc skasowanie tego klastra osierociłoby parę
+ProxySQL, VIP, PMM i MinIO — pozostali najemcy jechaliby dalej na
+infrastrukturze, której nikt nie może zaktualizować ani odtworzyć. Pole
+`proxysql.role` już nie istnieje; jego powrotu pilnuje
+`tests/validation/probe-proxysql-tenancy.py`, a niezależności warstwy od
+węzłów bazy — `tests/validation/validate-platform.py` (offline) oraz
+`tests/lab/probe-platform.py` (na żywym hoście).
 
 ## Dowody z żywej instalacji
 

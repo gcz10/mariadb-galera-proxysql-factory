@@ -39,24 +39,23 @@ pmm_agent_managed_names: >-
   {{ pmm_agent_managed_hosts
      | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}
 
-# Zestawy hostow i nazw dla rejestracji agentless. Konsument wspolnej pary
-# ProxySQL rejestruje tylko wlasne wezly; owner rejestruje Galera i ProxySQL.
+# Zestawy hostow i nazw dla rejestracji agentless. Kazdy klaster jest najemca
+# warstwy wspolnej i rejestruje w PMM wylacznie wlasne wezly — wezly ProxySQL
+# rejestruje platforma (f11_proxysql_metrics.yml uruchamiany z platform/shared/).
 pmm_agent_id_effective: "{{ monitoring.get('pmm', {}).get('agent_id', 'pmm-server') }}"
 pmm_node_hosts: >-
-  {{ ((groups.get('galera', []) if (proxysql.role | default('owner')) == 'consumer'
-      else groups.get('galera', []) + groups.get('proxysql', []))
-      | difference(pmm_agent_managed_hosts)) | unique | list }}
+  {{ (groups.get('galera', []) | difference(pmm_agent_managed_hosts)) | unique | list }}
 pmm_node_names: "{{ pmm_node_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
 pmm_mysql_hosts: "{{ (groups.get('galera', []) | difference(pmm_agent_managed_hosts)) | list }}"
 pmm_mysql_names: "{{ pmm_mysql_hosts | map('regex_replace', '^', pmm_cluster_name_effective ~ '-') | list }}"
 pmm_external_service_names: "{{ pmm_node_names | map('regex_replace', '$', '-node-exporter') | list }}"
 pmm_mysql_service_names: "{{ pmm_mysql_names | map('regex_replace', '$', '-mysql') | list }}"
 
-# Zmienne instalacji i rejestracji lokalnego agenta.
+# Zmienne instalacji i rejestracji lokalnego agenta. Agent trafia wylacznie na
+# hosty z grup wymienionych w monitoring.agent_groups — to definicja najemcy
+# (klastra) wskazuje swoje wezly; wezly warstwy wspolnej obsluguje platforma.
 pmm_agent_target: >-
-  {{ (group_names | intersect(monitoring.agent_groups | default([])) | length > 0)
-     and not ((proxysql.role | default('owner')) == 'consumer'
-              and (group_names | intersect(['proxysql', 'infra']) | length > 0)) }}
+  {{ group_names | intersect(monitoring.agent_groups | default([])) | length > 0 }}
 pmm_server_host: "{{ monitoring.pmm.server_url | regex_replace('^https?://', '') | regex_replace('/$', '') }}"
 pmm_node_name: "{{ monitoring.pmm.cluster_name }}-{{ inventory_hostname }}"
 pmm_qan_agent_key: "qan_mysql_{{ monitoring.qan_source | default('perfschema') }}_agent"
