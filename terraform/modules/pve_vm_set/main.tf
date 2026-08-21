@@ -6,7 +6,7 @@
 #
 # Roznice platformowe rootow sa parametrami, nie odrebna logika:
 #   - Rocky 10 (shared, finalclaude-r10): snippet cloud-init + scsi1 + os_type,
-#   - Rocky 9 (newclaude15-r9): bez snippetu, domyslny ide2, raw/io_uring.
+#   - Rocky 9 (newclaude16-r9): bez snippetu, domyslny ide2, raw/io_uring.
 #
 # Atrybuty Optional+Computed przekazywane jako null (file_format, aio, purge_
 # on_destroy itd.) sa dla providera rownowazne z pominieciem: wartosc zostaje

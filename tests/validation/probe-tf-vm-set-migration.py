@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Migracja VM do modulu terraform/modules/pve_vm_set nie moze niszczyc maszyn.
 
-Trzy rooty stanu (terraform/shared, finalclaude-r10, newclaude15-r9) korzystaja
-ze wspolnego modulu VM zamiast wlasnych kopii `proxmox_virtual_environment_vm`.
+Rooty stanu floty korzystaja ze wspolnego modulu VM zamiast wlasnych kopii
+`proxmox_virtual_environment_vm`.
 Sonda jest bramka bezpieczenstwa tej migracji: dla kazdego roota wykonuje
 `terraform plan -refresh=false` (zero polaczen do PVE, zero apply) i wymaga,
 ze plan NIE zawiera akcji destroy/create. Kazde "replace" to utrata zywej VM.
@@ -32,7 +32,13 @@ MODULE_DIR = REPO_ROOT / "terraform" / "modules" / "pve_vm_set"
 
 # Rooty stanu floty. Kazdy ma osobny state i musi zostac osobnym rootem —
 # warstwa wspoldzielona nie moze przypadkiem polaczyc sie z klastrem konsumenta.
-ROOTS = ("shared", "finalclaude-r10", "newclaude15-r9")
+ROOTS = ("shared", "finalclaude-r10", "newclaude16-r9")
+
+# Tylko te rooty MIGROWALY z wlasnej kopii zasobu do modulu, wiec tylko one
+# maja blok `moved`. Root zalozony od razu na module go nie ma i miec nie
+# powinien: `moved` bez historii adresu jest martwym kodem, ktory sugeruje
+# migracje, ktorej nigdy nie bylo.
+MIGRATED_ROOTS = ("shared", "finalclaude-r10")
 
 # Fikcyjne uwierzytelnienie: plan -refresh=false nie laczy sie z API, ale
 # provider i tak wymaga zmiennych podczas konfiguracji klienta.
@@ -90,18 +96,25 @@ def check_root_config(root, errors):
             "(migracja do modulu zakonczona tylko przy jednym autorze zasobu)"
         )
     moved = re.search(r"moved\s*\{(.*?)\}", main_tf, re.S)
+    if root not in MIGRATED_ROOTS:
+        if moved:
+            errors.append(
+                f"{root}: root zalozony na module nie migrowal, wiec nie moze "
+                "miec bloku moved"
+            )
+        return
     if not moved:
         errors.append(f"{root}: brak bloku moved — plan pokaze destroy/create")
-    else:
-        body = moved.group(1)
-        # terraform fmt wyrownuje `from`/`to` wielokrotnoscia spacji, wiec
-        # dopasowanie musi byc odporne na wciecia po znaku rownosci.
-        if not re.search(r"from\s*=\s*proxmox_virtual_environment_vm\.node", body):
-            errors.append(f"{root}: moved.from != proxmox_virtual_environment_vm.node")
-        if not re.search(r"to\s*=\s*module\.vms\.proxmox_virtual_environment_vm\.node", body):
-            errors.append(
-                f"{root}: moved.to != module.vms.proxmox_virtual_environment_vm.node"
-            )
+        return
+    body = moved.group(1)
+    # terraform fmt wyrownuje `from`/`to` wielokrotnoscia spacji, wiec
+    # dopasowanie musi byc odporne na wciecia po znaku rownosci.
+    if not re.search(r"from\s*=\s*proxmox_virtual_environment_vm\.node", body):
+        errors.append(f"{root}: moved.from != proxmox_virtual_environment_vm.node")
+    if not re.search(r"to\s*=\s*module\.vms\.proxmox_virtual_environment_vm\.node", body):
+        errors.append(
+            f"{root}: moved.to != module.vms.proxmox_virtual_environment_vm.node"
+        )
 
 
 def plan_root(root, errors, warnings):
@@ -189,7 +202,7 @@ def main():
             print(f"BLAD: {error}")
         print(f"\nSONDA PADLA: {len(errors)} problemow")
         return 1
-    print("OK: 3 rooty planuja 0 destroy/create po migracji do pve_vm_set")
+    print(f"OK: {len(ROOTS)} rooty planuja 0 destroy/create na module pve_vm_set")
     return 0
 
 

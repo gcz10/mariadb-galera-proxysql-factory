@@ -10,11 +10,13 @@ terraform {
 
 provider "proxmox" {} # endpoint + api_token + insecure z env PROXMOX_VE_*
 
-# newclaude15-r9 - warstwa BAZODANOWA czternastego przebiegu budowy od zera.
+# newclaude16-r9 - warstwa BAZODANOWA szesnastego przebiegu budowy od zera.
 #
-# Cel: pierwszy klaster budowany pod protokol fail-closed (PR #55). Cala
-# weryfikacja stanu ustalonego przez `make lab-post-build-gate`; sonda, ktora
-# nie umie sprawdzic, konczy UNDETERMINED (exit 2), nigdy zielono.
+# Cel: pierwszy klaster stawiany JEDNYM poleceniem `make cluster-build` po tym,
+# jak cel przestal konczyc sie na samej konfiguracji backupu. Build materializuje
+# teraz dowod (backup -> drill restore -> odswiezenie metryk) PRZED bramka
+# `lab-post-build-gate`, wiec probe-backup i probe-restore maja co mierzyc juz
+# przy pierwszym przebiegu.
 #
 # ProxySQL, VIP, PMM, MinIO i host aplikacyjny sa wspoldzielone i mieszkaja
 # w terraform/shared/ - ten katalog ich nie tworzy ani nie niszczy.
@@ -33,12 +35,13 @@ locals {
 
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
-  # VMID 9550-9553 wolne (sprawdzone przez API na pelnej liscie VM klastra PVE).
-  # IP .168-.171 potwierdzone AKTYWNYM skanem sieci (ping + port 22/8006) juz PO
-  # zniszczeniu n13, wiec blok jest realnie pusty, a nie tylko zwolniony w planie.
-  #
-  # Celowo pomijamy .164-.167 zwolnione przez n13 w tym samym przebiegu: switche
-  # i sasiedzi moga jeszcze trzymac nieswiezy ARP po tamtych maszynach.
+  # VMID 9550-9553 i IP .172-.175 sa REUZYWANE po newclaude15-r9, ktory zostal
+  # w tym samym przebiegu zderejestrowany (PMM, Grafana, ProxySQL, konto MinIO)
+  # i zniszczony. Reuse jest tu swiadomym testem kompletnosci sprzatania: gdyby
+  # derejestracja czegos nie usunela, kolizja wyszlaby natychmiast — w PMM
+  # (nazwy hostow), w ProxySQL (hostgroupy) albo na ZFS (sieroty po VMID).
+  # Dlatego NAZWY hostow sa nowe: PMM Inventory wymaga globalnej unikalnosci
+  # w calej flocie, a rozjazd nazw wykrylby zapomniany obiekt po n15.
   #
   # NIE UZYWAC .180-.183: `.181` to adres zarzadzania hypervisora Proxmox
   # (PROXMOX_VE_ENDPOINT). Zywe sa tez .179, .184 i .189. Kolizje z tymi blokami
@@ -48,16 +51,16 @@ locals {
   # innodb_buffer_pool_size zjezdza do 768M, zeby zostal zapas na mariabackup
   # podczas SST i backupu.
   vms = {
-    n15g1 = { id = 9550, ip = 172, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n15g2 = { id = 9551, ip = 173, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n15g3 = { id = 9552, ip = 174, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    n15r1 = { id = 9553, ip = 175, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    n16g1 = { id = 9550, ip = 172, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n16g2 = { id = 9551, ip = 173, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n16g3 = { id = 9552, ip = 174, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    n16r1 = { id = 9553, ip = 175, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
 
 # Definicja VM zyje we wspolnym module pve_vm_set; ten root decyduje wylacznie
-# o skladzie klastra. Blok moved nizej przenosi istniejace adresy stanu,
-# wiec plan po migracji nie zawiera destroy/create.
+# o skladzie klastra. Bloku `moved` tu nie ma i byc nie moze — to swiezy root,
+# ktory nie dziedziczy zadnych adresow stanu.
 module "vms" {
   source = "../modules/pve_vm_set"
 
@@ -71,8 +74,8 @@ module "vms" {
 
   vms = local.vms
 
-  tags               = ["rocky9", "galera", "newclaude15", "n14"]
-  description_prefix = "newclaude15-r9 Rocky 9"
+  tags               = ["rocky9", "galera", "newclaude16"]
+  description_prefix = "newclaude16-r9 Rocky 9"
   description_dash   = "-"
 
   disk_file_format = "raw"
@@ -80,11 +83,6 @@ module "vms" {
 
   purge_on_destroy                     = true
   delete_unreferenced_disks_on_destroy = true
-}
-
-moved {
-  from = proxmox_virtual_environment_vm.node
-  to   = module.vms.proxmox_virtual_environment_vm.node
 }
 
 output "vms" {
