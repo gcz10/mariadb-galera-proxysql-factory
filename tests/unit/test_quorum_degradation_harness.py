@@ -160,5 +160,79 @@ class StructuredCollectorTests(unittest.TestCase):
         self.assertIn("fcp2", str(ctx.exception))
 
 
+class MutationLifecycleTests(unittest.TestCase):
+    def test_arm_never_kills_after_reload_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        calls = []
+
+        def run(host, script, timeout=120):
+            calls.append(script)
+            if "daemon-reload" in script:
+                return {"ok": False, "rc": 1, "output": "", "error": "reload failed"}
+            return {"ok": True, "rc": 0, "output": "no" if "show mariadb" in script else "", "error": ""}
+
+        with self.assertRaises(ns["EvidenceError"]):
+            ns["arm_node"]("n16g2", run=run)
+        self.assertFalse(any("pkill" in command for command in calls))
+
+    def test_arm_rejects_kill_failure_and_still_alive_process(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+
+        def kill_fails(host, script, timeout=120):
+            if "show mariadb" in script:
+                return {"ok": True, "rc": 0, "output": "no", "error": ""}
+            if "pkill" in script:
+                return {"ok": False, "rc": 1, "output": "", "error": "kill failed"}
+            return {"ok": True, "rc": 0, "output": "", "error": ""}
+
+        with self.assertRaises(ns["EvidenceError"]):
+            ns["arm_node"]("n16g2", run=kill_fails)
+
+        def still_alive(host, script, timeout=120):
+            if "show mariadb" in script:
+                output = "no"
+            elif "pgrep" in script:
+                output = "ALIVE"
+            else:
+                output = ""
+            return {"ok": True, "rc": 0, "output": output, "error": ""}
+
+        with self.assertRaises(ns["EvidenceError"]):
+            ns["arm_node"]("n16g2", run=still_alive)
+
+    def test_cleanup_attempts_every_operation_on_every_host(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        calls = []
+
+        def run(host, script, timeout=120):
+            calls.append((host, script))
+            if host == "n16g2" and script.startswith("rm -f"):
+                return {"ok": False, "rc": None, "output": "", "error": "timeout"}
+            if "test ! -e" in script:
+                return {"ok": True, "rc": 0, "output": "ABSENT", "error": ""}
+            if "show mariadb" in script:
+                return {"ok": True, "rc": 0, "output": "on-abnormal", "error": ""}
+            return {"ok": True, "rc": 0, "output": "", "error": ""}
+
+        result = ns["cleanup_nodes"](
+            ("n16g2", "n16g3"), {"n16g2": "on-abnormal", "n16g3": "on-abnormal"}, run=run
+        )
+        for host in ("n16g2", "n16g3"):
+            host_commands = [command for called_host, command in calls if called_host == host]
+            self.assertTrue(any("daemon-reload" in command for command in host_commands))
+            self.assertTrue(any("start --no-block" in command for command in host_commands))
+            self.assertTrue(any("test ! -e" in command for command in host_commands))
+            self.assertTrue(any("show mariadb" in command for command in host_commands))
+        self.assertFalse(result["n16g2"]["remove_ok"])
+        self.assertTrue(result["n16g3"]["dropin_absent"])
+
+    def test_cleanup_set_is_both_intended_hosts_before_mutation(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        self.assertEqual(tuple(ns["STOPPED"]), ("n16g2", "n16g3"))
+
 if __name__ == "__main__":
     unittest.main()

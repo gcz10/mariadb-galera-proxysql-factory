@@ -73,12 +73,18 @@ __all__ = (
     "OUTCOME_DEGRADED",
     "OUTCOME_UNRESOLVED",
     "acceptance_failures",
+    "arm_node",
     "classify_outcome",
+    "cleanup_nodes",
     "datetime",
     "json",
+    "new_record",
     "parse_client_error",
     "proxy_log_proves_backend_error",
     "recovery_complete",
+    "require_ok",
+    "run_measurement",
+    "write_artifact",
 )
 
 CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
@@ -394,170 +400,354 @@ def monitor_row(host, survivor_address):
     return row
 
 
-def node_write_direct(host):
-    """Ta sama proba bezposrednio na wezle — dla porownania komunikatow."""
-    rc, out = sh(host,
-                 "timeout 20 mariadb --socket=/var/lib/mysql/mysql.sock isa_test "
-                 "-e \"INSERT INTO app_degradation () VALUES ()\" 2>&1")
-    return rc == 0, out.strip()
+def require_ok(result, label):
+    if not result["ok"]:
+        raise EvidenceError(f"{label}: {result['error']}")
+    return result["output"]
 
 
-def cluster_size(host):
-    rc, out = sh(host,
-                 "timeout 15 mariadb --socket=/var/lib/mysql/mysql.sock -N -B "
-                 "-e \"SHOW STATUS LIKE 'wsrep_cluster_status'\" 2>&1")
-    return out.split("\t")[-1].strip() if rc == 0 and "\t" in out else "?"
+def arm_node(host, run=safe_sh):
+    require_ok(run(host, f"mkdir -p {DROPIN_DIR} && printf '[Service]\\nRestart=no\\n' > {DROPIN}"),
+               f"write Restart=no on {host}")
+    require_ok(run(host, "systemctl daemon-reload"), f"daemon-reload on {host}")
+    policy = require_ok(run(host, "systemctl show mariadb -p Restart --value"),
+                        f"read effective Restart on {host}")
+    if policy.strip() != "no":
+        raise EvidenceError(f"effective Restart on {host} is {policy!r}, expected 'no'")
+    require_ok(run(host, "pkill -9 -x mariadbd"), f"SIGKILL mariadbd on {host}")
+    alive = require_ok(
+        run(host, "pgrep -x mariadbd >/dev/null && echo ALIVE || echo DEAD"),
+        f"verify mariadbd death on {host}",
+    )
+    if alive.strip() != "DEAD":
+        raise EvidenceError(f"mariadbd still alive on {host}")
+    return True
+
+
+def cleanup_nodes(hosts, restart_before, run=safe_sh):
+    results = {}
+    for host in hosts:
+        remove = run(host, f"rm -f {DROPIN}", timeout=60)
+        reload_result = run(host, "systemctl daemon-reload", timeout=60)
+        start = run(host, "systemctl start --no-block mariadb", timeout=60)
+        absent = run(host, f"test ! -e {DROPIN} && echo ABSENT || echo PRESENT", timeout=60)
+        policy = run(host, "systemctl show mariadb -p Restart --value", timeout=60)
+        results[host] = {
+            "remove_ok": remove["ok"],
+            "reload_ok": reload_result["ok"],
+            "start_enqueued": start["ok"],
+            "dropin_absent": absent["ok"] and absent["output"] == "ABSENT",
+            "restart_policy_before": restart_before.get(host),
+            "restart_policy_after": policy["output"] if policy["ok"] else None,
+            "restart_policy_restored": (
+                policy["ok"] and policy["output"] == restart_before.get(host)
+            ),
+            "errors": [
+                item["error"] for item in (remove, reload_result, start, absent, policy)
+                if not item["ok"]
+            ],
+        }
+    return results
+
+
+def new_record():
+    acceptance = {name: False for name in LOCAL_ACCEPTANCE}
+    acceptance.update({"platform_verify": None, "post_build_gate": None})
+    return {
+        "run_id": RUN_ID,
+        "cluster": CLUSTER_NAME,
+        "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "outcome": OUTCOME_UNRESOLVED,
+        "contract": {"expected": CONTRACT, "observed": OUTCOME_UNRESOLVED, "match": False},
+        "acceptance": acceptance,
+        "errors": [],
+        "versions": {},
+        "topology": {
+            "vip": VIP, "app_user": APP_USER, "galera": GALERA_ADDR, "proxysql": PROXYSQL_ADDR,
+            "writer_hostgroup": WRITER_HG, "offline_hostgroup": OFFLINE_HG,
+        },
+        "baseline": {},
+        "failure": {},
+        "cleanup": {"nodes": {}, "credential_profile_absent": False},
+        "recovery": {},
+        "external_gates": {
+            "platform_verify": {"ok": None, "command": "make platform-verify", "rc": None},
+            "post_build_gate": {
+                "ok": None,
+                "command": "make lab-post-build-gate CLUSTER=newclaude16-r9",
+                "rc": None,
+            },
+        },
+    }
+
+
+def write_artifact(record):
+    path = Path(f"/var/tmp/quorum-evidence-{EXPECTED_CLUSTER}-{RUN_ID}.json")
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(record, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    return path
+
+
+def run_measurement(record):
+    errors = record["errors"]
+    cleanup_hosts = tuple(STOPPED)  # established before the first mutation
+    restart_before = {}
+    confirmed_dead = []
+
+    # Fail-closed baseline: every item must exist before SIGKILL.
+    try:
+        record["versions"] = collect_versions()
+        baseline_states = {host: galera_state(host) for host in GALERA}
+        if not recovery_complete(baseline_states, NODES_EXPECTED):
+            raise EvidenceError(f"baseline Galera state is not Primary/3/Synced: {baseline_states}")
+        holder = vip_holder()
+        runtime_by_proxy = {host: runtime_snapshot(host) for host in PROXYSQL_HOSTS}
+        writer_rows = {
+            host: [row for row in rows if row["hostgroup_id"] == WRITER_HG and row["status"] == "ONLINE"]
+            for host, rows in runtime_by_proxy.items()
+        }
+        if any(len(rows) != 1 for rows in writer_rows.values()):
+            raise EvidenceError(f"baseline writer placement is not exactly one per proxy: {writer_rows}")
+        writer_addresses = {rows[0]["hostname"] for rows in writer_rows.values()}
+        if len(writer_addresses) != 1 or not writer_addresses.issubset(set(GALERA_ADDR.values())):
+            raise EvidenceError(f"ProxySQL pair disagrees on a canonical Galera writer: {writer_rows}")
+        for host in cleanup_hosts:
+            restart_before[host] = must_output(
+                host, "systemctl show mariadb -p Restart --value", "baseline Restart policy", timeout=30
+            )
+        setup = app_setup()
+        if not setup["ok"]:
+            raise EvidenceError(f"app table setup failed: {setup['error']}")
+        baseline_write = app_write()
+        if not baseline_write["ok"]:
+            raise EvidenceError(f"baseline app write failed: {baseline_write['error']}")
+        record["baseline"] = {
+            "vip_holder": holder,
+            "galera": baseline_states,
+            "runtime_writer": {host: rows[0] for host, rows in writer_rows.items()},
+            "restart_policy": restart_before,
+            "app_write_ok": True,
+        }
+        record["acceptance"]["baseline_complete"] = True
+    except (EvidenceError, ValueError) as exc:
+        errors.append(f"baseline: {exc}")
+        return record
+
+    try:
+        for host in cleanup_hosts:
+            arm_node(host)
+            confirmed_dead.append(host)
+        record["acceptance"]["processes_dead"] = confirmed_dead == list(cleanup_hosts)
+
+        deadline = time.monotonic() + 120
+        survivor_status = "?"
+        while time.monotonic() < deadline:
+            try:
+                survivor_status = galera_state(SURVIVOR).split("/", 1)[0]
+            except (EvidenceError, ValueError):
+                survivor_status = "?"
+            if survivor_status == "non-Primary":
+                break
+            time.sleep(3)
+        if survivor_status != "non-Primary":
+            raise EvidenceError(f"survivor did not reach non-Primary: {survivor_status}")
+        record["acceptance"]["survivor_non_primary"] = True
+
+        holder_before = vip_holder()
+        mark = log_mark(holder_before)
+        window_start_us = int(time.time() * 1_000_000)
+        window_started = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        app_result = app_write()
+        direct_result = safe_sh(
+            SURVIVOR,
+            "timeout 20 mariadb --socket=/var/lib/mysql/mysql.sock isa_test "
+            "-e \"INSERT INTO app_degradation () VALUES ()\" 2>&1",
+            timeout=30,
+        )
+
+        # Zachowaj oba wyniki ZANIM kolejne zrodlo dowodu zdazy zawiesc.
+        app_code, app_state = parse_client_error(app_result["output"] or app_result["error"])
+        node_code, node_state = parse_client_error(direct_result["output"] or direct_result["error"])
+        outcome = classify_outcome(app_code, app_state, node_code, node_state)
+        record["outcome"] = outcome
+        record["contract"] = {"expected": CONTRACT, "observed": outcome, "match": outcome == CONTRACT}
+        record["acceptance"].update({
+            "vip_write_rejected": not app_result["ok"],
+            "direct_write_rejected": not direct_result["ok"],
+            "backend_error_exact": (node_code, node_state) == ("1047", "08S01"),
+            "classification_resolved": outcome in (OUTCOME_DEGRADED, OUTCOME_CLEAN),
+        })
+        record["failure"] = {
+            "window_started_utc": window_started,
+            "window_ended_utc": None,
+            "window_start_us": window_start_us,
+            "survivor": SURVIVOR,
+            "stopped": confirmed_dead,
+            "survivor_status": survivor_status,
+            "app_code": app_code,
+            "app_sqlstate": app_state,
+            "app_error": app_result["output"] or app_result["error"],
+            "node_code": node_code,
+            "node_sqlstate": node_state,
+            "node_error": direct_result["output"] or direct_result["error"],
+            "monitor_row": None,
+            "runtime_survivor": None,
+            "proxysql_node": holder_before,
+            "proxysql_log": None,
+            "log_mark": mark,
+        }
+        if app_result["ok"]:
+            errors.append("critical: application write succeeded without quorum")
+        if direct_result["ok"]:
+            errors.append("critical: direct backend write succeeded without quorum")
+        if outcome == OUTCOME_UNRESOLVED:
+            errors.append(f"classification unresolved: app={app_code}/{app_state}, backend={node_code}/{node_state}")
+
+        # Monitor moze odswiezac sie po zapytaniu z opoznieniem. Czekamy na
+        # pierwsza najnowsza probke, ktorej epoch-us nalezy do TEGO okna.
+        monitor = None
+        monitor_error = ""
+        monitor_deadline = time.monotonic() + 30
+        while time.monotonic() < monitor_deadline:
+            try:
+                candidate = monitor_row(holder_before, GALERA_ADDR[SURVIVOR])
+                if candidate["time_start_us"] >= window_start_us:
+                    monitor = candidate
+                    break
+                monitor_error = (
+                    f"latest row still predates window: {candidate['time_start_us']} < {window_start_us}"
+                )
+            except (EvidenceError, ValueError) as exc:
+                monitor_error = str(exc)
+            time.sleep(1)
+        if monitor is None:
+            raise EvidenceError(f"no post-window-start monitor row: {monitor_error}")
+        if monitor["primary_partition"] != "NO":
+            raise EvidenceError(f"monitor row does not prove quorum loss: {monitor}")
+
+        runtime_rows = runtime_snapshot(holder_before)
+        survivor_rows = [row for row in runtime_rows if row["hostname"] == GALERA_ADDR[SURVIVOR]]
+        if len(survivor_rows) != 1:
+            raise EvidenceError(f"expected one runtime row for survivor, got {survivor_rows}")
+        runtime_survivor = survivor_rows[0]
+        if runtime_survivor["hostgroup_id"] not in (WRITER_HG, OFFLINE_HG):
+            raise EvidenceError(f"survivor is outside tenant writer/offline groups: {runtime_survivor}")
+
+        log_text = log_delta(holder_before, mark)
+        if not proxy_log_proves_backend_error(log_text, GALERA_ADDR[SURVIVOR]):
+            raise EvidenceError("bounded ProxySQL log delta lacks survivor-correlated backend 1047/WSREP")
+        holder_after = vip_holder()
+        if holder_after != holder_before:
+            raise EvidenceError(f"VIP holder changed inside evidence window: {holder_before} -> {holder_after}")
+
+        window_ended = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        record["failure"].update({
+            "window_ended_utc": window_ended,
+            "monitor_row": monitor,
+            "runtime_survivor": runtime_survivor,
+            "proxysql_log": log_text,
+        })
+        record["acceptance"].update({
+            "same_window_monitor": True,
+            "exact_runtime_placement": True,
+            "bounded_correlated_log": True,
+        })
+    except (EvidenceError, ValueError) as exc:
+        errors.append(f"measurement: {exc}")
+    except Exception as exc:  # noqa: BLE001 — cleanup/recovery precede failure return.
+        errors.append(f"unexpected measurement error {type(exc).__name__}: {exc}")
+    except BaseException as exc:  # KeyboardInterrupt/SystemExit: najpierw cleanup + recovery.
+        errors.append(f"measurement interrupted by {type(exc).__name__}: {exc}")
+    finally:
+        cleanup = cleanup_nodes(cleanup_hosts, restart_before)
+        record["cleanup"]["nodes"] = cleanup
+        record["acceptance"]["dropins_absent"] = all(
+            item["dropin_absent"] for item in cleanup.values()
+        )
+        record["acceptance"]["restart_policy_restored"] = all(
+            item["restart_policy_restored"] for item in cleanup.values()
+        )
+        for host, item in cleanup.items():
+            errors.extend(f"cleanup {host}: {error}" for error in item["errors"])
+
+    # Recovery readers are fail-soft: unknown state is recorded and retried to deadline.
+    deadline = time.monotonic() + 240
+    recovered_states = {}
+    app_recovered = False
+    while time.monotonic() < deadline:
+        recovered_states = {}
+        for host in GALERA:
+            try:
+                recovered_states[host] = galera_state(host)
+            except (EvidenceError, ValueError) as exc:
+                recovered_states[host] = f"UNKNOWN: {exc}"
+        if recovery_complete(recovered_states, NODES_EXPECTED):
+            app_recovered = app_write()["ok"]
+            if app_recovered:
+                break
+        time.sleep(5)
+    record["recovery"] = {"nodes": recovered_states, "app_write_ok": app_recovered}
+    record["acceptance"]["nodes_primary_synced"] = recovery_complete(recovered_states, NODES_EXPECTED)
+    record["acceptance"]["app_recovered"] = app_recovered
+    if not record["acceptance"]["nodes_primary_synced"]:
+        errors.append(f"recovery: cluster did not return Primary/3/Synced: {recovered_states}")
+    if not app_recovered:
+        errors.append("recovery: application write did not resume")
+    return record
 
 
 def main():
-    if ENVIRONMENT == "production":
-        print("REFUSED: chaos-app-degradation jest destrukcyjny i nie moze biec na produkcji (ISC-64)")
-        return 1
-    if not APP_PW:
-        print("FAIL: brak APP_DB_PASSWORD w srodowisku")
-        return 1
-    if not APP_HOST:
-        print("FAIL: inventory nie ma grupy 'app'")
-        return 1
-    if CONTRACT not in ("degraded", "clean"):
-        print(f"FAIL: APP_QUORUM_ERROR_CONTRACT={CONTRACT!r} (dozwolone: degraded, clean)")
-        return 1
-
-    failures = []
-    ok, out = app_write()
-    if not ok:
-        print(f"FAIL: aplikacja nie zapisuje JUZ PRZED awaria: {out[:200]}")
-        return 1
-
-    stopped_ok = []
-    try:
-        for host in STOPPED:
-            # KOLEJNOSC MA ZNACZENIE: najpierw odbierz systemd prawo wskrzeszenia,
-            # dopiero potem zabij. Jednostka MariaDB ma Restart=on-abnormal, a
-            # systemd.service(5) mowi wprost, ze ta polityka restartuje usluge
-            # "when the process is terminated by a signal (...) excluding
-            # SIGHUP, SIGINT, SIGTERM, SIGPIPE" — SIGKILL nie jest wykluczony,
-            # wiec wezel wstawal sam. Zmierzone na v10: NRestarts=2 i 3, klaster
-            # z powrotem Primary, zanim sonda zdazyla zobaczyc utrate kworum.
-            # Na v9 ta sama sonda przeszla, bo wyscig wygrala detekcja Galery —
-            # czyli test byl NIEDETERMINISTYCZNY, a nie poprawny.
-            #
-            # Zdejmujemy wylacznie zmartwychwstanie; sposob smierci zostaje
-            # nagly (SIGKILL, bez pozegnania do klastra).
-            sh(host, f"mkdir -p {DROPIN_DIR} && printf '[Service]\\nRestart=no\\n' > {DROPIN} "
-                     f"&& systemctl daemon-reload && echo armed", timeout=120)
-            sh(host, "pkill -9 -x mariadbd; echo killed", timeout=180)
-            stopped_ok.append(host)
-
-        # Poprzednia wersja ufala, ze `pkill` zadzialal — a `pkill ...; echo killed`
-        # zawsze konczy sie rc=0, wiec brak dopasowania procesu przechodzil cicho.
-        still_alive = [h for h in stopped_ok
-                       if sh(h, "pgrep -x mariadbd >/dev/null && echo ALIVE || echo DEAD")[1] != "DEAD"]
-        if still_alive:
-            print(f"FAIL: mariadbd nadal zyje na {still_alive} mimo SIGKILL — "
-                  f"test nie wytworzyl awarii, wynik odrzucony")
-            return 1
-        print(f"zabito {stopped_ok} (bez wskrzeszenia przez systemd); zostal {SURVIVOR}")
-
-        # Provider potrzebuje chwili, zeby stwierdzic utrate kworum.
-        deadline = time.time() + 120
-        status = "?"
-        while time.time() < deadline:
-            status = cluster_size(SURVIVOR)
-            if status == "non-Primary":
-                break
-            time.sleep(3)
-        print(f"{SURVIVOR}: wsrep_cluster_status={status}")
-        if status != "non-Primary":
-            # BRAMA POPRAWNOSCI POMIARU, nie asercja produktu. Bez utraty kworum
-            # dalsze warunki nie znacza nic: zapis MA przechodzic, a brak bledu
-            # nie jest defektem. Pierwsza wersja tej sondy gasila wezly przez
-            # `systemctl stop`, czyli LAGODNIE — Galera przelicza wtedy sklad i
-            # ocalaly zostaje Primary. Zmierzone: status=Primary, po czym trzy
-            # asercje bezpieczenstwa zapalily sie jako falszywe alarmy.
-            print(
-                f"FAIL: nie udalo sie doprowadzic do utraty kworum (status={status}); "
-                f"test nie zmierzyl tego, co mial zmierzyc — wynik odrzucony"
-            )
-            return 1
-
-        app_ok, app_err = app_write()
-        node_ok, node_err = node_write_direct(SURVIVOR)
-
-        # 1. BEZPIECZENSTWO — nadrzedne nad wszystkim innym.
-        if app_ok:
-            failures.append(
-                "aplikacja ZAPISALA przez VIP mimo utraty kworum — utrata danych (ISC-30)")
-        if node_ok:
-            failures.append(
-                f"{SURVIVOR} przyjal zapis bez kworum — naruszenie Primary Component")
-
-        # 2. DIAGNOZOWALNOSC.
-        app_code = re.search(r"ERROR (\d+)", app_err)
-        node_code = re.search(r"ERROR (\d+)", node_err)
-        app_code = app_code.group(1) if app_code else "brak"
-        node_code = node_code.group(1) if node_code else "brak"
-        print(f"aplikacja przez VIP -> ERROR {app_code}; wezel bezposrednio -> ERROR {node_code}")
-
-        # Bledy protokolu klienta: 2026/2027 mowia "cos zjadlo pakiet", nie "baza
-        # odmowila" — pula polaczen nie odrozni tego od awarii sieci.
-        protocol_error = app_code in ("2026", "2027")
-        if CONTRACT == "clean" and protocol_error:
-            failures.append(
-                f"aplikacja dostala blad protokolu ERROR {app_code} zamiast bledu bazy "
-                f"(oczekiwano 1047/08S01 jak przy polaczeniu bezposrednim): {app_err[:160]}"
-            )
-        if CONTRACT == "degraded" and not protocol_error:
-            failures.append(
-                f"aplikacja dostala ERROR {app_code}, a sonda spodziewa sie znanego "
-                f"zlamania (bledu protokolu). Jesli routing ProxySQL zostal naprawiony, "
-                f"ustaw APP_QUORUM_ERROR_CONTRACT=clean i egzekwuj kontrakt."
-            )
-
-    finally:
-        # Sprzatanie MUSI dojsc do konca dla KAZDEGO hosta. Poprzednia wersja
-        # robila blokujacy `systemctl start`, ktory przy niepelnym skladzie czeka
-        # na uformowanie Primary Component; timeout wywalal wyjatek w polowie
-        # petli i kolejny wezel zostawal z Restart=no na stale. Zmierzone na v10.
-        for host in stopped_ok:
-            try:
-                # Najpierw oddaj polityke restartu sprzed testu, potem startuj.
-                sh(host, f"rm -f {DROPIN} && systemctl daemon-reload && echo disarmed", timeout=120)
-                # --no-block: systemctl(1) "it is only verified and enqueued".
-                # Start wezla Galera czeka na grupe, wiec synchroniczny start
-                # zakleszcza sie z brama powrotu ponizej — ona i tak sprawdza
-                # efekt (Primary + udany zapis), wiec czekanie tutaj nic nie wnosi.
-                sh(host, "systemctl start --no-block mariadb", timeout=120)
-            except subprocess.TimeoutExpired:
-                print(f"UWAGA: sprzatanie {host} przekroczylo limit; kontynuuje pozostale")
-        # Powrot wezlow to IST; brama ponizej i tak czeka na pelny sklad.
-        time.sleep(20)
-
-    # 3. POWROT bez interwencji.
-    recovered = False
-    deadline = time.time() + 180
-    while time.time() < deadline:
-        if cluster_size(SURVIVOR) == "Primary":
-            ok, out = app_write()
-            if ok:
-                recovered = True
-                break
-        time.sleep(5)
-    if not recovered:
-        failures.append("aplikacja NIE wrocila do dzialania po przywroceniu wezlow")
-
-    if failures:
-        print("FAIL: kontrakt aplikacji w awarii naruszony:")
-        for f in failures:
-            print(f"  - {f}")
-        return 1
-
-    print(
-        f"PASS: przy utracie kworum aplikacja nie zapisala (bezpieczenstwo OK), "
-        f"dostala ERROR {app_code} przez VIP wobec ERROR {node_code} bezposrednio "
-        f"[kontrakt: {CONTRACT}], i wrocila do dzialania po przywroceniu wezlow"
+    guard_errors = validate_target(
+        CLUSTER_NAME,
+        CONFIG_PATH,
+        INVENTORY,
+        GALERA,
+        PROXYSQL_HOSTS,
+        [APP_HOST] if APP_HOST else [],
     )
-    return 0
+    if not APP_PW:
+        guard_errors.append("APP_DB_PASSWORD is missing")
+    if guard_errors:
+        for error in guard_errors:
+            print(f"REFUSED: {error}")
+        return 1
+
+    record = new_record()
+    record["acceptance"]["target_guard"] = True
+    copy_attempted = False
+    try:
+        copy_attempted = True
+        install_app_profile()
+        record = run_measurement(record)
+    except (EvidenceError, OSError, subprocess.TimeoutExpired) as exc:
+        record["errors"].append(f"credential/setup: {exc}")
+    except Exception as exc:  # noqa: BLE001 — zachowaj artifact po nieoczekiwanym bledzie.
+        record["errors"].append(f"unexpected setup/measurement error {type(exc).__name__}: {exc}")
+    except BaseException as exc:
+        record["errors"].append(f"main interrupted by {type(exc).__name__}: {exc}")
+    finally:
+        credential_cleanup = remove_app_profile() if copy_attempted else {"absent": True, "history": []}
+        record["cleanup"]["credential_profile_absent"] = credential_cleanup["absent"]
+        record["cleanup"]["credential_history"] = credential_cleanup["history"]
+        record["acceptance"]["credential_profile_absent"] = credential_cleanup["absent"]
+        if not credential_cleanup["absent"]:
+            record["errors"].append(f"credential profile remains or is unknown on {APP_HOST}")
+
+    artifact = write_artifact(record)  # after credential absence verification
+    local_failures = acceptance_failures(record, final=False)
+    if local_failures:
+        print(f"FAIL: {local_failures}")
+        exit_code = 1
+    elif not record["contract"]["match"]:
+        print(f"CONTRACT_MISMATCH: expected {CONTRACT}, observed {record['outcome']}")
+        exit_code = 3
+    else:
+        print(f"PASS: locally accepted {record['outcome']} measurement")
+        exit_code = 0
+    print(f"ARTEFAKT: {artifact}")  # final output line, exact current path
+    return exit_code
 
 
 if __name__ == "__main__":
