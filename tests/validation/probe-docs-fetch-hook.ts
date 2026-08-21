@@ -63,6 +63,9 @@ const MUST_ALLOW: Record<string, string> = {
     `curl -sL https://docs.percona.com/percona-monitoring-and-management/3/api/swagger.json`,
   "sciezka API pod hostem sklasyfikowanym jako dokumentacja":
     `curl -s "https://mariadb.com/rest-api/mariadb/11.4/"`,
+  "techniczny indeks llms.txt jest danymi maszynowymi do discovery":
+    `curl -sL https://mariadb.com/docs/llms.txt`,
+
 };
 
 let failures = 0;
@@ -82,6 +85,21 @@ for (const [label, command] of Object.entries(MUST_ALLOW)) {
     failures++;
   }
 }
+const mariadbBlocked = inspectCommand(
+  `curl -sL https://mariadb.com/docs/galera-cluster/reference/galera-cluster-system-variables`,
+);
+if (
+  !mariadbBlocked.block ||
+  !mariadbBlocked.reason?.includes("https://mariadb.com/docs/llms.txt") ||
+  !mariadbBlocked.reason?.includes("cytuj tresc wskazanej strony")
+) {
+  console.log(
+    "FAIL: blokada dokumentacji MariaDB nie wskazuje technicznego indeksu llms.txt " +
+      "jako resolvera (indeks nie jest sam zrodlem cytatu)",
+  );
+  failures++;
+}
+
 
 const total = Object.keys(MUST_BLOCK).length + Object.keys(MUST_ALLOW).length;
 if (failures > 0) {
