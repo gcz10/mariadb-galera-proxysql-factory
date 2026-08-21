@@ -78,6 +78,16 @@ class SafeRunnerTests(unittest.TestCase):
         self.assertIsNone(result["rc"])
         self.assertIn("timeout", result["error"])
 
+    def test_oserror_becomes_structured_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        with patch.object(subprocess, "run", side_effect=FileNotFoundError("ansible")):
+            result = ns["safe_sh"]("n16g1", "true", timeout=1)
+        self.assertFalse(result["ok"])
+        self.assertIsNone(result["rc"])
+        self.assertEqual(result["output"], "")
+        self.assertIn("FileNotFoundError", result["error"])
+
 
 class SecretTransportTests(unittest.TestCase):
     def test_app_write_uses_profile_not_password_or_setup(self):
@@ -132,6 +142,22 @@ class StructuredCollectorTests(unittest.TestCase):
         with patch.dict(ns["log_delta"].__globals__, {"safe_sh": lambda *args, **kwargs: next(outputs)}):
             with self.assertRaises(ns["EvidenceError"]):
                 ns["log_delta"]("fcp1", {"inode": 111, "size": 100})
+
+    def test_vip_holder_fails_closed_when_one_probe_errors(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        vip = ns["VIP"]
+
+        def fake_safe_sh(host, script, timeout=120):
+            if host == "fcp1":
+                return {"ok": True, "rc": 0,
+                        "output": f"eth0   UP   192.0.2.11/24 {vip}/32", "error": ""}
+            return {"ok": False, "rc": None, "output": "", "error": "FileNotFoundError: ansible"}
+
+        with patch.dict(ns["vip_holder"].__globals__, {"safe_sh": fake_safe_sh}):
+            with self.assertRaises(ns["EvidenceError"]) as ctx:
+                ns["vip_holder"]()
+        self.assertIn("fcp2", str(ctx.exception))
 
 
 if __name__ == "__main__":

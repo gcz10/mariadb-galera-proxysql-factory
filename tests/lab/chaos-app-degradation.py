@@ -189,6 +189,8 @@ def safe_sh(host, script, timeout=120):
         rc, output = sh(host, script, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         return {"ok": False, "rc": None, "output": "", "error": f"timeout after {exc.timeout}s"}
+    except Exception as exc:
+        return {"ok": False, "rc": None, "output": "", "error": f"{type(exc).__name__}: {exc}"}
     return {
         "ok": rc == 0,
         "rc": rc,
@@ -294,10 +296,11 @@ def os_version(host):
 def vip_holder():
     holders = []
     for host in PROXYSQL_HOSTS:
-        result = safe_sh(host, f"ip -br addr show | grep -q '{VIP}/' && echo HOLDER || echo NO", timeout=30)
+        result = safe_sh(host, "ip -br -4 addr show 2>&1", timeout=30)
         if not result["ok"]:
             raise EvidenceError(f"VIP probe failed on {host}: {result['error']}")
-        if result["output"] == "HOLDER":
+        # Check if VIP with CIDR mask prefix (e.g. "192.168.1.133/") is present in ip addr output
+        if f"{VIP}/" in result["output"]:
             holders.append(host)
     if len(holders) != 1:
         raise EvidenceError(f"expected exactly one VIP holder, got {holders}")
