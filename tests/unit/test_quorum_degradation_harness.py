@@ -1,3 +1,4 @@
+import json
 import os
 import runpy
 import subprocess
@@ -8,7 +9,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import yaml
-
 REPO = Path(__file__).resolve().parents[2]
 PROBE = REPO / "tests" / "lab" / "chaos-app-degradation.py"
 
@@ -233,6 +233,158 @@ class MutationLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ns = load_probe(Path(td))
         self.assertEqual(tuple(ns["STOPPED"]), ("n16g2", "n16g3"))
+
+class RecordAndArtifactTests(unittest.TestCase):
+    def test_new_record_initializes_all_local_acceptance_flags_to_false(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        record = ns["new_record"]()
+        self.assertEqual(record["run_id"], ns["RUN_ID"])
+        self.assertEqual(record["cluster"], ns["CLUSTER_NAME"])
+        self.assertEqual(record["outcome"], ns["OUTCOME_UNRESOLVED"])
+        self.assertFalse(record["contract"]["match"])
+        self.assertEqual(record["errors"], [])
+        for name in ns["LOCAL_ACCEPTANCE"]:
+            self.assertIn(name, record["acceptance"])
+            self.assertIs(record["acceptance"][name], False)
+        self.assertIsNone(record["acceptance"]["platform_verify"])
+        self.assertIsNone(record["acceptance"]["post_build_gate"])
+        self.assertIs(record["cleanup"]["credential_profile_absent"], False)
+
+    def test_write_artifact_is_mode_0600_from_creation(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+            record = ns["new_record"]()
+            record["test_field"] = "sample_data"
+            dest = Path(td) / "test-evidence.json"
+            with patch.dict(ns["write_artifact"].__globals__, {
+                "Path": lambda p: dest,
+            }):
+                written = ns["write_artifact"](record)
+            self.assertEqual(written, dest)
+            self.assertTrue(dest.exists())
+            mode = os.stat(dest).st_mode & 0o777
+            self.assertEqual(mode, 0o600)
+            loaded = json.loads(dest.read_text(encoding="utf-8"))
+            self.assertEqual(loaded["test_field"], "sample_data")
+            self.assertEqual(loaded["run_id"], ns["RUN_ID"])
+
+    def test_write_artifact_cleans_up_temp_file_on_write_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+            dest = Path(td) / "test-evidence.json"
+            created_tmps = []
+            orig_mkstemp = tempfile.mkstemp
+
+            def tracking_mkstemp(*args, **kwargs):
+                fd, path = orig_mkstemp(*args, **kwargs)
+                created_tmps.append(path)
+                return fd, path
+
+            with patch.dict(ns["write_artifact"].__globals__, {
+                "Path": lambda p: dest,
+                "tempfile": type("TempModule", (), {"mkstemp": staticmethod(tracking_mkstemp)})(),
+                "json": type("JsonModule", (), {"dumps": lambda *a, **kw: (_ for _ in ()).throw(ValueError("boom"))})(),
+            }):
+                with self.assertRaises(ValueError):
+                    ns["write_artifact"]({})
+            self.assertEqual(len(created_tmps), 1)
+            self.assertFalse(os.path.exists(created_tmps[0]))
+            self.assertFalse(dest.exists())
+
+
+class OrchestrationTests(unittest.TestCase):
+    def test_run_measurement_baseline_failure_stops_before_arming(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        arm_calls = []
+
+        def fake_collect_versions():
+            raise ns["EvidenceError"]("mocked baseline failure")
+
+        def fake_arm(host, run=None):
+            arm_calls.append(host)
+            return True
+
+        with patch.dict(ns["run_measurement"].__globals__, {
+            "collect_versions": fake_collect_versions,
+            "arm_node": fake_arm,
+        }):
+            rec = ns["new_record"]()
+            result_rec = ns["run_measurement"](rec)
+
+        self.assertEqual(arm_calls, [])
+        self.assertFalse(result_rec["acceptance"]["baseline_complete"])
+        self.assertTrue(any("baseline: mocked baseline failure" in err for err in result_rec["errors"]))
+
+    def test_main_fails_closed_and_records_errors_when_credential_removal_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        written_records = []
+
+        def fake_remove(attempts=3):
+            return {
+                "absent": False,
+                "history": [{"attempt": 1, "remove": {"ok": True}, "verify": {"ok": True, "output": "PRESENT"}}],
+            }
+
+        def fake_write_artifact(record):
+            written_records.append(record)
+            return Path("/tmp/fake-artifact.json")
+
+        def fake_run_measurement(record):
+            for k in ns["LOCAL_ACCEPTANCE"]:
+                record["acceptance"][k] = True
+            record["outcome"] = "degraded"
+            record["contract"] = {"expected": "degraded", "observed": "degraded", "match": True}
+            return record
+
+        with patch.dict(ns["main"].__globals__, {
+            "validate_target": lambda *a, **kw: [],
+            "install_app_profile": lambda: None,
+            "run_measurement": fake_run_measurement,
+            "remove_app_profile": fake_remove,
+            "write_artifact": fake_write_artifact,
+        }):
+            exit_code = ns["main"]()
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(written_records), 1)
+        rec = written_records[0]
+        self.assertFalse(rec["cleanup"]["credential_profile_absent"])
+        self.assertFalse(rec["acceptance"]["credential_profile_absent"])
+        self.assertTrue(any("credential profile remains" in err for err in rec["errors"]))
+
+    def test_main_fails_closed_and_cleans_up_when_setup_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            ns = load_probe(Path(td))
+        written_records = []
+        cleanup_calls = []
+
+        def fake_install():
+            raise ns["EvidenceError"]("copy failed")
+
+        def fake_remove(attempts=3):
+            cleanup_calls.append(attempts)
+            return {"absent": True, "history": []}
+
+        def fake_write_artifact(record):
+            written_records.append(record)
+            return Path("/tmp/fake-artifact.json")
+
+        with patch.dict(ns["main"].__globals__, {
+            "validate_target": lambda *a, **kw: [],
+            "install_app_profile": fake_install,
+            "remove_app_profile": fake_remove,
+            "write_artifact": fake_write_artifact,
+        }):
+            exit_code = ns["main"]()
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(cleanup_calls), 1)
+        self.assertEqual(len(written_records), 1)
+        rec = written_records[0]
+        self.assertTrue(any("credential/setup: copy failed" in err for err in rec["errors"]))
 
 if __name__ == "__main__":
     unittest.main()

@@ -483,10 +483,23 @@ def new_record():
 
 def write_artifact(record):
     path = Path(f"/var/tmp/quorum-evidence-{EXPECTED_CLUSTER}-{RUN_ID}.json")
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(record, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, path)
+    fd, local_path = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f"quorum-evidence-{EXPECTED_CLUSTER}-{RUN_ID}-",
+        suffix=".tmp",
+        text=True,
+    )
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, indent=2, ensure_ascii=False, sort_keys=True))
+        os.replace(local_path, path)
+    finally:
+        if os.path.exists(local_path):
+            try:
+                os.unlink(local_path)
+            except OSError:
+                pass
     return path
 
 
