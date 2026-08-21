@@ -275,7 +275,14 @@
             group: "proxysql"
         status_code: 200
       loop: "{{ pmm_proxysql_hosts }}"
-      when: (pmm_cluster_name_effective ~ '-' ~ item ~ '-proxysql') not in (pmm_services.json.external | default([]) | map(attribute='service_name') | list)
+      # Host jest monitorowany ALBO natywnie (lokalny pmm-agent, typ `proxysql`),
+      # ALBO agentless (typ `external`) — nigdy oboma. Warunek patrzyl wylacznie
+      # na liste `external`, wiec po dolozeniu agenta na fcp1/fcp2 probowal
+      # utworzyc druga usluge o tej samej nazwie i dostawal HTTP 409.
+      when: >-
+        (pmm_cluster_name_effective ~ '-' ~ item ~ '-proxysql') not in
+        (((pmm_services.json.external | default([])) + (pmm_services.json.proxysql | default([])))
+         | map(attribute='service_name') | list)
       no_log: true
 
     - name: "Pobierz docelowy PMM service inventory"
@@ -327,11 +334,19 @@
             listen_port: "{{ proxysql_metrics_port }}"
         status_code: 200
       loop: "{{ pmm_proxysql_hosts }}"
-      when: pmm_proxysql_service_ids[pmm_cluster_name_effective ~ '-' ~ item ~ '-proxysql'] not in (pmm_agents.json.external_exporter | default([]) | selectattr('listen_port', 'equalto', proxysql_metrics_port) | map(attribute='service_id') | list)
+      # Ta sama zasada "albo/albo" co przy tworzeniu uslugi: host z lokalnym
+      # pmm-agentem ma usluge natywna typu `proxysql` i wlasny eksporter, wiec
+      # nie ma dla niego wpisu w `pmm_proxysql_service_ids` (mapa powstaje z
+      # listy `external`). Bez pierwszego warunku zadanie wywalalo sie na
+      # `'pmm_proxysql_service_ids' is undefined` zamiast po prostu pominac
+      # hosta juz monitorowanego natywnie.
+      when:
+        - (pmm_cluster_name_effective ~ '-' ~ item ~ '-proxysql') in (pmm_proxysql_service_ids | default({}))
+        - pmm_proxysql_service_ids[pmm_cluster_name_effective ~ '-' ~ item ~ '-proxysql'] not in (pmm_agents.json.external_exporter | default([]) | selectattr('listen_port', 'equalto', proxysql_metrics_port) | map(attribute='service_id') | list)
       no_log: true
 
     - name: "Raport ProxySQL metrics w PMM"
       ansible.builtin.debug:
         msg: >-
-          Zarejestrowano {{ pmm_proxysql_service_ids | length }} usług ProxySQL (external exporter,
+          Zarejestrowano {{ pmm_proxysql_service_ids | default({}) | length }} uslug ProxySQL (external exporter,
           port {{ proxysql_metrics_port }}) w PMM Inventory.

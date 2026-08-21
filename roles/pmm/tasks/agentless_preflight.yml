@@ -4,7 +4,7 @@
     that:
       - pmm_admin_password | length > 0
       - pmm_api_url is match('^https://')
-      - cluster.environment != 'production' or pmm_validate_certs_effective
+      - pmm_environment_effective != 'production' or pmm_validate_certs_effective
     fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium oraz użyj PMM URL z https://."
 
 - name: "Potwierdź uwierzytelnienie i dostępność PMM API"

@@ -22,7 +22,7 @@
         address: 127.0.0.1
         port: 6032
         cluster: "{{ monitoring.pmm.cluster_name }}"
-        environment: "{{ cluster.environment }}"
+        environment: "{{ pmm_environment_effective }}"
     status_code: [200, 409]
   loop: "{{ pmm_agent_hosts | select('in', groups.get('proxysql', [])) | list }}"
   register: pmm_new_proxysql
@@ -40,7 +40,7 @@
         address: 127.0.0.1
         port: 3306
         cluster: "{{ monitoring.pmm.cluster_name }}"
-        environment: "{{ cluster.environment }}"
+        environment: "{{ pmm_environment_effective }}"
     status_code: [200, 409]
   loop: "{{ pmm_agent_hosts | select('in', groups.get('galera', [])) | list }}"
   register: pmm_new_mysql
