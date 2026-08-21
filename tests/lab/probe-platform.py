@@ -27,6 +27,7 @@ import json
 import os
 import ssl
 import sys
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from _probe_common import ProbeContext, check, finish, require_hosts, run_ansible
@@ -45,7 +46,13 @@ def pmm_json(base_url: str, user: str, password: str, path: str):
         context.verify_mode = ssl.CERT_NONE
     with urlopen(request, context=context, timeout=10) as response:
         return json.load(response)
-SHARED_CA = "/etc/mysql/app/shared/proxysql-ca.pem"
+
+
+def pmm_query(base_url: str, user: str, password: str, expr: str):
+    """Zapytanie natychmiastowe do magazynu metryk PMM."""
+    payload = urlencode({"query": expr})
+    body = pmm_json(base_url, user, password, f"/prometheus/api/v1/query?{payload}")
+    return body.get("data", {}).get("result", [])
 
 
 def main() -> int:
@@ -93,7 +100,11 @@ def main() -> int:
         f"if ip -o -4 addr show dev {IFACE} | grep -q '{vip}/'; then echo VIP=1; else echo VIP=0; fi; "
         "if pgrep -x proxysql >/dev/null; then echo PROC=1; else echo PROC=0; fi; "
         "mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf -h127.0.0.1 -P6032 -uadmin -N -B "
-        "-e \"SELECT 'ADMIN=1'\" 2>/dev/null || echo ADMIN=0"
+        "-e \"SELECT 'ADMIN=1'\" 2>/dev/null || echo ADMIN=0; "
+        # Liczba najemcow rozstrzyga, czy `connection_pool` MA prawo nie istniec.
+        "echo GROUPS=$(mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf "
+        "-h127.0.0.1 -P6032 -uadmin -N -B "
+        "-e \"SELECT COUNT(*) FROM runtime_mysql_galera_hostgroups WHERE active=1\" 2>/dev/null || echo 0)"
     )
     raw = run_ansible(ctx, "proxysql", probe)
     require_hosts(raw, proxysql_hosts, "stan pary ProxySQL", failures, undetermined)
@@ -195,6 +206,60 @@ def main() -> int:
                 f"['{expected_name}'] — rejestracja spoza warstwy wspolnej "
                 f"dubluje metryki tej samej maszyny",
                 failures,
+            )
+
+    # ISC-46: metryki ProxySQL musza REALNIE plynac, nie tylko byc zarejestrowane.
+    #
+    # Ta asercja powstala, bo 2026-08-21 przez kilka godzin nikt jej nie mial:
+    # sonda najemcy oczekuje teraz `0 ProxySQL metric exporters` (wezly naleza do
+    # warstwy), a ta sonda sprawdzala wylacznie WPISY w PMM Inventory. Rejestracja
+    # istniala, metryki nie plynely, i jedynym objawem byla regula ISC-47 palaca
+    # sie po oknie oczekiwania — czyli gwarancja bez straznika.
+    metric_age_limit = int(os.environ.get("PLATFORM_METRIC_MAX_AGE", "120"))
+    try:
+        live = pmm_query(
+            pmm_url, "admin", ctx.env_secret("PMM_ADMIN_PASSWORD"),
+            "proxysql_up",
+        )
+        pool = pmm_query(
+            pmm_url, "admin", ctx.env_secret("PMM_ADMIN_PASSWORD"),
+            "time() - max(timestamp(proxysql_connection_pool_status))",
+        )
+    except Exception as exc:  # noqa: BLE001 - kazdy blad tu jest niezmierzeniem
+        undetermined.append(f"nie odpytano metryk PMM ({exc})")
+    else:
+        up_nodes = {
+            s.get("metric", {}).get("node_name"): s.get("value", [0, "0"])[1]
+            for s in live
+        }
+        for host in proxysql_hosts:
+            name = f"{expected_prefix}-{host}"
+            check(
+                up_nodes.get(name) == "1",
+                f"{name}: brak zywej metryki `proxysql_up` (jest: "
+                f"{up_nodes.get(name, 'ZADNEJ SERII')}) — eksporter nie raportuje, "
+                f"choc wezel jest zarejestrowany",
+                failures,
+            )
+        # `connection_pool` powstaje dopiero, gdy jakis najemca ma backendy —
+        # przy zerze najemcow jego brak jest poprawny, dokladnie jak w bramce
+        # `check_proxysql.sh`. Od tej metryki zalezy regula ISC-47 "no writer".
+        tenants_present = any(
+            (v.get("GROUPS", "0") or "0").isdigit() and int(v["GROUPS"]) > 0
+            for v in state.values()
+        )
+        if tenants_present:
+            age = float(pool[0]["value"][1]) if pool else None
+            check(
+                age is not None and age <= metric_age_limit,
+                f"metryka `proxysql_connection_pool_status` "
+                f"{'ma ' + str(round(age)) + ' s' if age is not None else 'NIE ISTNIEJE'} "
+                f"(limit {metric_age_limit} s) — regula ISC-47 stracilaby zrodlo prawdy",
+                failures,
+            )
+        else:
+            undetermined.append(
+                "brak najemcow — `proxysql_connection_pool_status` slusznie nie istnieje"
             )
 
     summary = (

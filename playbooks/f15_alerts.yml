@@ -75,6 +75,20 @@
         summary: "Galera cluster size dropped below {{ galera.nodes_expected }} (node/writer lost) or metrics missing"
         severity: "critical"
         noDataState: "Alerting"
+      - uid: "isa-{{ cluster_label }}-node-silent"
+        title: "Galera node registered in PMM but reporting no metrics"
+        # Uzupelnia `node-loss`, ktory czyta WLASNY widok Galery: gdy wezel
+        # oslepnie monitoringowo, pozostale nadal raportuja pelny
+        # `wsrep_cluster_size`, wiec `min` sie nie zmienia i alert nie strzela.
+        # Zmierzone 2026-08-21 na n16g3: pmm-agent `active`+`enabled`, ale
+        # `Connected:false` i zero eksporterow przez ~16 minut. Tutaj liczymy
+        # wezly, ktore REALNIE oddaly probke.
+        expr: "(count(count by (node_name) (node_boot_time_seconds{cluster=\"{{ cluster_label }}\"})) or vector(0)) < bool {{ galera.nodes_expected }}"
+        summary: >-
+          Mniej niz {{ galera.nodes_expected }} wezlow Galery oddaje metryki do PMM.
+          Baza moze byc zdrowa, a wezel niewidoczny dla monitoringu — sprawdz `pmm-admin status`.
+        severity: "critical"
+        noDataState: "Alerting"
       - uid: "isa-{{ cluster_label }}-quorum-loss"
         title: "Galera quorum loss (not Primary)"
         expr: "(max(mysql_global_status_wsrep_cluster_status{cluster=\"{{ cluster_label }}\"}) or vector(0)) != bool 1"
@@ -194,6 +208,25 @@
         summary: >-
           Zdrowych instancji ProxySQL mniej niz {{ proxysql.nodes_expected }} —
           endpoint dziala, ale stracil redundancje. Kolejna awaria zdejmie VIP bez zapasu.
+        severity: "critical"
+        noDataState: "Alerting"
+
+      - uid: "isa-shared-node-silent"
+        title: "Node registered in PMM but reporting no metrics"
+        # Wykrywa DOKLADNIE stan zmierzony 2026-08-21 na n16g3 po twardej utracie
+        # maszyny: `systemctl is-active pmm-agent` = active, `is-enabled` = enabled,
+        # a `pmm-admin status` = Connected:false i ZERO eksporterow. Wezel milczal
+        # ~16 minut, monitoring go nie widzial, a zaden istniejacy alert nie mogl
+        # tego zlapac: `node-loss` czyta `wsrep_cluster_size`, czyli WLASNY widok
+        # Galery — pozostale wezly nadal raportowaly size=3, wiec `min` = 3.
+        #
+        # Tu liczymy wezly, ktore REALNIE oddaly probke, a nie to, co mowi o sobie
+        # klaster. Zmierzona latencja wykrycia to ~5 min (staleness magazynu
+        # metryk), wiec `for` trzymamy krotkie — inaczej okno slepoty rosnie.
+        expr: "(count(count by (node_name) (node_boot_time_seconds{cluster=\"{{ cluster_label }}\"})) or vector(0)) < bool {{ proxysql.nodes_expected }}"
+        summary: >-
+          Mniej niz {{ proxysql.nodes_expected }} wezlow warstwy wspolnej oddaje metryki.
+          Wezel moze byc zarejestrowany i miec dzialajaca usluge pmm-agent, a mimo to nie raportowac.
         severity: "critical"
         noDataState: "Alerting"
 
