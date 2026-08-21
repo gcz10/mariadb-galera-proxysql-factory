@@ -100,6 +100,12 @@ make lab-failover-test CLUSTER=lab-cluster      # ISC-27/28: kill writera, brak 
 make lab-split-brain-test CLUSTER=lab-cluster   # ISC-30: partycja sieci, jeden Primary
 make verify-no-mass-restart                     # ISC-31: brak masowego restartu Galery
 
+# P2: jeden destrukcyjny pomiar utraty kworum na przypietym newclaude16-r9.
+# APP_DB_PASSWORD musi byc wyeksportowane; run ID generuje operator:
+# run_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+# QUORUM_RUN_ID="$run_id" make lab-app-degradation-test CLUSTER=newclaude16-r9 CONFIRM=yes
+# Artefakt: /var/tmp/quorum-evidence-newclaude16-r9-${run_id}.json
+
 # F10 — konfiguracja schedulera, ręczny backup i potwierdzany restore
 make cluster-backup-configure CLUSTER=lab-cluster
 make cluster-backup CLUSTER=lab-cluster                  # ISC-32/33/34/35

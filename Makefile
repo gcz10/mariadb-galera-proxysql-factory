@@ -369,9 +369,16 @@ lab-app-bench:  ## Zmierz przepustowosc z hosta `app` (direct vs VIP, TLS vs pla
 # Sondy stanu ustalonego mowia, ze wszystko dziala, dopoki wszystko dziala.
 # Ta sprawdza, co aplikacja widzi przy utracie kworum: czy zapis zostaje
 # odrzucony (bezpieczenstwo) i czy blad da sie odroznic od awarii sieci.
-lab-app-degradation-test:  ## Zachowanie aplikacji przy utracie kworum (lab-only, destrukcyjny)
+lab-app-degradation-test:  ## P2 quorum loss (TYLKO newclaude16-r9, destrukcyjny; CONFIRM=yes)
+	$(cluster_guard)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
-	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" tests/lab/chaos-app-degradation.py
+	@: "$${QUORUM_RUN_ID:?Ustaw unikalny QUORUM_RUN_ID (32 hex)}"
+	@test "$(CLUSTER)" = "newclaude16-r9" || (echo "P2 jest przypiety do CLUSTER=newclaude16-r9"; exit 1)
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (SIGKILL na n16g2/n16g3)"; exit 1)
+	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" \
+	  QUORUM_RUN_ID="$${QUORUM_RUN_ID}" \
+	  APP_QUORUM_ERROR_CONTRACT="$${APP_QUORUM_ERROR_CONTRACT:-degraded}" \
+	  tests/lab/chaos-app-degradation.py
 
 # Caly pozostaly chaos celuje w Galere. Ta sprawdza WARSTWE POSREDNIA — ta, przez
 # ktora aplikacja faktycznie chodzi. Tryb `service` (domyslny) zabija sam proces
