@@ -25,12 +25,16 @@ obecną i przyszłą.
 
 | Host | VMID | IP | Rola | vCPU | RAM |
 |---|---:|---|---|---:|---:|
-| `fcinfra` | 9400 | 192.168.1.130 | PMM 3.8.1 + MinIO + maildev | 4 | 5120 MB |
+| `fcinfra` | 9400 | 192.168.1.130 | PMM 3.9.0 + MinIO + maildev | 4 | 5120 MB |
 | `fcp1` | 9401 | 192.168.1.131 | ProxySQL — **trzyma VIP** | 1 | 3072 MB |
 | `fcp2` | 9402 | 192.168.1.132 | ProxySQL — BACKUP | 1 | 3072 MB |
 | — | — | **192.168.1.133:6033** | VIP Keepalived — wspólny endpoint | — | — |
+| `fcapp` | 9403 | 192.168.1.134 | host aplikacyjny (klient, sondy z perspektywy aplikacji) | 2 | 3072 MB |
 
-### `finalclaude-r10` — Rocky 10, owner warstwy wspólnej
+Cyklem życia tych hostów zarządza **wyłącznie** `make platform-*`
+(`platform/shared/`). Żaden klaster nie jest ich właścicielem — patrz niżej.
+
+### `finalclaude-r10` — Rocky 10, najemca warstwy wspólnej
 
 MariaDB 11.4.12 (`el10`), `wsrep_cluster_name: fc10_galera`, `tls=disabled`.
 Hostgroupy ProxySQL **10/20/30/40**, użytkownik `app_user`.
@@ -42,31 +46,21 @@ Hostgroupy ProxySQL **10/20/30/40**, użytkownik `app_user`.
 | `f10g3` | 9412 | .142 | galera | 3072 MB |
 | `f10r1` | 9413 | .143 | restore (własny) | 2560 MB |
 
-### `finalclaude-r9` — Rocky 9, konsument warstwy wspólnej
+### `newclaude16-r9` — Rocky 9, najemca warstwy wspólnej
 
-MariaDB 11.4.12 (`el9`), `wsrep_cluster_name: fc9_galera`.
-**Korekta 2026-08-05:** replikacja Galera jest szyfrowana — `tls.mode: full`
-(commit `607871d`), a nie `disabled` jak w zdjeciu z 2026-08-02 powyzej.
-Szczegoly w `docs/records/2026-08-02-session-handoff.md`.
-
-**Aktualizacja 2026-08-15 — runda 3 TLS wykonana (PR #11).** Zdjety
-`socket.dynamic`, czyli fallback dopuszczajacy nieszyfrowana replikacje; wlaczone
-`[sst] encrypt=3`. Runtime na 3/3 wezlach: `socket.ssl = YES`, brak
-`socket.dynamic`. Szyfrowanie SST **zweryfikowane wymuszonym pelnym SST**, nie
-tylko konfiguracja — log dawcy pokazuje strumien przez
-`socat openssl-connect ... cert=/etc/mysql/tls/server-cert.pem`. Aktywacja poszla
-rolling (`serial: 1`), klaster nie zszedl ponizej `size=3`.
-`require_secure_transport` pozostaje `false` **swiadomie**: ProxySQL siega
-backendow z `use_ssl=0`, a `mysqld_exporter` i QAN ida TCP na `127.0.0.1:3306`.
-
-Hostgroupy ProxySQL **110/120/130/140**, użytkownik `app_user_fc9`.
+MariaDB 11.4.12 (`el9`), `wsrep_cluster_name: n16_galera`, **`tls.mode: full`**
+(replikacja Galera i SST szyfrowane, certy per węzeł ze wspólnego CA klastra).
+Hostgroupy ProxySQL **810/820/830/840**, użytkownik `app_user_n16`.
 
 | Host | VMID | IP | Rola | RAM |
 |---|---:|---|---|---:|
-| `f9g1` | 9420 | .150 | galera + scheduler backupu | 3072 MB |
-| `f9g2` | 9421 | .151 | galera | 3072 MB |
-| `f9g3` | 9422 | .152 | galera | 3072 MB |
-| `f9r1` | 9423 | .153 | restore (własny) | 2560 MB |
+| `n16g1` | 9550 | .172 | galera + scheduler backupu | 3072 MB |
+| `n16g2` | 9551 | .173 | galera | 3072 MB |
+| `n16g3` | 9552 | .174 | galera | 3072 MB |
+| `n16r1` | 9553 | .175 | restore (własny) | 2560 MB |
+
+Poprzednicy (`finalclaude-r9`, `newclaude8-r9` … `newclaude15-r9`) zostali
+zniszczeni po zamknięciu swoich cykli — historia w `docs/records/`.
 
 ## Jak działa jedna para ProxySQL dla dwóch klastrów
 
@@ -75,11 +69,12 @@ w tabelach **globalnych**, więc klastry rozdziela wyłącznie rozłączność
 identyfikatorów:
 
 ```
-runtime_mysql_servers (ONLINE):
-  hostgroup 10  -> 1   writer  fc10        hostgroup 110 -> 1   writer  fc9
-  hostgroup 20  -> 2   backup  fc10        hostgroup 120 -> 2   backup  fc9
+mysql_galera_hostgroups (odczyt z zywego fcp1, 2026-08-21):
+  writer / backup / reader / offline
+     10  /   20   /   30   /   40    -> finalclaude-r10
+    810  /  820   /  830   /  840    -> newclaude16-r9
 
-mysql_users:  app_user -> hg 10       app_user_fc9 -> hg 110
+mysql_users:  app_user -> hg 10       app_user_n16 -> hg 810
 ```
 
 Rozdział idzie **po użytkowniku, nie po porcie** — oba klastry współdzielą
@@ -100,17 +95,20 @@ infrastrukturze, której nikt nie może zaktualizować ani odtworzyć. Pole
 węzłów bazy — `tests/validation/validate-platform.py` (offline) oraz
 `tests/lab/probe-platform.py` (na żywym hoście).
 
-## Dowody z żywej instalacji
+## Dowody z żywej instalacji — 2026-08-21
 
 | Sprawdzenie | Wynik |
 |---|---|
-| Galera fc10 / fc9 | `Primary`, `size=3`, `wsrep_ready=ON` — oba |
-| Zapis przez VIP | `app_user` → `fc10_galera`, `app_user_fc9` → `fc9_galera` |
+| Galera fc10 / n16 | `Primary`, `size=3`, `wsrep_ready=ON` — oba |
+| Zapis przez VIP | `app_user` → `fc10_galera`, `app_user_n16` → `n16_galera` |
 | VIP | wyłącznie na `fcp1` |
-| Backup | `galera-finalclaude-r10-*` i `galera-finalclaude-r9-*`, zaszyfrowane, sha256 OK |
-| Drill restore | oba `success`, 1 baza / 1 tabela / 1 wiersz |
-| PMM | owner: 5 węzłów + 2 eksportery ProxySQL; konsument: 3 węzły, 0 |
-| Reguły alertowe | 8 na klaster, namespace `isa-fc10-*` / `isa-fc9-*` |
+| Backup | `galera-newclaude16-r9-*` off-cluster w S3, `aes-256-cbc`, sha256 OK |
+| Drill restore | `success` na izolowanym `n16r1`, 1 wiersz zweryfikowany |
+| PMM | warstwa: `shared-fcp1/2` + 2 eksportery ProxySQL; każdy najemca: 3 węzły, 0 |
+| Jeden węzeł PMM na adres | PASS — `probe-platform.py` (sieroty po byłym ownerze przejęte) |
+| Reguły alertowe | najemca: `isa-<klaster>-*`; warstwa: `isa-shared-*`, rozłączne |
+| Odporność n16 | failover miękki 6,0 s / twardy 0,0 s, 0 utraconych tx; rejoin przez IST po `ssl://`; utrata kworum bez split-brain; cold recovery 3/3 |
+| Rotacja TLS pod obciążeniem | 2893/2893 commitów, max przerwa 0,06 s, 3/3 węzły serwują nowe certy |
 
 ### Dolozone 2026-08-15
 
@@ -154,12 +152,14 @@ skasowania.
 qm list | sort -k1 -n
 pvesh get /pools/claude-isa --output-format json
 
-for c in finalclaude-r10 finalclaude-r9; do
+make platform-verify
+
+for c in finalclaude-r10 newclaude16-r9; do
   make cluster-health CLUSTER=$c
   make lab-monitoring-verify CLUSTER=$c
 done
 
-ansible fcp1 -i clusters/finalclaude-r10/inventory.yml -m shell -a \
+ansible fcp1 -i platform/shared/inventory.yml -m shell -a \
   'mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf -h127.0.0.1 -P6032 -uadmin -N -B \
    -e "SELECT hostgroup_id, COUNT(*) FROM runtime_mysql_servers WHERE status=\"ONLINE\" GROUP BY 1"'
 ```
