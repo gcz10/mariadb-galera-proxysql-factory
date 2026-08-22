@@ -13,7 +13,7 @@
         lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test lab-failover-hard-test cluster-tls-rotate \
         cluster-app-host lab-app-verify lab-app-bench lab-app-degradation-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
-        lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
+        lab-hardening-verify lab-monitoring-verify lab-pmm-preflight-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify \
@@ -483,6 +483,10 @@ cluster-monitoring-refresh:  ## F11 — odśwież metryki świeżości (po backu
 lab-monitoring-verify:  ## Zweryfikuj natywne PMM Inventory i metryki laboratorium
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
+
+lab-pmm-preflight-verify:  ## F11 — sonda: preflight odrzuca runtime PMM spoza lockfile (lab-cluster)
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" bash tests/lab/probe-pmm-version-preflight.sh
 
 cluster-rolling-restart:  ## F12 — rolling restart Galera serial:1 + brama zdrowia (ISC-50/51)
 	$(cluster_guard)

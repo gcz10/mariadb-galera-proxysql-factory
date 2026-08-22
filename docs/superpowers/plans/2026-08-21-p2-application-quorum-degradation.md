@@ -68,7 +68,7 @@
 - Produces: `parse_client_error`, `classify_outcome`, `option_file_quote`, `parse_tsv`, `recovery_complete`, `proxy_log_proves_backend_error`, `acceptance_failures`, `render_record`, `render_issue_draft`.
 - Later tasks use the constants `OUTCOME_DEGRADED`, `OUTCOME_CLEAN`, `OUTCOME_UNRESOLVED`, `NO_ERROR`, `LOCAL_ACCEPTANCE`, and `FINAL_ACCEPTANCE` unchanged.
 
-- [ ] **Step 1: Write the failing unit contract**
+- [x] **Step 1: Write the failing unit contract**
 
 Create `tests/unit/test_quorum_evidence.py`:
 
@@ -226,12 +226,12 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run and prove red**
+- [x] **Step 2: Run and prove red**
 
 Run: `python3 -m unittest tests.unit.test_quorum_evidence -v`
 Expected: `ModuleNotFoundError: No module named '_quorum_evidence'`.
 
-- [ ] **Step 3: Implement the pure module**
+- [x] **Step 3: Implement the pure module**
 
 Create `tests/lab/_quorum_evidence.py`:
 
@@ -460,7 +460,7 @@ Issue #1596 is historical context for a backend 1047 reaching ProxySQL result ha
     return _symbolise(body, record)
 ```
 
-- [ ] **Step 4: Prove green and run the existing unit suite**
+- [x] **Step 4: Prove green and run the existing unit suite**
 
 Run:
 
@@ -472,7 +472,7 @@ python3 -m pyflakes tests/lab/_quorum_evidence.py tests/unit/test_quorum_evidenc
 
 Expected: all cases `ok`; no pyflakes output.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/lab/_quorum_evidence.py tests/unit/test_quorum_evidence.py
@@ -491,7 +491,7 @@ git commit -m "test(lab): define fail-closed quorum evidence contract"
 - Produces in the harness: `validate_target`, `safe_sh`, `install_app_profile`, `remove_app_profile`, `app_setup`, `app_write`, `collect_versions`, `runtime_snapshot`, `galera_state`, `log_mark`, `log_delta`, `monitor_row`.
 - `safe_sh` always returns `{ok, rc, output, error}` and never raises; mutation cleanup and recovery polling rely on that invariant.
 
-- [ ] **Step 1: Write failing wiring/collector tests**
+- [x] **Step 1: Write failing wiring/collector tests**
 
 Create `tests/unit/test_quorum_degradation_harness.py`:
 
@@ -636,12 +636,12 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run and prove red**
+- [x] **Step 2: Run and prove red**
 
 Run: `python3 -m unittest tests.unit.test_quorum_degradation_harness -v`
 Expected: failures for missing `validate_target`, `safe_sh`, `log_mark`, and `EvidenceError`.
 
-- [ ] **Step 3: Add imports, exact constants, and canonical guard**
+- [x] **Step 3: Add imports, exact constants, and canonical guard**
 
 In `tests/lab/chaos-app-degradation.py`, add `import datetime`, `import json`, `import tempfile`, `from pathlib import Path`, and this explicit Task 1 import:
 
@@ -714,7 +714,7 @@ def validate_target(cluster_name, config_path, inventory_path, galera_hosts, pro
     return errors
 ```
 
-- [ ] **Step 4: Replace exception-throwing remote calls with a structured safe runner**
+- [x] **Step 4: Replace exception-throwing remote calls with a structured safe runner**
 
 Keep existing `sh()` for parsing compatibility, then add:
 
@@ -739,7 +739,7 @@ def must_output(host, script, label, timeout=120):
     return result["output"]
 ```
 
-- [ ] **Step 5: Implement protected profile and app queries**
+- [x] **Step 5: Implement protected profile and app queries**
 
 ```python
 def install_app_profile():
@@ -798,7 +798,7 @@ def app_write():
     return app_query("INSERT INTO app_degradation () VALUES ()")
 ```
 
-- [ ] **Step 6: Implement structured state, version, runtime, monitor, and log collectors**
+- [x] **Step 6: Implement structured state, version, runtime, monitor, and log collectors**
 
 ```python
 def admin_rows(host, sql, columns):
@@ -932,7 +932,7 @@ def monitor_row(host, survivor_address):
     return row
 ```
 
-- [ ] **Step 7: Prove green and commit**
+- [x] **Step 7: Prove green and commit**
 
 Run:
 
@@ -961,7 +961,7 @@ git commit -m "feat(lab): add pinned target and structured quorum evidence colle
 - Produces: `arm_node`, `cleanup_nodes`, `new_record`, `run_measurement`, `write_artifact`, and a `main()` that writes the artifact only after credential removal verification.
 - `run_measurement(record)` never writes a file and never renders Markdown; it returns the updated record after local recovery checks.
 
-- [ ] **Step 1: Add failing fault-injection tests**
+- [x] **Step 1: Add failing fault-injection tests**
 
 Append to `tests/unit/test_quorum_degradation_harness.py`:
 
@@ -1041,12 +1041,12 @@ class MutationLifecycleTests(unittest.TestCase):
         self.assertEqual(tuple(ns["STOPPED"]), ("n16g2", "n16g3"))
 ```
 
-- [ ] **Step 2: Run and prove red**
+- [x] **Step 2: Run and prove red**
 
 Run: `python3 -m unittest tests.unit.test_quorum_degradation_harness.MutationLifecycleTests -v`
 Expected: missing `arm_node` and `cleanup_nodes` failures.
 
-- [ ] **Step 3: Implement checked arm and independent cleanup**
+- [x] **Step 3: Implement checked arm and independent cleanup**
 
 ```python
 def require_ok(result, label):
@@ -1099,7 +1099,7 @@ def cleanup_nodes(hosts, restart_before, run=safe_sh):
     return results
 ```
 
-- [ ] **Step 4: Add record construction and artifact writing**
+- [x] **Step 4: Add record construction and artifact writing**
 
 ```python
 def new_record():
@@ -1142,7 +1142,7 @@ def write_artifact(record):
     return path
 ```
 
-- [ ] **Step 5: Replace the old mutation body with a single recoverable lifecycle**
+- [x] **Step 5: Replace the old mutation body with a single recoverable lifecycle**
 
 Implement `run_measurement(record)` with this exact control flow; all remote readers use Task 2 collectors, which raise `EvidenceError`, while the `finally` block uses only non-raising `safe_sh` via `cleanup_nodes`:
 
@@ -1355,7 +1355,7 @@ def run_measurement(record):
     return record
 ```
 
-- [ ] **Step 6: Replace `main()` so artifact creation follows credential verification**
+- [x] **Step 6: Replace `main()` so artifact creation follows credential verification**
 
 ```python
 def main():
@@ -1412,7 +1412,7 @@ def main():
 
 The existing entrypoint remains `sys.exit(main())`. Remove every `render_record()` and `render_issue_draft()` call from the harness.
 
-- [ ] **Step 7: Prove fault handling and full unit green**
+- [x] **Step 7: Prove fault handling and full unit green**
 
 Run:
 
@@ -1425,7 +1425,7 @@ bash tests/validation/probe-no-secrets-leak.sh
 
 Expected: all tests `ok`; pyflakes silent; secret guard PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add tests/lab/chaos-app-degradation.py tests/unit/test_quorum_degradation_harness.py
@@ -1444,7 +1444,7 @@ git commit -m "fix(lab): make quorum mutation cleanup and recovery unconditional
 - Consumes: exported `APP_DB_PASSWORD`, `CLUSTER=newclaude16-r9`, `CONFIRM=yes`, and caller-generated `QUORUM_RUN_ID`.
 - Produces: unchanged target name and exact artifact naming contract.
 
-- [ ] **Step 1: Replace the Make target**
+- [x] **Step 1: Replace the Make target**
 
 ```makefile
 lab-app-degradation-test:  ## P2 quorum loss (TYLKO newclaude16-r9, destrukcyjny; CONFIRM=yes)
@@ -1459,7 +1459,7 @@ lab-app-degradation-test:  ## P2 quorum loss (TYLKO newclaude16-r9, destrukcyjny
 	  tests/lab/chaos-app-degradation.py
 ```
 
-- [ ] **Step 2: Add exact README invocation**
+- [x] **Step 2: Add exact README invocation**
 
 ```markdown
 # P2: jeden destrukcyjny pomiar utraty kworum na przypietym newclaude16-r9.
@@ -1470,7 +1470,7 @@ QUORUM_RUN_ID="$run_id" make lab-app-degradation-test \
 # Artefakt: /var/tmp/quorum-evidence-newclaude16-r9-${run_id}.json
 ```
 
-- [ ] **Step 3: Verify guards without remote mutation**
+- [x] **Step 3: Verify guards without remote mutation**
 
 Run:
 
@@ -1482,7 +1482,7 @@ make -n lab-app-degradation-test CLUSTER=newclaude16-r9 CONFIRM=yes APP_DB_PASSW
 
 Expected: first refusal requires `CONFIRM=yes`; second refusal pins n16; dry run shows exact environment and no password inside the Python/Ansible command argv.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Makefile README.md
@@ -1497,7 +1497,7 @@ git commit -m "chore(make): pin and identify the P2 quorum measurement"
 
 **Preconditions:** operator exports real `APP_DB_PASSWORD` and `PMM_ADMIN_PASSWORD`. No password appears on the command line.
 
-- [ ] **Step 1: Fail-closed preflight**
+- [x] **Step 1: Fail-closed preflight**
 
 Run:
 
@@ -1509,7 +1509,7 @@ make lab-app-verify CLUSTER=newclaude16-r9
 
 Expected: three PASS results. Stop before mutation on any failure.
 
-- [ ] **Step 2: Generate one run ID, persist its exact path, and run once**
+- [x] **Step 2: Generate one run ID, persist its exact path, and run once**
 
 Run in one shell:
 
@@ -1527,7 +1527,7 @@ test -f "$artifact"
 
 Expected final harness line exactly equals the path stored in `/var/tmp/p2-current-artifact-path`. Exit `3` is allowed only for an otherwise accepted `clean` result under old `degraded`; exit `1` means acceptance failure and never permits cutover/issue filing.
 
-- [ ] **Step 3: Run both recovery gates unconditionally and append their exact results atomically**
+- [x] **Step 3: Run both recovery gates unconditionally and append their exact results atomically**
 
 Run:
 
@@ -1570,7 +1570,7 @@ PY
 
 Expected: both Make targets PASS; the same artifact now has `platform_verify=true` and `post_build_gate=true`.
 
-- [ ] **Step 4: Inspect the complete artifact without hiding an incomplete run**
+- [x] **Step 4: Inspect the complete artifact without hiding an incomplete run**
 
 ```bash
 python3 - <<'PY'
@@ -1595,7 +1595,7 @@ PY
 
 Expected for a complete measurement: empty `final_acceptance_problems` and accepted `degraded` or `clean`. A non-empty list is still preserved as the measured result and proceeds only to Task 6 record generation; it blocks issue generation and clean-contract cutover.
 
-- [ ] **Step 5: No commit**
+- [x] **Step 5: No commit**
 
 This task changes no tracked file.
 
@@ -1607,7 +1607,7 @@ This task changes no tracked file.
 - Create: `docs/records/2026-08-21-p2-quorum-degradation-measurement.md`
 - Conditional `clean` modifications: `tests/lab/chaos-app-degradation.py`, `Makefile`, `tests/lab/probe-app-conformance.py`, `tests/lab/probe-proxysql.py`
 
-- [ ] **Step 1: Generate the durable record only from the exact final artifact**
+- [x] **Step 1: Generate the durable record only from the exact final artifact**
 
 ```bash
 python3 - <<'PY'
@@ -1643,7 +1643,7 @@ PY
 
 Expected: the record is generated for complete, unresolved, and failed runs. It contains every acceptance flag, all sanitized error reasons, versions, exact window, monitor timestamp when available, measured runtime tuple when available, byte-log evidence when available, credential cleanup, local recovery, and both external gates.
 
-- [ ] **Step 2: For accepted `degraded`, generate a filing-ready draft — do not publish yet**
+- [x] **Step 2: For accepted `degraded`, generate a filing-ready draft — do not publish yet**
 
 ```bash
 python3 - <<'PY'
@@ -1671,7 +1671,7 @@ PY
 
 Expected for `degraded`: one sanitized draft after all acceptance checks. Present it to the operator. Run no issue-publication command without explicit instruction; if the operator authorizes and returns a URL, add the URL to the record before committing it.
 
-- [ ] **Step 3: For accepted `clean`, prove the only mismatch is the old default, then cut over every caller**
+- [x] **Step 3: For accepted `clean`, prove the only mismatch is the old default, then cut over every caller**
 
 First gate the cutover:
 
@@ -1728,7 +1728,7 @@ Replace the historical/current paragraph at `tests/lab/probe-proxysql.py:101-118
     # routowany backend byl Primary + Synced.
 ```
 
-- [ ] **Step 4: Verify conditional changes and commit locally**
+- [x] **Step 4: Verify conditional changes and commit locally**
 
 Run for every outcome:
 
@@ -1755,7 +1755,7 @@ git add Makefile tests/lab/chaos-app-degradation.py tests/lab/probe-app-conforma
 git commit -m "fix(lab): enforce clean quorum-loss contract after measurement"
 ```
 
-- [ ] **Step 5: Stop before remote publication and ask the operator**
+- [x] **Step 5: Stop before remote publication and ask the operator**
 
 Present:
 - branch name and local commit SHAs;
