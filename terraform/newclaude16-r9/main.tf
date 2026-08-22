@@ -89,5 +89,5 @@ output "vms" {
   value = module.vms.vms
 }
 output "shared_vip" {
-  value = "192.168.1.133 (terraform/shared/)"
+  value = "192.168.1.135 (terraform/shared/)"
 }

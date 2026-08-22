@@ -26,7 +26,7 @@ def sample_record():
             "os_backend": "Rocky Linux 9.6",
         },
         "topology": {
-            "vip": "192.168.1.133",
+            "vip": "192.168.1.135",
             "app_user": "app_user_n16",
             "galera": {"n16g1": "192.168.1.172", "n16g2": "192.168.1.173", "n16g3": "192.168.1.174"},
             "proxysql": {"fcp1": "192.168.1.131", "fcp2": "192.168.1.132"},

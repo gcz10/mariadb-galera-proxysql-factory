@@ -28,7 +28,7 @@ obecną i przyszłą.
 | `fcinfra` | 9400 | 192.168.1.130 | PMM 3.9.0 + MinIO + maildev | 4 | 5120 MB |
 | `fcp1` | 9401 | 192.168.1.131 | ProxySQL — **trzyma VIP** | 1 | 3072 MB |
 | `fcp2` | 9402 | 192.168.1.132 | ProxySQL — BACKUP | 1 | 3072 MB |
-| — | — | **192.168.1.133:6033** | VIP Keepalived — wspólny endpoint | — | — |
+| — | — | **192.168.1.135:6033** | VIP Keepalived — wspólny endpoint | — | — |
 | `fcapp` | 9403 | 192.168.1.134 | host aplikacyjny (klient, sondy z perspektywy aplikacji) | 2 | 3072 MB |
 
 Cyklem życia tych hostów zarządza **wyłącznie** `make platform-*`

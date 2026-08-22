@@ -20,7 +20,7 @@
 - `mysql_server_galera_log.time_start_us` is the check-start timestamp in microseconds since Unix epoch ([ProxySQL monitor schema](https://proxysql.com/documentation/the-admin-schemas/monitor-schema)); this permits a strict `time_start_us >= window_start_us` check.
 - Active ProxySQL error log: `/var/lib/proxysql/proxysql.log`; the repository logrotate policy covers `/var/lib/proxysql/*.log` (`playbooks/f11_log_lifecycle.yml:26`). A usable log delta therefore requires a successful `(inode, size)` mark before the client request and the same inode with non-decreasing size afterward.
 - MariaDB option files support double-quoted values and escapes `\n`, `\r`, `\t`, `\b`, `\s`, `\"`, `\'`, and `\\` ([MariaDB option-file syntax](https://mariadb.com/docs/server/server-management/install-and-upgrade-mariadb/configuring-mariadb/configuring-mariadb-with-option-files.md#option-file-syntax)).
-- `newclaude16-r9` canonical identity: config `clusters/newclaude16-r9/cluster.yml`, inventory `clusters/newclaude16-r9/inventory.yml`, Galera hosts `n16g1/n16g2/n16g3`, ProxySQL hosts `fcp1/fcp2`, app host `fcapp`, writer/offline hostgroups `810/840`, endpoint `192.168.1.133:6033`.
+- `newclaude16-r9` canonical identity: config `clusters/newclaude16-r9/cluster.yml`, inventory `clusters/newclaude16-r9/inventory.yml`, Galera hosts `n16g1/n16g2/n16g3`, ProxySQL hosts `fcp1/fcp2`, app host `fcapp`, writer/offline hostgroups `810/840`, endpoint `192.168.1.135:6033`.
 - Unit tests use stdlib `unittest`; CI command: `python3 -m unittest discover -s tests/unit -p 'test_*.py' -v` (`.github/workflows/ci.yml:45`).
 - The secret guard scans tracked and untracked non-ignored files and current process argv (`tests/validation/probe-no-secrets-leak.sh`). Raw artifacts therefore remain outside the repository.
 
@@ -101,7 +101,7 @@ def sample_record():
             "os_backend": "Rocky Linux 9.6",
         },
         "topology": {
-            "vip": "192.168.1.133",
+            "vip": "192.168.1.135",
             "app_user": "app_user_n16",
             "galera": {"n16g1": "192.168.1.172", "n16g2": "192.168.1.173", "n16g3": "192.168.1.174"},
             "proxysql": {"fcp1": "192.168.1.131", "fcp2": "192.168.1.132"},

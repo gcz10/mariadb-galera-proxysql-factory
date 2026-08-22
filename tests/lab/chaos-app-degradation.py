@@ -331,7 +331,7 @@ def vip_holder():
         result = safe_sh(host, "ip -br -4 addr show 2>&1", timeout=30)
         if not result["ok"]:
             raise EvidenceError(f"VIP probe failed on {host}: {result['error']}")
-        # Check if VIP with CIDR mask prefix (e.g. "192.168.1.133/") is present in ip addr output
+        # Check if VIP with CIDR mask prefix (e.g. "192.168.1.135/") is present in ip addr output
         if f"{VIP}/" in result["output"]:
             holders.append(host)
     if len(holders) != 1:

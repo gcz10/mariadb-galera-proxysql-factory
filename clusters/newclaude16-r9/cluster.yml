@@ -66,7 +66,7 @@ proxysql:
     ca_reference: "tests/lab/tls/shared/ca.pem"
   endpoint:
     type: "keepalived_vip"
-    address: "192.168.1.133"   # VIP warstwy wspolnej - ten sam co finalclaude-r10
+    address: "192.168.1.135"   # VIP warstwy wspolnej - ten sam co finalclaude-r10
     port: 6033
 
 tls:
