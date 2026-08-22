@@ -35,11 +35,11 @@ locals {
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
 
-  # Adresacja floty finalclaude: .130-.133 warstwa wspolna, .140+ klastry.
-  # VIP .133 nie jest maszyna — Keepalived podnosi go na fcp1/fcp2.
+  # Adresacja floty: .130-.135 warstwa wspolna (VIP obecnie .139), .140+ klastry.
+  # VIP .139 (dawniej .133) nie jest maszyna — Keepalived podnosi go na fcp1/fcp2.
   # RAM: limit operatora to 5 GB na VM.
   #
-  # `fcinfra` dostaje 5 GB, bo PMM 3.8.1 jest tu jedynym realnym konsumentem:
+  # `fcinfra` dostaje 5 GB, bo PMM 3.9.0 jest tu jedynym realnym konsumentem:
   # przy ZERZE zarejestrowanych uslug zajmowal juz 1.4 GB z 3 GB, a docelowo
   # dochodzi 5 wezlow z eksporterami i QAN (poprzednia flota dawala mu 8 GB).
   #

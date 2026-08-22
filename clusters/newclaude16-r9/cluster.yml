@@ -17,7 +17,7 @@
 # objawilaby sie natychmiast kolizja w PMM, ProxySQL albo sierota ZFS.
 # NAZWY hostow sa nowe, bo PMM Inventory wymaga globalnej unikalnosci we flocie.
 #
-# WARSTWA WSPOLNA (terraform/shared/): ProxySQL fcp1/fcp2 .131/.132, VIP .133,
+# WARSTWA WSPOLNA (terraform/shared/): ProxySQL fcp1/fcp2 .131/.132, VIP .139,
 # app fcapp .134, infra .130 (PMM + MinIO). Ten klaster jest jej KONSUMENTEM -
 # nie tworzy jej, nie niszczy i nie zarzadza VIP-em. Ownerem pary ProxySQL
 # jest finalclaude-r10.

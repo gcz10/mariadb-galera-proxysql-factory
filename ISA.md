@@ -222,7 +222,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 | ISC-41 | literal | bash | próba logowania root z remote | odrzucone | mariadb client |
 | ISC-42 | literal | bash | `SHOW GRANTS` dla kont SST/monitor/app | minimalne uprawnienia | mariadb client |
 | ISC-43 | Anti: no-secrets-leak | bash | gitleaks + `grep` repo/logi + `ps` argv | brak sekretów | gitleaks + ps |
-| ISC-44 | derived: tls-full | bash | połączenie z niezaufanym cert (wrong CA) | odrzucone (ERROR 2026) | probe-tls.sh |
+| ISC-44 | derived: tls-full | bash | połączenie z niezaufanym cert (wrong CA) | odrzucone (ERROR 2026) | probe-app-conformance.py |
 | ISC-45 | derived: tls-disabled-warning | bash | profil production + tls.disabled | ostrzeżenie + risk acceptance w Decisions | ansible report + grep |
 | ISC-46 | literal | python | PMM Prom: `proxysql_*` + `mysql_up` + Galera + node_exporter series | 2 ProxySQL + 3 MySQL + 5 node series scraped | probe-pmm-native.py |
 | ISC-47 | literal | bash | utrata quorum/writera/node → alert | alert dostarczony do celu | monitoring |

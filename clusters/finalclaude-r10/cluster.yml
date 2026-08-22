@@ -4,7 +4,7 @@
 # Adresacja: f10g1-3 na .140-.142 (VMID 9410-9412), restore f10r1 .143 (9413).
 #
 # WARSTWA WSPOLNA (terraform/shared/, NIE stawiana przez terraform/finalclaude-r10/):
-#   ProxySQL fcp1/fcp2 .131/.132 w HA, VIP .133, infra .130 (PMM + MinIO).
+#   ProxySQL fcp1/fcp2 .131/.132 w HA, VIP .139, infra .130 (PMM + MinIO).
 #   ProxySQL jest wspoldzielony z kazdym przyszlym klastrem — dlatego nalezy do
 #   warstwy wspolnej, a nie do zadnego katalogu klastra.
 #

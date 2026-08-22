@@ -53,8 +53,8 @@ tests/lab/tls/issue-node-certs.sh <klaster> <n1=ip1,n2=ip2,n3=ip3> [dni]
 #   Rotacja liścia pod tym samym CA:
 #     * wspólny cert: REUSE_CA=1 przed generate.sh, potem `make cluster-tls-rotate`
 #     * per węzeł: issue-node-certs.sh (nowy liść), potem `make cluster-tls-rotate`
-#     * frontend ProxySQL: REUSE_CA=1 przed generate.sh shared-proxysql, potem
-#       `make cluster-proxysql CLUSTER=<owner>` (PROXYSQL RELOAD TLS bez zrywania sesji).
+#     * frontend ProxySQL: REUSE_CA=1 przed generate.sh shared, potem
+#       `make platform-proxysql` (PROXYSQL RELOAD TLS bez zrywania sesji).
 #   Rotację CA prowadzi tests/lab/tls/rotate-ca.sh (okno podwójnego zaufania).
 
 # UWAGA kolejność: poniższa sekwencja jest zweryfikowana od zera (from-scratch).
@@ -137,7 +137,7 @@ make cluster-recover CLUSTER=<name> CONFIRM=yes
 
 PMM UI laboratorium: `http://127.0.0.1:8080`. Stan usług w PMM jest diagnostyczny: `Down` oznacza rzeczywiście nieosiągalną usługę, a nie błąd rejestracji.
 `GF_SECURITY_ADMIN_PASSWORD` inicjalizuje tylko czysty `pmm-data`; istniejący volume zachowuje zapisane hasło. Rotację wykonaj w PMM UI, po czym ustaw tę samą wartość w `PMM_ADMIN_PASSWORD`.
-Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje reguły zdrowia Galery, writera ProxySQL, backupu i restore, zamrożonych metryk oraz — gdy TLS jest włączony — ważności certyfikatu; owner wspólnej pary ProxySQL zarządza także regułą warstwy wspólnej. Krytyczne reguły używają `noDataState: Alerting`; brak metryk nie przechodzi cicho. Contact point i notification policy (`managed_by=ansible` → e-mail) biorą adres z `monitoring.alerts.email` w `cluster.yml`. W laboratorium poczta trafia do `maildev`.
+Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje reguły zdrowia Galery, writera ProxySQL, backupu i restore, zamrożonych metryk oraz — gdy TLS jest włączony — ważności certyfikatu; reguły warstwy wspólnej (`isa-shared-*`) provisionuje `make platform-alerts`. Krytyczne reguły używają `noDataState: Alerting`; brak metryk nie przechodzi cicho. Contact point i notification policy (`managed_by=ansible` → e-mail) biorą adres z `monitoring.alerts.email` w `cluster.yml`. W laboratorium poczta trafia do `maildev`.
 
 `lab-backup-verify` weryfikuje backend S3 i wymaga przypiętego SDK (`minio.sdk_version` z lockfile). Zarządzany SMB oraz wcześniej zamontowany filesystem weryfikuje `tests/live/probe-galera-backup-backends.py`; procedury i ograniczenia opisuje `docs/runbooks/backup.md`.
 

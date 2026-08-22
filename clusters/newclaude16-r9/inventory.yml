@@ -6,7 +6,7 @@
 #   n16g1-3 (VMID 9550-9552, IP .172-.174), n16r1 (9553, .175).
 # ProxySQL fcp1/fcp2 (.131/.132), app fcapp (.134) i infra fcinfra (.130)
 # NALEZA do terraform/shared/ i sa tu tylko deklarowane - ten katalog ich
-# nie tworzy ani nie niszczy. VIP .133.
+# nie tworzy ani nie niszczy. VIP .139.
 #
 # Nazwy hostow sa globalnie rozlaczne w calej flocie: trafiaja do PMM Inventory
 # jako <pmm.cluster_name>-<host> oraz do hostname VM. Adresy sa reuzyte po

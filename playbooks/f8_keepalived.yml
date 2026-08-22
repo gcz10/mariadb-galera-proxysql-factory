@@ -1,7 +1,7 @@
 ---
 # F8: Redundantny endpoint ProxySQL — Keepalived VIP.
 #
-# Playbook WYLACZNIE warstwy wspolnej (make platform-endpoint). VIP .133 jest
+# Playbook WYLACZNIE warstwy wspolnej (make platform-endpoint). VIP .139 jest
 # wspoldzielony przez cala flote, wiec zaden klaster Galera nie moze go
 # konfigurowac: build dowolnego najemcy nadpisalby VRRP pozostalym, a teardown
 # najemcy zdjalby endpoint wszystkim. Do niedawna nie bylo tu bramki wlasciciela

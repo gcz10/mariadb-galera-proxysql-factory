@@ -5,7 +5,7 @@
 # VM Galera i restore tworzy terraform/finalclaude-r10/:
 #   f10g1-3 (VMID 9410-9412, IP .140-.142), f10r1 (9413, .143).
 # ProxySQL fcp1/fcp2 (.131/.132) i infra fcinfra (.130) NALEZA do terraform/shared/
-# i sa tu tylko deklarowane — ten katalog ich nie tworzy ani nie niszczy. VIP .133.
+# i sa tu tylko deklarowane — ten katalog ich nie tworzy ani nie niszczy. VIP .139.
 #
 # Nazwy hostow sa globalnie rozlaczne w calej flocie: traf iaja do PMM Inventory
 # jako <pmm.cluster_name>-<host> oraz do hostname VM.

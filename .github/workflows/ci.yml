@@ -33,6 +33,9 @@ jobs:
       - name: Install Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
+      - name: Platform schema and inventory validation
+        run: python3 tests/validation/validate-platform.py platform/shared/platform.yml platform/schema/platform.schema.json platform/shared/inventory.yml
+
       - name: Schema validation (all clusters)
         run: |
           set -e
@@ -64,7 +67,7 @@ jobs:
 
       - name: Backup configuration semantics and ownership
         run: python3 tests/validation/validate-backup-config.py clusters
-      - name: Galera backup unit tests
+      - name: Unit tests (tests/unit)
         run: python3 -m unittest discover -s tests/unit -p 'test_*.py' -v
 
       - name: Galera backup executable compile

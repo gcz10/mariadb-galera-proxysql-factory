@@ -307,7 +307,7 @@ cluster-proxysql:  ## F7 — skonfiguruj ProxySQL (mysql_galera_hostgroups)
 lab-proxysql-verify:  ## Zweryfikuj routing ProxySQL (ISC-18/19/20/21/22/23)
 	$(TARGET_ENV) tests/lab/probe-proxysql.py
 
-# `cluster-endpoint` USUNIETY 2026-08-21. VIP .133 nalezy do warstwy wspolnej,
+# `cluster-endpoint` USUNIETY 2026-08-21. VIP .139 (dawniej .133) nalezy do warstwy wspolnej,
 # a ten cel pozwalal dowolnemu najemcy odpalic Keepalived na cudzej parze —
 # na newclaude16-r9 wyszlo to jako `changed=0`, ale bramki nie bylo zadnej.
 # Zastapiony przez `make platform-endpoint`; f8_keepalived.yml odrzuca teraz

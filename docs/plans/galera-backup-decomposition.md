@@ -1,6 +1,6 @@
 # Plan: dekompozycja runnera `galera-backup` (2741 linii → pakiet modułów)
 
-**Status:** NIEROZPOCZĘTY. Plan spisany 2026-08-15 po audycie thermo-nuclear.
+**Status:** ✅ WYKONANY 2026-08-15 (rola galera_backup z pakietem galera_backup/, 12 modułów + wrapper). Plan spisany 2026-08-15 po audycie thermo-nuclear.
 **Świadoma decyzja:** nie rozpoczynać bez dedykowanej sesji — uzasadnienie niżej.
 
 ## Problem
