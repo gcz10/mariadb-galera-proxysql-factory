@@ -101,6 +101,6 @@ moved {
 output "vms" {
   value = module.vms.vms
 }
-output "vip" { value = "192.168.1.135" }
+output "vip" { value = "192.168.1.139" }
 output "pmm_url" { value = "https://192.168.1.130" }
 output "s3_endpoint" { value = "192.168.1.130:9000" }

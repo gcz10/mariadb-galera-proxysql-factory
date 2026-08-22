@@ -143,7 +143,7 @@ Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje reguły zdrowi
 
 ## Warstwa wspolna
 
-ProxySQL `fcp1`/`fcp2`, VIP `192.168.1.135:6033`, `fcinfra` (PMM + MinIO +
+ProxySQL `fcp1`/`fcp2`, VIP `192.168.1.139:6033`, `fcinfra` (PMM + MinIO +
 maildev) i host aplikacyjny `fcapp` to **jednostka niezalezna od klastrow**,
 opisana w `platform/shared/` (`platform.yml` + `inventory.yml`). Klastry Galera
 sa jej **najemcami**: `make cluster-proxysql` rejestruje ich hostgroupy
@@ -190,7 +190,7 @@ w `cluster.yml`:
 | `finalclaude-r10` | Rocky 10 | `f10g1-3` + `f10r1` | `disabled` (kontrast platformowy) | 10/20/30/40 |
 | `newclaude16-r9` | Rocky 9 | `n16g1-3` + `n16r1` (restore) | `full`, SST szyfrowany | 810/820/830/840 |
 
-Warstwa wspolna dla obu: `fcp1`/`fcp2` (ProxySQL w HA, VIP `192.168.1.135:6033`)
+Warstwa wspolna dla obu: `fcp1`/`fcp2` (ProxySQL w HA, VIP `192.168.1.139:6033`)
 oraz `fcinfra` (PMM, MinIO, maildev). Jedna para ProxySQL obsluguje cala flote,
 a klastry rozdziela wylacznie rozlacznosc hostgroup i uzytkownikow - pilnuje jej
 sonda `make verify-proxysql-tenancy`.

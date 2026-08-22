@@ -36,6 +36,11 @@
 # Wpis ZOSTAJE.
 
 reserved:
+  - address: "192.168.1.135"
+    reason: >-
+      Zywy host fizyczny w LAN (MAC 10:f6:5:44:94:bd, odpowiada na ping).
+      Wykryty aktywnym skanem 2026-08-22 przed proba przestawienia VIP.
+
   - address: "192.168.1.179"
     reason: >-
       Zywy host spoza floty (odpowiada na ping). Nie jest zarzadzany przez to
