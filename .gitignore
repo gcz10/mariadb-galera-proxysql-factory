@@ -48,3 +48,9 @@ clusters/*/recover-bootstrap-node
 
 # Isolated execution worktrees
 .worktrees/
+
+# macOS
+.DS_Store
+
+# Scratch procesu subagent-driven-development (ledger, briefy, raporty zadan)
+.superpowers/
