@@ -331,7 +331,7 @@ def vip_holder():
         result = safe_sh(host, "ip -br -4 addr show 2>&1", timeout=30)
         if not result["ok"]:
             raise EvidenceError(f"VIP probe failed on {host}: {result['error']}")
-        # Check if VIP with CIDR mask prefix (e.g. "192.168.1.135/") is present in ip addr output
+        # Check if VIP with CIDR mask prefix (e.g. "192.168.1.139/") is present in ip addr output
         if f"{VIP}/" in result["output"]:
             holders.append(host)
     if len(holders) != 1:
@@ -381,19 +381,19 @@ def collect_versions():
 
 
 def log_mark(host):
-    output = must_output(host, f"stat -Lc '%i\\t%s' {PROXYSQL_LOG}", "ProxySQL log mark", timeout=30)
-    rows = parse_tsv(output, ("inode", "size"))
-    if len(rows) != 1:
+    output = must_output(host, f"stat -Lc '%i %s' {PROXYSQL_LOG}", "ProxySQL log mark", timeout=30)
+    parts = output.split()
+    if len(parts) != 2:
         raise EvidenceError(f"invalid log mark on {host}: {output!r}")
-    return {"inode": int(rows[0]["inode"]), "size": int(rows[0]["size"])}
+    return {"inode": int(parts[0]), "size": int(parts[1])}
 
 
 def log_delta(host, mark):
-    output = must_output(host, f"stat -Lc '%i\\t%s' {PROXYSQL_LOG}", "ProxySQL log recheck", timeout=30)
-    rows = parse_tsv(output, ("inode", "size"))
-    if len(rows) != 1:
+    output = must_output(host, f"stat -Lc '%i %s' {PROXYSQL_LOG}", "ProxySQL log recheck", timeout=30)
+    parts = output.split()
+    if len(parts) != 2:
         raise EvidenceError(f"invalid log recheck on {host}: {output!r}")
-    inode, size = int(rows[0]["inode"]), int(rows[0]["size"])
+    inode, size = int(parts[0]), int(parts[1])
     if inode != mark["inode"]:
         raise EvidenceError(f"ProxySQL log rotated on {host}: inode {mark['inode']} -> {inode}")
     if size < mark["size"]:
