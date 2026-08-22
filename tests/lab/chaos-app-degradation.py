@@ -414,7 +414,7 @@ def monitor_row(host, survivor_address):
     rows = admin_rows(
         host,
         "SELECT hostname, time_start_us, primary_partition, wsrep_local_state, "
-        "COALESCE(error, '') FROM mysql_server_galera_log "
+        "COALESCE(error, 'NONE') FROM mysql_server_galera_log "
         f"WHERE hostname='{survivor_address}' ORDER BY time_start_us DESC LIMIT 1",
         ("hostname", "time_start_us", "primary_partition", "wsrep_local_state", "error"),
     )
