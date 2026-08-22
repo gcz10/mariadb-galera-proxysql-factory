@@ -40,7 +40,7 @@ proxysql:
     private_key_reference: "tests/lab/tls/shared/server-key.pem"
   endpoint:
     type: "keepalived_vip"
-    address: "192.168.1.133"
+    address: "192.168.1.139"
     port: 6033
 
 # Polityka ingress hostow warstwy wspolnej, zapisana tymi samymi kluczami
