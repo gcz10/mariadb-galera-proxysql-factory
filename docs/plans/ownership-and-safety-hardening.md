@@ -1,7 +1,7 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
 **Status:** W TOKU — utworzony 2026-08-23 na bazie czterech zewnętrznych recenzji.
-**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-4 (`2996474`), P2-9 (`48740b1`).
+**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-4 (`2996474`, `4aeae5f`), P2-9 (`48740b1`).
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
 
@@ -163,11 +163,12 @@ produkcyjny config z `0` bez akceptacji ryzyka → FAIL.
 
 **Koszt:** mały.
 
-**Wynik (`2996474`).** Szablon domyślnie renderuje `1`; wszystkie obecne
-laboratoria zachowują jawne `0`. Schemat ogranicza wartości do `0/1/2` i dodaje
-boolean `durability_risk_accepted`. Walidator odrzuca produkcyjne `0/2` bez
-jawnej akceptacji, a pominięcie klucza pozostaje bezpieczne. Kontrakt pokrywa
-default, laboratoryjny opt-out, production reject/accept oraz typ pola.
+**Wynik (`2996474`, `4aeae5f`).** Szablon domyślnie renderuje `1`. Wszystkie
+sześć repozytoryjnych konfiguracji laboratoryjnych zachowuje jawne `0`; dwa
+kontenerowe (`lab-cluster`, `lab2-cluster`) dostały brakujące explicit opt-out,
+żeby converge nie zmienił ich zachowania. Schemat ogranicza wartości do `0/1/2`
+i dodaje boolean `durability_risk_accepted`. Walidator odrzuca produkcyjne `0/2`
+bez jawnej akceptacji, a pominięcie klucza pozostaje bezpieczne.
 
 ---
 
