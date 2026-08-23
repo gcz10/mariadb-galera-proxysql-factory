@@ -1,7 +1,7 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
 **Status:** W TOKU — utworzony 2026-08-23 na bazie czterech zewnętrznych recenzji.
-**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`).
+**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-4 (`2996474`), P2-9 (`48740b1`).
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
 
@@ -142,7 +142,7 @@ Sonda sekretów: brak `PROXYSQL_ADMIN_PASSWORD` w plikach na hostach `galera`.
 
 ---
 
-## P1-4. Domyślna trwałość jest ustawiona w złą stronę
+## P1-4. Domyślna trwałość jest ustawiona w złą stronę — ZROBIONE
 
 **Problem.** `roles/mariadb_install/templates/server.cnf.j2` renderuje
 `innodb_flush_log_at_trx_commit` z `| default(0)`. Schemat nie wymaga tego klucza,
@@ -162,6 +162,12 @@ Walidator odrzuca `profile: production` z wartością inną niż `1`, chyba że
 produkcyjny config z `0` bez akceptacji ryzyka → FAIL.
 
 **Koszt:** mały.
+
+**Wynik (`2996474`).** Szablon domyślnie renderuje `1`; wszystkie obecne
+laboratoria zachowują jawne `0`. Schemat ogranicza wartości do `0/1/2` i dodaje
+boolean `durability_risk_accepted`. Walidator odrzuca produkcyjne `0/2` bez
+jawnej akceptacji, a pominięcie klucza pozostaje bezpieczne. Kontrakt pokrywa
+default, laboratoryjny opt-out, production reject/accept oraz typ pola.
 
 ---
 
@@ -248,7 +254,7 @@ i zwraca komplet diagnostyki.
 
 ---
 
-## P2-9. Fail-open przy pustym zbiorze hostów i nieświeży plik stanu recovery
+## P2-9. Fail-open przy pustym zbiorze hostów i nieświeży plik stanu recovery — ZROBIONE
 
 **Problem (składowa).** `ansible.cfg` nie ustawia `[inventory] unparsed_is_failed = True`,
 więc „no hosts matched" to `rc = 0`. Jednocześnie `Makefile:513-522` nie kasuje
@@ -264,6 +270,13 @@ playbook zapisuje `{run_id, timestamp, node}`, a Makefile weryfikuje zgodność
 odmawia bootstrapu.
 
 **Koszt:** trywialny.
+
+**Wynik (`48740b1`).** `unparsed_is_failed=True` zamienia brak inventory w rc=1.
+Każdy recovery usuwa stary stan i generuje UUID; playbook zapisuje JSON
+`{run_id, generated_at, node}`. Verifier wymaga zgodnego run_id, poprawnego
+timestampu, bezpiecznej nazwy oraz członkostwa w grupie `galera`, po czym
+atomowo powstaje osobny plik z jedyną nazwą konsumowaną przez bootstrap/join.
+Stary plaintext, obcy run_id, zły host i częściowy JSON są odrzucane.
 
 ---
 
