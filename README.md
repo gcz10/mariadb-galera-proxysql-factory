@@ -100,11 +100,11 @@ make lab-failover-test CLUSTER=lab-cluster      # ISC-27/28: kill writera, brak 
 make lab-split-brain-test CLUSTER=lab-cluster   # ISC-30: partycja sieci, jeden Primary
 make verify-no-mass-restart                     # ISC-31: brak masowego restartu Galery
 
-# P2: jeden destrukcyjny pomiar utraty kworum na przypietym newclaude16-r9.
+# P2: jeden destrukcyjny pomiar utraty kworum na przypietym newclaude17-r9.
 # APP_DB_PASSWORD musi byc wyeksportowane; run ID generuje operator:
 # run_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
-# QUORUM_RUN_ID="$run_id" make lab-app-degradation-test CLUSTER=newclaude16-r9 CONFIRM=yes
-# Artefakt: /var/tmp/quorum-evidence-newclaude16-r9-${run_id}.json
+# QUORUM_RUN_ID="$run_id" make lab-app-degradation-test CLUSTER=newclaude17-r9 CONFIRM=yes
+# Artefakt: /var/tmp/quorum-evidence-newclaude17-r9-${run_id}.json
 
 # F10 — konfiguracja schedulera, ręczny backup i potwierdzany restore
 make cluster-backup-configure CLUSTER=lab-cluster
@@ -188,7 +188,7 @@ w `cluster.yml`:
 | Klaster | OS | Wezly | TLS | Hostgroupy ProxySQL |
 |---|---|---|---|---|
 | `finalclaude-r10` | Rocky 10 | `f10g1-3` + `f10r1` | `disabled` (kontrast platformowy) | 10/20/30/40 |
-| `newclaude16-r9` | Rocky 9 | `n16g1-3` + `n16r1` (restore) | `full`, SST szyfrowany | 810/820/830/840 |
+| `newclaude17-r9` | Rocky 9 | `n17g1-3` + `n17r1` (restore) | `full`, SST szyfrowany | 850/860/870/880 |
 
 Warstwa wspolna dla obu: `fcp1`/`fcp2` (ProxySQL w HA, VIP `192.168.1.139:6033`)
 oraz `fcinfra` (PMM, MinIO, maildev). Jedna para ProxySQL obsluguje cala flote,
@@ -196,7 +196,7 @@ a klastry rozdziela wylacznie rozlacznosc hostgroup i uzytkownikow - pilnuje jej
 sonda `make verify-proxysql-tenancy`.
 
 Każda komenda ze Szybkiego startu działa na nich przez `CLUSTER=<nazwa>`, np.
-`make cluster-backup CLUSTER=newclaude16-r9`. Aktualny stan maszyn, adresy i
+`make cluster-backup CLUSTER=newclaude17-r9`. Aktualny stan maszyn, adresy i
 dowody z żywej instalacji: `docs/infrastructure-state.md`.
 
 ## Struktura

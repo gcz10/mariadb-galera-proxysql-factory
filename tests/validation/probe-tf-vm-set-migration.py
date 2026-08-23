@@ -32,7 +32,11 @@ MODULE_DIR = REPO_ROOT / "terraform" / "modules" / "pve_vm_set"
 
 # Rooty stanu floty. Kazdy ma osobny state i musi zostac osobnym rootem —
 # warstwa wspoldzielona nie moze przypadkiem polaczyc sie z klastrem konsumenta.
-ROOTS = ("shared", "finalclaude-r10", "newclaude16-r9")
+ROOTS = ("shared", "finalclaude-r10")
+# Root zbudowany od zera na module (n17): pusty state jest normą do momentu
+# pierwszego apply, wiec sonda planu go pomija — brak destroy/create jest tu
+# gwarantowany konstrukcyjnie, a nie przez migracje adresow.
+FRESH_ROOTS = ("newclaude17-r9",)
 
 # Tylko te rooty MIGROWALY z wlasnej kopii zasobu do modulu, wiec tylko one
 # maja blok `moved`. Root zalozony od razu na module go nie ma i miec nie
@@ -184,9 +188,10 @@ def plan_root(root, errors, warnings):
 
 def main():
     errors, warnings = [], []
-
     check_module_files(errors)
     for root in ROOTS:
+        check_root_config(root, errors)
+    for root in FRESH_ROOTS:
         check_root_config(root, errors)
 
     # Plan offline tylko, gdy statyczna struktura jest na miejscu — inaczej
@@ -202,7 +207,8 @@ def main():
             print(f"BLAD: {error}")
         print(f"\nSONDA PADLA: {len(errors)} problemow")
         return 1
-    print(f"OK: {len(ROOTS)} rooty planuja 0 destroy/create na module pve_vm_set")
+    print(f"OK: {len(ROOTS)} rooty planuja 0 destroy/create na module pve_vm_set; "
+          f"{len(FRESH_ROOTS)} swiezy root (n17) sprawdzony statycznie")
     return 0
 
 

@@ -12,7 +12,7 @@ def sample_record():
     acceptance = {name: True for name in qe.FINAL_ACCEPTANCE}
     return {
         "run_id": "a" * 32,
-        "cluster": "newclaude16-r9",
+        "cluster": "newclaude17-r9",
         "timestamp_utc": "2026-08-21T12:00:00Z",
         "outcome": qe.OUTCOME_DEGRADED,
         "contract": {"expected": "degraded", "observed": "degraded", "match": True},
@@ -27,23 +27,23 @@ def sample_record():
         },
         "topology": {
             "vip": "192.168.1.139",
-            "app_user": "app_user_n16",
-            "galera": {"n16g1": "192.168.1.172", "n16g2": "192.168.1.173", "n16g3": "192.168.1.174"},
+            "app_user": "app_user_n17",
+            "galera": {"n17g1": "192.168.1.172", "n17g2": "192.168.1.173", "n17g3": "192.168.1.174"},
             "proxysql": {"fcp1": "192.168.1.131", "fcp2": "192.168.1.132"},
             "writer_hostgroup": 810,
             "offline_hostgroup": 840,
         },
         "baseline": {
             "vip_holder": "fcp1",
-            "galera": {"n16g1": "Primary/3/4", "n16g2": "Primary/3/4", "n16g3": "Primary/3/4"},
+            "galera": {"n17g1": "Primary/3/4", "n17g2": "Primary/3/4", "n17g3": "Primary/3/4"},
             "runtime_writer": {"fcp1": {"hostgroup_id": 810, "hostname": "192.168.1.172", "status": "ONLINE"}},
             "app_write_ok": True,
         },
         "failure": {
             "window_started_utc": "2026-08-21T12:01:00Z",
             "window_ended_utc": "2026-08-21T12:01:03Z",
-            "survivor": "n16g1",
-            "stopped": ["n16g2", "n16g3"],
+            "survivor": "n17g1",
+            "stopped": ["n17g2", "n17g3"],
             "survivor_status": "non-Primary",
             "app_code": "2027",
             "app_sqlstate": "HY000",
@@ -60,17 +60,17 @@ def sample_record():
             "proxysql_log": "2026-08-21 error 1047 backend 192.168.1.172 WSREP has not yet prepared node",
         },
         "cleanup": {
-            "nodes": {"n16g2": {"dropin_absent": True, "restart_policy_restored": True, "start_enqueued": True},
-                      "n16g3": {"dropin_absent": True, "restart_policy_restored": True, "start_enqueued": True}},
+            "nodes": {"n17g2": {"dropin_absent": True, "restart_policy_restored": True, "start_enqueued": True},
+                      "n17g3": {"dropin_absent": True, "restart_policy_restored": True, "start_enqueued": True}},
             "credential_profile_absent": True,
         },
         "recovery": {
-            "nodes": {"n16g1": "Primary/3/4", "n16g2": "Primary/3/4", "n16g3": "Primary/3/4"},
+            "nodes": {"n17g1": "Primary/3/4", "n17g2": "Primary/3/4", "n17g3": "Primary/3/4"},
             "app_write_ok": True,
         },
         "external_gates": {
             "platform_verify": {"ok": True, "command": "make platform-verify", "rc": 0},
-            "post_build_gate": {"ok": True, "command": "make lab-post-build-gate CLUSTER=newclaude16-r9", "rc": 0},
+            "post_build_gate": {"ok": True, "command": "make lab-post-build-gate CLUSTER=newclaude17-r9", "rc": 0},
         },
     }
 
@@ -139,7 +139,7 @@ class AcceptanceAndRenderingTests(unittest.TestCase):
 
     def test_issue_is_symbolic_and_uses_measured_runtime_row(self):
         draft = qe.render_issue_draft(sample_record())
-        for leaked in ("192.168.1.", "n16g", "fcp", "app_user_n16", "newclaude16-r9"):
+        for leaked in ("192.168.1.", "n17g", "fcp", "app_user_n17", "newclaude17-r9"):
             self.assertNotIn(leaked, draft)
         self.assertIn("hostgroup 810", draft)
         self.assertIn("ONLINE", draft)

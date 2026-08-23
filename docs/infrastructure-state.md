@@ -46,18 +46,19 @@ Hostgroupy ProxySQL **10/20/30/40**, użytkownik `app_user`.
 | `f10g3` | 9412 | .142 | galera | 3072 MB |
 | `f10r1` | 9413 | .143 | restore (własny) | 2560 MB |
 
-### `newclaude16-r9` — Rocky 9, najemca warstwy wspólnej
+### `newclaude17-r9` — Rocky 9, najemca warstwy wspólnej
 
-MariaDB 11.4.12 (`el9`), `wsrep_cluster_name: n16_galera`, **`tls.mode: full`**
+MariaDB 11.4.12 (`el9`), `wsrep_cluster_name: n17_galera`, **`tls.mode: full`**
 (replikacja Galera i SST szyfrowane, certy per węzeł ze wspólnego CA klastra).
-Hostgroupy ProxySQL **810/820/830/840**, użytkownik `app_user_n16`.
+Hostgroupy ProxySQL **850/860/870/880**, użytkownik `app_user_n17`.
 
 | Host | VMID | IP | Rola | RAM |
 |---|---:|---|---|---:|
-| `n16g1` | 9550 | .172 | galera + scheduler backupu | 3072 MB |
-| `n16g2` | 9551 | .173 | galera | 3072 MB |
-| `n16g3` | 9552 | .174 | galera | 3072 MB |
-| `n16r1` | 9553 | .175 | restore (własny) | 2560 MB |
+| `n17g1` | 9550 | .144 | galera + scheduler backupu | 3072 MB |
+| `n17g2` | 9551 | .145 | galera | 3072 MB |
+| `n17g3` | 9552 | .146 | galera | 3072 MB |
+| `n17r1` | 9553 | .147 | restore (własny) | 2560 MB |
+
 
 Poprzednicy (`finalclaude-r9`, `newclaude8-r9` … `newclaude15-r9`) zostali
 zniszczeni po zamknięciu swoich cykli — historia w `docs/records/`.
@@ -72,9 +73,9 @@ identyfikatorów:
 mysql_galera_hostgroups (odczyt z zywego fcp1, 2026-08-21):
   writer / backup / reader / offline
      10  /   20   /   30   /   40    -> finalclaude-r10
-    810  /  820   /  830   /  840    -> newclaude16-r9
+    810  /  820   /  830   /  840    -> newclaude17-r9
 
-mysql_users:  app_user -> hg 10       app_user_n16 -> hg 810
+mysql_users:  app_user -> hg 10       app_user_n17 -> hg 850 (n17)
 ```
 
 Rozdział idzie **po użytkowniku, nie po porcie** — oba klastry współdzielą
@@ -95,20 +96,20 @@ infrastrukturze, której nikt nie może zaktualizować ani odtworzyć. Pole
 węzłów bazy — `tests/validation/validate-platform.py` (offline) oraz
 `tests/lab/probe-platform.py` (na żywym hoście).
 
-## Dowody z żywej instalacji — 2026-08-21
+## Dowody z żywej instalacji — 2026-08-21/22 (faza n16; n16 zderejestrowany i
+## zniszczony 2026-08-22, zastąpiony przez newclaude17-r9 na .144-.147)
 
-| Sprawdzenie | Wynik |
+| Sprawdzenie | Wynik (n16, do czasu teardown) |
 |---|---|
 | Galera fc10 / n16 | `Primary`, `size=3`, `wsrep_ready=ON` — oba |
 | Zapis przez VIP | `app_user` → `fc10_galera`, `app_user_n16` → `n16_galera` |
-| VIP | wyłącznie na `fcp1` |
-| Backup | `galera-newclaude16-r9-*` off-cluster w S3, `aes-256-cbc`, sha256 OK |
+| VIP `.139` | wyłącznie na `fcp1` |
+| Backup | `galera-newclaude16-r9-*` off-cluster w S3, `aes-256-cbc`, sha256 OK; ostatni przed teardown: `20260822-223752` |
 | Drill restore | `success` na izolowanym `n16r1`, 1 wiersz zweryfikowany |
-| PMM | warstwa: `shared-fcp1/2` + 2 eksportery ProxySQL; każdy najemca: 3 węzły, 0 |
-| Jeden węzeł PMM na adres | PASS — `probe-platform.py` (sieroty po byłym ownerze przejęte) |
+| PMM | warstwa: `shared-fcp1/2` + 2 eksportery ProxySQL; każdy najemca: 3 węzły |
 | Reguły alertowe | najemca: `isa-<klaster>-*`; warstwa: `isa-shared-*`, rozłączne |
-| Odporność n16 | failover miękki 6,0 s / twardy 0,0 s, 0 utraconych tx; rejoin przez IST po `ssl://`; utrata kworum bez split-brain; cold recovery 3/3 |
-| Rotacja TLS pod obciążeniem | 2893/2893 commitów, max przerwa 0,06 s, 3/3 węzły serwują nowe certy |
+| Pomiar P2 | `degraded`: klient przez VIP `ERROR 2027`, backend `ERROR 1047`; rekord w `docs/records/` |
+| Derejestracja n16 | PASS zero sierot (PMM/Grafana/ProxySQL/MinIO), 4 VM zniszczone, ZFS czysty |
 
 ### Dolozone 2026-08-15
 
@@ -154,7 +155,7 @@ pvesh get /pools/claude-isa --output-format json
 
 make platform-verify
 
-for c in finalclaude-r10 newclaude16-r9; do
+for c in finalclaude-r10 newclaude17-r9; do
   make cluster-health CLUSTER=$c
   make lab-monitoring-verify CLUSTER=$c
 done

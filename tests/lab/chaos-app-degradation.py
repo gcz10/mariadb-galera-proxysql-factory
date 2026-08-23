@@ -124,10 +124,10 @@ WRITER_HG = HG_BASE
 OFFLINE_HG = HG_BASE + 30
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-EXPECTED_CLUSTER = "newclaude16-r9"
-EXPECTED_CONFIG = (REPO_ROOT / "clusters/newclaude16-r9/cluster.yml").resolve()
-EXPECTED_INVENTORY = (REPO_ROOT / "clusters/newclaude16-r9/inventory.yml").resolve()
-EXPECTED_GALERA = {"n16g1", "n16g2", "n16g3"}
+EXPECTED_CLUSTER = "newclaude17-r9"
+EXPECTED_CONFIG = (REPO_ROOT / "clusters/newclaude17-r9/cluster.yml").resolve()
+EXPECTED_INVENTORY = (REPO_ROOT / "clusters/newclaude17-r9/inventory.yml").resolve()
+EXPECTED_GALERA = {"n17g1", "n17g2", "n17g3"}
 EXPECTED_PROXYSQL = {"fcp1", "fcp2"}
 EXPECTED_APP = {"fcapp"}
 APP_CNF = "/run/isa-app-degradation.cnf"
@@ -512,7 +512,7 @@ def new_record():
             "platform_verify": {"ok": None, "command": "make platform-verify", "rc": None},
             "post_build_gate": {
                 "ok": None,
-                "command": "make lab-post-build-gate CLUSTER=newclaude16-r9",
+                "command": "make lab-post-build-gate CLUSTER=newclaude17-r9",
                 "rc": None,
             },
         },

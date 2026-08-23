@@ -309,7 +309,7 @@ lab-proxysql-verify:  ## Zweryfikuj routing ProxySQL (ISC-18/19/20/21/22/23)
 
 # `cluster-endpoint` USUNIETY 2026-08-21. VIP .139 (dawniej .133) nalezy do warstwy wspolnej,
 # a ten cel pozwalal dowolnemu najemcy odpalic Keepalived na cudzej parze —
-# na newclaude16-r9 wyszlo to jako `changed=0`, ale bramki nie bylo zadnej.
+# na newclaude17-r9 wyjdzie to jako `changed=0`, ale bramki nie bylo zadnej.
 # Zastapiony przez `make platform-endpoint`; f8_keepalived.yml odrzuca teraz
 # definicje klastra asercja fail-closed.
 
@@ -369,11 +369,11 @@ lab-app-bench:  ## Zmierz przepustowosc z hosta `app` (direct vs VIP, TLS vs pla
 # Sondy stanu ustalonego mowia, ze wszystko dziala, dopoki wszystko dziala.
 # Ta sprawdza, co aplikacja widzi przy utracie kworum: czy zapis zostaje
 # odrzucony (bezpieczenstwo) i czy blad da sie odroznic od awarii sieci.
-lab-app-degradation-test:  ## P2 quorum loss (TYLKO newclaude16-r9, destrukcyjny; CONFIRM=yes)
+lab-app-degradation-test:  ## P2 quorum loss (TYLKO newclaude17-r9, destrukcyjny; CONFIRM=yes)
 	$(cluster_guard)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	@: "$${QUORUM_RUN_ID:?Ustaw unikalny QUORUM_RUN_ID (32 hex)}"
-	@test "$(CLUSTER)" = "newclaude16-r9" || (echo "P2 jest przypiety do CLUSTER=newclaude16-r9"; exit 1)
+	@test "$(CLUSTER)" = "newclaude17-r9" || (echo "P2 jest przypiety do CLUSTER=newclaude17-r9"; exit 1)
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (SIGKILL na n16g2/n16g3)"; exit 1)
 	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" \
 	  QUORUM_RUN_ID="$${QUORUM_RUN_ID}" \

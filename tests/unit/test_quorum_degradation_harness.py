@@ -15,15 +15,15 @@ PROBE = REPO / "tests" / "lab" / "chaos-app-degradation.py"
 
 def load_probe(tmp):
     cluster = {
-        "cluster": {"name": "newclaude16-r9", "environment": "laboratory"},
+        "cluster": {"name": "newclaude17-r9", "environment": "laboratory"},
         "galera": {"nodes_expected": 3},
-        "proxysql": {"app_user": "app_user_n16", "hostgroup_base": 810,
+        "proxysql": {"app_user": "app_user_n17", "hostgroup_base": 810,
                      "endpoint": {"address": "192.0.2.10", "port": 6033}},
     }
     inventory = {"all": {"children": {
-        "galera": {"hosts": {"n16g1": {"ansible_host": "192.0.2.1"},
-                              "n16g2": {"ansible_host": "192.0.2.2"},
-                              "n16g3": {"ansible_host": "192.0.2.3"}}},
+        "galera": {"hosts": {"n17g1": {"ansible_host": "192.0.2.1"},
+                              "n17g2": {"ansible_host": "192.0.2.2"},
+                              "n17g3": {"ansible_host": "192.0.2.3"}}},
         "proxysql": {"hosts": {"fcp1": {"ansible_host": "192.0.2.11"},
                                 "fcp2": {"ansible_host": "192.0.2.12"}}},
         "app": {"hosts": {"fcapp": {"ansible_host": "192.0.2.20"}}},
@@ -33,7 +33,7 @@ def load_probe(tmp):
     config.write_text(yaml.safe_dump(cluster), encoding="utf-8")
     inv.write_text(yaml.safe_dump(inventory), encoding="utf-8")
     env = {
-        "CLUSTER": "newclaude16-r9",
+        "CLUSTER": "newclaude17-r9",
         "CONFIRM": "yes",
         "CLUSTER_CONFIG": str(config),
         "CLUSTER_INVENTORY": str(inv),
@@ -54,7 +54,7 @@ class TargetGuardTests(unittest.TestCase):
             ns = load_probe(Path(td))
         errors = ns["validate_target"](
             "other-lab", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
-            {"n16g1", "n16g2", "n16g3"}, {"fcp1", "fcp2"}, {"fcapp"},
+            {"n17g1", "n17g2", "n17g3"}, {"fcp1", "fcp2"}, {"fcapp"},
         )
         self.assertIn("cluster name", " ".join(errors))
 
@@ -62,8 +62,8 @@ class TargetGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ns = load_probe(Path(td))
         errors = ns["validate_target"](
-            "newclaude16-r9", Path("/tmp/spoof.yml"), Path("/tmp/spoof-inventory.yml"),
-            {"n16g1", "n16g2", "n16g3"}, {"fcp1", "fcp2"}, {"fcapp"},
+            "newclaude17-r9", Path("/tmp/spoof.yml"), Path("/tmp/spoof-inventory.yml"),
+            {"n17g1", "n17g2", "n17g3"}, {"fcp1", "fcp2"}, {"fcapp"},
         )
         self.assertTrue(any("config path" in error for error in errors))
         self.assertTrue(any("inventory path" in error for error in errors))
@@ -73,15 +73,15 @@ class TargetGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ns = load_probe(Path(td))
         errors_no = ns["validate_target"](
-            "newclaude16-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
-            {"n16g1", "n16g2", "n16g3"}, {"fcp1", "fcp2"}, {"fcapp"},
+            "newclaude17-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
+            {"n17g1", "n17g2", "n17g3"}, {"fcp1", "fcp2"}, {"fcapp"},
             confirm="no",
         )
         self.assertTrue(any("CONFIRM" in error for error in errors_no))
 
         errors_empty = ns["validate_target"](
-            "newclaude16-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
-            {"n16g1", "n16g2", "n16g3"}, {"fcp1", "fcp2"}, {"fcapp"},
+            "newclaude17-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
+            {"n17g1", "n17g2", "n17g3"}, {"fcp1", "fcp2"}, {"fcapp"},
             confirm="",
         )
         self.assertTrue(any("CONFIRM" in error for error in errors_empty))
@@ -90,15 +90,15 @@ class TargetGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ns = load_probe(Path(td))
         errors_wrong = ns["validate_target"](
-            "newclaude16-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
-            {"n16g1", "n16g2", "n16g3"}, {"fcp1", "fcp2"}, {"fcapp"},
+            "newclaude17-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
+            {"n17g1", "n17g2", "n17g3"}, {"fcp1", "fcp2"}, {"fcapp"},
             operator_cluster="other-cluster",
         )
         self.assertTrue(any("CLUSTER" in error for error in errors_wrong))
 
         errors_empty = ns["validate_target"](
-            "newclaude16-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
-            {"n16g1", "n16g2", "n16g3"}, {"fcp1", "fcp2"}, {"fcapp"},
+            "newclaude17-r9", ns["EXPECTED_CONFIG"], ns["EXPECTED_INVENTORY"],
+            {"n17g1", "n17g2", "n17g3"}, {"fcp1", "fcp2"}, {"fcapp"},
             operator_cluster="",
         )
         self.assertTrue(any("CLUSTER" in error for error in errors_empty))
@@ -108,7 +108,7 @@ class SafeRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ns = load_probe(Path(td))
         with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("ansible", 1)):
-            result = ns["safe_sh"]("n16g1", "true", timeout=1)
+            result = ns["safe_sh"]("n17g1", "true", timeout=1)
         self.assertFalse(result["ok"])
         self.assertIsNone(result["rc"])
         self.assertIn("timeout", result["error"])
@@ -117,7 +117,7 @@ class SafeRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ns = load_probe(Path(td))
         with patch.object(subprocess, "run", side_effect=FileNotFoundError("ansible")):
-            result = ns["safe_sh"]("n16g1", "true", timeout=1)
+            result = ns["safe_sh"]("n17g1", "true", timeout=1)
         self.assertFalse(result["ok"])
         self.assertIsNone(result["rc"])
         self.assertEqual(result["output"], "")
@@ -128,7 +128,7 @@ class SafeRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ns = load_probe(Path(td))
         with patch.object(subprocess, "run", side_effect=KeyboardInterrupt):
-            result = ns["safe_sh"]("n16g1", "true", timeout=1)
+            result = ns["safe_sh"]("n17g1", "true", timeout=1)
         self.assertFalse(result["ok"])
         self.assertIsNone(result["rc"])
         self.assertEqual(result["output"], "")
@@ -218,7 +218,7 @@ class MutationLifecycleTests(unittest.TestCase):
             return {"ok": True, "rc": 0, "output": "no" if "show mariadb" in script else "", "error": ""}
 
         with self.assertRaises(ns["EvidenceError"]):
-            ns["arm_node"]("n16g2", run=run)
+            ns["arm_node"]("n17g2", run=run)
         self.assertFalse(any("pkill" in command for command in calls))
 
     def test_arm_rejects_kill_failure_and_still_alive_process(self):
@@ -233,7 +233,7 @@ class MutationLifecycleTests(unittest.TestCase):
             return {"ok": True, "rc": 0, "output": "", "error": ""}
 
         with self.assertRaises(ns["EvidenceError"]):
-            ns["arm_node"]("n16g2", run=kill_fails)
+            ns["arm_node"]("n17g2", run=kill_fails)
 
         def still_alive(host, script, timeout=120):
             if "show mariadb" in script:
@@ -245,7 +245,7 @@ class MutationLifecycleTests(unittest.TestCase):
             return {"ok": True, "rc": 0, "output": output, "error": ""}
 
         with self.assertRaises(ns["EvidenceError"]):
-            ns["arm_node"]("n16g2", run=still_alive)
+            ns["arm_node"]("n17g2", run=still_alive)
 
     def test_cleanup_attempts_every_operation_on_every_host(self):
         with tempfile.TemporaryDirectory() as td:
@@ -254,7 +254,7 @@ class MutationLifecycleTests(unittest.TestCase):
 
         def run(host, script, timeout=120):
             calls.append((host, script))
-            if host == "n16g2" and script.startswith("rm -f"):
+            if host == "n17g2" and script.startswith("rm -f"):
                 return {"ok": False, "rc": None, "output": "", "error": "timeout"}
             if "test ! -e" in script:
                 return {"ok": True, "rc": 0, "output": "ABSENT", "error": ""}
@@ -263,21 +263,21 @@ class MutationLifecycleTests(unittest.TestCase):
             return {"ok": True, "rc": 0, "output": "", "error": ""}
 
         result = ns["cleanup_nodes"](
-            ("n16g2", "n16g3"), {"n16g2": "on-abnormal", "n16g3": "on-abnormal"}, run=run
+            ("n17g2", "n17g3"), {"n17g2": "on-abnormal", "n17g3": "on-abnormal"}, run=run
         )
-        for host in ("n16g2", "n16g3"):
+        for host in ("n17g2", "n17g3"):
             host_commands = [command for called_host, command in calls if called_host == host]
             self.assertTrue(any("daemon-reload" in command for command in host_commands))
             self.assertTrue(any("start --no-block" in command for command in host_commands))
             self.assertTrue(any("test ! -e" in command for command in host_commands))
             self.assertTrue(any("show mariadb" in command for command in host_commands))
-        self.assertFalse(result["n16g2"]["remove_ok"])
-        self.assertTrue(result["n16g3"]["dropin_absent"])
+        self.assertFalse(result["n17g2"]["remove_ok"])
+        self.assertTrue(result["n17g3"]["dropin_absent"])
 
     def test_cleanup_set_is_both_intended_hosts_before_mutation(self):
         with tempfile.TemporaryDirectory() as td:
             ns = load_probe(Path(td))
-        self.assertEqual(tuple(ns["STOPPED"]), ("n16g2", "n16g3"))
+        self.assertEqual(tuple(ns["STOPPED"]), ("n17g2", "n17g3"))
 
     def test_cleanup_attempts_all_hosts_even_if_run_raises_keyboard_interrupt(self):
         with tempfile.TemporaryDirectory() as td:
@@ -286,19 +286,19 @@ class MutationLifecycleTests(unittest.TestCase):
 
         def run(host, script, timeout=120):
             calls.append((host, script))
-            if host == "n16g2":
+            if host == "n17g2":
                 raise KeyboardInterrupt("simulated interrupt on first host")
             return {"ok": True, "rc": 0, "output": "ABSENT" if "test ! -e" in script else "", "error": ""}
 
         result = ns["cleanup_nodes"](
-            ("n16g2", "n16g3"), {"n16g2": "on-abnormal", "n16g3": "on-abnormal"}, run=run
+            ("n17g2", "n17g3"), {"n17g2": "on-abnormal", "n17g3": "on-abnormal"}, run=run
         )
-        self.assertIn("n16g2", result)
-        self.assertIn("n16g3", result)
-        self.assertFalse(result["n16g2"]["remove_ok"])
-        self.assertTrue(any("KeyboardInterrupt" in err for err in result["n16g2"]["errors"]))
-        self.assertTrue(result["n16g3"]["remove_ok"])
-        self.assertTrue(result["n16g3"]["dropin_absent"])
+        self.assertIn("n17g2", result)
+        self.assertIn("n17g3", result)
+        self.assertFalse(result["n17g2"]["remove_ok"])
+        self.assertTrue(any("KeyboardInterrupt" in err for err in result["n17g2"]["errors"]))
+        self.assertTrue(result["n17g3"]["remove_ok"])
+        self.assertTrue(result["n17g3"]["dropin_absent"])
 
 class RecordAndArtifactTests(unittest.TestCase):
     def test_new_record_initializes_all_local_acceptance_flags_to_false(self):

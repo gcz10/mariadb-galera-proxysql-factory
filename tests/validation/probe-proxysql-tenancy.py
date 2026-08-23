@@ -271,7 +271,7 @@ def self_test(root):
         return True
 
     def inject_material(work):
-        target = work / "clusters" / "newclaude16-r9" / "cluster.yml"
+        target = work / "clusters" / "newclaude17-r9" / "cluster.yml"
         if not target.exists():
             candidates = [
                 path
