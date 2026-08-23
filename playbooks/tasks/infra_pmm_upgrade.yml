@@ -1,0 +1,218 @@
+---
+- name: "PMM — znajdź kontener"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - ls
+      - --all
+      - --format
+      - "{{ '{{' }}.Names{{ '}}' }}"
+      - --filter
+      - name=pmm-server
+  register: infra_pmm_container_list
+  changed_when: false
+
+- name: "PMM — znajdź volume danych"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - volume
+      - ls
+      - --format
+      - "{{ '{{' }}.Name{{ '}}' }}"
+      - --filter
+      - "name={{ infra_pmm_data_volume }}"
+  register: infra_pmm_volume_list
+  changed_when: false
+
+- name: "PMM — sklasyfikuj stan danych"
+  ansible.builtin.set_fact:
+    infra_pmm_state: >-
+      {{
+        'managed'
+        if (
+          'pmm-server' in (infra_pmm_container_list.stdout_lines | default([]))
+          and infra_pmm_data_volume in (infra_pmm_volume_list.stdout_lines | default([]))
+        )
+        else 'orphaned-data'
+        if infra_pmm_data_volume in (infra_pmm_volume_list.stdout_lines | default([]))
+        else 'missing-data'
+        if 'pmm-server' in (infra_pmm_container_list.stdout_lines | default([]))
+        else 'fresh'
+      }}
+
+- name: "PMM — wymagaj spójnego stanu kontenera i danych"
+  ansible.builtin.assert:
+    that:
+      - "infra_pmm_state in ['fresh', 'managed']"
+    fail_msg: >-
+      Niespójny stan PMM: {{ infra_pmm_state }}.
+      Kontener i volume {{ infra_pmm_data_volume }} muszą istnieć razem;
+      automatyczna zmiana obrazu została zablokowana.
+
+- name: "PMM — odczytaj bieżący obraz kontenera"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - inspect
+      - --format
+      - "{{ '{{' }}.Config.Image{{ '}}' }}"
+      - pmm-server
+  register: infra_pmm_container_inspect
+  changed_when: false
+  when: infra_pmm_state == 'managed'
+
+- name: "PMM — zapamiętaj bieżący obraz kontenera"
+  ansible.builtin.set_fact:
+    infra_pmm_current_image: >-
+      {{
+        infra_pmm_container_inspect.stdout | default('') | trim
+        if infra_pmm_state == 'managed'
+        else ''
+      }}
+
+- name: "PMM — wylicz potrzebę backupu przed zmianą obrazu"
+  ansible.builtin.set_fact:
+    infra_pmm_upgrade_required: >-
+      {{
+        infra_pmm_state == 'managed'
+        and infra_pmm_current_image != infra_pmm_desired_image
+      }}
+
+- name: "PMM — wykonaj spójny backup przed zmianą obrazu"
+  when:
+    - infra_pmm_upgrade_required | bool
+  block:
+    - name: "PMM — zatrzymaj serwer przed backupem"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - stop
+          - pmm-server
+      changed_when: true
+
+    - name: "PMM — utwórz volume backupu"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - create
+          - --label
+          - isa.pmm.backup=true
+          - --label
+          - "isa.pmm.source={{ infra_pmm_data_volume }}"
+          - "{{ infra_pmm_backup_volume }}"
+      changed_when: true
+
+    - name: "PMM — skopiuj i zweryfikuj dane /srv"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --user
+          - "0"
+          - -v
+          - "{{ infra_pmm_data_volume }}:/from:ro"
+          - -v
+          - "{{ infra_pmm_backup_volume }}:/to"
+          - "{{ infra_pmm_current_image }}"
+          - sh
+          - -ceu
+          - >-
+            cp -a /from/. /to/;
+            test -d /to/grafana;
+            test -d /to/victoriametrics;
+            test "$(du -sk /from | cut -f1)" = "$(du -sk /to | cut -f1)";
+            printf '%s\n' '{{ infra_pmm_current_image }} -> {{ infra_pmm_desired_image }}'
+            > /to/.isa-pmm-backup-complete
+      changed_when: true
+  rescue:
+    - name: "PMM — usuń niekompletny volume backupu"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - rm
+          - --force
+          - "{{ infra_pmm_backup_volume }}"
+      register: infra_pmm_backup_cleanup
+      changed_when: infra_pmm_backup_cleanup.rc == 0
+      failed_when: false
+
+    - name: "PMM — sprawdź stan volume po cleanupie"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - ls
+          - --format
+          - "{{ '{{' }}.Name{{ '}}' }}"
+          - --filter
+          - "name={{ infra_pmm_backup_volume }}"
+      register: infra_pmm_backup_after_cleanup
+      changed_when: false
+      failed_when: false
+
+    - name: "PMM — przerwij po nieudanym backupie"
+      ansible.builtin.fail:
+        msg: >-
+          Backup PMM {{ infra_pmm_backup_volume }} nie przeszedl weryfikacji.
+          Blad backupu:
+          {{
+            ansible_failed_result.stderr
+            | default(ansible_failed_result.msg | default('brak szczegolow'), true)
+            | trim
+          }}.
+          {% if infra_pmm_backup_after_cleanup.rc != 0 %}
+          Stan volume po cleanupie jest nieznany.
+          Blad kontroli:
+          {{
+            infra_pmm_backup_after_cleanup.stderr
+            | default(infra_pmm_backup_after_cleanup.stdout | default('brak szczegolow'), true)
+            | trim
+          }}.
+          {% elif infra_pmm_backup_volume in
+                  (infra_pmm_backup_after_cleanup.stdout_lines | default([])) %}
+          Cleanup nie udal sie; volume {{ infra_pmm_backup_volume }} pozostal.
+          Wynik cleanupu rc={{ infra_pmm_backup_cleanup.rc }}:
+          {{
+            infra_pmm_backup_cleanup.stderr
+            | default(infra_pmm_backup_cleanup.stdout | default('brak szczegolow'), true)
+            | trim
+          }}.
+          {% else %}
+          Volume {{ infra_pmm_backup_volume }} nie istnieje po cleanupie
+          (zostal usuniety albo nie powstal).
+          {% endif %}
+          Stary PMM zostanie uruchomiony.
+  always:
+    - name: "PMM — uruchom serwer po backupie"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - start
+          - pmm-server
+      changed_when: true
+
+- name: "PMM — wymagaj kompletnego backupu przed zmianą obrazu"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --user
+      - "0"
+      - -v
+      - "{{ infra_pmm_backup_volume }}:/backup:ro"
+      - "{{ infra_pmm_current_image }}"
+      - sh
+      - -ceu
+      - >-
+        test -f /backup/.isa-pmm-backup-complete;
+        test -d /backup/grafana;
+        test -d /backup/victoriametrics
+  changed_when: false
+  when: infra_pmm_upgrade_required | bool

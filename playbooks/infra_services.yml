@@ -2,9 +2,27 @@
 # Uslugi wspierajace FLOTE na hoscie infra warstwy wspolnej (fcinfra):
 # PMM serwuje monitoring wszystkim najemcom, MinIO backupy, Maildev alerty.
 # Zakres: Docker CE + PMM Server + MinIO + Maildev. Bez Samby.
-# Odpalane z definicji platformy (`make platform-infra`, -e @platform.yml):
-# host infra nalezy do warstwy wspolnej, wiec playbook nie czyta ZADNEJ
-# zmiennej z cluster.yml najemcy (kiedy robil to jako cel cluster-infra).
+# Odpalane wyłącznie z definicji platformy (`make platform-infra`,
+# `-e @platform.yml`). Host infra należy do warstwy współdzielonej;
+# playbook nie czyta żadnej zmiennej z konfiguracji najemcy.
+
+- name: "Infra — wymagaj ownership warstwy wspólnej"
+  hosts: infra
+  become: false
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: "Wymagaj konfiguracji platformy przed mutacją hosta"
+      ansible.builtin.assert:
+        that:
+          - platform is defined
+          - platform is mapping
+          - cluster is not defined
+          - versions is defined
+          - versions is mapping
+        fail_msg: >-
+          infra_services.yml przyjmuje wyłącznie konfigurację platformy.
+          Użyj kanonicznego celu platform-infra.
 
 - name: "Infra — wymuś dokładną politykę host firewall przed uruchomieniem usług"
   ansible.builtin.import_playbook: firewall.yml
@@ -25,7 +43,7 @@
     infra_compose_file: /etc/isa-infra/compose.yml
     infra_pmm_data_volume: isa-pmm-data
     infra_pmm_desired_image: "{{ lock.pmm.image }}@{{ lock.pmm.image_digest }}"
-    infra_pmm_backup_volume: "isa-pmm-data-backup-{{ lock.pmm.version }}-{{ ansible_date_time.epoch }}"
+    infra_pmm_backup_volume: "isa-pmm-data-backup-{{ ansible_date_time.epoch }}-{{ lock.pmm.version }}"
     infra_firewall_rules: >-
       {{
         (
@@ -61,15 +79,24 @@
           - platform.environment != 'production'
           - groups['infra'] | length == 1
           - ansible_facts.architecture == 'x86_64'
-          - pmm_admin_password | length >= 12
-          - minio_root_user | length >= 3
-          - minio_root_password | length >= 12
           - lock.docker.engine_version | length > 0
           - lock.pmm.image_digest is match('^sha256:[0-9a-f]{64}$')
           - lock.minio.image_digest is match('^sha256:[0-9a-f]{64}$')
+          - monitoring.pmm.backup_retention | int >= 1
+          - monitoring.pmm.backup_retention | int <= 5
         fail_msg: >-
-          Infra wymaga jednego hosta x86_64, środowiska nieprodukcyjnego oraz
-          PMM_ADMIN_PASSWORD, MINIO_ROOT_USER i MINIO_ROOT_PASSWORD poza repozytorium.
+          Infra wymaga jednego hosta x86_64, środowiska nieprodukcyjnego,
+          poprawnych lockfile'ów i retencji backupów PMM 1..5.
+
+    - name: "Wymagaj sekretów infra"
+      ansible.builtin.assert:
+        that:
+          - pmm_admin_password | length >= 12
+          - minio_root_user | length >= 3
+          - minio_root_password | length >= 12
+        fail_msg: >-
+          Ustaw PMM_ADMIN_PASSWORD, MINIO_ROOT_USER i MINIO_ROOT_PASSWORD
+          poza repozytorium.
       no_log: true
 
   tasks:
@@ -209,127 +236,8 @@
       # zadanie restartu. Bez flush handler wystapilby dopiero na koncu play,
       # czyli po `docker compose up` — zrestartowany daemon zdjalby kontenery.
       ansible.builtin.meta: flush_handlers
-    - name: "PMM — odczytaj bieżący obraz kontenera"
-      ansible.builtin.command:
-        argv:
-          - docker
-          - container
-          - inspect
-          - --format
-          - "{{ '{{' }}.Config.Image{{ '}}' }}"
-          - pmm-server
-      register: infra_pmm_container_inspect
-      changed_when: false
-      failed_when: infra_pmm_container_inspect.rc not in [0, 1]
-
-    - name: "PMM — zapamiętaj bieżący obraz kontenera"
-      ansible.builtin.set_fact:
-        infra_pmm_current_image: >-
-          {{
-            infra_pmm_container_inspect.stdout | trim
-            if infra_pmm_container_inspect.rc == 0
-            else ''
-          }}
-
-    - name: "PMM — wylicz potrzebę backupu przed zmianą obrazu"
-      ansible.builtin.set_fact:
-        infra_pmm_upgrade_required: >-
-          {{
-            infra_pmm_current_image | length > 0
-            and infra_pmm_current_image != infra_pmm_desired_image
-          }}
-
-
-    - name: "PMM — wykonaj spójny backup przed zmianą obrazu"
-      when:
-        - infra_pmm_upgrade_required | bool
-      block:
-        - name: "PMM — zatrzymaj serwer przed backupem"
-          ansible.builtin.command:
-            argv:
-              - docker
-              - stop
-              - pmm-server
-          changed_when: true
-
-        - name: "PMM — utwórz volume backupu"
-          ansible.builtin.command:
-            argv:
-              - docker
-              - volume
-              - create
-              - "{{ infra_pmm_backup_volume }}"
-          changed_when: true
-
-        - name: "PMM — skopiuj i zweryfikuj dane /srv"
-          ansible.builtin.command:
-            argv:
-              - docker
-              - run
-              - --rm
-              - --user
-              - "0"
-              - -v
-              - "{{ infra_pmm_data_volume }}:/from:ro"
-              - -v
-              - "{{ infra_pmm_backup_volume }}:/to"
-              - "{{ infra_pmm_current_image }}"
-              - sh
-              - -ceu
-              - >-
-                cp -a /from/. /to/;
-                test -d /to/grafana;
-                test -d /to/victoriametrics;
-                test "$(du -sk /from | cut -f1)" = "$(du -sk /to | cut -f1)";
-                printf '%s\n' '{{ infra_pmm_current_image }} -> {{ infra_pmm_desired_image }}'
-                > /to/.isa-pmm-backup-complete
-          changed_when: true
-      rescue:
-        - name: "PMM — usuń niekompletny volume backupu"
-          ansible.builtin.command:
-            argv:
-              - docker
-              - volume
-              - rm
-              - --force
-              - "{{ infra_pmm_backup_volume }}"
-          register: infra_pmm_backup_cleanup
-          changed_when: infra_pmm_backup_cleanup.rc == 0
-          failed_when: false
-
-        - name: "PMM — przerwij po nieudanym backupie"
-          ansible.builtin.fail:
-            msg: >-
-              Backup PMM {{ infra_pmm_backup_volume }} nie przeszedl weryfikacji.
-              Niekompletny volume zostal usuniety; stary PMM zostanie uruchomiony.
-      always:
-        - name: "PMM — uruchom serwer po backupie"
-          ansible.builtin.command:
-            argv:
-              - docker
-              - start
-              - pmm-server
-          changed_when: true
-
-    - name: "PMM — wymagaj kompletnego backupu przed zmianą obrazu"
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --user
-          - "0"
-          - -v
-          - "{{ infra_pmm_backup_volume }}:/backup:ro"
-          - "{{ infra_pmm_current_image }}"
-          - sh
-          - -ceu
-          - >-
-            test -f /backup/.isa-pmm-backup-complete;
-            test -d /backup/grafana;
-            test -d /backup/victoriametrics
-      changed_when: false
-      when: infra_pmm_upgrade_required | bool
+    - name: "PMM — zabezpiecz zmianę obrazu"
+      ansible.builtin.include_tasks: tasks/infra_pmm_upgrade.yml
 
 
     - name: "Utwórz prywatny katalog konfiguracji infra"
@@ -430,6 +338,7 @@
         fail_msg: "Nie wszystkie usługi infra są uruchomione: {{ infra_running_services.stdout_lines }}"
         success_msg: "PMM, MinIO i Maildev działają na {{ inventory_hostname }}."
 
+
     # Na trwałym volume docelowe haslo moze byc juz ustawione — wtedy pierwszy
     # test wystarcza. Fallback ponizej obsluguje WYLACZNIE pierwszy bootstrap
     # z admin/admin; inne stare haslo wymaga jawnej rotacji przez operatora.
@@ -463,6 +372,8 @@
           - 200
       when: pmm_admin_auth.status == 401
       no_log: true
+    - name: "PMM — zastosuj retencję zweryfikowanych backupów"
+      ansible.builtin.include_tasks: tasks/infra_pmm_backup_retention.yml
 
   handlers:
     - name: "Restart Docker po zmianie sysctl ip_forward"

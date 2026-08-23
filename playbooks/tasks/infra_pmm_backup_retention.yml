@@ -1,0 +1,90 @@
+---
+- name: "PMM — znajdź zarządzane backupy"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - volume
+      - ls
+      - --format
+      - "{{ '{{' }}.Name{{ '}}' }}"
+      - --filter
+      - label=isa.pmm.backup=true
+      - --filter
+      - "label=isa.pmm.source={{ infra_pmm_data_volume }}"
+  register: infra_pmm_backup_list
+  changed_when: false
+
+- name: "PMM — zweryfikuj zarządzane backupy"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --user
+      - "0"
+      - -v
+      - "{{ item }}:/backup:ro"
+      - "{{ infra_pmm_desired_image }}"
+      - sh
+      - -ceu
+      - >-
+        test -f /backup/.isa-pmm-backup-complete;
+        test -d /backup/grafana;
+        test -d /backup/victoriametrics
+  loop: "{{ infra_pmm_backup_list.stdout_lines | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  register: infra_pmm_backup_probe
+  changed_when: false
+  failed_when: false
+
+- name: "PMM — wyzeruj listę backupów do zachowania"
+  ansible.builtin.set_fact:
+    infra_pmm_backup_keep: []
+
+- name: "PMM — wybierz zweryfikowane backupy do zachowania"
+  ansible.builtin.set_fact:
+    infra_pmm_backup_keep: "{{ infra_pmm_backup_keep + [item.item] }}"
+  loop: >-
+    {{
+      infra_pmm_backup_probe.results
+      | default([])
+      | sort(attribute='item', reverse=true)
+    }}
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - item.rc == 0
+    - infra_pmm_backup_keep | length < (monitoring.pmm.backup_retention | int)
+
+- name: "PMM — wymagaj sprawnej weryfikacji przed usuwaniem"
+  ansible.builtin.assert:
+    that:
+      - infra_pmm_backup_keep | length > 0
+    fail_msg: >-
+      Żaden z {{ infra_pmm_backup_list.stdout_lines | length }} oznaczonych
+      backupów nie przeszedł weryfikacji. Awaria sondy albo utrata wszystkich
+      generacji jest niejednoznaczna; nic nie usunięto.
+  when: infra_pmm_backup_list.stdout_lines | default([]) | length > 0
+
+- name: "PMM — usuń backupy nieweryfikowalne i ponad retencję"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - volume
+      - rm
+      - "{{ item }}"
+  loop: "{{ infra_pmm_backup_list.stdout_lines | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  when: item not in infra_pmm_backup_keep
+  changed_when: true
+
+- name: "PMM — wymagaj bieżącego zweryfikowanego backupu po zmianie obrazu"
+  ansible.builtin.assert:
+    that:
+      - infra_pmm_backup_volume in infra_pmm_backup_keep
+    fail_msg: >-
+      Bieżący backup {{ infra_pmm_backup_volume }} nie przeszedł weryfikacji;
+      zmiana obrazu nie ma potwierdzonego rollbacku.
+  when: infra_pmm_upgrade_required | bool

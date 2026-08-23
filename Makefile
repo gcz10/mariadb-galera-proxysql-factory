@@ -7,7 +7,7 @@
 
 .PHONY: cluster-build cluster-recover help lab-up lab-start-services cluster-discover cluster-validate cluster-deploy \
         cluster-bootstrap cluster-health cluster-join cluster-proxysql \
-        cluster-infra cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
+        cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan \
         cluster-drift cluster-remove-node-plan cluster-remove-node cluster-alerts \
         lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test lab-failover-hard-test cluster-tls-rotate \
@@ -264,12 +264,6 @@ cluster-deploy:  ## F2+F3 — instaluj pakiety + konfiguruj (idempotentny conver
 	ansible-playbook playbooks/site.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 	ansible-playbook playbooks/firewall.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
-cluster-infra:  ## Usługi wspierające na infra VM: PMM + MinIO + Maildev
-	$(cluster_guard)
-	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
-	@: "$${MINIO_ROOT_USER:?Ustaw MINIO_ROOT_USER poza repozytorium}"
-	@: "$${MINIO_ROOT_PASSWORD:?Ustaw MINIO_ROOT_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/infra_services.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 cluster-firewall:  ## Wymuś minimalną politykę firewalld według roli hosta
 	$(cluster_guard)
 	ansible-playbook playbooks/firewall.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)

@@ -215,7 +215,8 @@
             "agent_id",
             "cluster_name",
             "validate_certs",
-            "credentials_revision"
+            "credentials_revision",
+            "backup_retention"
           ],
           "additionalProperties": false,
           "properties": {
@@ -239,6 +240,12 @@
             "credentials_revision": {
               "type": "integer",
               "minimum": 1
+            },
+            "backup_retention": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "description": "Liczba najnowszych, zweryfikowanych volume backupu PMM zachowywanych po poprawnym converge."
             }
           }
         },

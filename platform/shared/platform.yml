@@ -66,6 +66,8 @@ monitoring:
     cluster_name: "shared"
     validate_certs: false
     credentials_revision: 3
+    # Zachowuj biezacy rollback i jedna poprzednia zweryfikowana generacje.
+    backup_retention: 2
   agent_groups: ["proxysql"]
   alerts:
     email: "ops@claude.local"

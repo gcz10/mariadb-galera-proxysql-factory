@@ -246,14 +246,15 @@ wywaliło locki ZFS na PVE (`HTTP 596 Broken pipe` i VM utworzona poza stanem).
 
 ```bash
 make infra-provision CLUSTER=shared
-make infra-provision CLUSTER=finalclaude-r10   # VM klastra muszą istnieć...
-make cluster-trust-hosts CLUSTER=finalclaude-r10  # ...bo trust-hosts skanuje CAŁE inventory
-make cluster-infra CLUSTER=finalclaude-r10 ANSIBLE_OPTS='-e allow_kernel_reboot=yes'
+make platform-trust-hosts PLATFORM=shared
+make platform-infra PLATFORM=shared ANSIBLE_OPTS='-e allow_kernel_reboot=yes'
+make infra-provision CLUSTER=finalclaude-r10
+make cluster-trust-hosts CLUSTER=finalclaude-r10
 ```
 
-`cluster-trust-hosts` kończy się `[ "$ok" = "$total" ] || exit 1`, więc wymaga,
-by **wszystkie** hosty z inventarza odpowiadały — inventory klastra obejmuje
-dwa moduły Terraform, więc oba muszą być postawione wcześniej.
+Warstwa wspólna ma własny inventory i lifecycle. `platform-trust-hosts`
+weryfikuje jej hosty przed `platform-infra`; późniejszy `cluster-trust-hosts`
+obejmuje wyłącznie inventory przygotowywanego najemcy.
 
 `allow_kernel_reboot=yes` jest konieczne przy świeżym obrazie: VM bootuje
 starszy kernel niż zainstalowany, brakuje modułów `xtables` i filtr ingress
@@ -297,7 +298,7 @@ wspólnym VIP (`proxysql.endpoint.port` już istnieje w `cluster.yml`).
 
 ### Etap 4 — `finalclaude-r9`
 
-Ta sama sekwencja co Etap 2, bez `cluster-infra` (infra stoi).
+Ta sama sekwencja co Etap 2; lifecycle warstwy wspólnej nie jest powtarzany.
 
 ## Faza 5 — Kryteria akceptacji
 

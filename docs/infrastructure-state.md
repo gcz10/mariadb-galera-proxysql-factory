@@ -41,11 +41,15 @@ po backupie trwałego volume `isa-pmm-data` do `pmm-data-backup-20260823-133353`
 (2.5G; katalogi Grafana i VictoriaMetrics zweryfikowane). Klienci zostały
 zaktualizowane najpierw na `fcp1/fcp2` (EL10), następnie na `n17g1-3` (EL9),
 zgodnie z zasadą PMM Server >= PMM Client. `f10` pozostaje agentless.
-Kolejne zmiany przypiętego obrazu są fail-closed: `platform-infra` rozpoznaje
-różnicę obrazu i tworzy świeży volume backupu z wersją oraz timestampem dla
-każdej próby. Źródłowy `isa-pmm-data` jest montowany read-only; niekompletna
-kopia usuwa wyłącznie volume bieżącej próby i uruchamia stary PMM. Dopiero
-marker oraz kontrola katalogów danych pozwalają na Compose recreate.
+Kolejne zmiany przypiętego obrazu są fail-closed: `platform-infra` najpierw
+klasyfikuje parę kontener + `isa-pmm-data`. Tylko stan całkowicie pusty albo
+kompletna para jest dozwolona; osierocony volume, brak danych przy istniejącym
+kontenerze i błąd Dockera blokują operację przed zmianą obrazu. Upgrade tworzy
+oznaczony, świeży volume backupu z timestampem i wersją. Źródło jest montowane
+read-only, marker oraz katalogi danych są weryfikowane przed Compose recreate,
+a błąd cleanupu jest raportowany bez ukrywania pozostawionego volume. Po pełnej
+gotowości usług retencja zachowuje dwie najnowsze zweryfikowane generacje;
+nieoznaczone backupy ręczne pozostają nietknięte.
 
 
 Nie zastosowano hurtowo porad z `VolkanSah/optimize-MySQL-MariaDB`: są ogólnymi
