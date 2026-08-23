@@ -282,19 +282,24 @@ class ClusterRecoverMakefileContractTests(unittest.TestCase):
     def test_uses_dedicated_stop_and_selection_playbook(self):
         self.assertIn("playbooks/cluster_recover.yml", self.joined)
 
-    def test_passes_state_file_and_bootstrap_node_override(self):
+    def test_passes_state_file_run_id_and_bootstrap_override(self):
         self.assertIn(
-            "recover_state_file=$(RECOVER_STATE_FILE)",
+            'recover_state_file="$(RECOVER_STATE_FILE)"',
             self.joined,
-            "playbook zapisuje wybrany wezel do jawnej sciezki odczytywanej przez Makefile",
+            "playbook zapisuje wybor do jawnej sciezki odczytywanej przez verifier",
+        )
+        self.assertIn(
+            'recover_run_id="$(RECOVER_RUN_ID)"',
+            self.joined,
+            "playbook i verifier musza dzielic identyfikator biezacego przebiegu",
         )
         self.assertIn(
             "-e recover_bootstrap_node=$(BOOTSTRAP_NODE)",
             self.joined,
-            "BOOTSTRAP_NODE operatora musi trafiac do playboku jako jawny override",
+            "BOOTSTRAP_NODE operatora musi trafic do playbooka jako jawny override",
         )
 
-    def test_bootstrap_node_is_read_after_selection_playbook(self):
+    def test_bootstrap_node_is_verified_after_selection_playbook(self):
         active_make = "\n".join(
             line
             for line in self.text.splitlines()
@@ -305,15 +310,18 @@ class ClusterRecoverMakefileContractTests(unittest.TestCase):
             r"\$\(\s*shell\s+cat\b",
             "$(shell cat ...) jest rozwijane przed powstaniem pliku stanu",
         )
+        self.assertIn("verify-recovery-state.py", self.joined)
+        self.assertIn("$(RECOVER_NODE_FILE)", self.joined)
+        self.assertNotIn('cat "$(RECOVER_STATE_FILE)"', self.joined)
         self.assertIn(
-            '-e bootstrap_node=$$(cat "$(RECOVER_STATE_FILE)")',
+            'bootstrap_node=$$(cat "$(RECOVER_NODE_FILE)")',
             self.joined,
-            "shell ma odczytac wybor na linii bootstrapu, po zakonczeniu playbooka",
+            "bootstrap dostaje dopiero zweryfikowany wybor biezacego przebiegu",
         )
         self.assertIn(
-            'join_bootstrap_node=$$(cat "$(RECOVER_STATE_FILE)")',
+            'join_bootstrap_node=$$(cat "$(RECOVER_NODE_FILE)")',
             self.joined,
-            "join musi pominac faktyczny bootstrap, nie zawsze galera[0]",
+            "join reuse'uje ten sam zweryfikowany wybor",
         )
 
     def test_reuses_canonical_bootstrap_playbook(self):
@@ -456,15 +464,17 @@ class ClusterRecoverPlaybookContractTests(unittest.TestCase):
         self.assertIn(
             "recover_state_file",
             select_play,
-            "playbook zapisuje wybrany wezel pod recover_state_file",
+            "playbook zapisuje wybor pod recover_state_file",
         )
+        self.assertIn("recover_run_id", select_play)
         _, recipes = parse_makefile(makefile_text())
         recover_recipe = "\n".join(recipes.get("cluster-recover", []))
         self.assertIn(
-            "recover_state_file=$(RECOVER_STATE_FILE)",
+            'recover_state_file="$(RECOVER_STATE_FILE)"',
             recover_recipe,
             "Makefile przekazuje ta sama sciezke stanu, ktora zapisuje playbook",
         )
+        self.assertIn('recover_run_id="$(RECOVER_RUN_ID)"', recover_recipe)
 
 
 class ClusterJoinBootstrapContractTests(unittest.TestCase):
@@ -581,6 +591,7 @@ class ClusterRecoverSelectionLogicTests(unittest.TestCase):
             "groups": {"galera": [item["item"] for item in results]},
             "recover_grastate": {"results": results},
             "recover_state_file": "clusters/test/recover-bootstrap-node",
+            "recover_run_id": "unit-test-run",
         }
         if override is not None:
             context["recover_bootstrap_node"] = override

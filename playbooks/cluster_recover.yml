@@ -124,12 +124,16 @@
   any_errors_fatal: true
 
   tasks:
-    - name: "Wymagaj jawnego recover_state_file (przekazuje go cel cluster-recover)"
+    - name: "Wymagaj jawnego pliku stanu i identyfikatora przebiegu"
       ansible.builtin.assert:
         that:
           - recover_state_file is defined
           - recover_state_file | length > 0
-        fail_msg: "Przekaz -e recover_state_file=clusters/<klaster>/recover-bootstrap-node."
+          - recover_run_id is defined
+          - recover_run_id | length > 0
+        fail_msg: >-
+          Przekaz recover_state_file oraz unikalny recover_run_id z celu
+          cluster-recover. Stan bez identyfikatora przebiegu nie jest dowodem.
 
     - name: "Odczytaj grastate.dat ze wszystkich wezlow Galera"
       ansible.builtin.slurp:
@@ -303,9 +307,17 @@
       delegate_to: "{{ recover_bootstrap_choice }}"
       when: recover_bootstrap_choice not in recover_stb_nodes
 
-    - name: "Zapisz wybrany wezel do pliku stanu (odczytuje go cel cluster-recover)"
+    - name: "Zapisz wybrany wezel do pliku stanu bieżącego przebiegu"
       ansible.builtin.copy:
-        content: "{{ recover_bootstrap_choice }}\n"
+        content: >-
+          {{
+            {
+              'run_id': recover_run_id,
+              'generated_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ'),
+              'node': recover_bootstrap_choice
+            }
+            | to_nice_json
+          }}
         dest: "{{ recover_state_file }}"
         mode: "0644"
       delegate_to: localhost

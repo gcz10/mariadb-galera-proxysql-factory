@@ -511,22 +511,25 @@ lab-rolling-restart-verify:  ## F12 — zweryfikuj rolling restart (ISC-50/51)
 #      playbooks/bootstrap.yml przez istniejacy cel cluster-bootstrap z parametrami
 #      bootstrap_node + bootstrap_confirm_all_down=true, potem join z brama zdrowia.
 #
-# Wezel wybrany przez playbooks/cluster_recover.yml. Sciezka jest ABSOLUTNA:
-# ansible.builtin.copy z delegate_to: localhost zapisuje na hoscie sterujacym,
-# a wzgledny dest moglby wskazac katalog domowy uzytkownika Ansible zamiast
-# repozytorium. Wybor odczytuje POWLOKA dopiero na liniach bootstrap/join:
-# `$(shell cat ...)` w zmiennej Make byloby rozwiniete przed uruchomieniem
-# playbooka, czyli zanim plik stanu powstanie.
+# Wezel wybrany przez playbooks/cluster_recover.yml. Plik stanu jest artefaktem
+# JEDNEGO przebiegu, nie pamiecia ostatniego sukcesu: cel usuwa poprzedni plik,
+# generuje run_id, playbook zapisuje JSON {run_id, generated_at, node}, a
+# verifier porownuje run_id i czlonkostwo node w grupie galera. Samo `test -s`
+# przepuszczalo stary wybor, gdy Ansible zwrocil rc=0 bez wykonania play.
 RECOVER_STATE_FILE = $(CURDIR)/clusters/$(CLUSTER)/recover-bootstrap-node
+RECOVER_NODE_FILE = $(RECOVER_STATE_FILE).validated
+cluster-recover: RECOVER_RUN_ID := $(shell python3 -c 'import uuid; print(uuid.uuid4())')
 cluster-recover:  ## Cold recovery Galera: serialny stop + bezpieczny bootstrap + join (CLUSTER+CONFIRM=yes; BOOTSTRAP_NODE przy remisie)
 	$(cluster_guard)
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (cold recovery zatrzymuje caly klaster)"; exit 1)
 	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/cluster_recover.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e confirm=yes -e recover_state_file=$(RECOVER_STATE_FILE) $(if $(BOOTSTRAP_NODE),-e recover_bootstrap_node=$(BOOTSTRAP_NODE)) $(ANSIBLE_OPTS)
-	@test -s $(RECOVER_STATE_FILE) || { echo "ERROR: playbooks/cluster_recover.yml nie zapisal wezla bootstrap" >&2; exit 1; }
-	@echo "Bootstrap po recovery: $$(cat $(RECOVER_STATE_FILE)) (kanoniczny playbooks/bootstrap.yml)"
-	$(MAKE) cluster-bootstrap ANSIBLE_OPTS="$(ANSIBLE_OPTS) -e bootstrap_node=$$(cat "$(RECOVER_STATE_FILE)") -e bootstrap_confirm_all_down=true"
-	$(MAKE) cluster-join ANSIBLE_OPTS="$(ANSIBLE_OPTS) -e join_bootstrap_node=$$(cat "$(RECOVER_STATE_FILE)")"
+	@rm -f "$(RECOVER_STATE_FILE)" "$(RECOVER_NODE_FILE)" "$(RECOVER_NODE_FILE).tmp"
+	ansible-playbook playbooks/cluster_recover.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e confirm=yes -e recover_state_file="$(RECOVER_STATE_FILE)" -e recover_run_id="$(RECOVER_RUN_ID)" $(if $(BOOTSTRAP_NODE),-e recover_bootstrap_node=$(BOOTSTRAP_NODE)) $(ANSIBLE_OPTS)
+	@python3 tests/validation/verify-recovery-state.py "$(RECOVER_STATE_FILE)" "$(RECOVER_RUN_ID)" "clusters/$(CLUSTER)/inventory.yml" > "$(RECOVER_NODE_FILE).tmp"
+	@mv "$(RECOVER_NODE_FILE).tmp" "$(RECOVER_NODE_FILE)"
+	@echo "Bootstrap po recovery: $$(cat "$(RECOVER_NODE_FILE)") (kanoniczny playbooks/bootstrap.yml)"
+	$(MAKE) cluster-bootstrap ANSIBLE_OPTS="$(ANSIBLE_OPTS) -e bootstrap_node=$$(cat "$(RECOVER_NODE_FILE)") -e bootstrap_confirm_all_down=true"
+	$(MAKE) cluster-join ANSIBLE_OPTS="$(ANSIBLE_OPTS) -e join_bootstrap_node=$$(cat "$(RECOVER_NODE_FILE)")"
 	$(MAKE) cluster-health
 
 cluster-upgrade-plan:  ## F12 — wygeneruj read-only plan major upgrade (ISC-53/54/56)
