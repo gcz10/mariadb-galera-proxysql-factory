@@ -73,7 +73,7 @@ identyfikatorów:
 mysql_galera_hostgroups (odczyt z zywego fcp1, 2026-08-21):
   writer / backup / reader / offline
      10  /   20   /   30   /   40    -> finalclaude-r10
-    810  /  820   /  830   /  840    -> newclaude17-r9
+    850  /  860   /  870   /  880    -> newclaude17-r9
 
 mysql_users:  app_user -> hg 10       app_user_n17 -> hg 850 (n17)
 ```
