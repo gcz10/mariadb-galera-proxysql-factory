@@ -1,6 +1,6 @@
 # Compatibility Report — F1 Version Research
 
-**Research date:** 2026-07-22
+**Research date:** bazowe badanie 2026-07-22; aktualizacja i live test PMM 3.9.1 — 2026-08-23
 **Sources:** mariadb.org, endoflife.date, proxysql.com, rockylinux.org, docs.ansible.com, github.com/ansible-collections/ansible.mysql, Percona PMM release notes, Prometheus node_exporter releases
 **Status:** Read-only research (BLK-4 rozstrzygnięty: internet dostępny). Host-dependent fakty pozostają na F0.
 
@@ -82,6 +82,7 @@
 | ProxySQL 3.0.9 | Stable | RPM oficjalne repo | `mysql_galera_hostgroups` | Security CVEs patchowane |
 | Galera 4 (galera-4) | wsrep API 26 | z MariaDB repo | — | MariaDB 11.x wylacznie |
 | ansible-core 2.21.2 | latest | — | — | ansible.mysql 5.1.0 |
+| ansible.mysql 5.1.0 | active | — | — | MariaDB wspierana do mid-2027 |
 | PMM Server 3.9.1 | security release | kontener, nie RPM | natywne metryki MariaDB/Galera | digest + trwały volume; backup przed upgrade |
 | node_exporter 1.12.1 | latest stable 2026-07-14 | oficjalny tarball per arch | external service w PMM | amd64/arm64 SHA-256 przypięte |
 

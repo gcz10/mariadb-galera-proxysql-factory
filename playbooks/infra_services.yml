@@ -23,6 +23,9 @@
     minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
     infra_compose_dir: /etc/isa-infra
     infra_compose_file: /etc/isa-infra/compose.yml
+    infra_pmm_data_volume: isa-pmm-data
+    infra_pmm_desired_image: "{{ lock.pmm.image }}@{{ lock.pmm.image_digest }}"
+    infra_pmm_backup_volume: "isa-pmm-data-backup-{{ lock.pmm.version }}-{{ ansible_date_time.epoch }}"
     infra_firewall_rules: >-
       {{
         (
@@ -206,6 +209,128 @@
       # zadanie restartu. Bez flush handler wystapilby dopiero na koncu play,
       # czyli po `docker compose up` — zrestartowany daemon zdjalby kontenery.
       ansible.builtin.meta: flush_handlers
+    - name: "PMM — odczytaj bieżący obraz kontenera"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - container
+          - inspect
+          - --format
+          - "{{ '{{' }}.Config.Image{{ '}}' }}"
+          - pmm-server
+      register: infra_pmm_container_inspect
+      changed_when: false
+      failed_when: infra_pmm_container_inspect.rc not in [0, 1]
+
+    - name: "PMM — zapamiętaj bieżący obraz kontenera"
+      ansible.builtin.set_fact:
+        infra_pmm_current_image: >-
+          {{
+            infra_pmm_container_inspect.stdout | trim
+            if infra_pmm_container_inspect.rc == 0
+            else ''
+          }}
+
+    - name: "PMM — wylicz potrzebę backupu przed zmianą obrazu"
+      ansible.builtin.set_fact:
+        infra_pmm_upgrade_required: >-
+          {{
+            infra_pmm_current_image | length > 0
+            and infra_pmm_current_image != infra_pmm_desired_image
+          }}
+
+
+    - name: "PMM — wykonaj spójny backup przed zmianą obrazu"
+      when:
+        - infra_pmm_upgrade_required | bool
+      block:
+        - name: "PMM — zatrzymaj serwer przed backupem"
+          ansible.builtin.command:
+            argv:
+              - docker
+              - stop
+              - pmm-server
+          changed_when: true
+
+        - name: "PMM — utwórz volume backupu"
+          ansible.builtin.command:
+            argv:
+              - docker
+              - volume
+              - create
+              - "{{ infra_pmm_backup_volume }}"
+          changed_when: true
+
+        - name: "PMM — skopiuj i zweryfikuj dane /srv"
+          ansible.builtin.command:
+            argv:
+              - docker
+              - run
+              - --rm
+              - --user
+              - "0"
+              - -v
+              - "{{ infra_pmm_data_volume }}:/from:ro"
+              - -v
+              - "{{ infra_pmm_backup_volume }}:/to"
+              - "{{ infra_pmm_current_image }}"
+              - sh
+              - -ceu
+              - >-
+                cp -a /from/. /to/;
+                test -d /to/grafana;
+                test -d /to/victoriametrics;
+                test "$(du -sk /from | cut -f1)" = "$(du -sk /to | cut -f1)";
+                printf '%s\n' '{{ infra_pmm_current_image }} -> {{ infra_pmm_desired_image }}'
+                > /to/.isa-pmm-backup-complete
+          changed_when: true
+      rescue:
+        - name: "PMM — usuń niekompletny volume backupu"
+          ansible.builtin.command:
+            argv:
+              - docker
+              - volume
+              - rm
+              - --force
+              - "{{ infra_pmm_backup_volume }}"
+          register: infra_pmm_backup_cleanup
+          changed_when: infra_pmm_backup_cleanup.rc == 0
+          failed_when: false
+
+        - name: "PMM — przerwij po nieudanym backupie"
+          ansible.builtin.fail:
+            msg: >-
+              Backup PMM {{ infra_pmm_backup_volume }} nie przeszedl weryfikacji.
+              Niekompletny volume zostal usuniety; stary PMM zostanie uruchomiony.
+      always:
+        - name: "PMM — uruchom serwer po backupie"
+          ansible.builtin.command:
+            argv:
+              - docker
+              - start
+              - pmm-server
+          changed_when: true
+
+    - name: "PMM — wymagaj kompletnego backupu przed zmianą obrazu"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --user
+          - "0"
+          - -v
+          - "{{ infra_pmm_backup_volume }}:/backup:ro"
+          - "{{ infra_pmm_current_image }}"
+          - sh
+          - -ceu
+          - >-
+            test -f /backup/.isa-pmm-backup-complete;
+            test -d /backup/grafana;
+            test -d /backup/victoriametrics
+      changed_when: false
+      when: infra_pmm_upgrade_required | bool
+
 
     - name: "Utwórz prywatny katalog konfiguracji infra"
       ansible.builtin.file:
@@ -305,9 +430,9 @@
         fail_msg: "Nie wszystkie usługi infra są uruchomione: {{ infra_running_services.stdout_lines }}"
         success_msg: "PMM, MinIO i Maildev działają na {{ inventory_hostname }}."
 
-    # PMM Server 3.9.1 moze zachowac haslo z volume; przy pierwszym starcie
-    # Grafana moze nie stosowac GF_SECURITY_ADMIN_PASSWORD — API ponizej
-    # wymusza skonfigurowane haslo idempotentnie.
+    # Na trwałym volume docelowe haslo moze byc juz ustawione — wtedy pierwszy
+    # test wystarcza. Fallback ponizej obsluguje WYLACZNIE pierwszy bootstrap
+    # z admin/admin; inne stare haslo wymaga jawnej rotacji przez operatora.
     - name: "PMM — sprawdz czy haslo admina z compose dziala (uri, bez wycieku w argv)"
       ansible.builtin.uri:
         url: "https://{{ ansible_host }}:443/graph/api/user"

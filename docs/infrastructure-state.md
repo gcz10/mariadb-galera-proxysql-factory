@@ -41,6 +41,12 @@ po backupie trwałego volume `isa-pmm-data` do `pmm-data-backup-20260823-133353`
 (2.5G; katalogi Grafana i VictoriaMetrics zweryfikowane). Klienci zostały
 zaktualizowane najpierw na `fcp1/fcp2` (EL10), następnie na `n17g1-3` (EL9),
 zgodnie z zasadą PMM Server >= PMM Client. `f10` pozostaje agentless.
+Kolejne zmiany przypiętego obrazu są fail-closed: `platform-infra` rozpoznaje
+różnicę obrazu i tworzy świeży volume backupu z wersją oraz timestampem dla
+każdej próby. Źródłowy `isa-pmm-data` jest montowany read-only; niekompletna
+kopia usuwa wyłącznie volume bieżącej próby i uruchamia stary PMM. Dopiero
+marker oraz kontrola katalogów danych pozwalają na Compose recreate.
+
 
 Nie zastosowano hurtowo porad z `VolkanSah/optimize-MySQL-MariaDB`: są ogólnymi
 przykładami dla dedykowanych serwerów, a n17 ma 3G RAM na węzeł, Galerę, SST,

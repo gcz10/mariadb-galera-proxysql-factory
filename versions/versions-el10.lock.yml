@@ -3,8 +3,8 @@
 # Równoległy do versions.lock.yml (EL9); kod playbooków jest wspólny i nie zna platformy.
 # Wybór następuje przez `versions.lock_file` w clusters/<name>/cluster.yml.
 #
-# Wszystkie wersje i sumy kontrolne ZWERYFIKOWANE realnym zapytaniem do repozytoriów
-# 2026-07-26 (repomd.xml + pobranie RPM-a i policzenie sha256), nie przepisane z pamięci.
+# Bazowe wersje i sumy zweryfikowano realnymi zapytaniami 2026-07-26
+# (repomd.xml + pobranie RPM-u i sha256); PMM 3.9.1 zweryfikowano 2026-08-23.
 # Produkcja używa wyłącznie tego pliku. Nigdy state: latest.
 
 rocky_linux:
@@ -129,12 +129,15 @@ repositories:
     gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
     integrity_control: "sha256-pinned-rpm"   # proxysql.rpm_sha256
 
-# Status: LOCKED dla warstwy pakietowej — wszystkie wersje i sumy potwierdzone realnym
-# zapytaniem do repozytoriów 2026-07-26. NIEZWERYFIKOWANE URUCHOMIENIEM: SELinux/SST
-# (moduł polityki mariadb-server.te pod checkpolicy 3.10) — bramka R3 planu dual-platform.
+# Status: LOCKED. Bazowa warstwa pakietowa zweryfikowana 2026-07-26, a PMM
+# Server/client 3.9.1 — repozytorium, obraz i live runtime — 2026-08-23.
+# NIEZWERYFIKOWANE URUCHOMIENIEM: SELinux/SST (modul polityki
+# mariadb-server.te pod checkpolicy 3.10) — bramka R3 planu dual-platform.
 
 pmm_client:
-  # Serwer musi byc najpierw >= klienta; oba komponenty przechodza na 3.9.1.
+  # Serwer musi byc najpierw >= klienta; oba komponenty sa na 3.9.1.
+  # Tryb MUSI zostac jawnie 'push': 'auto' wybiera tu 'pull', ktory wymaga
+  # przychodzacych portow 42000-51999 blokowanych przez minimalny firewalld.
   version: "3.9.1"
   rpm_release: "1.el10"
   package: "pmm-client-3.9.1-1.el10"

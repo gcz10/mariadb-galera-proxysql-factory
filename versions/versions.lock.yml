@@ -131,12 +131,13 @@ repositories:
 # Status: LOCKED — promowany z candidate.lock.yml 2026-07-22 (F0 PASS na lab-cluster).
 
 pmm_client:
-  # Serwer musi byc najpierw >= klienta; oba komponenty przechodza na 3.9.1.
+  # Serwer musi byc najpierw >= klienta; oba komponenty sa na 3.9.1.
+  # Tryb MUSI zostac jawnie 'push': 'auto' wybiera tu 'pull', ktory wymaga
+  # przychodzacych portow 42000-51999 blokowanych przez minimalny firewalld.
   version: "3.9.1"
   rpm_release: "1.el9"
   package: "pmm-client-3.9.1-1.el9"
   repo_component: "pmm3-client"
   release_rpm: "https://repo.percona.com/yum/percona-release-latest.noarch.rpm"
-  # Tryb metryk MUSI byc jawnie 'push'.
   metrics_mode: "push"
   source: "https://docs.percona.com/percona-monitoring-and-management/3/install-pmm/install-pmm-client/package_manager.html"

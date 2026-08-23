@@ -1,7 +1,7 @@
 # Plan: Rocky Linux 10 obok Rocky Linux 9 (dual-platform)
 
 **Status:** ✅ **ZAKOŃCZONE** (2026-07-27). Wszystkie fazy R0-R6 wykonane i zweryfikowane na żywym klastrze Rocky 10.2. Podsumowanie w §8.
-**Data ustaleń:** 2026-07-26. Wszystkie wersje/URL/sumy **zweryfikowane realnym zapytaniem do repozytoriów**, nie z pamięci.
+**Data ustaleń bazowych:** 2026-07-26. **Aktualizacja PMM:** 2026-08-23. Wersje/URL/sumy zweryfikowano realnymi zapytaniami do repozytoriów, nie z pamięci.
 **Zasada nadrzędna:** kod jest **uniwersalny** — zero wersji i zero platformy w playbookach.
 Wszystko platformowe/wersyjne pochodzi z **lockfile wskazanego per klaster** (`versions.lock_file` w `cluster.yml`; schema tego wymaga).
 Kod Rocky 9 **zostaje** — to dodanie drugiej platformy, nie migracja.
@@ -66,8 +66,8 @@ Po wydaniu PMM 3.9.1 (19 sierpnia 2026) zaktualizowano serwer oraz klientów.
 Wersja naprawia high-severity ClickHouse datasource i inne błędy opisane w
 oficjalnych release notes. Przed zmianą obrazu wykonano backup trwałego volume
 PMM (`pmm-data-backup-20260823-133353`, 2.5G); następnie `make platform-infra`
-podmienił obraz, a `make platform-monitoring` zaktualizował klientów fcp1/fcp2
-i n17g1-3. Post-upgrade: platform-verify, probe-pmm-native oraz obie sondy
+podmienił obraz. `make platform-monitoring` zaktualizował klientów `fcp1/fcp2`,
+a `make cluster-monitoring CLUSTER=newclaude17-r9` klientów `n17g1-3`. Post-upgrade: platform-verify, probe-pmm-native oraz obie sondy
 Galera przeszły.
 
 ### URL-e i sumy kontrolne (do lockfile EL10)
