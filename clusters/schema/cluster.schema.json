@@ -693,7 +693,20 @@
           "type": [
             "integer",
             "string"
-          ]
+          ],
+          "enum": [
+            0,
+            1,
+            2,
+            "0",
+            "1",
+            "2"
+          ],
+          "description": "Domyslnie 1 (flush przy COMMIT). 0/2 zwieksza wydajnosc kosztem trwalosci ostatnich transakcji; w production wymaga durability_risk_accepted=true."
+        },
+        "durability_risk_accepted": {
+          "type": "boolean",
+          "description": "Jawna, maszynowo sprawdzalna akceptacja ryzyka dla production z innodb_flush_log_at_trx_commit innym niz 1."
         },
         "gcache_page_size": {
           "type": "string"

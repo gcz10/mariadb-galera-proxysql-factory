@@ -13,7 +13,10 @@ user = mysql
 binlog_format = ROW
 default_storage_engine = InnoDB
 innodb_autoinc_lock_mode = 2
-innodb_flush_log_at_trx_commit = {{ (mariadb_tuning | default({})).innodb_flush_log_at_trx_commit | default(0) }}
+# Bezpieczny default MariaDB = 1 (flush przy kazdym COMMIT). Laboratory moze
+# jawnie ustawic 0 dla wydajnosci; produkcja wymaga 1 albo risk acceptance.
+# Zrodlo: https://mariadb.com/docs/server/server-management/server-monitoring-logs/binary-log/group-commit-for-the-binary-log
+innodb_flush_log_at_trx_commit = {{ (mariadb_tuning | default({})).innodb_flush_log_at_trx_commit | default(1) }}
 
 # === wsrep ===
 wsrep_on = ON

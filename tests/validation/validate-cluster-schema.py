@@ -75,6 +75,18 @@ def main():
     if env == "production" and policy != "locked":
         errors.append(f"production environment requires versions.policy=locked, got '{policy}'")
 
+    # Bezpieczny default to 1. Wartosci 0/2 moga utracic ostatnie zatwierdzone
+    # transakcje przy crashu hosta; w production wymagaja jawnej, maszynowo
+    # sprawdzalnej akceptacji ryzyka zamiast komentarza/ADR poza configiem.
+    tuning = cluster.get("mariadb_tuning", {})
+    flush_at_commit = int(tuning.get("innodb_flush_log_at_trx_commit", 1))
+    durability_risk_accepted = tuning.get("durability_risk_accepted", False)
+    if env == "production" and flush_at_commit != 1 and not durability_risk_accepted:
+        errors.append(
+            "production with mariadb_tuning.innodb_flush_log_at_trx_commit "
+            f"{flush_at_commit} requires mariadb_tuning.durability_risk_accepted=true"
+        )
+
     # Check: tls.mode=disabled in production requires risk acceptance (ISC-45)
     tls_mode = cluster.get("tls", {}).get("mode", "")
     if env == "production" and tls_mode == "disabled":
