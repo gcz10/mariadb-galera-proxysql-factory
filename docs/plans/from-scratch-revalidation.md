@@ -247,14 +247,16 @@ wywaliło locki ZFS na PVE (`HTTP 596 Broken pipe` i VM utworzona poza stanem).
 ```bash
 make infra-provision CLUSTER=shared
 make platform-trust-hosts PLATFORM=shared
-make platform-infra PLATFORM=shared ANSIBLE_OPTS='-e allow_kernel_reboot=yes'
+make platform-build PLATFORM=shared ANSIBLE_OPTS='-e allow_kernel_reboot=yes'
 make infra-provision CLUSTER=finalclaude-r10
 make cluster-trust-hosts CLUSTER=finalclaude-r10
 ```
 
-Warstwa wspólna ma własny inventory i lifecycle. `platform-trust-hosts`
-weryfikuje jej hosty przed `platform-infra`; późniejszy `cluster-trust-hosts`
-obejmuje wyłącznie inventory przygotowywanego najemcy.
+Warstwa wspólna ma własny inventory i lifecycle. `platform-build` wykonuje
+kanoniczną kolejność validate → deploy → **platform-firewall** → infra →
+ProxySQL → endpoint → monitoring → alerty → verify. Jawny krok firewalla jest
+granicą ownership: tylko platforma zarządza `fcp1/fcp2/fcinfra/fcapp`.
+Późniejszy `cluster-trust-hosts` obejmuje inventory przygotowywanego najemcy.
 
 `allow_kernel_reboot=yes` jest konieczne przy świeżym obrazie: VM bootuje
 starszy kernel niż zainstalowany, brakuje modułów `xtables` i filtr ingress
