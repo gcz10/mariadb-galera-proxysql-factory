@@ -27,54 +27,35 @@
           - sst_password | length > 0
         fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env). Puste hasło = konto SST bez hasła."
 
-    - name: "Sonduj każdy węzeł Galera: osiągalność + Primary Component (audit#2)"
-      ansible.builtin.command:
-        argv:
-          - mariadb
-          - --socket=/var/lib/mysql/mysql.sock
-          - -N
-          - -B
-          - -e
-          - "SHOW STATUS LIKE 'wsrep_cluster_status'"
-      delegate_to: "{{ item }}"
-      loop: "{{ groups['galera'] }}"
-      register: bootstrap_node_probe
-      changed_when: false
-      failed_when: false
-      ignore_unreachable: true
+    - name: "Sonduj stan wszystkich wezlow Galera (wspolny klasyfikator)"
+      ansible.builtin.include_tasks: tasks/galera_state_probe.yml
 
-    - name: "Klasyfikuj węzły: żywy Primary / nieosiągalne"
-      ansible.builtin.set_fact:
-        bootstrap_live_primary: >-
-          {{
-            bootstrap_node_probe.results
-            | selectattr('stdout', 'defined')
-            | map(attribute='stdout')
-            | select('search', '(?m)^wsrep_cluster_status\tPrimary$')
-            | list
-          }}
-        bootstrap_unreachable: >-
-          {{
-            bootstrap_node_probe.results
-            | rejectattr('stdout', 'defined')
-            | map(attribute='item')
-            | list
-          }}
+    # Fail-closed bez furtki: `bootstrap_confirm_all_down` potwierdza WIEDZE
+    # operatora o wezlach nieosiagalnych, a nie o takich, ktorych stanu nie
+    # udalo sie odczytac mimo dzialajacego SSH. Te drugie trzeba zbadac.
+    - name: "Fail-closed: kazdy wezel ma jednoznaczny stan"
+      ansible.builtin.assert:
+        that:
+          - galera_state_unknown | length == 0
+        fail_msg: >-
+          Nieznany stan wezlow: {{ galera_state_unknown }}. SSH dziala, ale sonda
+          nie zwrocila rozstrzygajacej odpowiedzi — nie mozna wykluczyc zywego
+          Primary. Zbadaj klienta bazy/socket na tych wezlach i powtorz.
 
     - name: "ISC-65: brak żywego Primary Component (anti split-brain)"
       ansible.builtin.assert:
         that:
-          - bootstrap_live_primary | length == 0
+          - galera_state_primary | length == 0
         fail_msg: >-
-          Żywy Primary Component wykryty: {{ bootstrap_live_primary }}.
+          Żywy Primary Component wykryty: {{ galera_state_primary }}.
           Bootstrap = drugi Primary → split-brain / utrata danych. Dołącz zamiast bootstrappować.
 
     - name: "Audit#2: nieosiągalne węzły wymagają bootstrap_confirm_all_down=true"
       ansible.builtin.assert:
         that:
-          - (bootstrap_unreachable | length == 0) or (bootstrap_confirm_all_down | default(false) | bool)
+          - (galera_state_unreachable | length == 0) or (bootstrap_confirm_all_down | default(false) | bool)
         fail_msg: >-
-          Nieosiągalne węzły: {{ bootstrap_unreachable }}. Nie można wykluczyć, że któryś
+          Nieosiągalne węzły: {{ galera_state_unreachable }}. Nie można wykluczyć, że któryś
           działa jako Primary (sieć/partycja). Jeśli na PEWNO wszystkie stoją — przekaż
           -e bootstrap_confirm_all_down=true. W przeciwnym razie zbadaj osiągalność najpierw.
 

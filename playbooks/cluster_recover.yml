@@ -41,52 +41,36 @@
 
 
   tasks:
-    - name: "Sonduj wsrep_cluster_status na kazdym wezle Galera"
-      ansible.builtin.command:
-        argv:
-          - mariadb
-          - --socket=/var/lib/mysql/mysql.sock
-          - -N
-          - -B
-          - -e
-          - "SHOW STATUS LIKE 'wsrep_cluster_status'"
-      delegate_to: "{{ item }}"
-      loop: "{{ groups['galera'] }}"
-      register: recover_probe
-      changed_when: false
-      failed_when: false
-      ignore_unreachable: true
+    - name: "Sonduj stan wszystkich wezlow Galera (wspolny klasyfikator)"
+      ansible.builtin.include_tasks: tasks/galera_state_probe.yml
 
-    - name: "Klasyfikuj wezly: zywy Primary / nieosiagalny SSH / baza stoi"
-      ansible.builtin.set_fact:
-        recover_live_primary: >-
-          {{ recover_probe.results
-             | selectattr('stdout', 'defined')
-             | selectattr('stdout', 'search', '(?m)^wsrep_cluster_status\tPrimary$')
-             | map(attribute='item')
-             | list }}
-        recover_ssh_unreachable: >-
-          {{ recover_probe.results
-             | selectattr('unreachable', 'defined')
-             | selectattr('unreachable')
-             | map(attribute='item')
-             | list }}
+    # Tu skutek nieznanego stanu jest odwrotny niz przy bootstrapie: bez tej
+    # asercji niejednoznaczna sonda przechodzila jako "klaster stoi" i Play 2
+    # zatrzymywal dzialajacy klaster. Falszywy alarm zamienial sie w awarie.
+    - name: "Fail-closed: kazdy wezel ma jednoznaczny stan"
+      ansible.builtin.assert:
+        that:
+          - galera_state_unknown | length == 0
+        fail_msg: >-
+          Nieznany stan wezlow: {{ galera_state_unknown }}. SSH dziala, ale sonda
+          nie rozstrzygnela stanu bazy — zatrzymanie klastra na tej podstawie
+          byloby zgadywaniem. Zbadaj te wezly i powtorz.
 
     - name: "Cold recovery wymaga osiagalnosci SSH wszystkich wezlow"
       ansible.builtin.assert:
         that:
-          - recover_ssh_unreachable | length == 0
+          - galera_state_unreachable | length == 0
         fail_msg: >-
-          Nieosiagalne (SSH): {{ recover_ssh_unreachable }}. Bez odczytu ich
+          Nieosiagalne (SSH): {{ galera_state_unreachable }}. Bez odczytu ich
           stanu wybor wezla bootstrap bylby zgadywaniem. Przywroc osiagalnosc
           (make cluster-trust-hosts CLUSTER=<klaster>) i powtorz.
 
     - name: "ISC-65: przy zywym Primary NIE robimy cold recovery bootstrapem"
       ansible.builtin.assert:
         that:
-          - recover_live_primary | length == 0
+          - galera_state_primary | length == 0
         fail_msg: >-
-          Zywy Primary Component: {{ recover_live_primary }}. Klaster dziala —
+          Zywy Primary Component: {{ galera_state_primary }}. Klaster dziala —
           cold recovery z bootstrapem stworzylby drugi Primary (split-brain).
           Uzyj: make cluster-rolling-restart.
 

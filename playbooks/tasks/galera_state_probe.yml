@@ -1,0 +1,98 @@
+---
+# Jeden klasyfikator stanu Galery dla KAZDEJ operacji destrukcyjnej.
+#
+# Sonda `wsrep_cluster_status` konczy sie na piec sposobow, a poprzednia wersja
+# rozpoznawala dwa: "stdout zawiera Primary" oraz "stdout niezdefiniowany".
+# Host osiagalny po SSH, ktorego klient bazy zwrocil rc != 0 i pusty stdout
+# (brak uprawnien do socketu, zle haslo, uszkodzony klient), nie trafial do
+# zadnej kategorii — znikal z decyzji. Skutki byly przeciwstawne i oba zle:
+# bootstrap uznawal, ze nie ma zywego Primary i tworzyl drugi (split-brain),
+# a cold recovery uznawal, ze klaster stoi, i zatrzymywal zdrowy klaster.
+#
+# Kategorie sa TOTALNE: `galera_state_unknown` liczony jest przez roznice
+# wzgledem grupy galera, wiec zaden ksztalt wyniku nie moze wypasc poza model.
+# Uzycie: include_tasks + asercja `galera_state_unknown | length == 0` PRZED
+# jakimkolwiek krokiem zmieniajacym stan klastra.
+
+- name: "Galera — sonduj wsrep_cluster_status na kazdym wezle"
+  ansible.builtin.command:
+    argv:
+      - mariadb
+      - --socket=/var/lib/mysql/mysql.sock
+      - -N
+      - -B
+      - -e
+      - "SHOW STATUS LIKE 'wsrep_cluster_status'"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['galera'] }}"
+  register: galera_state_probe
+  changed_when: false
+  failed_when: false
+  ignore_unreachable: true
+
+- name: "Galera — sklasyfikuj jednoznaczne wyniki sondy"
+  ansible.builtin.set_fact:
+    # Kazda kategoria wymaga DOWODU POZYTYWNEGO. rc=0 z pustym stdout nie jest
+    # dowodem braku Primary: tak wyglada zarowno pominiete zadanie w --check
+    # (Ansible zwraca syntetyczne rc=0), jak i klient, ktory nic nie odpowiedzial.
+    # Bez tego warunku trzy zywe wezly Primary ladowaly w 'non_primary'.
+    galera_state_primary: >-
+      {{
+        galera_state_probe.results
+        | rejectattr('unreachable', 'defined')
+        | rejectattr('skipped', 'defined')
+        | selectattr('rc', 'defined')
+        | selectattr('rc', 'eq', 0)
+        | selectattr('stdout', 'search', '(?m)^wsrep_cluster_status\tPrimary$')
+        | map(attribute='item')
+        | list
+      }}
+    galera_state_non_primary: >-
+      {{
+        galera_state_probe.results
+        | rejectattr('unreachable', 'defined')
+        | rejectattr('skipped', 'defined')
+        | selectattr('rc', 'defined')
+        | selectattr('rc', 'eq', 0)
+        | selectattr('stdout', 'search', '(?m)^wsrep_cluster_status\t\S')
+        | rejectattr('stdout', 'search', '(?m)^wsrep_cluster_status\tPrimary$')
+        | map(attribute='item')
+        | list
+      }}
+    galera_state_down_verified: >-
+      {{
+        galera_state_probe.results
+        | rejectattr('unreachable', 'defined')
+        | rejectattr('skipped', 'defined')
+        | selectattr('rc', 'defined')
+        | rejectattr('rc', 'eq', 0)
+        | selectattr('stderr', 'defined')
+        | selectattr('stderr', 'search', 'ERROR 2002')
+        | map(attribute='item')
+        | list
+      }}
+    galera_state_unreachable: >-
+      {{
+        galera_state_probe.results
+        | selectattr('unreachable', 'defined')
+        | selectattr('unreachable')
+        | map(attribute='item')
+        | list
+      }}
+
+# Osobne zadanie, bo `set_fact` nie gwarantuje widocznosci kluczy z tego samego
+# wywolania. Roznica wzgledem grupy czyni model totalnym: cokolwiek nowego
+# zwroci Ansible, wpadnie do UNKNOWN, a nie w cisze.
+- name: "Galera — wszystko pozostale jest stanem nieznanym"
+  ansible.builtin.set_fact:
+    galera_state_unknown: >-
+      {{
+        groups['galera']
+        | difference(
+            galera_state_primary
+            + galera_state_non_primary
+            + galera_state_down_verified
+            + galera_state_unreachable
+          )
+        | list
+      }}

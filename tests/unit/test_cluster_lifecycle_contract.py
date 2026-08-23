@@ -367,16 +367,16 @@ class ClusterRecoverPlaybookContractTests(unittest.TestCase):
         self.assertNotIn("galera_new_cluster", self.raw)
 
     def test_playbook_has_confirm_guard_before_any_probe(self):
-        probe_index = self.find_play("wsrep_cluster_status")
+        probe_index = self.find_play("galera_state_probe.yml")
         probe_play = self.plays[probe_index]
         self.assertIn("pre_tasks", probe_play)
         self.assertIn("confirm is defined", self.play_text(probe_play))
         self.assertIn("confirm | bool", self.play_text(probe_play))
 
     def test_live_primary_guard_precedes_stop(self):
-        probe_index = self.find_play("wsrep_cluster_status")
+        probe_index = self.find_play("galera_state_probe.yml")
         stop_index = self.find_play("pkill -x mariadbd")
-        self.assertIsNotNone(probe_index, "playbook musi sondowac wsrep na wszystkich wezlach")
+        self.assertIsNotNone(probe_index, "playbook musi sondowac stan wszystkich wezlow")
         self.assertIsNotNone(stop_index, "playbook musi zatrzymywac mariadbd")
         self.assertLess(
             probe_index,
@@ -385,13 +385,21 @@ class ClusterRecoverPlaybookContractTests(unittest.TestCase):
         )
         probe_play = self.play_text(self.plays[probe_index])
         self.assertIn("rolling-restart", probe_play, "przy zywym Primary operator odsylany do rolling-restart")
+
+        # Klasyfikator jest wspolny z bootstrapem — jedna definicja, dwie
+        # operacje destrukcyjne. Sprawdzamy wyrazenie w jego zrodle.
+        shared = yaml.safe_load(
+            (REPO / "playbooks" / "tasks" / "galera_state_probe.yml").read_text(
+                encoding="utf-8"
+            )
+        )
         classify = next(
             task
-            for task in self.plays[probe_index]["tasks"]
-            if "recover_live_primary" in task.get("ansible.builtin.set_fact", {})
+            for task in shared
+            if "galera_state_primary" in (task.get("ansible.builtin.set_fact") or {})
         )
         expression = str(
-            classify["ansible.builtin.set_fact"]["recover_live_primary"]
+            classify["ansible.builtin.set_fact"]["galera_state_primary"]
         )
         self.assertIn(
             "map(attribute='item')",

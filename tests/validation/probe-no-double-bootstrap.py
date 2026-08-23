@@ -74,13 +74,37 @@ def has_bootstrap_action(play):
     return False
 
 
-def has_existing_primary_guard(play):
-    """True when pre-tasks probe wsrep state and reject an existing Primary."""
+INCLUDE_KEYS = ("ansible.builtin.include_tasks", "include_tasks")
+
+
+def _expand_includes(items, base):
+    """Rozwin statyczne include_tasks — guard moze mieszkac w pliku wspolnym.
+
+    Klasyfikator stanu Galery zostal wyniesiony do playbooks/tasks/, zeby
+    bootstrap i cold recovery uzywaly JEDNEJ definicji. Sonda, ktora nie
+    wchodzi w include, uznalaby ten refaktor za brak guardu.
+    """
+    for task in _walk_tasks(items):
+        include = next((task[key] for key in INCLUDE_KEYS if key in task), None)
+        if include is None:
+            yield task
+            continue
+        relative = include["file"] if isinstance(include, dict) else include
+        path = (base / str(relative)).resolve()
+        if not path.exists():
+            continue
+        nested = yaml.safe_load(path.read_text(encoding="utf-8")) or []
+        yield from _expand_includes(nested, path.parent)
+
+
+def has_existing_primary_guard(play, base):
+    """True gdy pre-taski sonduja stan wsrep i odrzucaja zywy oraz nieznany."""
     has_probe = False
     has_anchored_classification = False
-    has_assert = False
+    has_primary_assert = False
+    has_unknown_assert = False
 
-    for task in play.get("pre_tasks", []) or []:
+    for task in _expand_includes(play.get("pre_tasks", []) or [], base):
         if not isinstance(task, dict):
             continue
         cmd = task.get("ansible.builtin.command") or task.get("command") or {}
@@ -88,16 +112,29 @@ def has_existing_primary_guard(play):
             has_probe = True
 
         set_fact = task.get("ansible.builtin.set_fact") or task.get("set_fact") or {}
-        live_primary = set_fact.get("bootstrap_live_primary", "")
-        if "(?m)^wsrep_cluster_status" in live_primary and "Primary$" in live_primary:
-            has_anchored_classification = True
+        for key in ("galera_state_primary", "bootstrap_live_primary"):
+            expression = str(set_fact.get(key, ""))
+            if "(?m)^wsrep_cluster_status" in expression and "Primary$" in expression:
+                has_anchored_classification = True
 
         assert_task = task.get("ansible.builtin.assert") or task.get("assert") or {}
         that_list = str(assert_task.get("that", []))
-        if "bootstrap_live_primary" in that_list and "== 0" in that_list:
-            has_assert = True
+        if "== 0" in that_list:
+            if "galera_state_primary" in that_list or "bootstrap_live_primary" in that_list:
+                has_primary_assert = True
+            # Wynik niejednoznaczny (SSH dziala, sonda nie odpowiada) nie moze
+            # przechodzic jako "brak Primary" — to byl fail-open na split-brain.
+            if "galera_state_unknown" in that_list:
+                has_unknown_assert = True
 
-    return has_probe and has_anchored_classification and has_assert
+    return (
+        has_probe
+        and has_anchored_classification
+        and has_primary_assert
+        and has_unknown_assert
+    )
+
+
 def is_single_host(hosts):
     s = str(hosts).strip()
     return bool(re.match(r"^(galera\[\d+\]|localhost|[a-z]+node\d+)$", s))
@@ -143,7 +180,7 @@ def main():
                     f"confirm guard (ISC-65) — bootstrap must require -e confirm=yes"
                 )
 
-            if not has_existing_primary_guard(play):
+            if not has_existing_primary_guard(play, pb.parent):
                 violations.append(
                     f"{pb}: play '{play.get('name', '?')}' has no existing-Primary "
                     f"runtime guard (ISC-65)"

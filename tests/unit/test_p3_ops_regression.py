@@ -26,14 +26,24 @@ class BootstrapClassificationTests(unittest.TestCase):
         self.assertIsNone(re.search(pattern, non_primary_output))
         self.assertIsNone(re.search(pattern, arbitrary_output))
 
-    def test_bootstrap_playbook_contains_anchored_regex(self):
+    def test_bootstrap_uses_anchored_regex_from_shared_classifier(self):
         with open("playbooks/bootstrap.yml", encoding="utf-8") as f:
-            content = f.read()
+            bootstrap = f.read()
+        with open("playbooks/tasks/galera_state_probe.yml", encoding="utf-8") as f:
+            classifier = f.read()
 
+        # Klasyfikator zostal wyniesiony do pliku wspolnego (bootstrap +
+        # cold recovery). Kotwiczony wzorzec musi byc w nim, a bootstrap musi
+        # go faktycznie wlaczac — inaczej test pilnowalby martwego pliku.
+        self.assertIn(
+            "tasks/galera_state_probe.yml",
+            bootstrap,
+            "bootstrap.yml must include the shared Galera state classifier",
+        )
         self.assertIn(
             "(?m)^wsrep_cluster_status\\tPrimary$",
-            content,
-            "bootstrap.yml must use anchored regex for Primary detection",
+            classifier,
+            "classifier must use anchored regex for Primary detection",
         )
 
 
