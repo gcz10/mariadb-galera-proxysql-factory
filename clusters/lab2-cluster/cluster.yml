@@ -69,6 +69,11 @@ workload:
   largest_table_gb: "unknown"
   expected_write_latency_ms: "unknown"
 
+# Lab jawnie zachowuje dotychczasowy opt-out wydajnosciowy. Bez tego wpisu
+# nowy bezpieczny default szablonu (=1) zmienilby zachowanie przy converge.
+mariadb_tuning:
+  innodb_flush_log_at_trx_commit: 0
+
 availability:
   rto_node_failure: "2m"
 

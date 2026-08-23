@@ -36,6 +36,19 @@ class DurabilityTemplateDefaultTests(unittest.TestCase):
         self.assertEqual(self.render({"innodb_flush_log_at_trx_commit": 0}), "0")
 
 
+    def test_existing_container_labs_pin_their_previous_opt_out(self):
+        for name in ("lab-cluster", "lab2-cluster"):
+            config = yaml.safe_load(
+                (REPO / "clusters" / name / "cluster.yml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                config["mariadb_tuning"]["innodb_flush_log_at_trx_commit"],
+                0,
+                f"{name} musi zachowac poprzednia efektywna wartosc jawnie",
+            )
+
 class ProductionDurabilityValidatorTests(unittest.TestCase):
     def setUp(self):
         self.base = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
