@@ -57,8 +57,9 @@ przykładami dla dedykowanych serwerów, a n17 ma 3G RAM na węzeł, Galerę, SS
 backup i QAN. Obowiązująca konfiguracja (`768M` buffer pool, `256M` redo,
 `gcache=256M`, `max_connections=100`) jest ograniczona pomiarem i bramkami.
 Zmiany strojenia powinny być pojedynczym parametrem, po baseline i benchmarku;
-nie włączamy `innodb_dedicated_server`, query cache ani `innodb_flush_log_at_trx_commit=1`
-bez osobnej decyzji wymagań trwałości.
+nie włączamy `innodb_dedicated_server` ani query cache. Bezpieczny domyślny
+`innodb_flush_log_at_trx_commit` to `1`; wszystkie obecne laboratoria mają jawny
+opt-out `0`, a produkcja wymaga `1` albo `durability_risk_accepted: true`.
 
 ### `finalclaude-r10` — Rocky 10, najemca warstwy wspólnej
 
