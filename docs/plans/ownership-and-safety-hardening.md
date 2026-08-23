@@ -1,6 +1,7 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
-**Status:** OTWARTY — utworzony 2026-08-23 na bazie czterech zewnętrznych recenzji.
+**Status:** W TOKU — utworzony 2026-08-23 na bazie czterech zewnętrznych recenzji.
+**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`).
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
 
@@ -11,7 +12,7 @@ a reszta kosztuje czas operatora, nie dane.
 
 ---
 
-## P0-1. Najemca przepisuje firewall warstwy wspólnej
+## P0-1. Najemca przepisuje firewall warstwy wspólnej — ZROBIONE
 
 **Problem.** `make cluster-deploy` (`Makefile:265`) uruchamia `playbooks/firewall.yml`
 z inwentarzem i `cluster.yml` najemcy. Playbook celuje w
@@ -47,9 +48,16 @@ na obecnym `cluster-deploy`, GREEN po. Dodatkowo test: najemca z CIDR-em
 
 **Koszt:** średni.
 
+**Wynik (`85ff115`).** `firewall.yml` ma bramkę własności sprawdzaną per host;
+`cluster-deploy` i `cluster-firewall` przekazują
+`firewall_target_hosts=galera:restore`; nowy `platform-firewall` (wpięty w
+`platform-build`) obejmuje `proxysql:infra:app`; `probe-firewall.py` weryfikuje
+wyłącznie hosty należące do danej warstwy. Dowód live na `fcp1`: definicja
+najemcy odrzucona przed mutacją (`changed=0`), definicja platformy przechodzi.
+
 ---
 
-## P0-2. Klasyfikator stanu Galery jest fail-open na wyniku niejednoznacznym
+## P0-2. Klasyfikator stanu Galery jest fail-open — ZROBIONE
 
 **Problem.** `playbooks/bootstrap.yml:30-77` sonduje węzły komendą z
 `failed_when: false` i `ignore_unreachable: true`, a następnie klasyfikuje wyniki
@@ -82,6 +90,18 @@ wyjęte z playbooka** (wzorzec z `tests/unit/test_platform_pmm_upgrade_contract.
 z wierszami: `rc=1/stdout=""/stderr="Access denied"` → `UNKNOWN` → asercja blokuje.
 
 **Koszt:** mały.
+
+**Wynik (`2d7df6d`).** `playbooks/tasks/galera_state_probe.yml` jest jedynym
+klasyfikatorem; `bootstrap.yml` i `cluster_recover.yml` konsumują go przez
+`include_tasks`. Każda kategoria wymaga dowodu pozytywnego, a `UNKNOWN` liczy
+się różnicą względem grupy — model jest totalny. Statyczna bramka ISC-65 wchodzi
+w `include_tasks` i wymaga obu asercji (`primary`, `unknown`).
+
+Smoke test na żywym n17 ujawnił defekt samej poprawki: wynik pominięty w
+`--check` ma `rc: 0` i puste `stdout`, więc trzy węzły Primary trafiały do
+`non_primary`. Klasyfikator wymaga teraz dopasowania `wsrep_cluster_status`
+w `stdout`; brak odpowiedzi to `UNKNOWN`. Dowód live: bootstrap na działającym
+klastrze odmawia, wskazując węzły o nieznanym stanie.
 
 ---
 
