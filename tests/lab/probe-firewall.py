@@ -24,6 +24,22 @@ with open(INVENTORY_PATH, encoding="utf-8") as inventory_file:
 GROUPS = INVENTORY["all"]["children"]
 NETWORK = CONFIG["network"]
 
+# Wlascicielem polityki hosta jest ta warstwa, ktora go tworzy. Definicja
+# najemcy deklaruje wspolne fcp1/fcp2/fcinfra/fcapp, zeby sie do nich laczyc —
+# sprawdzanie ICH regul przeciw CIDR-om najemcy cementowaloby blad, ktory
+# bramka wlasciciela w playbooks/firewall.yml wlasnie zamyka.
+TENANT_GROUPS = ("galera", "restore")
+SHARED_GROUPS = ("proxysql", "infra", "app")
+
+
+def owned_groups(config: dict) -> tuple[str, ...]:
+    platform = config.get("platform") or {}
+    return SHARED_GROUPS if platform.get("name") else TENANT_GROUPS
+
+
+OWNED_GROUPS = owned_groups(CONFIG)
+OWNED_PATTERN = ":".join(OWNED_GROUPS)
+
 
 def run_command(pattern: str, command: str, timeout: int = 120) -> dict[str, str]:
     result = subprocess.run(
@@ -150,19 +166,23 @@ def check(condition: bool, message: str, failures: list[str]) -> None:
 
 def main() -> int:
     failures: list[str] = []
-    all_hosts = set().union(*(hosts(group) for group in GROUPS))
+    owned_hosts = set().union(*(hosts(group) for group in OWNED_GROUPS))
     inventory_hosts = {
         host: values.get("ansible_host", host)
         for group in GROUPS.values()
         for host, values in group.get("hosts", {}).items()
     }
 
-    policies = run_command("all", "firewall-cmd --list-all")
-    enabled = run_command("all", "systemctl is-enabled firewalld")
-    active_zones = run_command("all", "firewall-cmd --get-active-zones")
-    check(set(policies) == all_hosts, "not every inventory host returned firewalld policy", failures)
+    policies = run_command(OWNED_PATTERN, "firewall-cmd --list-all")
+    enabled = run_command(OWNED_PATTERN, "systemctl is-enabled firewalld")
+    active_zones = run_command(OWNED_PATTERN, "firewall-cmd --get-active-zones")
+    check(
+        set(policies) == owned_hosts,
+        "not every owned host returned firewalld policy",
+        failures,
+    )
 
-    for host in sorted(all_hosts):
+    for host in sorted(owned_hosts):
         body = policies.get(host, "")
         actual_rules = set(re.findall(r'^\s*(rule family="ipv4".*)$', body, re.MULTILINE))
         expected = expected_rules(host)
@@ -294,8 +314,9 @@ def main() -> int:
         return 1
 
     print(
-        f"PASS: firewalld exact role policy on {len(all_hosts)} hosts; "
-        "unexpected listeners blocked; Docker ingress filter and address binding verified"
+        f"PASS: firewalld exact role policy on {len(owned_hosts)} owned hosts "
+        f"({OWNED_PATTERN}); unexpected listeners blocked; "
+        "Docker ingress filter and address binding verified"
     )
     return 0
 

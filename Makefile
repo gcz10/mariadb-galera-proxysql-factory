@@ -17,7 +17,7 @@
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify \
-        platform-validate platform-trust-hosts platform-deploy platform-infra platform-proxysql platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
+        platform-validate platform-trust-hosts platform-deploy platform-firewall platform-infra platform-proxysql platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
 
 CLUSTER ?= example-cluster
 ANSIBLE_OPTS ?=
@@ -171,6 +171,12 @@ platform-trust-hosts:  ## Re-skanuj klucze hostow warstwy wspolnej do known_host
 platform-deploy:  ## Instaluj pakiety warstwy wspolnej (ProxySQL wg lockfile EL10)
 	ansible-playbook playbooks/platform_install.yml $(PLATFORM_OPTS)
 
+# Polityka hosta fcp1/fcp2/fcinfra/fcapp nalezy do warstwy wspolnej. Najemca
+# deklaruje te hosty w swoim inventory, ale ich firewalla nie dotyka — patrz
+# bramka wlasciciela w playbooks/firewall.yml.
+platform-firewall:  ## Polityka firewalld hostow warstwy wspolnej (proxysql, infra, app)
+	ansible-playbook playbooks/firewall.yml $(PLATFORM_OPTS) -e firewall_target_hosts=proxysql:infra:app
+
 platform-infra:  ## Uslugi wspierajace na fcinfra: PMM + MinIO + Maildev
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	@: "$${MINIO_ROOT_USER:?Ustaw MINIO_ROOT_USER poza repozytorium}"
@@ -219,6 +225,7 @@ platform-verify:  ## Sondy warstwy wspolnej: para ProxySQL, VIP, TLS endpointu, 
 platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→infra→proxysql→endpoint→monitoring→alerts→sonda
 	$(MAKE) platform-validate
 	$(MAKE) platform-deploy
+	$(MAKE) platform-firewall
 	$(MAKE) platform-infra
 	$(MAKE) platform-proxysql
 	$(MAKE) platform-endpoint
@@ -262,11 +269,11 @@ cluster-deploy:  ## F2+F3 — instaluj pakiety + konfiguruj (idempotentny conver
 	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
 	ansible-playbook playbooks/f2_install.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 	ansible-playbook playbooks/site.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
-	ansible-playbook playbooks/firewall.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/firewall.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e firewall_target_hosts=galera:restore $(ANSIBLE_OPTS)
 
 cluster-firewall:  ## Wymuś minimalną politykę firewalld według roli hosta
 	$(cluster_guard)
-	ansible-playbook playbooks/firewall.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/firewall.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e firewall_target_hosts=galera:restore $(ANSIBLE_OPTS)
 cluster-firewall-verify:  ## Zweryfikuj dokładną politykę firewalld i Docker ingress
 	CLUSTER_CONFIG=clusters/$(CLUSTER)/cluster.yml CLUSTER_INVENTORY=clusters/$(CLUSTER)/inventory.yml \
 		python3 tests/lab/probe-firewall.py

@@ -2,6 +2,15 @@
 # Jeden właściciel polityki firewalld dla wszystkich hostów klastra.
 # Reguły rich-rule pozwalają nakładającym się CIDR-om korzystać z różnych usług
 # bez przechwytywania całego źródła przez osobną strefę.
+#
+# ZAKRES JEST WLASNOSCIA, NIE DEKLARACJA. Inventory najemcy deklaruje wspolne
+# fcp1/fcp2/fcinfra/fcapp, bo najemca musi sie do nich laczyc (rejestracja
+# hostgroup w ProxySQL, dystrybucja CA). Polityka hosta tych maszyn nalezy
+# jednak do warstwy wspolnej: `hosts: all` z definicji najemcy przepisywal
+# public.xml na fcp1/fcp2 CIDR-ami tego najemcy i przeladowywal firewalld,
+# wiec najemca z wezszym application_cidrs odcinal pozostalych od 6033.
+# Dlatego kazdy host wspolny wymaga tu definicji platformy — tak samo jak
+# w f8_keepalived.yml.
 
 - name: "Firewall — minimalne wejście według roli hosta"
   hosts: "{{ firewall_target_hosts | default('all') }}"
@@ -10,6 +19,10 @@
   serial: 1
   max_fail_percentage: 0
   vars:
+    firewall_shared_groups:
+      - proxysql
+      - infra
+      - app
     firewall_legacy_zones:
       - pmm-monitoring
       - proxysql-admin
@@ -52,6 +65,18 @@
       }}
 
   pre_tasks:
+    - name: "Odrzuc mutacje hosta warstwy wspolnej z definicji najemcy"
+      ansible.builtin.assert:
+        that:
+          - >-
+            (group_names | intersect(firewall_shared_groups) | length == 0)
+            or (platform.name is defined and galera is not defined)
+        fail_msg: >-
+          {{ inventory_hostname }} nalezy do warstwy wspolnej
+          ({{ group_names | intersect(firewall_shared_groups) | join(', ') }}),
+          a uruchomienie ma definicje najemcy. Polityka firewalld tych hostow
+          nalezy do platformy — uruchom: make platform-firewall.
+
     - name: "Wymagaj jawnych źródeł ruchu"
       ansible.builtin.assert:
         that:
