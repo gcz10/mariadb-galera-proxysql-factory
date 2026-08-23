@@ -1,0 +1,64 @@
+---
+# Green Rocky 9 — tenant platformy green. Tylko grg1-3/grr1 naleza do tego
+# Terraform root; grp1/grp2/grinfra/grapp sa deklarowane jako cele integracji.
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: tests/lab/ssh_key
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        grg1:
+          ansible_host: "192.168.1.28"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.28"
+        grg2:
+          ansible_host: "192.168.1.29"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.29"
+        grg3:
+          ansible_host: "192.168.1.30"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.30"
+
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        grp1:
+          ansible_host: "192.168.1.24"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.24"
+        grp2:
+          ansible_host: "192.168.1.25"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.25"
+
+    restore:
+      vars:
+        restore_role: "restore"
+      hosts:
+        grr1:
+          ansible_host: "192.168.1.31"
+          restore_node_address: "192.168.1.31"
+
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        grapp:
+          ansible_host: "192.168.1.26"
+          app_node_address: "192.168.1.26"
+
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        grinfra:
+          ansible_host: "192.168.1.23"
+          infra_node_address: "192.168.1.23"

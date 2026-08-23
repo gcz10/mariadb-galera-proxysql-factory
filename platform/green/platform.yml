@@ -1,0 +1,42 @@
+---
+# Warstwa wspolna generacji green — niezalezna od starego stacku shared.
+# Hosty: grinfra/grp1/grp2/grapp. VIP: 192.168.1.27.
+platform:
+  name: "green"
+  environment: "laboratory"
+  rocky_linux_major: 10
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/versions-el10.lock.yml"
+
+proxysql:
+  nodes_expected: 2
+  frontend_tls:
+    ca_reference: "tests/lab/tls/green/ca.pem"
+    certificate_reference: "tests/lab/tls/green/server-cert.pem"
+    private_key_reference: "tests/lab/tls/green/server-key.pem"
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.27"
+    port: 6033
+
+# Polityka ingress wspolnej warstwy. Szerokie CIDR-y sa swiadomym ustawieniem
+# laboratoryjnym; ownership egzekwuje osobny cel platform-firewall.
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.23/32"]
+
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.23"
+    agent_id: "pmm-server"
+    cluster_name: "green"
+    validate_certs: false
+    credentials_revision: 1
+    backup_retention: 2
+  agent_groups: ["proxysql"]
+  alerts:
+    email: "ops@claude.local"

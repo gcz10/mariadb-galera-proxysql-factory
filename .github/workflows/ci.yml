@@ -33,8 +33,20 @@ jobs:
       - name: Install Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      - name: Platform schema and inventory validation
-        run: python3 tests/validation/validate-platform.py platform/shared/platform.yml platform/schema/platform.schema.json platform/shared/inventory.yml
+      - name: Platform schema and inventory validation (all platforms)
+        run: |
+          set -e
+          rc=0
+          for p in platform/*/platform.yml; do
+            [ -f "$p" ] || continue
+            pdir=$(dirname "$p")
+            if python3 tests/validation/validate-platform.py "$p" platform/schema/platform.schema.json "$pdir/inventory.yml"; then
+              echo "OK: $p"
+            else
+              echo "FAIL: $p"; rc=1
+            fi
+          done
+          exit $rc
 
       - name: Schema validation (all clusters)
         run: |
