@@ -55,25 +55,17 @@ proxysql:
   source: "https://github.com/sysown/proxysql/releases/tag/v3.0.10"
 
 pmm:
-  version: "3.9.0"
-  released: "2026-07-30"
-  image: "percona/pmm-server:3.9.0"
-  image_digest: "sha256:ec0391338420a019a45ab33c101a2b62c3e2e0908bf6748056a9793b97c6d094"
+  version: "3.9.1"
+  released: "2026-08-19"
+  image: "percona/pmm-server:3.9.1"
+  image_digest: "sha256:003f9c25f84256e53dccbd71975e3aaf98ca06e891bda86a35c262ef21ca58c1"
   deployment: "docker-volume"
   rpm_for_rocky_9: false
   support_eol: "not-published-per-point-release"
-  # 3.9.0 USUWA upgrade z UI i Watchtower z obrazu (PMM-14969). Jedyna wspierana
-  # sciezka to podmiana obrazu kontenera — czyli dokladnie to, co robi
-  # infra_services.yml przez `docker compose up --pull always`.
-  security: >-
-    CVE-2026-39822 (HIGH, symlink traversal w stdlib Go) naprawiony w
-    percona-telemetry-agent; usuniety preinstalowany datasource PostgreSQL,
-    ktory pozwalal roli Viewer wykonywac dowolny SQL na wewnetrznej bazie PMM
-    (dokanczka hardeningu po CVE-2026-25212 z 3.7.0)
-  # Dlaczego ta wersja, a nie tylko "nowsza": PMM-14193/PMM-15145 naprawiaja
-  # alerty *Down* wracajace do Normal, gdy baza I agent padaja jednoczesnie.
-  # To dokladnie ta sama zasada fail-closed, ktorej pilnuje ISC-47.
-  source: "https://github.com/percona/pmm/blob/main/documentation/docs/release-notes/3.9.0.md"
+  # 3.9.1 security release: least-privilege ClickHouse datasource, fix rotacji
+  # klucza szyfrujacego oraz reconnect pmm-client po przerwie sieciowej.
+  # Oficjalna procedura wymaga backupu /srv przed upgrade; dane sa w volume.
+  source: "https://github.com/percona/pmm/releases/tag/v3.9.1"
 
 docker:
   engine_version: "3:29.6.2-1.el9"
@@ -139,18 +131,12 @@ repositories:
 # Status: LOCKED — promowany z candidate.lock.yml 2026-07-22 (F0 PASS na lab-cluster).
 
 pmm_client:
-  # Agent PMM instalowany z repozytorium Percony (pmm3-client), NIE tarball.
-  # Wersja MUSI byc <= wersji serwera (pmm.version powyzej) — dokumentacja Percony
-  # wymaga kolejnosci: najpierw serwer, potem klient. Oba na 3.9.0.
-  # Zweryfikowane w repo na zywym hoscie: `dnf --showduplicates list pmm-client`
-  # zwraca 3.9.0-1.el9 jako najnowszy.
-  version: "3.9.0"
+  # Serwer musi byc najpierw >= klienta; oba komponenty przechodza na 3.9.1.
+  version: "3.9.1"
   rpm_release: "1.el9"
-  package: "pmm-client-3.9.0-1.el9"
+  package: "pmm-client-3.9.1-1.el9"
   repo_component: "pmm3-client"
   release_rpm: "https://repo.percona.com/yum/percona-release-latest.noarch.rpm"
-  # Tryb metryk MUSI byc jawnie 'push'. Domyslka `pmm-admin add` to 'auto', ktore
-  # w tym srodowisku wybiera 'pull' — a pull wymaga otwarcia 42000-51999
-  # przychodzaco, czego minimalna polityka firewalld (ISC-5) nie dopuszcza.
+  # Tryb metryk MUSI byc jawnie 'push'.
   metrics_mode: "push"
   source: "https://docs.percona.com/percona-monitoring-and-management/3/install-pmm/install-pmm-client/package_manager.html"

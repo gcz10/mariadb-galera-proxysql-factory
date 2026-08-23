@@ -87,7 +87,7 @@ services:
       - NET_ADMIN
 
   pmm-server:
-    image: percona/pmm-server:3.8.1@sha256:ef47471fb3b54e10897a92bab0b7b45e82d9825c3b0abf5a0693242191f99468
+    image: percona/pmm-server:3.9.1@sha256:003f9c25f84256e53dccbd71975e3aaf98ca06e891bda86a35c262ef21ca58c1
     platform: linux/amd64
     container_name: pmm-server
     hostname: pmm-server

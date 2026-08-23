@@ -16,7 +16,7 @@ Stara flota (18 VM, prefiks `claude-*`) została skasowana 2026-08-02; stan
 sprzed w `docs/records/2026-08-02-pre-teardown.md`. Obecna powstała w całości
 z kodu, etapami — `docs/plans/from-scratch-revalidation.md`.
 
-**11 VM, wszystkie w puli `claude-isa`.**
+**12 VM, wszystkie w puli `claude-isa`. PMM Server został zaktualizowany do 3.9.1; backup danych przed zmianą obrazu: `pmm-data-backup-20260823-133353` (2.5G).**
 
 ### Warstwa wspólna — `terraform/shared/`
 
@@ -25,7 +25,7 @@ obecną i przyszłą.
 
 | Host | VMID | IP | Rola | vCPU | RAM |
 |---|---:|---|---|---:|---:|
-| `fcinfra` | 9400 | 192.168.1.130 | PMM 3.9.0 + MinIO + maildev | 4 | 5120 MB |
+| `fcinfra` | 9400 | 192.168.1.130 | PMM 3.9.1 + MinIO + maildev | 4 | 5120 MB |
 | `fcp1` | 9401 | 192.168.1.131 | ProxySQL — **trzyma VIP** | 1 | 3072 MB |
 | `fcp2` | 9402 | 192.168.1.132 | ProxySQL — BACKUP | 1 | 3072 MB |
 | — | — | **192.168.1.139:6033** | VIP Keepalived — wspólny endpoint | — | — |
@@ -33,6 +33,22 @@ obecną i przyszłą.
 
 Cyklem życia tych hostów zarządza **wyłącznie** `make platform-*`
 (`platform/shared/`). Żaden klaster nie jest ich właścicielem — patrz niżej.
+
+### PMM upgrade — 2026-08-23
+
+PMM Server został zaktualizowany z 3.9.0 do **3.9.1** przez `make platform-infra`,
+po backupie trwałego volume `isa-pmm-data` do `pmm-data-backup-20260823-133353`
+(2.5G; katalogi Grafana i VictoriaMetrics zweryfikowane). Klienci zostały
+zaktualizowane najpierw na `fcp1/fcp2` (EL10), następnie na `n17g1-3` (EL9),
+zgodnie z zasadą PMM Server >= PMM Client. `f10` pozostaje agentless.
+
+Nie zastosowano hurtowo porad z `VolkanSah/optimize-MySQL-MariaDB`: są ogólnymi
+przykładami dla dedykowanych serwerów, a n17 ma 3G RAM na węzeł, Galerę, SST,
+backup i QAN. Obowiązująca konfiguracja (`768M` buffer pool, `256M` redo,
+`gcache=256M`, `max_connections=100`) jest ograniczona pomiarem i bramkami.
+Zmiany strojenia powinny być pojedynczym parametrem, po baseline i benchmarku;
+nie włączamy `innodb_dedicated_server`, query cache ani `innodb_flush_log_at_trx_commit=1`
+bez osobnej decyzji wymagań trwałości.
 
 ### `finalclaude-r10` — Rocky 10, najemca warstwy wspólnej
 

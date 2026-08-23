@@ -61,14 +61,14 @@ proxysql:
   source: "https://github.com/sysown/proxysql/releases/tag/v3.0.10"
 
 pmm:
-  # Kontener — niezależny od OS hosta; identyczny z lockfile EL9.
-  version: "3.9.0"
-  released: "2026-07-30"
-  image: "percona/pmm-server:3.9.0"
-  image_digest: "sha256:ec0391338420a019a45ab33c101a2b62c3e2e0908bf6748056a9793b97c6d094"
+  # Kontener — niezalezny od OS hosta; identyczny z lockfile EL9.
+  version: "3.9.1"
+  released: "2026-08-19"
+  image: "percona/pmm-server:3.9.1"
+  image_digest: "sha256:003f9c25f84256e53dccbd71975e3aaf98ca06e891bda86a35c262ef21ca58c1"
   deployment: "docker-volume"
   support_eol: "not-published-per-point-release"
-  source: "https://github.com/percona/pmm/blob/main/documentation/docs/release-notes/3.9.0.md"
+  source: "https://github.com/percona/pmm/releases/tag/v3.9.1"
 
 docker:
   # Zweryfikowane w repodata download.docker.com/linux/centos/10/x86_64/stable:
@@ -134,17 +134,11 @@ repositories:
 # (moduł polityki mariadb-server.te pod checkpolicy 3.10) — bramka R3 planu dual-platform.
 
 pmm_client:
-  # Agent PMM instalowany z repozytorium Percony (pmm3-client), NIE tarball.
-  # Wersja MUSI byc <= wersji serwera (pmm.version powyzej) — dokumentacja Percony
-  # wymaga kolejnosci: najpierw serwer, potem klient. Oba na 3.9.0.
-  # Zweryfikowane w repodata: pmm-client-3.9.0-1.el10.x86_64.rpm istnieje.
-  version: "3.9.0"
+  # Serwer musi byc najpierw >= klienta; oba komponenty przechodza na 3.9.1.
+  version: "3.9.1"
   rpm_release: "1.el10"
-  package: "pmm-client-3.9.0-1.el10"
+  package: "pmm-client-3.9.1-1.el10"
   repo_component: "pmm3-client"
   release_rpm: "https://repo.percona.com/yum/percona-release-latest.noarch.rpm"
-  # Tryb metryk MUSI byc jawnie 'push'. Domyslka `pmm-admin add` to 'auto', ktore
-  # w tym srodowisku wybiera 'pull' — a pull wymaga otwarcia 42000-51999
-  # przychodzaco, czego minimalna polityka firewalld (ISC-5) nie dopuszcza.
   metrics_mode: "push"
   source: "https://docs.percona.com/percona-monitoring-and-management/3/install-pmm/install-pmm-client/package_manager.html"

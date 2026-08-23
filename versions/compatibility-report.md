@@ -64,14 +64,15 @@
 
 | Komponent | Wersja | Dostarczenie | Status / ryzyko | Źródło |
 |---|---|---|---|---|
-| PMM Server | **3.8.1** (2026-06-16) | obraz Docker przypięty tagiem i digestem; trwały `/srv` | security release; EOL point release nieopublikowany | Percona release notes 3.8.1 |
+| PMM Server | **3.9.1** (2026-08-19) | obraz Docker przypięty tagiem i digestem; trwały `/srv` | security release; upgrade wymaga backupu volume przed zmianą obrazu | Percona release v3.9.1 |
 | node_exporter | **1.12.1** (2026-07-14) | oficjalny tarball Linux amd64/arm64, SHA-256 per architektura | latest stable w dniu badania; brak RPM Rocky 9 | Prometheus GitHub release v1.12.1 |
 
-**PMM security:** 3.8.1 łata krytyczne/wysokie podatności zależności Grafana, gRPC i nginx. Vendor pozostawia udokumentowane ryzyka zależności third-party, ocenione jako typowo nieosiągalne; lab ogranicza PMM do loopback, wyłącza automatyczne aktualizacje obrazu i stosuje limit pamięci/nofile.
+**PMM security:** PMM 3.9.1 naprawia wysokiego ryzyka ClickHouse datasource (konto read-only dla Grafany zamiast uprzywilejowanego), błąd rotacji klucza szyfrującego i reconnect klientów po przerwie sieciowej. Przed zmianą obrazu wymagany jest backup trwałego `/srv` volume; downgrade nie jest wspierany.
 
-**Kompatybilność zmierzona:** PMM 3.8.1 native Inventory + PMM-managed `mysqld_exporter`/QAN działa z MariaDB 11.4.12. `node_exporter` 1.12.1 dostarcza metryki pięciu hostów przez external services. ProxySQL metrics są poza tym feature i zależą od F7.
+**Kompatybilność:** PMM Server 3.9.1 jest wdrażany przed klientami 3.9.1. n17 korzysta z lokalnych agentów PMM, f10 i hosty agentless zachowują istniejący model monitoringu.
 
 **Decyzja:** oba komponenty trafiają do `versions.lock.yml`; zabronione są pływające tagi `:3`/`:latest` i niezweryfikowane binaria.
+
 
 ## 6. Kompatybilność matryca
 
@@ -81,8 +82,7 @@
 | ProxySQL 3.0.9 | Stable | RPM oficjalne repo | `mysql_galera_hostgroups` | Security CVEs patchowane |
 | Galera 4 (galera-4) | wsrep API 26 | z MariaDB repo | — | MariaDB 11.x wylacznie |
 | ansible-core 2.21.2 | latest | — | — | ansible.mysql 5.1.0 |
-| ansible.mysql 5.1.0 | active | — | — | MariaDB wspierana do mid-2027 |
-| PMM Server 3.8.1 | security release | kontener, nie RPM | natywne metryki MariaDB/Galera | digest + trwały volume zweryfikowane po restarcie |
+| PMM Server 3.9.1 | security release | kontener, nie RPM | natywne metryki MariaDB/Galera | digest + trwały volume; backup przed upgrade |
 | node_exporter 1.12.1 | latest stable 2026-07-14 | oficjalny tarball per arch | external service w PMM | amd64/arm64 SHA-256 przypięte |
 
 ## 7. Blockery pozostające na F0

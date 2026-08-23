@@ -121,7 +121,7 @@ make lab-backup-impact CLUSTER=lab-cluster                # ISC-39, lab-only
 # F15 — reguły alertów (ISC-47); adres e-mail z monitoring.alerts.email w cluster.yml
 make cluster-alerts CLUSTER=lab-cluster
 
-# Kontrakt końcowy: PMM Server i pmm-client z aktywnego lockfile'a (oba 3.9.0);
+# Kontrakt końcowy: PMM Server i pmm-client z aktywnego lockfile'a (oba 3.9.1);
 # oczekiwane nodes/services wynikają z inventory i cluster.yml, dalej QAN,
 # świeże metryki Galery/lifecycle ORAZ reguły ISC-47
 make cluster-monitoring-refresh CLUSTER=lab-cluster

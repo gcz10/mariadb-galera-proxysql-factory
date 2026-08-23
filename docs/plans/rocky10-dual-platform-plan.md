@@ -55,10 +55,20 @@ Rekomendacja: traktować `clusters/claude-pve/` jako **zamrożoną referencję k
 | lsof / chrony / firewalld / rsync | — | `4.98.0-7.el10` / `4.8-2.el10` / `2.4.0-1.el10_1` / `3.4.1-6.el10_2` |
 | **Python** | 3.9 | **3.12.13** |
 | node_exporter | 1.12.1 | ta sama statyczna binarka |
-| PMM / MinIO / Maildev | 3.8.1 / RELEASE.2025-09-07 / 2.2.1 | kontenery — bez zmian |
+| PMM / MinIO / Maildev | 3.9.1 / RELEASE.2025-09-07 / 2.2.1 | kontenery — PMM zaktualizowany po planie; MinIO/Maildev bez zmian |
 | Docker CE | 29.6.2 | repo `centos/10` odpowiada (200) |
 
 **Wniosek: warstwa bazodanowa jest wersyjnie neutralna.** MariaDB i Galera mają na EL10 dokładnie te same wersje, które działają dziś na EL9. To zmiana OS, nie upgrade bazy.
+
+### PMM security upgrade (2026-08-23)
+
+Po wydaniu PMM 3.9.1 (19 sierpnia 2026) zaktualizowano serwer oraz klientów.
+Wersja naprawia high-severity ClickHouse datasource i inne błędy opisane w
+oficjalnych release notes. Przed zmianą obrazu wykonano backup trwałego volume
+PMM (`pmm-data-backup-20260823-133353`, 2.5G); następnie `make platform-infra`
+podmienił obraz, a `make platform-monitoring` zaktualizował klientów fcp1/fcp2
+i n17g1-3. Post-upgrade: platform-verify, probe-pmm-native oraz obie sondy
+Galera przeszły.
 
 ### URL-e i sumy kontrolne (do lockfile EL10)
 
@@ -309,7 +319,7 @@ Wszystkie znalezione przez **realne uruchomienie**, nie analizę statyczną:
 
 **Przy okazji, niezależne od platformy:**
 - `f15_alerts.yml` — POST `/api/folders` bez `force_basic_auth`/`body_format`/`201` (bug też na EL9)
-- PMM 3.8.1 nie stosuje `GF_SECURITY_ADMIN_PASSWORD` przy pierwszym starcie
+- PMM 3.9.1 moze zachowac haslo z volume przy restarcie; playbook wymusza je przez API, jeśli jest wymagane
 - `backup-run.sh` — `${EXTRA[@]}` z `set -u` łamie bash 3.2 (regresja z fixu `restore_confirm`)
 - `make cluster-restore-drill` był martwy odkąd dodano strażnika `audit#5`
 
