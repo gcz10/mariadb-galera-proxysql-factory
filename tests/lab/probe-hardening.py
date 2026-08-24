@@ -104,7 +104,7 @@ def main() -> int:
 
     # Waznosc certyfikatow TLS na KAZDYM wezle Galery (gdy tls.mode == full).
     #
-    # Nasze certy sa wystawiane recznie przez tests/lab/tls/generate.sh i nikt ich
+    # Nasze certy sa wystawiane recznie przez pki/generate.sh i nikt ich
     # nie rotuje — CA i lisc dostaja 1095 dni, po czym po prostu wygasaja. Sciezka
     # naprawy jest udokumentowana i bezprzestojowa: podmiana plikow w miejscu +
     # `FLUSH SSL` per wezel (galera-security/reloading-tls-certificates-without-

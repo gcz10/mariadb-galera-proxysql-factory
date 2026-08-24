@@ -114,7 +114,7 @@ cluster-trust-hosts:  ## Re-skanuj klucze hostow do known_hosts (po re-provision
 			ssh-keygen -R $$ip -f clusters/$(CLUSTER)/known_hosts >/dev/null 2>&1 || true; \
 			ssh-keyscan -H $$ip >> clusters/$(CLUSTER)/known_hosts 2>/dev/null || true; \
 			sort -u clusters/$(CLUSTER)/known_hosts -o clusters/$(CLUSTER)/known_hosts 2>/dev/null || true; \
-			if ssh -i tests/lab/ssh_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=clusters/$(CLUSTER)/known_hosts -o ConnectTimeout=5 -o ConnectionAttempts=1 -o BatchMode=yes -o PasswordAuthentication=no root@$$ip true 2>/dev/null; then \
+			if ssh -i secrets/ssh_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=clusters/$(CLUSTER)/known_hosts -o ConnectTimeout=5 -o ConnectionAttempts=1 -o BatchMode=yes -o PasswordAuthentication=no root@$$ip true 2>/dev/null; then \
 				good=1; break; \
 			fi; \
 			sleep 5; \

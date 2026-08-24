@@ -6,6 +6,45 @@ Powtarzalna, idempotentna fabryka produkcyjnych klastrów MariaDB Galera z Proxy
 
 Zobacz `ISA.md` — jedyne źródło prawdy dla idealnego stanu, kryteriów, mapy testów i postępu.
 
+## Czego wymagają maszyny
+
+Dostępu SSH, systemd, Rocky Linux 9 albo 10 i konta z sudo. **Nic ponadto.**
+Skąd pochodzą — Proxmox, libvirt/KVM, blaszak, chmura, maszyny dostarczone przez
+klienta — jest bez znaczenia dla fabryki.
+
+`make infra-provision` (Terraform + Proxmox VE) tworzy maszyny w tym konkretnym
+laboratorium i jest **opcjonalny**: żaden cel wołany przez `cluster-build` ani
+`platform-build` go nie uruchamia i żaden nie czyta stanu Terraforma. Cała wiedza
+o topologii pochodzi z `clusters/<name>/inventory.yml` i `platform/<name>/inventory.yml`.
+
+### Własne hosty, krok po kroku
+
+```bash
+# 1. Warstwa wspólna: para ProxySQL z VIP-em, monitoring, magazyn kopii.
+cp -r platform/example platform/<nazwa>
+$EDITOR platform/<nazwa>/inventory.yml   # adresy Twoich maszyn
+$EDITOR platform/<nazwa>/platform.yml    # VIP, PMM, ścieżki TLS, polityka ingress
+
+# 2. Najemca: węzły bazy.
+cp -r clusters/example-cluster clusters/<nazwa>
+$EDITOR clusters/<nazwa>/inventory.yml   # adresy węzłów Galery
+$EDITOR clusters/<nazwa>/cluster.yml     # nazwa klastra, backup, monitoring
+
+# 3. Materiał TLS i klucz SSH należą do Ciebie, nie do repozytorium.
+#    Wskaż własny klucz w inwentarzu (`ansible_ssh_private_key_file`),
+#    a certyfikaty wygeneruj narzędziami z `pki/` albo podstaw swoje.
+
+# 4. Bramki statyczne PRZED dotknięciem maszyn — walidują schemat i inwentarz.
+make cluster-validate CLUSTER=<nazwa>
+
+# 5. Budowa.
+make platform-build PLATFORM=<nazwa>
+make cluster-build CLUSTER=<nazwa> CONFIRM=yes
+```
+
+Interfejs sieciowy dla VIP-a wykrywany jest z domyślnej trasy hosta; przy
+nietypowej konfiguracji sieci wskaż go jawnie przez `proxysql_endpoint_interface`.
+
 ## Szybki start
 
 ```bash
@@ -44,23 +83,23 @@ make cluster-validate CLUSTER=example-cluster
 # maszynie trzeba je wytworzyć, inaczej F3/F7 padną na brakującym pliku.
 #   1) CA + cert KLASTRA (ścieżki z tls.*_reference w cluster.yml); SAN musi
 #      pokrywać nazwy ORAZ adresy węzłów — Galera łączy się po adresie.
-tests/lab/tls/generate.sh <klaster> <n1,n2,n3,ip1,ip2,ip3>
+pki/generate.sh <klaster> <n1,n2,n3,ip1,ip2,ip3>
 #   2) CA + cert WSPÓLNEGO endpointu ProxySQL (proxysql.frontend_tls). CA jest
 #      wspólne dla całej floty, nie klastrowe: jedna para ProxySQL serwuje
 #      wszystkie klastry JEDNYM certem frontendu. Wdraza go wylacznie warstwa
 #      wspolna (`make platform-proxysql`); klaster deklaruje tylko `ca_reference`.
 #      SAN musi pokrywać VIP i adresy węzłów ProxySQL.
-tests/lab/tls/generate.sh shared-proxysql fcp1,fcp2,<ip-fcp1>,<ip-fcp2>,<ip-vip>
+pki/generate.sh shared-proxysql fcp1,fcp2,<ip-fcp1>,<ip-fcp2>,<ip-vip>
 #   3) Certyfikaty PER WĘZEŁ (tls.per_node_certificates=true). Po kroku 1 wystaw
 #      osobny liść i klucz dla każdego węzła pod wspólnym CA klastra:
-tests/lab/tls/issue-node-certs.sh <klaster> <n1=ip1,n2=ip2,n3=ip3> [dni]
+pki/issue-node-certs.sh <klaster> <n1=ip1,n2=ip2,n3=ip3> [dni]
 #
 #   Rotacja liścia pod tym samym CA:
 #     * wspólny cert: REUSE_CA=1 przed generate.sh, potem `make cluster-tls-rotate`
 #     * per węzeł: issue-node-certs.sh (nowy liść), potem `make cluster-tls-rotate`
 #     * frontend ProxySQL: REUSE_CA=1 przed generate.sh shared, potem
 #       `make platform-proxysql` (PROXYSQL RELOAD TLS bez zrywania sesji).
-#   Rotację CA prowadzi tests/lab/tls/rotate-ca.sh (okno podwójnego zaufania).
+#   Rotację CA prowadzi pki/rotate-ca.sh (okno podwójnego zaufania).
 
 # UWAGA kolejność: poniższa sekwencja jest zweryfikowana od zera (from-scratch).
 # Zależności, które ją wymuszają:

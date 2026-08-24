@@ -35,9 +35,9 @@ proxysql:
   # CA najemcy zmusiloby klientow pozostalych do zaufania cudzemu CA, a usuniecie
   # tego najemcy uniewaznialoby endpoint calej floty.
   frontend_tls:
-    ca_reference: "tests/lab/tls/shared/ca.pem"
-    certificate_reference: "tests/lab/tls/shared/server-cert.pem"
-    private_key_reference: "tests/lab/tls/shared/server-key.pem"
+    ca_reference: "pki/shared/ca.pem"
+    certificate_reference: "pki/shared/server-cert.pem"
+    private_key_reference: "pki/shared/server-key.pem"
   endpoint:
     type: "keepalived_vip"
     address: "192.168.1.139"

@@ -12,12 +12,12 @@
 # wygladaja jak awaria replikacji.
 #
 # Uzycie:
-#   tests/lab/tls/generate.sh <nazwa> <SAN>[,<SAN>...]
+#   pki/generate.sh <nazwa> <SAN>[,<SAN>...]
 # Przyklad:
-#   tests/lab/tls/generate.sh nc9-galera ncg1,ncg2,ncg3,192.168.1.160,192.168.1.161,192.168.1.162
+#   pki/generate.sh nc9-galera ncg1,ncg2,ncg3,192.168.1.160,192.168.1.161,192.168.1.162
 #
-# Wynik: tests/lab/tls/<nazwa-bez-sufiksu>/{ca.pem,server-cert.pem,server-key.pem}
-# Katalog `tests/lab/tls/` jest gitignorowany — artefakty zostaja lokalnie.
+# Wynik: pki/<nazwa-bez-sufiksu>/{ca.pem,server-cert.pem,server-key.pem}
+# Katalog `pki/` jest gitignorowany — artefakty zostaja lokalnie.
 set -euo pipefail
 
 if [ $# -ne 2 ]; then
@@ -66,7 +66,7 @@ umask 0077
 # time, and finally retiring the old CA. Do not remove the old CA from trust
 # until every node has been reissued". Nosnikiem tego okna jest bundle: wg
 # socket.ssl_ca "the CA file may contain multiple concatenated certificates".
-# Procedure realizuje tests/lab/tls/rotate-ca.sh (trzy fazy) + `make cluster-tls-rotate`.
+# Procedure realizuje pki/rotate-ca.sh (trzy fazy) + `make cluster-tls-rotate`.
 if [ "${REUSE_CA:-0}" = "1" ]; then
   if [ ! -r "$OUT_DIR/ca.pem" ] || [ ! -r "$OUT_DIR/ca-key.pem" ]; then
     echo "FAIL: REUSE_CA=1, ale brakuje $OUT_DIR/ca.pem albo ca-key.pem" >&2

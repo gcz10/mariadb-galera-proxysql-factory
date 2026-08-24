@@ -15,15 +15,15 @@
 # Ten skrypt przygotowuje WYLACZNIE material na hoscie kontrolnym. Wdrozenie kazdej
 # fazy to osobny, jawny krok operatora:
 #
-#   tests/lab/tls/rotate-ca.sh <cn> <san1,san2,...> trust-both
+#   pki/rotate-ca.sh <cn> <san1,san2,...> trust-both
 #   make cluster-tls-rotate CLUSTER=<klaster>          # wezly ufaja STAREMU i NOWEMU
 #
-#   tests/lab/tls/rotate-ca.sh <cn> <san1,san2,...> reissue
+#   pki/rotate-ca.sh <cn> <san1,san2,...> reissue
 #   make cluster-tls-rotate CLUSTER=<klaster>          # lisc od NOWEGO CA
 #                                                       (server-cert i wszystkie
 #                                                       liscie per wezel)
 #
-#   tests/lab/tls/rotate-ca.sh <cn> <san1,san2,...> retire-old
+#   pki/rotate-ca.sh <cn> <san1,san2,...> retire-old
 #   make cluster-tls-rotate CLUSTER=<klaster>          # zaufanie tylko do NOWEGO
 #
 # Rozdzielenie faz jest celowe: miedzy nimi nalezy potwierdzic zdrowie klastra.

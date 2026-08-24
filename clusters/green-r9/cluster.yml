@@ -23,7 +23,7 @@ proxysql:
   hostgroup_base: 890
   app_user: "app_user_gr"
   frontend_tls:
-    ca_reference: "tests/lab/tls/green/ca.pem"
+    ca_reference: "pki/green/ca.pem"
   endpoint:
     type: "keepalived_vip"
     address: "192.168.1.27"
@@ -33,9 +33,9 @@ tls:
   mode: "full"
   socket_dynamic: false
   per_node_certificates: true
-  ca_reference: "tests/lab/tls/gr9/ca.pem"
-  certificate_reference: "tests/lab/tls/gr9/server-cert.pem"
-  private_key_reference: "tests/lab/tls/gr9/server-key.pem"
+  ca_reference: "pki/gr9/ca.pem"
+  certificate_reference: "pki/gr9/server-cert.pem"
+  private_key_reference: "pki/gr9/server-key.pem"
   require_secure_transport: false
 
 network:

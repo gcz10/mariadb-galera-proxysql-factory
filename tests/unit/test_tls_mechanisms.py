@@ -22,7 +22,7 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TLS_SCRIPTS = REPO_ROOT / "tests" / "lab" / "tls"
+TLS_SCRIPTS = REPO_ROOT / "pki"
 TLS_ROTATE_PLAYBOOK = REPO_ROOT / "playbooks" / "tls_rotate.yml"
 
 HOSTS = ("nlabg1", "nlabg2")

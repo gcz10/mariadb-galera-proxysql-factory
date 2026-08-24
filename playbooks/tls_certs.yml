@@ -13,8 +13,8 @@
 #     kto uruchomil f7 jako ostatni. Dlatego f7 podaje sciezke per klaster.
 ---
 # audit: `copy` rozwiazuje relatywny `src` wzgledem katalogu PLAYBOOKA, wiec
-# repo-relatywne referencje z cluster.yml (np. "tests/lab/tls/ca.pem", tak jak
-# ma je lab2-cluster) laduja jako "playbooks/tests/lab/tls/ca.pem" i zadanie
+# repo-relatywne referencje z cluster.yml (np. "pki/ca.pem", tak jak
+# ma je lab2-cluster) laduja jako "playbooks/pki/ca.pem" i zadanie
 # pada na "Could not find or access". Sciezki bezwzgledne (artefakty PKI
 # produkcji) zostaja bez zmian.
 - name: "TLS: rozwiaz referencje wzgledem katalogu repozytorium"
@@ -23,7 +23,7 @@
 
 # Lisc PER WEZEL, gdy `tls.per_node_certificates` jest wlaczone: kazdy wezel
 # dostaje wlasny cert i wlasny klucz spod WSPOLNEGO CA klastra
-# (tests/lab/tls/issue-node-certs.sh). Wyciek klucza z jednego wezla nie daje
+# (pki/issue-node-certs.sh). Wyciek klucza z jednego wezla nie daje
 # wtedy tozsamosci pozostalych, a lisc mozna wymienic pojedynczo.
 #
 # Sciezka jest WYPROWADZANA z katalogu CA, nie deklarowana osobno w cluster.yml:

@@ -12,13 +12,13 @@
 #
 # CA i jego klucz musza juz istniec — ten skrypt CELOWO nie potrafi ich stworzyc.
 # Wystawianie nowego CA to zdarzenie wymagajace rotacji zaufania na calej flocie
-# (tests/lab/tls/rotate-ca.sh, okno podwojnego zaufania); wymieszanie tego z
+# (pki/rotate-ca.sh, okno podwojnego zaufania); wymieszanie tego z
 # rutynowym wystawianiem liscia konczy sie CA wygenerowanym przez pomylke.
 #
 # Uzycie:
-#   tests/lab/tls/issue-node-certs.sh <katalog> <host=ip>[,<host=ip>...] [dni]
+#   pki/issue-node-certs.sh <katalog> <host=ip>[,<host=ip>...] [dni]
 # Przyklad:
-#   tests/lab/tls/issue-node-certs.sh n11 n11g1=192.168.1.185,n11g2=192.168.1.186 90
+#   pki/issue-node-certs.sh n11 n11g1=192.168.1.185,n11g2=192.168.1.186 90
 #
 # Zmienne srodowiskowe (opcjonalne):
 #   CA_FILE  — certyfikat CA podpisujacy; domyslnie <katalog>/ca.pem
@@ -39,7 +39,7 @@ if [ $# -lt 2 ] || [ $# -gt 3 ]; then
 fi
 
 BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DIR="$BASE/${1#tests/lab/tls/}"
+DIR="$BASE/${1#pki/}"
 NODES="$2"
 # 90 dni to nie ostroznosc, tylko wymuszenie cwiczenia rotacji. Cert wazny 3 lata
 # jest rotowany raz — w panice, przez osobe, ktora nigdy tego nie robila.

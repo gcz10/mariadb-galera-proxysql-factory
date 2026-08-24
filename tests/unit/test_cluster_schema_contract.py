@@ -193,9 +193,9 @@ class ClusterSchemaContractTests(unittest.TestCase):
         cluster = canonical_cluster()
         cluster["tls"] = {
             "mode": "full",
-            "ca_reference": "tests/lab/tls/x/ca.pem",
-            "certificate_reference": "tests/lab/tls/x/server-cert.pem",
-            "private_key_reference": "tests/lab/tls/x/server-key.pem",
+            "ca_reference": "pki/x/ca.pem",
+            "certificate_reference": "pki/x/server-cert.pem",
+            "private_key_reference": "pki/x/server-key.pem",
         }
         self.assert_valid(cluster)
 

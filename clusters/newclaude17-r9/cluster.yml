@@ -64,7 +64,7 @@ proxysql:
   # na host aplikacyjny, zeby klient mogl zweryfikowac lancuch VIP-a. CA jest
   # wspolne, nie klastrowe: jeden cert frontendu obsluguje wszystkie klastry naraz.
   frontend_tls:
-    ca_reference: "tests/lab/tls/shared/ca.pem"
+    ca_reference: "pki/shared/ca.pem"
   endpoint:
     type: "keepalived_vip"
     address: "192.168.1.139"   # VIP warstwy wspolnej - ten sam co finalclaude-r10
@@ -78,9 +78,9 @@ tls:
   # materialu i sa ignorowane przy tej fladze - sciezke liscia wyprowadza
   # tls_certs.yml z katalogu CA i `inventory_hostname`.
   per_node_certificates: true
-  ca_reference: "tests/lab/tls/n17/ca.pem"
-  certificate_reference: "tests/lab/tls/n17/server-cert.pem"
-  private_key_reference: "tests/lab/tls/n17/server-key.pem"
+  ca_reference: "pki/n17/ca.pem"
+  certificate_reference: "pki/n17/server-cert.pem"
+  private_key_reference: "pki/n17/server-key.pem"
   # Wymuszanie TLS na WSZYSTKICH polaczeniach TCP to osobny krok: ProxySQL laczy
   # sie do backendow z use_ssl per serwer, a mysqld_exporter i agent QAN ida TCP
   # na 127.0.0.1:3306. Wlaczenie tego tutaj zshunnowaloby backendy i wygasilo metryki.

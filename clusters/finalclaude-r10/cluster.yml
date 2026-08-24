@@ -39,7 +39,7 @@ proxysql:
   # (cert+klucz) nalezy do platform/shared — gdyby zyl w definicji najemcy,
   # zniszczenie tego klastra uniewazniloby endpoint calej floty.
   frontend_tls:
-    ca_reference: "tests/lab/tls/shared/ca.pem"
+    ca_reference: "pki/shared/ca.pem"
   endpoint:
     type: "keepalived_vip"
     address: "192.168.1.139"   # VIP warstwy wspolnej
