@@ -129,16 +129,28 @@
       delegate_to: "{{ groups['infra'][0] }}"
 
     - name: Wybierz konta MinIO tego klastra
-      # DOKLADNE dopasowanie nazwy `galera-backup-{{ cluster.name }}` po info:
-      # konta innych klastrow na wspoldzielonym MinIO nigdy nie trafiaja na liste.
+      # DOKLADNE dopasowanie nazw po info: konta innych klastrow na
+      # wspoldzielonym MinIO nigdy nie trafiaja na liste. OBA konta klastra
+      # musza zniknac — samo konto zapisu zostawiloby na wspolnym MinIO sierote
+      # z prawem kasowania kopii po zniszczonym juz kliencie.
       ansible.builtin.set_fact:
         galera_backup_deregister_access_keys: >-
           {{
-            galera_backup_deregister_accesskey_info.results
-            | default([])
-            | map(attribute='stdout')
-            | list
-            | minio_access_keys_named('galera-backup-' ~ cluster.name)
+            (
+              galera_backup_deregister_accesskey_info.results
+              | default([])
+              | map(attribute='stdout')
+              | list
+              | minio_access_keys_named('galera-backup-' ~ cluster.name)
+            )
+            +
+            (
+              galera_backup_deregister_accesskey_info.results
+              | default([])
+              | map(attribute='stdout')
+              | list
+              | minio_access_keys_named('galera-backup-prune-' ~ cluster.name)
+            )
           }}
       no_log: true
 

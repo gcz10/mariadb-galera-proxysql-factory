@@ -13,6 +13,9 @@ SENSITIVE_SECRET_KEYS = frozenset({
     "GALERA_BACKUP_PROXYSQL_STATS_PASSWORD",
     "GALERA_BACKUP_ENCRYPTION_KEY",
     "GALERA_BACKUP_S3_SECRET_KEY",
+    # Poswiadczenie retencji lezy TYLKO na koordynatorze; jest jedynym kluczem
+    # z prawem kasowania kopii, wiec tym bardziej nie moze trafic do argv.
+    "GALERA_BACKUP_S3_PRUNE_SECRET_KEY",
     "GALERA_BACKUP_SMB_PASSWORD",
 })
 
@@ -24,6 +27,7 @@ SENSITIVE_SECRET_KEYS = frozenset({
 # on it breaks legitimate commands and mangles diagnostics.
 REDACT_ONLY_SECRET_KEYS = frozenset({
     "GALERA_BACKUP_S3_ACCESS_KEY",
+    "GALERA_BACKUP_S3_PRUNE_ACCESS_KEY",
     "GALERA_BACKUP_SMB_USERNAME",
 })
 

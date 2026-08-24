@@ -95,6 +95,8 @@
     galera_backup_existing_encryption_key: ""
     galera_backup_existing_s3_access_key: ""
     galera_backup_existing_s3_secret_key: ""
+    galera_backup_existing_s3_prune_access_key: ""
+    galera_backup_existing_s3_prune_secret_key: ""
   no_log: true
 
 - name: Read existing scheduler secrets for idempotent MinIO provisioning
@@ -129,6 +131,22 @@
         (
           (galera_backup_existing_secrets.content | b64decode)
           | regex_findall('(?m)^GALERA_BACKUP_S3_SECRET_KEY="([^"]+)"$')
+          | first
+        ) | default('', true)
+      }}
+    galera_backup_existing_s3_prune_access_key: >-
+      {{
+        (
+          (galera_backup_existing_secrets.content | b64decode)
+          | regex_findall('(?m)^GALERA_BACKUP_S3_PRUNE_ACCESS_KEY="([^"]+)"$')
+          | first
+        ) | default('', true)
+      }}
+    galera_backup_existing_s3_prune_secret_key: >-
+      {{
+        (
+          (galera_backup_existing_secrets.content | b64decode)
+          | regex_findall('(?m)^GALERA_BACKUP_S3_PRUNE_SECRET_KEY="([^"]+)"$')
           | first
         ) | default('', true)
       }}
@@ -175,6 +193,19 @@
               | default(galera_backup_existing_s3_secret_key, true),
               true
             )
+        }}
+      # Poswiadczenie retencji CELOWO nie ma sciezki dziedziczenia: zyje
+      # wylacznie na koordynatorze (backup.scheduler.host), wiec nigdy nie
+      # trafia do hostvars pozostalych wezlow ani hosta restore.
+      s3_prune_access_key: >-
+        {{
+          galera_backup_s3_prune_access_key
+          | default(galera_backup_existing_s3_prune_access_key, true)
+        }}
+      s3_prune_secret_key: >-
+        {{
+          galera_backup_s3_prune_secret_key
+          | default(galera_backup_existing_s3_prune_secret_key, true)
         }}
       smb_username: >-
         {{
@@ -231,8 +262,16 @@
   no_log: true
 
 - name: Publish resolved secrets for following restore-host play
+  # Poswiadczenie retencji jest CELOWO wycinane: host restore nie moze dostac
+  # prawa kasowania kopii, a jedynym konsumentem tego faktu jest jego play.
   ansible.builtin.set_fact:
-    galera_backup_shared_secrets: "{{ galera_backup_resolved_shared_secrets }}"
+    galera_backup_shared_secrets: >-
+      {{
+        galera_backup_resolved_shared_secrets
+        | dict2items
+        | rejectattr('key', 'in', ['s3_prune_access_key', 's3_prune_secret_key'])
+        | items2dict
+      }}
   when: inventory_hostname == backup.scheduler.host
   no_log: true
 
@@ -272,6 +311,33 @@
           - "{{ item }}"
       loop: "{{ galera_backup_access_keys_to_revoke | default([]) }}"
       # Kazdy obrot petli usuwa konto serwisowe — mutacja stanu MinIO.
+      changed_when: true
+      no_log: true
+      delegate_to: "{{ groups['infra'][0] }}"
+      when:
+        - galera_backup_managed_minio
+        - inventory_hostname == backup.scheduler.host
+
+    - name: Revoke stale MinIO retention accounts owned by this cluster
+      # Osobna petla, bo osobne konto: aktywny klucz retencji jest juz w
+      # secrets.env koordynatora (zadanie wyzej), wiec dopiero teraz wolno
+      # skasowac poprzednie konta o tej nazwie.
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - /run/galera-backup-minio-tmp/root.env
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - admin
+          - accesskey
+          - remove
+          - myminio
+          - "{{ item }}"
+      loop: "{{ galera_backup_prune_keys_to_revoke | default([]) }}"
       changed_when: true
       no_log: true
       delegate_to: "{{ groups['infra'][0] }}"

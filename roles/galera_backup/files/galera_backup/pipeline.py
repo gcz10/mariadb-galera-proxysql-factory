@@ -431,15 +431,39 @@ def wait_until_synced(socket_path: Path, runner: CommandRunner, timeout_s: int =
         time.sleep(5)
 
 
-def get_storage_backend(cfg: RunConfig, secrets: dict[str, str], runner: Optional["CommandRunner"] = None) -> Any:
+def get_storage_backend(
+    cfg: RunConfig,
+    secrets: dict[str, str],
+    runner: Optional["CommandRunner"] = None,
+    purpose: str = "write",
+) -> Any:
+    """Zbuduj backend kopii; `purpose="retention"` bierze poswiadczenie z delete.
+
+    Rozdzielenie jest bezpieczenstwem, nie kosmetyka. Donora wybiera runner przy
+    starcie, wiec poswiadczenie ZAPISU lezy na kazdym wezle Galery i nie moze
+    miec prawa kasowania — inaczej kompromitacja dowolnego wezla bazy kasuje
+    historie off-cluster. Klucz retencji dostaje wylacznie koordynator
+    (`backup.scheduler.host`), patrz roles/galera_backup/templates/minio-policy-prune.json.j2.
+    """
     b_type = str(cfg.backend.get("type", cfg.backend.get("destination", ""))).lower()
     if b_type == "s3":
+        if purpose == "retention":
+            access_key = secrets.get("GALERA_BACKUP_S3_PRUNE_ACCESS_KEY", "")
+            secret_key = secrets.get("GALERA_BACKUP_S3_PRUNE_SECRET_KEY", "")
+            if not access_key or not secret_key:
+                raise BackupError(
+                    "E_SECRETS",
+                    "Retention credentials are absent: this host is not the retention coordinator",
+                )
+        else:
+            access_key = secrets["GALERA_BACKUP_S3_ACCESS_KEY"]
+            secret_key = secrets["GALERA_BACKUP_S3_SECRET_KEY"]
         return S3Backend(
             endpoint=cfg.backend["endpoint"],
             bucket=cfg.backend["bucket"],
             secure=cfg.backend.get("secure", False),
-            access_key=secrets["GALERA_BACKUP_S3_ACCESS_KEY"],
-            secret_key=secrets["GALERA_BACKUP_S3_SECRET_KEY"],
+            access_key=access_key,
+            secret_key=secret_key,
             cluster_name=cfg.cluster_name,
         )
     elif b_type == "smb":
@@ -588,6 +612,79 @@ def _finalize_success_cleanup(
             report("workdir.remove", cleanup_exc, work_dir_error_code)
 
 
+def has_retention_credential(secrets: dict[str, str]) -> bool:
+    """Czy TEN host jest koordynatorem retencji (ma klucz z prawem delete)."""
+    return bool(secrets.get("GALERA_BACKUP_S3_PRUNE_ACCESS_KEY")) and bool(
+        secrets.get("GALERA_BACKUP_S3_PRUNE_SECRET_KEY")
+    )
+
+
+def run_retention(
+    cfg: RunConfig,
+    secrets: dict[str, str],
+    runner: Optional["CommandRunner"],
+    event_mgr: Any,
+    backend_type: str,
+    backup_backend: Any = None,
+) -> None:
+    """Skasuj wygasle kopie. JEDYNA sciezka runnera z prawem kasowania.
+
+    Dla S3 buduje WLASNY backend na poswiadczeniu retencji — backend uzyty do
+    publikacji nigdy nie dostaje prawa delete, wiec nie da sie przypadkiem
+    skasowac historii kluczem lezacym na kazdym wezle Galery.
+
+    Wezel bez poswiadczenia retencji konczy bez zdarzenia: dokladnie jeden host
+    w klastrze jest koordynatorem, a dwa pozostale nie maja tu nic do roboty.
+
+    Nigdy nie podnosi wyjatku. Kopia jest w tym momencie opublikowana i
+    zweryfikowana; awaria retencji jest raportowana zdarzeniem i NIE degraduje
+    udanego backupu (zachowanie sprzed rozdzielenia poswiadczen).
+    """
+    backend = backup_backend
+    dedicated = None
+
+    if backend_type == "s3":
+        if not has_retention_credential(secrets):
+            return
+        try:
+            dedicated = get_storage_backend(cfg, secrets, runner, purpose="retention")
+            dedicated.preflight()
+            backend = dedicated
+        except BackupError as exc:
+            event_mgr.emit(
+                "retention.failure",
+                {"error_code": exc.code, "message": exc.public_message},
+            )
+            return
+        except Exception as exc:
+            event_mgr.emit(
+                "retention.failure", {"error_code": "E_STORAGE", "message": str(exc)}
+            )
+            return
+
+    if backend is None:
+        return
+
+    try:
+        deleted = backend.prune(datetime.now(timezone.utc), cfg.retention_days)
+        event_mgr.emit("retention.success", {"deleted": int(deleted or 0)})
+    except BackupError as exc:
+        event_mgr.emit(
+            "retention.failure",
+            {"error_code": exc.code, "message": exc.public_message},
+        )
+    except Exception as exc:
+        event_mgr.emit(
+            "retention.failure", {"error_code": "E_STORAGE", "message": str(exc)}
+        )
+    finally:
+        if dedicated is not None:
+            try:
+                dedicated.close()
+            except Exception:
+                pass
+
+
 def run_backup(
     config_path: Optional[Path] = None,
     secrets_path: Optional[Path] = None,
@@ -677,6 +774,10 @@ def run_backup(
                 f"galera-backup: {curr_host} nie jest donorem w tym przebiegu "
                 f"(wybrany: {donor}) — pomijam"
             )
+            # Retencja nalezy do KOORDYNATORA, nie do donora: gdyby biegla tylko
+            # w sciezce backupu, kazde przejecie backupu przez inny wezel
+            # zatrzymywaloby kasowanie wygaslych kopii az do powrotu preferencji.
+            run_retention(cfg, secrets, runner, event_mgr, b_type)
             return
 
         # Druga, niezalezna warstwa: nawet gdyby elekcja sie pomylila, backup
@@ -867,20 +968,11 @@ def run_backup(
             last_duration_seconds=duration,
         )
 
-        # Prune — retention housekeeping; failures are reported but never
-        # downgrade the successful run recorded above.
-        try:
-            backend.prune(datetime.now(timezone.utc), cfg.retention_days)
-        except BackupError as prune_exc:
-            event_mgr.emit(
-                "retention.failure",
-                {"error_code": prune_exc.code, "message": prune_exc.public_message},
-            )
-        except Exception as prune_exc:
-            event_mgr.emit(
-                "retention.failure",
-                {"error_code": "E_STORAGE", "message": str(prune_exc)},
-            )
+        # Retencja — jedyna sciezka z prawem kasowania. Dla S3 buduje wlasny
+        # backend na poswiadczeniu koordynatora; backend publikacji (obecny na
+        # kazdym wezle) nie ma prawa delete. Awarie sa raportowane zdarzeniem i
+        # nigdy nie degraduja zapisanego wyzej sukcesu.
+        run_retention(cfg, secrets, runner, event_mgr, b_type, backend)
 
         # Most swiezosci restore drillu: host schedulera JEST scrapowany, izolowany
         # host `restore` nie jest. Przepisujemy tu znacznik zostawiony przez drill

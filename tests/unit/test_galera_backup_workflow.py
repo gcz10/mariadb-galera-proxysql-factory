@@ -77,10 +77,16 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             # Donor to .51, a ten wezel to .52 — ma sie wycofac, nie pracowac.
             with patch("socket.gethostname", return_value="current-host"):
                 with patch.object(pipeline, "get_storage_backend") as backend:
-                    pipeline.run_backup(
-                        config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b"
-                    )
+                    with patch.object(pipeline, "run_retention") as retention:
+                        pipeline.run_backup(
+                            config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b"
+                        )
                 backend.assert_not_called()
+
+            # Retencja nalezy do koordynatora, nie do donora: pominiecie backupu
+            # NIE moze zatrzymac kasowania wygaslych kopii, inaczej kazde
+            # przejecie backupu przez inny wezel wstrzymywaloby retencje.
+            retention.assert_called_once()
 
             events = (Path(cfg_data["paths"]["cluster_dir"]) / "events.jsonl").read_text()
             self.assertIn("skipped.not_elected", events)
@@ -344,6 +350,12 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
 
             self.assertLess(events.index("backend.preflight"), events.index("mariadb-backup.backup"))
             self.assertLess(events.index("backend.verify"), events.index("state.success"))
+
+            # Backend publikacji stoi na poswiadczeniu lezacym na KAZDYM wezle
+            # Galery, wiec sciezka backupu nie moze niczego kasowac. Retencja
+            # ma wlasny backend i wlasny klucz — patrz
+            # tests/unit/test_backup_delete_separation.py.
+            fake_backend.prune.assert_not_called()
 
     def test_run_backup_cleanup_failure_does_not_downgrade_success(self):
         # Regresja: porazka porzadkowania (close backendu / usuniecie

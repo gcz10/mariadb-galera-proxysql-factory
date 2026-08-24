@@ -93,7 +93,10 @@ class TestExistingGrantsSurvive(unittest.TestCase):
         arn = f"arn:aws:s3:::{BUCKET}/galera-{CLUSTER}-*"
         actions = allowed_actions(render_policy(), arn)
         self.assertIn("s3:PutObject", actions)
-        self.assertIn("s3:DeleteObject", actions)
+        # `s3:DeleteObject` CELOWO tu nie ma: prawo kasowania kopii przeszlo do
+        # osobnego poswiadczenia retencji, bo ta polityka lezy na kazdym wezle
+        # Galery. Kontrakt rozdzialu: tests/unit/test_backup_delete_separation.py.
+        self.assertNotIn("s3:DeleteObject", actions)
 
     def test_owner_file_still_readable(self):
         arn = f"arn:aws:s3:::{BUCKET}/galera-backup-owner.json"

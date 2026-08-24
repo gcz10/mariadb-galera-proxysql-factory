@@ -1,7 +1,7 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
-**Status:** W TOKU — P0/P1/P2-6/P2-8/P2-9/P3 zamknięte; P2-7 ma blocker integralności, otwarte P2-10 i dług testowy.
-**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3/P1-4/P1-5, P2-6/P2-8/P2-9, P3 (higiena, komplet). P2-7 funkcjonalnie PASS, security BLOCKED.
+**Status:** W TOKU — P0/P1/P2-6/P2-7/P2-8/P2-9 zamknięte; P3 ma jedną otwartą decyzję (LICENSE), otwarte P2-10 i dług testowy.
+**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3/P1-4/P1-5, P2-6/P2-8/P2-9, P3 (higiena; audyt na kodzie 2026-08-24 potwierdził 10/11 pozycji zamkniętych). P2-7 domknięte: prawo kasowania kopii jest odseparowane od prawa zapisu i zweryfikowane na żywo.
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
 
@@ -317,7 +317,7 @@ nadal fail-closed odmawia (anti split-brain). Dowód końcowy: backup
 
 ---
 
-## P2-7. Statyczny scheduler backupu po failoverze może zostać writerem — FUNKCJONALNIE ZROBIONE; BLOKER INTEGRALNOŚCI
+## P2-7. Statyczny scheduler backupu po failoverze może zostać writerem — ZROBIONE
 
 **Problem.** `backup.scheduler.host` jest przypięty do konkretnego węzła, a guard
 `assert_scheduler_is_not_writer` (fail-closed, `E_WRITER`) jest poprawny. Po
@@ -368,15 +368,51 @@ aktywnym writerem:
 Artefakt `galera-green-r9-20260824-151333` zweryfikowany (aes-256-cbc, sha256 OK,
 off-cluster w S3). Po przywróceniu preferencji bramka po budowie 13/13 PASS.
 
-**BLOKER przed push.** Elekcja wymaga runnera i `secrets.env` na wszystkich
-trzech węzłach Galery. Obecna polityka MinIO zawiera `s3:DeleteObject`
-(`minio-policy.json.j2`), a runner realnie usuwa obiekty przy retencji
-(`storage/s3.py`). W efekcie kompromitacja dowolnego węzła bazy może teraz
-skasować historię off-cluster — poufność danych live tego nie łagodzi.
-Mitigacja: osobne poświadczenie write/list/read na wszystkich donorach oraz
-delete/prune tylko na jednym koordynatorze (albo udokumentowany Object Lock po
-weryfikacji dokumentacji MinIO). Do czasu tej separacji P2-7 nie jest gotowe
-do wypchnięcia mimo pełnej poprawności funkcjonalnej.
+**Bloker integralności — ZDJĘTY (2026-08-24).** Elekcja rozstawiła runnera i
+`secrets.env` na wszystkich trzech węzłach Galery, a polityka MinIO łączyła
+wtedy `s3:PutObject` z `s3:DeleteObject`. Kompromitacja dowolnego węzła bazy
+kasowała historię off-cluster — poufność danych live tego nie łagodzi, bo backup
+jest ostatnią linią obrony.
+
+Prawo kasowania jest teraz odcięte od prawa zapisu:
+
+| Poświadczenie | Gdzie leży | Polityka |
+|---|---|---|
+| `galera-backup-<cluster>` | każdy węzeł Galery + host restore | `Get`/`Put`/`AbortMultipartUpload`/`ListMultipartUploadParts` na `galera-<cluster>-*`; **zero akcji `s3:Delete*`** |
+| `galera-backup-prune-<cluster>` | wyłącznie `backup.scheduler.host` | `ListBucket`, `GetObject`, `DeleteObject` na `galera-<cluster>-*`; **bez `PutObject`** |
+
+Konto retencji ma własną nazwę, więc selekcja konta zapisu (dokładne dopasowanie
+nazwy w `minio_access_keys_named`) nigdy go nie widzi ani nie odwołuje; każda
+rola ma osobną listę odwołań i osobną sondę po `create`. Derejestracja klastra
+kasuje oba konta — pojedyncze zostawiłoby na współdzielonym MinIO sierotę
+z prawem kasowania kopii po już zniszczonym kliencie.
+
+W runnerze retencja przeszła do `run_retention()`, jedynej ścieżki z prawem
+delete. Buduje **własny** backend na kluczu retencji (`purpose="retention"`),
+więc backend publikacji nigdy nie dostaje delete. Węzeł bez tego klucza kończy
+bez zdarzenia — to normalny stan dwóch z trzech węzłów, nie awaria. Retencja
+biegnie także w gałęzi „nie jestem donorem", bo należy do koordynatora: inaczej
+każde przejęcie backupu przez inny węzeł wstrzymywałoby kasowanie wygasłych
+kopii. Poświadczenie retencji jest wycinane z faktów publikowanych do gry hosta
+restore — host restore nigdy nie dostaje prawa kasowania.
+
+**Dowód (green, 2026-08-24).** Po `cluster-backup-configure`:
+
+| Sprawdzenie | Wynik |
+|---|---|
+| `GALERA_BACKUP_S3_PRUNE_ACCESS_KEY` w `secrets.env` | `grg1` = 1, `grg2`/`grg3`/`grr1` = 0 |
+| `grg2` kluczem zapisu: `put_object` | `ok` |
+| `grg2` kluczem zapisu: `remove_object` | `DENIED:AccessDenied` |
+| `grg1`: `run_retention` na syntetycznej wygasłej kopii | `retention.success {"deleted": 1}`, 6 realnych kopii nietknięte |
+| `grg1` kluczem retencji: sprzątnięcie obiektu sondy | usunięty |
+| `make cluster-backup` | `grg1`: `backend.publish` → `backend.verify` → `state.success` → `retention.success`; `grg2`/`grg3`: `skipped.not_elected` |
+
+**Ryzyko rezydualne.** Klucz zapisu nadal może **nadpisać** obiekt pod własnym
+prefiksem (`PutObject` na istniejący klucz niszczy poprzednią zawartość, bo
+bucket nie ma wersjonowania). Delete jest odcięty, nadpisanie nie — pełne
+domknięcie wymaga wersjonowania bucketa i Object Lock, a ten drugi w S3 daje się
+włączyć wyłącznie przy tworzeniu bucketa, więc dotyczy nowych klastrów.
+Zapisane jako osobna pozycja, nie jako część tej zmiany.
 
 ---
 
@@ -479,22 +515,39 @@ warunek. Wariant B: brak zdania o produkcji bez kwalifikatora w README i ISA.
 
 Pozycje tanie, bez ryzyka, do zrobienia razem:
 
-Statusy zweryfikowane na kodzie 2026-08-24.
+Statusy przeaudytowane na kodzie 2026-08-24 (poprzednia wersja tej tabeli była
+nieaktualna: 10 z 11 pozycji technicznych było już zamkniętych w kodzie).
 
 | Pozycja | Status | Dowód |
 |---|---|---|
-| `cluster_guard` na celach weryfikacyjnych | otwarte | 29 celów dotyka `CLUSTER` bez guardu, w tym destrukcyjne `lab-failover-hard-test`, `lab-split-brain-test` |
-| Strażniki sekretów na początku bramki, nie po 12 sondach | otwarte | `PMM_ADMIN_PASSWORD` sprawdzany w 13. linii recepty `lab-post-build-gate`; `APP_DB_PASSWORD` bez guardu |
-| `probe-zero-hardcode.py` skanuje też `Makefile` | otwarte | `SCAN_DIRS = ["playbooks", "roles"]` |
-| Usunięcie zgniłych komentarzy (`n16g2/n16g3`, `proxysql-3.0.9`) | otwarte | `Makefile:378`, `versions/versions.lock.yml:42` |
+| `cluster_guard` na celach weryfikacyjnych | **zrobione** | `Makefile:40` wpięty w 54 celach klastrowych; destrukcyjne `galera-rebuild:66`, `infra-teardown:78`, `lab-failover-hard-test:416`, `lab-split-brain-test:482`, `cluster-recover:619`; 0 celów bez guardu |
+| Strażniki sekretów na początku bramki, nie po 12 sondach | **zrobione** | `Makefile:690-691` — `APP_DB_PASSWORD` i `PMM_ADMIN_PASSWORD` w 5. i 6. linii recepty, przed wszystkimi 13 sondami (`:692-704`) |
+| `probe-zero-hardcode.py` skanuje też `Makefile` | **zrobione** | `tests/validation/probe-zero-hardcode.py:21` `SCAN_FILES = ["Makefile"]` |
+| Usunięcie zgniłych komentarzy (`n16g2/n16g3`, `proxysql-3.0.9`) | **zrobione** | `n16g2/n16g3` już nie istnieją w `Makefile`; `versions/versions.lock.yml:42` poprawiony na `proxysql-3.0.10-1` |
 | 6 śledzonych `.DS_Store` | **zrobione** (`277a587`) | `.gitignore:53` już je ignorował; zostały w indeksie z przeszłości |
-| Rola bez `tasks/` to cichy no-op, nie błąd | otwarte | `roles: mariadb_install` -> `rc=0`, zero zadań |
-| `galera-rebuild` w `.PHONY` | otwarte | jest tylko komentarz `Makefile:5` i definicja `:52` |
-| `BUILD_SKIP`: sprzężenie seed→backup egzekwowane, nie komentowane | otwarte | sprzężenie nadal wyłącznie w komentarzu `Makefile:135-141` |
-| Trzeci stan w tablicy ISC (`PASS-z-zastrzeżeniem`) | otwarte | `grep` po `ISA.md` nie znajduje takiego stanu |
-| Aktualizacja ISA: Out of Scope kontra `infra-provision` | otwarte | `ISA.md:30` nadal wyklucza „tworzenie VM" |
-| Piny wersji w krokach `pip install` w CI | otwarte | trzy niepinowane instalacje: `ci.yml:31,170,214` |
-| Decyzja o `LICENSE` i o publiczności mapy sieci | otwarte | brak pliku `LICENSE`; `docs/infrastructure-state.md` |
+| Rola bez `tasks/` to cichy no-op, nie błąd | **zrobione** | `tests/validation/probe-role-contract.py` + cel `verify-role-contract` (`Makefile:502`) odrzucają katalog bez `tasks/main.yml` wywołany jako rola |
+| `galera-rebuild` w `.PHONY` | **zrobione** | `Makefile:7` |
+| `BUILD_SKIP`: sprzężenie seed→backup egzekwowane, nie komentowane | **zrobione** | `Makefile:298-308` (bash guard w `cluster-build`) + `tests/unit/test_cluster_lifecycle_contract.py:728-735` |
+| Trzeci stan w tablicy ISC (`PASS-z-zastrzeżeniem`) | **zrobione** | `ISA.md:79` definiuje `[~]`; użyty na ISC-1, ISC-22, ISC-44, ISC-66 |
+| Aktualizacja ISA: Out of Scope kontra `infra-provision` | **zrobione** | `ISA.md:32` deklaruje tworzenie VM w zakresie (Terraform, `infra-provision`) |
+| Piny wersji w krokach `pip install` w CI | **zrobione** | `.github/workflows/ci.yml:37,178,229` — wszystkie z `==` |
+| Decyzja o `LICENSE` i o publiczności mapy sieci | otwarte | brak pliku `LICENSE`; `docs/infrastructure-state.md` — decyzja właściciela, nie kod |
+
+---
+
+## P4. Nadpisanie kopii kluczem zapisu (ryzyko rezydualne po P2-7)
+
+**Problem.** P2-7 odciął `s3:DeleteObject` od poświadczenia leżącego na każdym
+węźle Galery, ale `s3:PutObject` na istniejący klucz nadal niszczy poprzednią
+zawartość: bucket nie ma wersjonowania. Kompromitacja węzła bazy nie skasuje
+historii, lecz może ją nadpisać.
+
+**Kierunek.** Wersjonowanie bucketa + Object Lock. Wymaga weryfikacji w
+dokumentacji MinIO, czy i jak włączyć je na istniejącym buckecie — S3 pozwala
+włączyć Object Lock wyłącznie przy tworzeniu bucketa, więc realnie dotyczy
+nowych klastrów, a istniejące wymagałyby migracji danych do nowego bucketa.
+
+**Koszt:** średni. **Blokuje:** nic — P2-7 jest samodzielnie poprawne.
 
 ---
 

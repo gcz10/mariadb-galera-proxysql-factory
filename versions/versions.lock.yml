@@ -39,7 +39,7 @@ proxysql:
   series: "3.0"
   tier: "Stable"
   released: "2026-07-31"
-  rpm_release: "1"              # audit#12: potwierdzone na hostach (proxysql-3.0.9-1.x86_64)
+  rpm_release: "1"              # zgodne z przypietym RPM-em ponizej (proxysql-3.0.10-1)
   # R1: usunieto repo_baseurl - wskazywalo na 404 (sciezka `rocky/9` nie istnieje;
   # oficjalna jest `centos/<major>`) i nie bylo przez nic konsumowane.
   # URL RPM-u sklada f2_install z: series + rocky_linux.major + version + architektura.

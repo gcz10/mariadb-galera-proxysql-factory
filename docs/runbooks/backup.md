@@ -102,9 +102,24 @@ Rola zapisuje wyłącznie wymagane wartości w:
 /opt/galera-backup/clusters/<cluster>/secrets.env
 ```
 
-Plik ma właściciela `root:root` i tryb `0600`; ta sama para scoped credentials trafia na scheduler oraz host restore. Hasło SMB jest przekazywane do `mount.cifs` przez tymczasowy plik credentials `0600`, nigdy jako `password=...` w argv. Plik jest usuwany także po błędzie mountu lub unmountu.
+Plik ma właściciela `root:root` i tryb `0600`. Para scoped credentials z prawem **zapisu** trafia na każdy węzeł Galery (donora wybiera runner przy starcie) oraz na host restore. Osobna para z prawem **kasowania** trafia wyłącznie na `backup.scheduler.host` — patrz „Rozdział poświadczeń" niżej. Hasło SMB jest przekazywane do `mount.cifs` przez tymczasowy plik credentials `0600`, nigdy jako `password=...` w argv. Plik jest usuwany także po błędzie mountu lub unmountu.
 
 Dla zewnętrznego S3 administrator storage musi przed przekazaniem scoped credentials utworzyć w buckecie `galera-backup-owner.json` o treści `{"format_version":1,"cluster_name":"<cluster>"}`. Konto runnera dostaje tylko `GetObject` do markera oraz operacje na prefiksie `galera-<cluster>-*`; nie może zmienić ani usunąć markera.
+
+### Rozdział poświadczeń: zapis kontra kasowanie
+
+Runner stoi na wszystkich węzłach Galery, więc poświadczenie zapisu leży na każdym z nich. Gdyby miało `s3:DeleteObject`, kompromitacja dowolnego węzła bazy kasowałaby historię kopii off-cluster. Dlatego są dwa konta:
+
+| Konto | Gdzie leży | Uprawnienia |
+|---|---|---|
+| `galera-backup-<cluster>` | każdy węzeł Galery + host restore | `GetObject`, `PutObject`, `AbortMultipartUpload`, `ListMultipartUploadParts` na `galera-<cluster>-*`; **bez `Delete*`** |
+| `galera-backup-prune-<cluster>` | tylko `backup.scheduler.host` | `ListBucket`, `GetObject`, `DeleteObject` na `galera-<cluster>-*`; **bez `PutObject`** |
+
+Retencja (`run_retention`) biegnie na koordynatorze — także wtedy, gdy backup wykonał inny węzeł. Węzeł bez poświadczenia retencji nie emituje zdarzeń retencji; to normalny stan, nie awaria. Zdarzenie `retention.success` w `events.jsonl` na koordynatorze niesie liczbę usuniętych kopii.
+
+**Skutek operacyjny:** gdy koordynator jest długo niedostępny, kopie nadal powstają (inny węzeł zostaje donorem), ale wygasłe przestają być kasowane do jego powrotu. Bucket rośnie; świeżość kopii pozostaje nienaruszona.
+
+**Ryzyko rezydualne:** klucz zapisu może nadpisać obiekt pod własnym prefiksem (bucket nie ma wersjonowania). Delete jest odcięty, nadpisanie nie.
 
 ### Zarządzany MinIO
 
@@ -112,15 +127,15 @@ Jeżeli host z `backup.s3.endpoint` jest pierwszym hostem grupy `infra`, `cluste
 
 1. używa `MINIO_ROOT_USER` i `MINIO_ROOT_PASSWORD` tylko w tymczasowym pliku `0600` na hoście infra;
 2. tworzy bucket i marker właściciela przy użyciu root credentials;
-3. tworzy konto usługowe `galera-backup-<cluster>` z polityką ograniczoną do jednego bucketu i prefiksu klastra;
-4. zapisuje wygenerowaną parę scoped credentials na schedulerze i hoście restore;
+3. tworzy konto usługowe `galera-backup-<cluster>` (zapis, bez delete) oraz `galera-backup-prune-<cluster>` (retencja, z delete) — obydwa z polityką ograniczoną do jednego bucketu i prefiksu klastra;
+4. zapisuje parę zapisu na wszystkich węzłach Galery i hoście restore, a parę retencji wyłącznie na `backup.scheduler.host`;
 5. usuwa tymczasowe dane root.
 
 Ponowne configure zachowuje działającą parę kluczy i zbiega politykę — nie rotuje klucza przy każdym uruchomieniu.
 
 Rotacja zarządzanego MinIO:
 
-1. w oknie serwisowym usuń konto usługowe `galera-backup-<cluster>` w konsoli administracyjnej MinIO;
+1. w oknie serwisowym usuń konto usługowe `galera-backup-<cluster>` (i/lub `galera-backup-prune-<cluster>`) w konsoli administracyjnej MinIO;
 2. załaduj root credentials poza repozytorium;
 3. uruchom `make cluster-backup-configure CLUSTER=<name>`;
 4. uruchom ręczny backup i potwierdzany restore.

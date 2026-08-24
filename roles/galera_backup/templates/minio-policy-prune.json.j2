@@ -1,0 +1,47 @@
+{#
+  Polityka poswiadczenia RETENCJI. Trafia wylacznie na host
+  `backup.scheduler.host` (koordynator retencji) i jest jedynym poswiadczeniem
+  z prawem kasowania kopii tego klastra.
+
+  Celowo BEZ `s3:PutObject`: nadpisanie istniejacej kopii niszczy historie tak
+  samo jak delete, tylko ciszej. Koordynator ma kasowac wygasle kopie, nie
+  podmieniac istniejace.
+
+  `s3:GetObject` jest wymagane: prune czyta `metadata.json` kazdego prefiksu,
+  zeby wyliczyc wiek kopii, a `preflight` czyta marker ownera bucketa.
+  Kontrakt pilnuje tests/unit/test_backup_delete_separation.py.
+#}
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::{{ backup.s3.bucket }}"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::{{ backup.s3.bucket }}/galera-{{ cluster.name }}-*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::{{ backup.s3.bucket }}/galera-backup-owner.json"
+      ]
+    }
+  ]
+}
