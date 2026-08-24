@@ -52,8 +52,10 @@ TF_DIR ?= terraform/$(CLUSTER)
 # na kazdym innym klastrze cel destrukcyjny celowal w nieistniejace maszyny.
 # Nazwy hostow w inwentarzu sa tozsame z kluczami zasobow w terraform/<cluster>.
 # Rekurencyjne `=` (nie `:=`): liczy sie dopiero przy uzyciu, wiec `make help`
-# nie czyta zadnego inwentarza.
-GALERA_VMS = $(shell python3 -c "import yaml,sys; c=yaml.safe_load(open('clusters/$(CLUSTER)/inventory.yml'))['all']['children']; print(' '.join(h for g in ('galera','restore') for h in (c.get(g) or {}).get('hosts', {})))" 2>/dev/null)
+# nie czyta zadnego inwentarza. `?=`, nie `=`: zwykle przypisanie w Makefile
+# WYGRYWA ze zmienna srodowiskowa, wiec `GALERA_VMS=... make galera-rebuild`
+# zostalby po cichu zignorowany — a to cel, ktory kasuje maszyny.
+GALERA_VMS ?= $(shell python3 -c "import yaml,sys; c=yaml.safe_load(open('clusters/$(CLUSTER)/inventory.yml'))['all']['children']; print(' '.join(h for g in ('galera','restore') for h in (c.get(g) or {}).get('hosts', {})))" 2>/dev/null)
 # Provider bpg/proxmox uwierzytelnia sie ALBO tokenem API (PROXMOX_VE_API_TOKEN),
 # ALBO haslem (PROXMOX_VE_PASSWORD). Bramka zadajaca wylacznie hasla odbijala
 # operatora uzywajacego tokena — wystarczy dowolne z dwoch.

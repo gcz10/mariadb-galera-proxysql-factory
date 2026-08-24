@@ -109,8 +109,8 @@ node_exporter:
 
 ansible:
   # Warstwa kontrolera — niezależna od platformy hostów.
-  core_version: "2.21.2"
-  core_released: "2026-07-13"
+  core_version: "2.21.3"
+  core_released: "2026-08-10"
   collections:
     - name: "ansible.mysql"
       version: "5.1.0"
