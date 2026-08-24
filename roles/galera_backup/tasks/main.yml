@@ -299,7 +299,7 @@
     - (galera_backup_install_cron | default(true))
     - backup.enabled
     - backup.scheduler.mode == 'cron'
-    - inventory_hostname == backup.scheduler.host
+    - galera_backup_local_role | default('scheduler') == 'scheduler'
 
 - name: Require durable cron log sink
   ansible.builtin.assert:
@@ -312,7 +312,7 @@
     - (galera_backup_install_cron | default(true))
     - backup.enabled
     - backup.scheduler.mode == 'cron'
-    - inventory_hostname == backup.scheduler.host
+    - galera_backup_local_role | default('scheduler') == 'scheduler'
 
 - name: Manage per-cluster cron job
   ansible.builtin.template:
@@ -325,14 +325,18 @@
     - (galera_backup_install_cron | default(true))
     - backup.enabled
     - backup.scheduler.mode == 'cron'
-    - inventory_hostname == backup.scheduler.host
+    - galera_backup_local_role | default('scheduler') == 'scheduler'
 
-- name: Remove cron file on non-scheduler hosts or manual mode
+# Cron nalezy do KAZDEGO kandydata na donora, nie do jednego przypietego hosta:
+# donora wybiera runner przy starcie. Kasujemy plik tam, gdzie cron jest
+# wylaczony jawnie (host restore) albo gdzie harmonogram nie jest cronowy.
+- name: Remove cron file where this host is not a backup candidate
   ansible.builtin.file:
     path: "/etc/cron.d/galera-backup-{{ cluster.name }}"
     state: absent
   when: >
-    not (backup.enabled and backup.scheduler.mode == 'cron' and inventory_hostname == backup.scheduler.host) or
+    not (backup.enabled and backup.scheduler.mode == 'cron'
+         and (galera_backup_local_role | default('scheduler')) == 'scheduler') or
     not (galera_backup_install_cron | default(true))
 
 # === Harmonogram restore drill (ISC-36/37) ===

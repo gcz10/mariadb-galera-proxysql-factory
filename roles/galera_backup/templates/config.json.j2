@@ -5,6 +5,10 @@
   "local_role": "{{ galera_backup_local_role | default('scheduler') }}",
   "scheduler_system_hostname": "{{ backup.scheduler.host }}",
   "scheduler_system_address": "{{ hostvars[backup.scheduler.host].galera_node_address }}",
+  {# Wlasny adres wezla: bez niego runner nie odpowie na pytanie "czy to JA
+     zostalem wybrany donorem". scheduler_* opisuje PREFERENCJE z cluster.yml,
+     nie tozsamosc hosta, na ktorym akurat dziala cron. #}
+  "node_system_address": "{{ galera_node_address | default(restore_node_address) | default('') }}",
   "galera_nodes_expected": {{ galera.nodes_expected | default(3) }},
   "galera_nodes": {{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | list | to_json }},
   "mariadb_version": "{{ lock.mariadb.version | default('') }}",
@@ -13,7 +17,11 @@
   "proxysql": {
     "admin_host": "{{ hostvars[groups['proxysql'][0]].proxysql_node_address }}",
     "admin_port": 6032,
-    "writer_hostgroup": {{ galera_writer_hg }}
+    "writer_hostgroup": {{ galera_writer_hg }},
+    {# Zdrowe nie-writery. Wg dokumentacji ProxySQL backup_writer_hostgroup
+       dostaje wezly read_only=0 ponad max_writers, a niezdrowe ida do
+       offline_hostgroup — czyli ONLINE tutaj == kandydat na donora. #}
+    "backup_hostgroup": {{ galera_backup_hg }}
   },
   "backend": {
     "type": "{{ backup.destination }}",

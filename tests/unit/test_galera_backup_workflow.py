@@ -25,8 +25,23 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             except RuntimeError:
                 pass
 
+
+        # Symetrycznie do straznika writera: elekcja donora odpytuje ProxySQL,
+        # a te testy sprawdzaja kroki PO wyborze donora. Zwracany adres jest
+        # obojetny — fixture nie ustawia `node_system_address`, wiec runner nie
+        # wchodzi w galaz pomijania.
+        self.donor_election = patch.object(
+            pipeline, "elect_backup_donor", return_value="192.168.1.51"
+        )
+        self.donor_election.start()
+        self.addCleanup(self.donor_election.stop)
         self.addCleanup(_stop_writer_guard)
-    def test_run_backup_hostname_mismatch_fails(self):
+
+    def test_node_that_is_not_the_elected_donor_skips_cleanly(self):
+        """Dawniej: niezgodnosc hostname == blad. Teraz cron stoi na kazdym
+        wezle Galery, wiec "to nie moja kolej" jest normalnym wynikiem, nie
+        awaria — inaczej kazdy przebieg produkowalby falszywe porazki na
+        dwoch z trzech wezlow."""
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
             cfg_path = td_path / "config.json"
@@ -38,8 +53,9 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "metric_cluster_label": "r10b-galera",
                 "local_role": "scheduler",
                 "scheduler_system_hostname": "different-host",
+                "node_system_address": "192.168.1.52",
                 "galera_nodes_expected": 3,
-                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
                 "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
                 "mariadb_version": "11.4.12",
                 "retention_days": 14,
@@ -58,10 +74,17 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_STATS_USER="admin"\nGALERA_BACKUP_PROXYSQL_STATS_PASSWORD="proxysql_pass_999"\n')
             os.chmod(env_path, 0o600)
 
+            # Donor to .51, a ten wezel to .52 — ma sie wycofac, nie pracowac.
             with patch("socket.gethostname", return_value="current-host"):
-                with self.assertRaises(pipeline.BackupError) as ctx:
-                    pipeline.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
-                self.assertEqual(ctx.exception.code, "E_GALERA")
+                with patch.object(pipeline, "get_storage_backend") as backend:
+                    pipeline.run_backup(
+                        config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b"
+                    )
+                backend.assert_not_called()
+
+            events = (Path(cfg_data["paths"]["cluster_dir"]) / "events.jsonl").read_text()
+            self.assertIn("skipped.not_elected", events)
+            self.assertIn("192.168.1.51", events)
 
     def test_run_backup_galera_unhealthy_fails(self):
         with tempfile.TemporaryDirectory() as td:
@@ -76,7 +99,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "local_role": "scheduler",
                 "scheduler_system_hostname": "gnode4",
                 "galera_nodes_expected": 3,
-                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
                 "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
                 "mariadb_version": "11.4.12",
                 "retention_days": 14,
@@ -139,7 +162,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "local_role": "scheduler",
                 "scheduler_system_hostname": "gnode4",
                 "galera_nodes_expected": 3,
-                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
                 "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
                 "mariadb_version": "11.4.12",
                 "retention_days": 14,
@@ -226,7 +249,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "local_role": "scheduler",
                 "scheduler_system_hostname": "gnode4",
                 "galera_nodes_expected": 3,
-                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
                 "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
                 "mariadb_version": "11.4.12",
                 "retention_days": 14,
@@ -342,7 +365,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                         "local_role": "scheduler",
                         "scheduler_system_hostname": "gnode4",
                         "galera_nodes_expected": 3,
-                        "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                        "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
                         "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
                         "mariadb_version": "11.4.12",
                         "retention_days": 14,
@@ -454,7 +477,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                         "local_role": "scheduler",
                         "scheduler_system_hostname": "gnode4",
                         "galera_nodes_expected": 3,
-                        "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10},
+                        "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
                         "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
                         "mariadb_version": "11.4.12",
                         "retention_days": 14,

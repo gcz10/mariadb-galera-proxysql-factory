@@ -1,7 +1,7 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
 **Status:** W TOKU — utworzony 2026-08-23 na bazie czterech zewnętrznych recenzji.
-**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3, P1-4 (`2996474`, `4aeae5f`), P2-8, P2-9 (`48740b1`), P3 (higiena, komplet).
+**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3, P1-4 (`2996474`, `4aeae5f`), P2-7, P2-8, P2-9 (`48740b1`), P3 (higiena, komplet).
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
 
@@ -265,7 +265,7 @@ sukcesem bez ręcznej interwencji.
 
 ---
 
-## P2-7. Statyczny scheduler backupu po failoverze może zostać writerem
+## P2-7. Statyczny scheduler backupu po failoverze może zostać writerem — ZROBIONE
 
 **Problem.** `backup.scheduler.host` jest przypięty do konkretnego węzła, a guard
 `assert_scheduler_is_not_writer` (fail-closed, `E_WRITER`) jest poprawny. Po
@@ -279,6 +279,42 @@ inwentarza i stanu klastra; statyczny host zostaje wyłącznie jako preferencja.
 nadal PASS.
 
 **Koszt:** średni.
+
+**Wynik.** Runner wybiera donora przy starcie (`elect_backup_donor`), a cron stoi
+na każdym węźle Galery. Węzeł niewybrany kończy się `rc=0` ze zdarzeniem
+`skipped.not_elected` — to normalny wynik, nie awaria, więc dwa z trzech węzłów
+nie produkują fałszywych porażek.
+
+Zbiór kandydatów pochodzi z **backup hostgroup ProxySQL**, nie z osobnego
+odpytywania klastra. Dokumentacja `mysql_galera_hostgroups`: do
+`backup_writer_hostgroup` trafiają węzły `read_only=0` ponad `max_writers`
+(czyli zdrowe, ale nie będące writerem), a niezdrowe idą do `offline_hostgroup`.
+Dzięki temu elekcja nie potrzebuje ani uprawnień `SUPER`, ani nowego kanału —
+wystarcza konto read-only wprowadzone w P1-3.
+
+`backup.scheduler.host` zostaje **preferencją**: wygrywa, gdy jest zdrowym
+nie-writerem. Straźnik `assert_scheduler_is_not_writer` zostaje jako druga,
+niezależna warstwa.
+
+**Defekt złapany dopiero na żywo.** Pierwsza wersja przeszła wszystkie testy
+jednostkowe, a mimo to backup padał `E_WRITER` w dokładnie tym scenariuszu, dla
+którego powstała elekcja: strażnik trzymał w zbiorze tożsamości
+`scheduler_system_address`, więc wybrany donor porównywał z writerem adres
+CUDZEGO hosta i trafiał. Tożsamość pochodzi teraz z `node_system_address` —
+węzła, który faktycznie wykonuje pracę. Regresja ma własny test
+(`GuardJudgesExecutorNotPreferenceTests`).
+
+**Dowód (green, 2026-08-24).** Preferencja wskazana na `grg3`, który był
+aktywnym writerem:
+
+| Węzeł | Rola w przebiegu | Zdarzenie |
+|---|---|---|
+| `grg3` (.30) | preferowany, ale writer | `skipped.not_elected` |
+| `grg1` (.28) | wybrany donor | `state.success` |
+| `grg2` (.29) | kandydat | `skipped.not_elected` |
+
+Artefakt `galera-green-r9-20260824-151333` zweryfikowany (aes-256-cbc, sha256 OK,
+off-cluster w S3). Po przywróceniu preferencji bramka po budowie 13/13 PASS.
 
 ---
 

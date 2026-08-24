@@ -288,7 +288,9 @@ class GaleraBackupCoreTests(unittest.TestCase):
         run.assert_not_called()
 
 
-    def test_active_writer_guard_rejects_scheduler_and_uses_env_password(self):
+    def test_active_writer_guard_rejects_the_executing_node(self):
+        """Bramka pyta o wezel, ktory WYKONUJE backup — po elekcji donora
+        preferencja z cluster.yml nie jest juz jego tozsamoscia."""
         self.assertTrue(hasattr(pipeline, "assert_scheduler_is_not_writer"))
         cfg = MagicMock(
             proxysql={
@@ -298,6 +300,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
             },
             scheduler_system_address="192.168.1.51",
             scheduler_system_hostname="gnode4",
+            node_system_address="192.168.1.51",
             galera_nodes=["192.168.1.51", "192.168.1.52", "192.168.1.53"],
         )
         runner = MagicMock()
@@ -650,6 +653,8 @@ class TemplateContractTests(unittest.TestCase):
                 },
             },
             "galera_writer_hg": 10,
+            "galera_backup_hg": 20,
+            "galera_node_address": "172.28.0.11",
             "lock": {"mariadb": {"version": "11.4.12"}},
             "galera_backup_local_role": "scheduler",
             "galera_backup_proxysql_stats_user": "isa_stats",
@@ -678,8 +683,10 @@ class TemplateContractTests(unittest.TestCase):
             "admin_host": "172.28.0.21",
             "admin_port": 6032,
             "writer_hostgroup": 10,
+            "backup_hostgroup": 20,
         })
         self.assertEqual(cfg_dict["scheduler_system_address"], "172.28.0.11")
+        self.assertEqual(cfg_dict["node_system_address"], "172.28.0.11")
         self.assertEqual(
             cfg_dict["galera_nodes"],
             ["172.28.0.11", "172.28.0.12", "172.28.0.13"],

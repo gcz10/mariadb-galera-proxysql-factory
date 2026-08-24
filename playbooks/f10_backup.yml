@@ -21,13 +21,10 @@
         state: absent
       when: galera_backup_action == 'configure'
 
-    - name: Remove current cron from every non-selected node
-      ansible.builtin.file:
-        path: "/etc/cron.d/galera-backup-{{ cluster.name }}"
-        state: absent
-      when:
-        - galera_backup_action == 'configure'
-        - inventory_hostname != backup.scheduler.host
+    # Cron stoi teraz na KAZDYM wezle Galery: donora wybiera runner przy starcie
+    # (backup hostgroup ProxySQL), a wezel niewybrany konczy sie rc=0. Wczesniej
+    # cron byl tylko na przypietym hoscie, wiec failover NA niego zabieral
+    # klastrowi backupy do czasu recznej zmiany cluster.yml.
 
 - name: Configure or run Galera backup on the selected scheduler
   # W runtime `default` jest martwe (make zawsze podaje -e @clusters/<name>/cluster.yml),
@@ -80,6 +77,53 @@
       vars:
         galera_backup_local_role: scheduler
       when: galera_backup_action == 'configure'
+
+- name: Pre-position backup runner and cron on remaining Galera candidates
+  # Osobny play, nie rozszerzenie poprzedniego: koordynator publikuje
+  # `galera_backup_shared_secrets` dopiero w trakcie swojego przebiegu, a
+  # asercja o dziedziczonych sekretach wypada wczesniej. Rozdzielenie na plays
+  # daje te sama gwarancje kolejnosci, ktora od dawna dziala dla hosta restore.
+  hosts: "galera:!{{ backup.scheduler.host | default('galera[0]') }}"
+  become: true
+  vars_files:
+    - vars/proxysql_hostgroups.yml
+  gather_facts: true
+  vars:
+    galera_backup_action: "{{ action | default('configure') }}"
+    # Kandydat sam wykonuje elekcje i straznika writera, wiec potrzebuje tego
+    # samego konta read-only co koordynator. Klucze szyfrowania i S3 dziedziczy.
+    galera_backup_proxysql_stats_user: "{{ lookup('ansible.builtin.env', 'GALERA_BACKUP_PROXYSQL_STATS_USER') | default(proxysql_stats_user, true) }}"
+    galera_backup_proxysql_stats_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_STATS_PASSWORD') }}"
+  pre_tasks:
+    - name: Load platform lockfile
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+  roles:
+    - role: galera_backup
+      vars:
+        galera_backup_local_role: scheduler
+        # Cron TAK: kazdy kandydat musi sam sprawdzic, czy zostal donorem.
+        galera_backup_install_cron: true
+        # MinIO i sekrety zostaja wlasnoscia koordynatora — kandydat ich nie
+        # tworzy ani nie obraca, tylko konsumuje.
+        galera_backup_provision_s3: false
+        galera_backup_inherited_shared_secrets: >-
+          {{ hostvars[backup.scheduler.host].galera_backup_shared_secrets | default({}) }}
+      when: galera_backup_action == 'configure'
+
+- name: Execute manual backup on whichever Galera node is elected donor
+  # Reczne `make cluster-backup` musi trafic tam, gdzie cron: na kazdego
+  # kandydata. Runner sam rozstrzyga, kto jest donorem — pozostali koncza rc=0.
+  # Gdyby ten play zostal przypiety do jednego hosta, backup uruchomiony w chwili,
+  # gdy ten host jest writerem, bylby cichym no-opem zamiast kopii.
+  hosts: galera
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/proxysql_hostgroups.yml
+  vars:
+    galera_backup_action: "{{ action | default('configure') }}"
   tasks:
     - name: Execute manual backup runner
       ansible.builtin.command:
@@ -87,8 +131,8 @@
           - /opt/galera-backup/galera-backup
           - backup
           - "{{ cluster.name }}"
-      # Reczne uruchomienie backupu always tworzy nowy snapshot w S3/SMB —
-      # to jest wlasnie jego cel (akcja 'run', nie 'configure').
+      # Reczne uruchomienie backupu tworzy nowy snapshot w S3/SMB na wybranym
+      # wezle — to jest cel akcji 'run'. Na pozostalych to sprawdzenie, rc=0.
       changed_when: true
       when: galera_backup_action == 'run'
 

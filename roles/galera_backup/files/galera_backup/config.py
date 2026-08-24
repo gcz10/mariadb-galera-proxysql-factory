@@ -37,6 +37,7 @@ class RunConfig:
     local_role: str
     scheduler_system_hostname: str
     scheduler_system_address: str
+    node_system_address: str
     galera_nodes_expected: int
     galera_nodes: list[str]
     mariadb_version: str
@@ -74,6 +75,7 @@ def load_run_config(config_path: Path, expected_cluster_name: str) -> RunConfig:
             local_role=data.get("local_role", "scheduler"),
             scheduler_system_hostname=data.get("scheduler_system_hostname", ""),
             scheduler_system_address=data.get("scheduler_system_address", ""),
+            node_system_address=data.get("node_system_address", ""),
             galera_nodes_expected=int(data.get("galera_nodes_expected", 3)),
             galera_nodes=list(data.get("galera_nodes", [])),
             mariadb_version=str(data.get("mariadb_version", "")),

@@ -191,21 +191,101 @@ def assert_scheduler_is_not_writer(
             f"{sorted(cfg.galera_nodes)}; the writer guard cannot be enforced against a foreign ProxySQL",
         )
 
-    scheduler_identities = {
+    # Tozsamosc wezla, ktory FAKTYCZNIE wykonuje backup — nie tego, ktory jest
+    # PREFEROWANY w cluster.yml. Po wprowadzeniu elekcji donora te dwie rzeczy
+    # sie rozjezdzaja: gdy preferowany host zostal writerem, backup przejmuje
+    # inny wezel. Trzymanie `scheduler_system_address` w tym zbiorze sprawialo,
+    # ze wybrany donor oskarzal sam siebie o bycie writerem i backup padal
+    # (E_WRITER) dokladnie w sytuacji, dla ktorej elekcja powstala.
+    node_identity = str(getattr(cfg, "node_system_address", "") or "").strip()
+    if not node_identity:
+        # Konfiguracja sprzed elekcji: runner dzialal wylacznie na hoscie
+        # wskazanym w cluster.yml, wiec preferencja BYLA tozsamoscia.
+        node_identity = str(cfg.scheduler_system_address or "").strip()
+
+    running_identities = {
         value.strip()
-        for value in (
-            cfg.scheduler_system_address,
-            cfg.scheduler_system_hostname,
-            current_hostname,
-        )
+        for value in (node_identity, current_hostname)
         if value and value.strip()
     }
-    if writers[0] in scheduler_identities:
+    if writers[0] in running_identities:
         raise BackupError(
             "E_WRITER",
-            f"Backup scheduler '{current_hostname}' is the active ProxySQL writer; backup aborted",
+            f"Backup donor '{current_hostname}' is the active ProxySQL writer; backup aborted",
         )
 
+
+def elect_backup_donor(
+    cfg: RunConfig,
+    secrets: dict[str, str],
+    runner: CommandRunner,
+) -> str:
+    """Zwraca adres wezla, ktory ma wykonac backup w TYM przebiegu.
+
+    Zbior kandydatow bierzemy z backup hostgroup ProxySQL. Dokumentacja
+    `mysql_galera_hostgroups` mowi, ze trafiaja tam wezly `read_only=0` ponad
+    `max_writers` (czyli zdrowe, ale nie bedace aktywnym writerem), a wezly
+    niezdrowe ida do `offline_hostgroup`. Nie musimy wiec sami liczyc zdrowia
+    klastra ani prosic o uprawnienia SUPER — wystarczy konto read-only.
+
+    `scheduler_system_address` z cluster.yml jest PREFERENCJA, nie warunkiem:
+    gdy skonfigurowany wezel jest zdrowym nie-writerem, wygrywa; gdy zostal
+    writerem, backup przechodzi na kolejnego kandydata zamiast padac trwale.
+    """
+    proxysql = cfg.proxysql
+    admin_host = str(proxysql.get("admin_host", "")).strip()
+    admin_port = int(proxysql.get("admin_port", 0) or 0)
+    backup_hostgroup = int(proxysql.get("backup_hostgroup", 0) or 0)
+    stats_user = secrets.get("GALERA_BACKUP_PROXYSQL_STATS_USER", "").strip()
+    stats_password = secrets.get("GALERA_BACKUP_PROXYSQL_STATS_PASSWORD", "")
+
+    if not admin_host or admin_port <= 0 or backup_hostgroup <= 0:
+        raise BackupError(
+            "E_CONFIG",
+            "ProxySQL donor election configuration is missing or invalid",
+        )
+    if not stats_user or not stats_password:
+        raise BackupError("E_SECRETS", "ProxySQL donor election credentials are missing")
+
+    command = [
+        "mariadb",
+        "--protocol=tcp",
+        "-h",
+        admin_host,
+        "-P",
+        str(admin_port),
+        "-u",
+        stats_user,
+        "-N",
+        "-B",
+        "-e",
+        (
+            "SELECT srv_host FROM stats_mysql_connection_pool "
+            f"WHERE hostgroup={backup_hostgroup} AND status='ONLINE' "
+            "ORDER BY srv_host"
+        ),
+    ]
+    rc, stdout, stderr = runner.run(command, env={"MYSQL_PWD": stats_password}, timeout=20)
+    if rc != 0:
+        detail = (stderr or stdout or "unknown error").strip()
+        raise BackupError("E_PROXYSQL", f"Cannot determine backup donor candidates: {detail}")
+
+    # Jedna para ProxySQL obsluguje cala flote, wiec odsiewamy wezly innych
+    # najemcow — dokladnie tak samo jak straznik writera.
+    healthy = sorted(
+        {line.strip() for line in stdout.splitlines() if line.strip()}
+        & set(cfg.galera_nodes)
+    )
+    if not healthy:
+        raise BackupError(
+            "E_PROXYSQL",
+            "No healthy non-writer node available for backup "
+            f"(ProxySQL hostgroup {backup_hostgroup} has no ONLINE member of "
+            f"{sorted(cfg.galera_nodes)})",
+        )
+
+    preferred = (cfg.scheduler_system_address or "").strip()
+    return preferred if preferred in healthy else healthy[0]
 
 
 class MetricsManager:
@@ -582,14 +662,25 @@ def run_backup(
     old_int = signal.signal(signal.SIGINT, _sig_handler)
     try:
         state_mgr.read()
-        # Check hostname
         curr_host = socket.gethostname().split(".")[0]
-        sched_host = cfg.scheduler_system_hostname.split(".")[0] if cfg.scheduler_system_hostname else ""
-        if sched_host and curr_host != sched_host:
-            raise BackupError(
-                "E_GALERA",
-                f"Current hostname '{curr_host}' does not match configured scheduler hostname '{sched_host}'"
+
+        # Cron stoi na kazdym wezle Galery, ale backup w danym przebiegu robi
+        # DOKLADNIE JEDEN — wybrany tu donor. Wezel niewybrany konczy sie rc=0
+        # (to nie jest blad: jego zadaniem bylo sprawdzic, czy jest potrzebny).
+        # Wczesniej host byl przypiety na stale, wiec failover NA niego zabieral
+        # klastrowi backupy az do recznej zmiany cluster.yml.
+        donor = elect_backup_donor(cfg, secrets, runner)
+        me = (cfg.node_system_address or "").strip()
+        if me and donor != me:
+            event_mgr.emit("skipped.not_elected", {"donor": donor, "node": me})
+            print(
+                f"galera-backup: {curr_host} nie jest donorem w tym przebiegu "
+                f"(wybrany: {donor}) — pomijam"
             )
+            return
+
+        # Druga, niezalezna warstwa: nawet gdyby elekcja sie pomylila, backup
+        # nigdy nie leci z aktywnego writera (ISC-39).
         assert_scheduler_is_not_writer(cfg, secrets, runner, curr_host)
 
         backend = get_storage_backend(cfg, secrets, runner)
