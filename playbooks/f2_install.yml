@@ -51,7 +51,11 @@
     # przy starym repozytorium i instalowal z niego. Bramkujemy TRESCIA — repo
     # ma wskazywac dokladnie te wersje, ktora deklaruje lockfile.
     - name: "MariaDB repo - sprawdz, czy wskazuje wersje z lockfile"
-      ansible.builtin.command: "grep -q 'mariadb-server/{{ lock.mariadb.version }}/' /etc/yum.repos.d/mariadb.repo"
+      # Dwa udokumentowane uklady sciezki: `mariadb-server/<wersja>/` generuje
+      # skrypt repo_setup, `mariadb-<wersja>/` ma archiwum MariaDB, ktorym
+      # dokumentacja kaze przypinac recznie. Wzorzec musi uznac oba, inaczej
+      # host przypiety recznie dostaje repo_setup przy kazdym converge.
+      ansible.builtin.command: "grep -Eq 'mariadb-(server/)?{{ lock.mariadb.version | regex_escape }}/' /etc/yum.repos.d/mariadb.repo"
       register: mariadb_repo_pinned
       failed_when: false
       changed_when: false

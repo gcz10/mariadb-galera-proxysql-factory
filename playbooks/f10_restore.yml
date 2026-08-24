@@ -60,7 +60,7 @@
     # jest odtwarzany co drill, ale gdy przetrwa podbicie wersji, `creates:`
     # zostawiloby go przy starym repozytorium.
     - name: "MariaDB repo - sprawdz, czy wskazuje wersje z lockfile ({{ mariadb_version }})"
-      ansible.builtin.command: "grep -q 'mariadb-server/{{ lock.mariadb.version }}/' /etc/yum.repos.d/mariadb.repo"
+      ansible.builtin.command: "grep -Eq 'mariadb-(server/)?{{ lock.mariadb.version | regex_escape }}/' /etc/yum.repos.d/mariadb.repo"
       register: restore_repo_pinned
       failed_when: false
       changed_when: false
