@@ -214,6 +214,8 @@
           [Service]
           TimeoutStartSec=infinity
           LimitNOFILE=1048576
+          # Rekomendacja produkcyjna: OOMScoreAdjust=-800 chroni proces bazy
+          # przed ubiciem przez kernel OOM killer przed innymi procesami w tle.
           OOMScoreAdjust=-800
         dest: /etc/systemd/system/mariadb.service.d/timeoutstartsec.conf
         owner: root
