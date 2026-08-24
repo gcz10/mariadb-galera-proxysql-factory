@@ -21,9 +21,25 @@ galera:
 
 proxysql:
   nodes_expected: 2
+  # ROZLACZNOSC NAJEMCOW na wspoldzielonej parze ProxySQL. Baza rezerwuje
+  # CZTERY hostgroupy: base (writer), +10 (backup writer), +20 (reader),
+  # +30 (offline). Sasiednie bazy sa wiec kolizja, mimo ze wygladaja inaczej:
+  # przy 890 i 900 wezly drugiego najemcy laduja w puli, na ktora pierwszy
+  # przelacza sie przy failoverze writera. Kolejnemu klastrowi daj base+40.
+  hostgroup_base: 10
+  # Wpis w `mysql_users` jest GLOBALNY dla instancji ProxySQL: dwaj najemcy
+  # z ta sama nazwa uzytkownika to jeden wpis i ruch obu trafi do jednego
+  # klastra. Nazwa musi byc unikalna w obrebie wspolnego endpointu.
+  app_user: "app_user_example"
+  frontend_tls:
+    # WYLACZNIE ca_reference: cert i klucz frontendu naleza do warstwy wspolnej,
+    # ktora serwuje cala flote jednym certem. Wskaz CA tej warstwy.
+    ca_reference: "pki/example/ca.pem"
   endpoint:
     type: "keepalived_vip"
-    address: "10.0.0.100"   # PLACEHOLDER — zastąp rzeczywistym VIP z sieci klastra
+    # Musi byc DOKLADNIE ten VIP, ktory wystawia warstwa wspolna
+    # (platform/example/platform.yml). Najemca go nie tworzy — tylko mu ufa.
+    address: "10.0.1.20"
     port: 6033
 
 # TLS opcjonalne per-klaster. mode=full => serwer prezentuje cert, replikacja Galera
@@ -91,6 +107,12 @@ backup:
       - "nosuid"
       - "nodev"
       - "noexec"
+  # Alternatywa dla `destination: "s3"` — kazdy najemca dostaje WLASNY bucket
+  # i wlasne konto scoped, wiec magazyn moze byc wspolny dla calej floty:
+  # s3:
+  #   endpoint: "10.0.1.51:9000"
+  #   bucket: "example-galera-backups"
+  #   secure: false
 
 monitoring:
   pmm:
