@@ -33,7 +33,7 @@ from urllib.request import Request, urlopen
 from _probe_common import ProbeContext, check, finish, require_hosts, run_ansible
 
 IFACE = os.environ.get("PROXYSQL_ENDPOINT_INTERFACE", "eth0")
-# Rozprowadza go `app_host.yml` z `proxysql.frontend_tls.ca_reference`.
+# Rozprowadza go platform_proxysql.yml — platforma jest wlascicielem CA frontendu.
 SHARED_CA = "/etc/mysql/app/shared/proxysql-ca.pem"
 
 
@@ -53,6 +53,36 @@ def pmm_query(base_url: str, user: str, password: str, expr: str):
     payload = urlencode({"query": expr})
     body = pmm_json(base_url, user, password, f"/prometheus/api/v1/query?{payload}")
     return body.get("data", {}).get("result", [])
+
+
+def check_pool_metric(
+    state: dict[str, dict[str, str]],
+    pool: list[dict],
+    metric_age_limit: int,
+    failures: list[str],
+) -> bool:
+    """Wymagaj pool metric tylko wtedy, gdy istnieje choc jeden tenant.
+
+    Zero tenantow to mierzalny, poprawny stan swiezej platformy, nie
+    `UNDETERMINED`: check_proxysql potwierdza wtedy GROUPS=0, a metryka puli
+    strukturalnie nie ma jeszcze serii.
+    """
+    tenants_present = any(
+        (values.get("GROUPS", "0") or "0").isdigit()
+        and int(values["GROUPS"]) > 0
+        for values in state.values()
+    )
+    if not tenants_present:
+        return False
+    age = float(pool[0]["value"][1]) if pool else None
+    check(
+        age is not None and age <= metric_age_limit,
+        f"metryka `proxysql_connection_pool_status` "
+        f"{'ma ' + str(round(age)) + ' s' if age is not None else 'NIE ISTNIEJE'} "
+        f"(limit {metric_age_limit} s) — regula ISC-47 stracilaby zrodlo prawdy",
+        failures,
+    )
+    return True
 
 
 def main() -> int:
@@ -244,23 +274,7 @@ def main() -> int:
         # `connection_pool` powstaje dopiero, gdy jakis najemca ma backendy —
         # przy zerze najemcow jego brak jest poprawny, dokladnie jak w bramce
         # `check_proxysql.sh`. Od tej metryki zalezy regula ISC-47 "no writer".
-        tenants_present = any(
-            (v.get("GROUPS", "0") or "0").isdigit() and int(v["GROUPS"]) > 0
-            for v in state.values()
-        )
-        if tenants_present:
-            age = float(pool[0]["value"][1]) if pool else None
-            check(
-                age is not None and age <= metric_age_limit,
-                f"metryka `proxysql_connection_pool_status` "
-                f"{'ma ' + str(round(age)) + ' s' if age is not None else 'NIE ISTNIEJE'} "
-                f"(limit {metric_age_limit} s) — regula ISC-47 stracilaby zrodlo prawdy",
-                failures,
-            )
-        else:
-            undetermined.append(
-                "brak najemcow — `proxysql_connection_pool_status` slusznie nie istnieje"
-            )
+        check_pool_metric(state, pool, metric_age_limit, failures)
 
     summary = (
         f"warstwa wspolna zdrowa — {len(proxysql_hosts)} wezlow ProxySQL "

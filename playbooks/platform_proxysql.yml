@@ -338,3 +338,44 @@
         group: proxysql
         mode: "0600"
   handlers: []
+
+- name: "Platform — rozprowadz zaufanie wspolnego endpointu na host aplikacyjny"
+  hosts: app
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  pre_tasks:
+    - name: "Odrzuc uruchomienie z definicja najemcy"
+      ansible.builtin.assert:
+        that:
+          - platform.name is defined
+          - platform.name | length > 0
+          - galera is not defined
+        fail_msg: >-
+          CA wspolnego endpointu nalezy do platformy. Uruchom
+          make platform-proxysql PLATFORM=<platforma>.
+
+    - name: "Wymagaj CA frontendu ProxySQL"
+      ansible.builtin.assert:
+        that:
+          - ((proxysql.frontend_tls | default({})).ca_reference | default('')) | length > 0
+        fail_msg: "Platforma wymaga proxysql.frontend_tls.ca_reference."
+
+  tasks:
+    - name: "APP — katalog materialu wspolnego endpointu"
+      ansible.builtin.file:
+        path: /etc/mysql/app/shared
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: "APP — rozprowadz CA wspolnego endpointu ProxySQL"
+      ansible.builtin.copy:
+        src: "{{ (playbook_dir ~ '/../' ~ proxysql.frontend_tls.ca_reference) | realpath }}"
+        dest: /etc/mysql/app/shared/proxysql-ca.pem
+        owner: root
+        group: root
+        mode: "0644"
+
+  handlers: []
