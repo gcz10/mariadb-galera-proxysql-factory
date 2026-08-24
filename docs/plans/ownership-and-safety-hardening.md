@@ -171,12 +171,19 @@ kolumny `hostgroup`/`srv_host`/`srv_port`/`status`
 (main-runtime/mysql-tables); zmiana wchodzi przez `LOAD ADMIN VARIABLES TO
 RUNTIME` + `SAVE ADMIN VARIABLES TO DISK` (the-admin-schemas/admin-commands).
 
-**Sprawdzone ryzyko: pusta pula.** Tabela statystyczna mogłaby teoretycznie nie
-mieć wiersza dla hostgroupy bez ruchu — wtedy strażnik nie znalazłby writera
-i backup padłby fail-closed z mylącym komunikatem. Zmierzone na `grp2`, który
-nie trzyma VIP-a i nie widzi ruchu aplikacji: komplet trzech wierszy hg 890
-z poprawnym `status`, w tym wiersz o `ConnOK=0, Queries=0`. Wiersze powstają
-z konfiguracji i monitoringu, nie z ruchu — ryzyko nie materializuje się.
+**Pusta live tabela po zimnym starcie — granica dowodu.** Oficjalna zmienna
+`admin-stats_mysql_connection_pool` (domyślnie `60`) steruje odświeżaniem
+**historycznych** statystyk w `proxysql_stats.db`, nie tabeli live
+`stats_mysql_connection_pool`
+(https://proxysql.com/documentation/global-variables/admin-variables/#admin-stats_mysql_connection_pool).
+Dokumentacja nie określa, kiedy tabela live dostaje pierwsze wiersze po restarcie.
+
+**[INFERENCE]** Na `grp2`, który nie trzyma VIP-a i nie widzi ruchu aplikacji,
+tabela live miała komplet trzech wierszy hg 890, w tym wiersz o
+`ConnOK=0, Queries=0`; obserwacja dowodzi działania bez ruchu, ale nie pokrywa
+chwili zimnego startu. Restart wspólnego ProxySQL wyłącznie dla tego pomiaru
+byłby nieuzasadnionym zakłóceniem. Jeśli tabela jest pusta, strażnik pozostaje
+bezpieczny: odrzuca backup (`found 0`), zamiast ryzykować backup z writera.
 
 ---
 
