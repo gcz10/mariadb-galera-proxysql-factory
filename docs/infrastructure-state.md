@@ -2,21 +2,68 @@
 
 **Snapshot bazowy:** 2026-08-02 01:40 UTC — topologia, VMID, adresy.
 **Warstwy nalozone pozniej:** 2026-08-05 (TLS full na r9), 2026-08-15 (runda 3
-TLS, limity systemd, dekompozycja runnera, rotacja poswiadczen) — zaznaczone
-w miejscach, ktorych dotycza.
+TLS, limity systemd, dekompozycja runnera, rotacja poswiadczen), 2026-08-24
+(czysty stack green na osobnych nazwach/IP/VMID) — zaznaczone w sekcjach.
 **Zebrany z:** `terraform`, `ansible`, ProxySQL admin, PMM, MinIO, `qm list`.
 
 > Ten plik jest **datowanym zdjęciem**, nie źródłem prawdy. Źródłem prawdy dla
 > zamiaru są `clusters/<name>/` i `terraform/<name>/`; dla rzeczywistości —
 > hypervisor.
 
-## Flota `finalclaude` — działa
+## Stack `green` — aktywny (2026-08-24)
+
+Zbudowany od zera równolegle do poprzedniej floty. PVE miał 20.47 GiB wolnego
+RAM przy wymaganych 25.5 GiB, dlatego stare 12 VM zatrzymano łagodnie po świeżym
+backupie i restore drill; nie zostały skasowane ani usunięte ze stanu Terraform.
+
+### Warstwa wspólna — `terraform/green/`, `platform/green/`
+
+| Host | VMID | IP | Rola | vCPU | RAM | Dysk |
+|---|---:|---|---|---:|---:|---:|
+| `grinfra` | 9750 | 192.168.1.23 | PMM 3.9.1 + MinIO + maildev | 4 | 5120 MB | 40 GiB |
+| `grp1` | 9751 | 192.168.1.24 | ProxySQL, domyślny właściciel VIP | 1 | 3072 MB | 20 GiB |
+| `grp2` | 9752 | 192.168.1.25 | ProxySQL HA | 1 | 3072 MB | 20 GiB |
+| `grapp` | 9753 | 192.168.1.26 | host aplikacyjny | 2 | 3072 MB | 20 GiB |
+| — | — | **192.168.1.27:6033** | VIP Keepalived | — | — | — |
+
+### Tenant Galera — `terraform/green-r9/`, `clusters/green-r9/`
+
+| Host | VMID | IP | Rola | vCPU | RAM | Dysk |
+|---|---:|---|---|---:|---:|---:|
+| `grg1` | 9754 | 192.168.1.28 | Galera + scheduler backupu | 2 | 3072 MB | 40 GiB |
+| `grg2` | 9755 | 192.168.1.29 | Galera | 2 | 3072 MB | 40 GiB |
+| `grg3` | 9756 | 192.168.1.30 | Galera, writer po buildzie | 2 | 3072 MB | 40 GiB |
+| `grr1` | 9757 | 192.168.1.31 | izolowany restore | 1 | 2560 MB | 40 GiB |
+
+### Dowody odbudowy
+
+- aktywny skan `.20-.40`: `.20-.22` i `.38` zajęte, wpisane do rejestru;
+  `.23-.31` wolne przed provisioningiem,
+- dwa plany Terraform: po 4 `create`, zero `change/destroy`; po apply oba
+  raportują `No changes`,
+- platforma przechodzi build i drugi converge z `changed=0`,
+- tenant: 3/3 `Primary/Synced/Ready`, jeden writer, TLS aplikacja→VIP i
+  ProxySQL→backend zweryfikowany,
+- backup `galera-green-r9-20260824-005014`: S3 off-cluster, AES-256-CBC,
+  sha256 OK; restore drill na `grr1`, 1 wiersz zweryfikowany,
+- failover Galery: 0 utraconych transakcji, przerwa 6.2 s,
+- failover ProxySQL: VIP przejęty w 5.0 s, 0 utraconych transakcji,
+- trzeci `cluster-deploy`: wszystkie hosty `changed=0`.
+
+PVE po uruchomieniu green: 93.59 GiB RAM, 74.94 GiB użyte, 19.02 GiB wolne.
+
+---
+
+## Flota `finalclaude` — zatrzymana, zachowana jako rollback
 
 Stara flota (18 VM, prefiks `claude-*`) została skasowana 2026-08-02; stan
 sprzed w `docs/records/2026-08-02-pre-teardown.md`. Obecna powstała w całości
 z kodu, etapami — `docs/plans/from-scratch-revalidation.md`.
 
-**12 VM, wszystkie w puli `claude-isa`. PMM Server został zaktualizowany do 3.9.1; backup danych przed zmianą obrazu: `pmm-data-backup-20260823-133353` (2.5G).**
+**12 VM istnieje nadal w puli `claude-isa`, wszystkie `stopped`. Ostatnie
+zweryfikowane backupy przed zatrzymaniem: `galera-finalclaude-r10-20260823-231315`
+(2776 wierszy restore drill) i `galera-newclaude17-r9-20260823-231351`
+(37011 wierszy restore drill). Dyski PMM/MinIO oraz Terraform state zachowane.**
 
 ### Warstwa wspólna — `terraform/shared/`
 
