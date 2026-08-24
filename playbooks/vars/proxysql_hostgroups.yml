@@ -26,8 +26,20 @@ galera_app_user: "{{ proxysql.app_user | default('app_user') }}"
 
 # Zdalna tozsamosc administracyjna ProxySQL. ProxySQL twardo odrzuca uzytkownika
 # o nazwie `admin` spoza loopbacku ("ERROR 1040: User 'admin' can only connect
-# locally"), a runner backupu (cron na wezle Galera) MUSI odpytac hostgroup
-# writera przez siec, zeby nie robic backupu z aktywnego writera (ISC-39).
-# Dlatego f7_proxysql.yml ZAPISUJE druga pozycje w admin-admin_credentials pod
-# ta nazwa, a f10_backup.yml ja CZYTA. Nazwa musi byc rozna od `admin`.
+# locally"), wiec operacje mutujace warstwy wspolnej (f12/f13/f11) uzywaja tej
+# nazwy z hosta kontrolnego. Konto nalezy do puli READ-WRITE.
 proxysql_remote_admin_user: "isa_admin"
+
+# Tozsamosc READ-ONLY dla straznika writera w backupie. Runner backupu jest
+# cronem na wezle Galery, wiec jego poswiadczenie lezy na dysku bazy danych —
+# dawanie mu puli read-write calego wspolnego ProxySQL oznaczalo, ze przejecie
+# jednego wezla najemcy daje zapis do proxy CALEJ floty, i to po to, by odczytac
+# jedna informacje: kto jest teraz writerem.
+#
+# Zmierzone na ProxySQL 3.0 (green, 2026-08-24) kontem z admin-stats_credentials:
+#   SELECT srv_host FROM stats_mysql_connection_pool WHERE hostgroup=<writer>  -> OK
+#   SELECT hostname FROM runtime_mysql_servers                                 -> ERROR 1045: no such table
+#   UPDATE global_variables ...                                                -> ERROR 1045: attempt to write a readonly database
+#
+# Dlatego straznik czyta tabele statystyczna, a nie schemat konfiguracyjny.
+proxysql_stats_user: "isa_stats"

@@ -10,14 +10,14 @@ from __future__ import annotations
 # Values that gate argv. Identifiers MUST NOT be here: enrolling the ProxySQL
 # admin username made the guard reject the writer guard's own `-u <user>`.
 SENSITIVE_SECRET_KEYS = frozenset({
-    "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD",
+    "GALERA_BACKUP_PROXYSQL_STATS_PASSWORD",
     "GALERA_BACKUP_ENCRYPTION_KEY",
     "GALERA_BACKUP_S3_SECRET_KEY",
     "GALERA_BACKUP_SMB_PASSWORD",
 })
 
 # Additionally masked in output. Credential halves worth hiding from logs, but
-# never allowed to gate argv. GALERA_BACKUP_PROXYSQL_ADMIN_USER is deliberately
+# never allowed to gate argv. GALERA_BACKUP_PROXYSQL_STATS_USER is deliberately
 # absent from BOTH sets: it is an identifier, and short identity strings are
 # substrings of real argv/output tokens (`admin` occurs in `mariadb-admin`,
 # `admin_host` and `/etc/proxysql/admin-check.cnf`), so guarding or redacting

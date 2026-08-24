@@ -13,6 +13,7 @@ Zobacz `ISA.md` — jedyne źródło prawdy dla idealnego stanu, kryteriów, map
 export PMM_ADMIN_PASSWORD='<pmm-admin-password>'
 export PMM_MONITOR_PASSWORD='<mariadb-monitor-password>'
 export PROXYSQL_ADMIN_PASSWORD='<proxysql-admin-password>'
+export PROXYSQL_STATS_PASSWORD='<proxysql-readonly-password>'   # strażnik writera w backupie
 export PROXYSQL_MONITOR_PASSWORD='<proxysql-galera-monitor-password>'
 export APP_DB_PASSWORD='<application-db-password>'
 export KEEPALIVED_AUTH_PASS='<vrrp-8-znakowe-haslo>'

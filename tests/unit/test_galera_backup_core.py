@@ -131,15 +131,15 @@ class GaleraBackupCoreTests(unittest.TestCase):
 
             with tf_path.open("a", encoding="utf-8") as f:
                 f.write(
-                    'GALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\n'
-                    'GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql"\n'
+                    'GALERA_BACKUP_PROXYSQL_STATS_USER="admin"\n'
+                    'GALERA_BACKUP_PROXYSQL_STATS_PASSWORD="proxysql"\n'
                 )
             secrets = pipeline.load_secrets(
                 tf_path,
                 backend_type="s3",
                 require_writer_credentials=True,
             )
-            self.assertEqual(secrets["GALERA_BACKUP_PROXYSQL_ADMIN_USER"], "admin")
+            self.assertEqual(secrets["GALERA_BACKUP_PROXYSQL_STATS_USER"], "admin")
         finally:
             tf_path.unlink(missing_ok=True)
 
@@ -303,8 +303,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
         runner = MagicMock()
         runner.run.return_value = (0, "192.168.1.51\n", "")
         secrets = {
-            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
-            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
+            "GALERA_BACKUP_PROXYSQL_STATS_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_STATS_PASSWORD": "proxysql-secret",
         }
 
         with self.assertRaises(pipeline.BackupError) as ctx:
@@ -328,8 +328,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
         runner = MagicMock()
         runner.run.return_value = (1, "", "connection refused")
         secrets = {
-            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
-            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
+            "GALERA_BACKUP_PROXYSQL_STATS_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_STATS_PASSWORD": "proxysql-secret",
         }
 
         with self.assertRaises(pipeline.BackupError) as ctx:
@@ -350,8 +350,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
         # sensitive_secret_values does not exist (AttributeError), and even if the
         # runner were built from all values the `-u admin` argv would be rejected.
         secrets = {
-            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
-            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql_pass_999",
+            "GALERA_BACKUP_PROXYSQL_STATS_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_STATS_PASSWORD": "proxysql_pass_999",
             "GALERA_BACKUP_ENCRYPTION_KEY": "enc_key_999",
             "GALERA_BACKUP_S3_ACCESS_KEY": "s3_access_888",
             "GALERA_BACKUP_S3_SECRET_KEY": "s3_secret_777",
@@ -377,8 +377,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
 
     def test_sensitive_secret_values_includes_only_credentials(self):
         secrets = {
-            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
-            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql_pass_999",
+            "GALERA_BACKUP_PROXYSQL_STATS_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_STATS_PASSWORD": "proxysql_pass_999",
             "GALERA_BACKUP_ENCRYPTION_KEY": "enc_key_999",
             "GALERA_BACKUP_S3_ACCESS_KEY": "s3_access_888",
             "GALERA_BACKUP_S3_SECRET_KEY": "s3_secret_777",
@@ -405,8 +405,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
 
     def test_redactable_secret_values_adds_identifier_halves_but_not_admin_user(self):
         secrets = {
-            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
-            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql_pass_999",
+            "GALERA_BACKUP_PROXYSQL_STATS_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_STATS_PASSWORD": "proxysql_pass_999",
             "GALERA_BACKUP_ENCRYPTION_KEY": "enc_key_999",
             "GALERA_BACKUP_S3_ACCESS_KEY": "s3_access_888",
             "GALERA_BACKUP_S3_SECRET_KEY": "s3_secret_777",
@@ -427,7 +427,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
 
     def test_redactor_from_redactable_values_spares_admin_user(self):
         secrets = {
-            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_STATS_USER": "admin",
             "GALERA_BACKUP_ENCRYPTION_KEY": "enc_key_999",
             "GALERA_BACKUP_S3_SECRET_KEY": "s3_secret_777",
         }
@@ -453,8 +453,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
         runner = MagicMock()
         runner.run.return_value = (0, "192.168.1.71\n", "")
         secrets = {
-            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
-            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
+            "GALERA_BACKUP_PROXYSQL_STATS_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_STATS_PASSWORD": "proxysql-secret",
         }
         with self.assertRaises(pipeline.BackupError) as ctx:
             pipeline.assert_scheduler_is_not_writer(
@@ -474,8 +474,8 @@ class GaleraBackupCoreTests(unittest.TestCase):
         runner = MagicMock()
         runner.run.return_value = (0, "192.168.1.71\n", "")
         secrets = {
-            "GALERA_BACKUP_PROXYSQL_ADMIN_USER": "admin",
-            "GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD": "proxysql-secret",
+            "GALERA_BACKUP_PROXYSQL_STATS_USER": "admin",
+            "GALERA_BACKUP_PROXYSQL_STATS_PASSWORD": "proxysql-secret",
         }
         # No raise: a foreign writer is tolerated when the node list is unknown.
         pipeline.assert_scheduler_is_not_writer(
@@ -652,8 +652,8 @@ class TemplateContractTests(unittest.TestCase):
             "galera_writer_hg": 10,
             "lock": {"mariadb": {"version": "11.4.12"}},
             "galera_backup_local_role": "scheduler",
-            "galera_backup_proxysql_admin_user": "admin",
-            "galera_backup_proxysql_admin_password": "proxysql_pass_999",
+            "galera_backup_proxysql_stats_user": "isa_stats",
+            "galera_backup_proxysql_stats_password": "proxysql_pass_999",
             "galera_backup_encryption_key": "enc_pass_123",
             "galera_backup_s3_access_key": "access_key_456",
             "galera_backup_s3_secret_key": "secret_key_789",
@@ -691,12 +691,12 @@ class TemplateContractTests(unittest.TestCase):
         restore_ctx = dict(ctx)
         restore_ctx["galera_backup_local_role"] = "restore"
         restore_secrets = tmpl_secrets.render(restore_ctx)
-        self.assertNotIn("GALERA_BACKUP_PROXYSQL_ADMIN_USER", restore_secrets)
-        self.assertNotIn("GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD", restore_secrets)
+        self.assertNotIn("GALERA_BACKUP_PROXYSQL_STATS_USER", restore_secrets)
+        self.assertNotIn("GALERA_BACKUP_PROXYSQL_STATS_PASSWORD", restore_secrets)
         self.assertIn('GALERA_BACKUP_ENCRYPTION_KEY="enc_pass_123"', rendered_secrets)
         self.assertIn('GALERA_BACKUP_S3_ACCESS_KEY="access_key_456"', rendered_secrets)
-        self.assertIn('GALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"', rendered_secrets)
-        self.assertIn('GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"', rendered_secrets)
+        self.assertIn('GALERA_BACKUP_PROXYSQL_STATS_USER="isa_stats"', rendered_secrets)
+        self.assertIn('GALERA_BACKUP_PROXYSQL_STATS_PASSWORD="proxysql_pass_999"', rendered_secrets)
         self.assertIn('GALERA_BACKUP_S3_SECRET_KEY="secret_key_789"', rendered_secrets)
 
         # 3. cron.j2
@@ -737,7 +737,7 @@ class CutoverContractTests(unittest.TestCase):
         self.assertIn("/opt/galera-backup/galera-backup", restore_playbook)
         self.assertIn("restore", restore_playbook)
         self.assertIn("galera_backup_provision_s3: false", restore_playbook)
-        self.assertNotIn("GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD", restore_playbook)
+        self.assertNotIn("GALERA_BACKUP_PROXYSQL_STATS_PASSWORD", restore_playbook)
         self.assertNotIn("PROXYSQL_ADMIN_PASSWORD", restore_playbook)
         self.assertIn("--confirm", restore_playbook)
         self.assertNotIn("s3_object.py", restore_playbook)

@@ -1,7 +1,7 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
 **Status:** W TOKU — utworzony 2026-08-23 na bazie czterech zewnętrznych recenzji.
-**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-4 (`2996474`, `4aeae5f`), P2-9 (`48740b1`).
+**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3, P1-4 (`2996474`, `4aeae5f`), P2-9 (`48740b1`), P3 (higiena, komplet).
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
 
@@ -105,7 +105,7 @@ klastrze odmawia, wskazując węzły o nieznanym stanie.
 
 ---
 
-## P1-3. Backup trzyma poświadczenia admina ProxySQL do odczytu jednej informacji
+## P1-3. Backup trzyma poświadczenia admina ProxySQL do odczytu jednej informacji — ZROBIONE
 
 **Problem.** `playbooks/platform_proxysql.yml:191-201` rejestruje `isa_admin`
 w `admin-admin_credentials`, czyli w puli read-write. `playbooks/f10_backup.yml:51-53`
@@ -139,6 +139,27 @@ sukcesem; próba `UPDATE` tym samym poświadczeniem jest odrzucona przez ProxySQ
 Sonda sekretów: brak `PROXYSQL_ADMIN_PASSWORD` w plikach na hostach `galera`.
 
 **Koszt:** średni.
+
+**Wynik.** Platforma rejestruje `isa_stats` w `admin-stats_credentials`
+(`platform_proxysql.yml`, idempotentnie); przy okazji znika fabryczne
+`stats:stats`. Strażnik writera czyta `stats_mysql_connection_pool`
+(kolumny `hostgroup`/`srv_host`), bo konto read-only nie widzi schematu
+konfiguracyjnego. `secrets.env` na węźle Galery zawiera wyłącznie
+`GALERA_BACKUP_PROXYSQL_STATS_*`.
+
+Zmierzone na żywym green (2026-08-24), z hosta runnera `grg1` przez VIP `.27:6032`:
+
+| Próba kontem `isa_stats` | Wynik |
+|---|---|
+| `SELECT srv_host FROM stats_mysql_connection_pool WHERE hostgroup=890` | `192.168.1.30` |
+| `SELECT hostname FROM runtime_mysql_servers` | `ERROR 1045: no such table` |
+| `UPDATE global_variables ...` | `ERROR 1045: attempt to write a readonly database` |
+| stare `stats:stats` | `ERROR 1045: Access denied` |
+
+Grep po `$PROXYSQL_ADMIN_PASSWORD` na wszystkich czterech węzłach klastra
+(`/opt/galera-backup`, `/etc`): zero trafień. Backup i dryl odtworzenia
+przeszły nowym poświadczeniem (`galera-green-r9-20260824-122356`, 4536
+wierszy zweryfikowanych), bramka po budowie 13/13 PASS.
 
 ---
 

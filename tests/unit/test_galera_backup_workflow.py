@@ -55,7 +55,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 },
             }
             cfg_path.write_text(json.dumps(cfg_data))
-            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\nGALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"\n')
+            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_STATS_USER="admin"\nGALERA_BACKUP_PROXYSQL_STATS_PASSWORD="proxysql_pass_999"\n')
             os.chmod(env_path, 0o600)
 
             with patch("socket.gethostname", return_value="current-host"):
@@ -92,7 +92,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 },
             }
             cfg_path.write_text(json.dumps(cfg_data))
-            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\nGALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"\n')
+            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_STATS_USER="admin"\nGALERA_BACKUP_PROXYSQL_STATS_PASSWORD="proxysql_pass_999"\n')
             os.chmod(env_path, 0o600)
 
             with patch("socket.gethostname", return_value="gnode4"):
@@ -155,7 +155,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 },
             }
             cfg_path.write_text(json.dumps(cfg_data))
-            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\nGALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"\n')
+            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_STATS_USER="admin"\nGALERA_BACKUP_PROXYSQL_STATS_PASSWORD="proxysql_pass_999"\n')
             os.chmod(env_path, 0o600)
 
             galera_vars_seq = [
@@ -242,7 +242,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 },
             }
             cfg_path.write_text(json.dumps(cfg_data))
-            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\nGALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"\n')
+            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_STATS_USER="admin"\nGALERA_BACKUP_PROXYSQL_STATS_PASSWORD="proxysql_pass_999"\n')
             os.chmod(env_path, 0o600)
 
             galera_vars = {
@@ -305,7 +305,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "writer guard mariadb argv never reached CommandRunner._exec",
             )
             guard_argv = guard_calls[0]
-            self.assertIn("SELECT hostname FROM runtime_mysql_servers", " ".join(guard_argv))
+            self.assertIn("SELECT srv_host FROM stats_mysql_connection_pool", " ".join(guard_argv))
             u_idx = guard_argv.index("-u")
             self.assertEqual(guard_argv[u_idx + 1], "admin")
 
@@ -369,8 +369,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 'GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\n'
                 'GALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\n'
                 'GALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\n'
-                'GALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\n'
-                'GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"\n',
+                'GALERA_BACKUP_PROXYSQL_STATS_USER="admin"\n'
+                'GALERA_BACKUP_PROXYSQL_STATS_PASSWORD="proxysql_pass_999"\n',
                 encoding="utf-8",
             )
             os.chmod(env_path, 0o600)
@@ -481,8 +481,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 'GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\n'
                 'GALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\n'
                 'GALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\n'
-                'GALERA_BACKUP_PROXYSQL_ADMIN_USER="admin"\n'
-                'GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD="proxysql_pass_999"\n',
+                'GALERA_BACKUP_PROXYSQL_STATS_USER="admin"\n'
+                'GALERA_BACKUP_PROXYSQL_STATS_PASSWORD="proxysql_pass_999"\n',
                 encoding="utf-8",
             )
             os.chmod(env_path, 0o600)

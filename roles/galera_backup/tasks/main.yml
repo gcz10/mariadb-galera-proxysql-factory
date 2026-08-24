@@ -223,8 +223,8 @@
       - backup.destination != 's3' or (galera_backup_resolved_shared_secrets.s3_secret_key | length) > 0
       - backup.destination != 'smb' or (galera_backup_resolved_shared_secrets.smb_username | length) > 0
       - backup.destination != 'smb' or (galera_backup_resolved_shared_secrets.smb_password | length) > 0
-      - not (backup.enabled | bool) or (galera_backup_local_role | default('scheduler')) != 'scheduler' or (galera_backup_proxysql_admin_user | default('') | length) > 0
-      - not (backup.enabled | bool) or (galera_backup_local_role | default('scheduler')) != 'scheduler' or (galera_backup_proxysql_admin_password | default('') | length) > 0
+      - not (backup.enabled | bool) or (galera_backup_local_role | default('scheduler')) != 'scheduler' or (galera_backup_proxysql_stats_user | default('') | length) > 0
+      - not (backup.enabled | bool) or (galera_backup_local_role | default('scheduler')) != 'scheduler' or (galera_backup_proxysql_stats_password | default('') | length) > 0
     fail_msg: Required backup credentials are unavailable
     quiet: true
   when: galera_backup_write_secrets

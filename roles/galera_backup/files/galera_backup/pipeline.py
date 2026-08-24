@@ -124,20 +124,26 @@ def assert_scheduler_is_not_writer(
     admin_host = str(proxysql.get("admin_host", "")).strip()
     admin_port = int(proxysql.get("admin_port", 0) or 0)
     writer_hostgroup = int(proxysql.get("writer_hostgroup", 0) or 0)
-    admin_user = secrets.get("GALERA_BACKUP_PROXYSQL_ADMIN_USER", "").strip()
-    admin_password = secrets.get("GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD", "")
+    stats_user = secrets.get("GALERA_BACKUP_PROXYSQL_STATS_USER", "").strip()
+    stats_password = secrets.get("GALERA_BACKUP_PROXYSQL_STATS_PASSWORD", "")
 
     if not admin_host or admin_port <= 0 or writer_hostgroup <= 0:
         raise BackupError(
             "E_CONFIG",
             "ProxySQL writer guard configuration is missing or invalid",
         )
-    if not admin_user or not admin_password:
+    if not stats_user or not stats_password:
         raise BackupError(
             "E_SECRETS",
             "ProxySQL writer guard credentials are missing",
         )
 
+    # `stats_mysql_connection_pool` zamiast `runtime_mysql_servers`: konto z
+    # admin-stats_credentials NIE widzi schematu konfiguracyjnego (zmierzone na
+    # ProxySQL 3.0: "ERROR 1045 no such table"), a obie tabele daja ten sam
+    # obraz writera. Kolumny tez sa inne: hostgroup/srv_host, nie
+    # hostgroup_id/hostname. Dzieki temu runner na wezle Galery trzyma
+    # poswiadczenie, ktorym nie da sie nic zapisac.
     command = [
         "mariadb",
         "--protocol=tcp",
@@ -146,19 +152,19 @@ def assert_scheduler_is_not_writer(
         "-P",
         str(admin_port),
         "-u",
-        admin_user,
+        stats_user,
         "-N",
         "-B",
         "-e",
         (
-            "SELECT hostname FROM runtime_mysql_servers "
-            f"WHERE hostgroup_id={writer_hostgroup} AND status='ONLINE' "
-            "ORDER BY hostname"
+            "SELECT srv_host FROM stats_mysql_connection_pool "
+            f"WHERE hostgroup={writer_hostgroup} AND status='ONLINE' "
+            "ORDER BY srv_host"
         ),
     ]
     rc, stdout, stderr = runner.run(
         command,
-        env={"MYSQL_PWD": admin_password},
+        env={"MYSQL_PWD": stats_password},
         timeout=20,
     )
     if rc != 0:

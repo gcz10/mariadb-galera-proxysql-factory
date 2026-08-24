@@ -134,9 +134,9 @@ def load_secrets(
             raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_SMB_PASSWORD in {env_path}")
 
     if require_writer_credentials:
-        if not secrets.get("GALERA_BACKUP_PROXYSQL_ADMIN_USER"):
-            raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_PROXYSQL_ADMIN_USER in {env_path}")
-        if not secrets.get("GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD"):
-            raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_PROXYSQL_ADMIN_PASSWORD in {env_path}")
+        if not secrets.get("GALERA_BACKUP_PROXYSQL_STATS_USER"):
+            raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_PROXYSQL_STATS_USER in {env_path}")
+        if not secrets.get("GALERA_BACKUP_PROXYSQL_STATS_PASSWORD"):
+            raise BackupError("E_SECRETS", f"Missing required GALERA_BACKUP_PROXYSQL_STATS_PASSWORD in {env_path}")
 
     return secrets

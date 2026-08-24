@@ -203,6 +203,9 @@ platform-infra:  ## Uslugi wspierajace na fcinfra: PMM + MinIO + Maildev
 
 platform-proxysql:  ## Konfiguruj sama pare ProxySQL (frontend TLS, ustawienia globalne)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	@# Konto read-only dla straznika writera w backupie najemcy: rejestruje je
+	@# platforma, wiec sekret jest wymagany tutaj, a nie na celach klastra.
+	@: "$${PROXYSQL_STATS_PASSWORD:?Ustaw PROXYSQL_STATS_PASSWORD poza repozytorium}"
 	ansible-playbook playbooks/platform_proxysql.yml $(PLATFORM_OPTS)
 
 platform-endpoint:  ## Redundantny endpoint ProxySQL (Keepalived VIP) — WYLACZNIE tutaj

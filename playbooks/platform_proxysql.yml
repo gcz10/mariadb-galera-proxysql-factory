@@ -34,6 +34,11 @@
       {{ proxysql_admin_password | replace("'", "''") }}
     proxysql_monitor_password_sql: >-
       {{ proxysql_monitor_password | replace("'", "''") }}
+    # Poswiadczenie READ-ONLY dla straznika writera w backupie najemcy. Osobne
+    # od admina, bo laduje na dysku wezla Galery (patrz vars/proxysql_hostgroups.yml).
+    proxysql_stats_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_STATS_PASSWORD') }}"
+    proxysql_stats_password_sql: >-
+      {{ proxysql_stats_password | replace("'", "''") }}
     # Tozsamosc administratora wdraza platforma; najemcy korzystaja z niej
     # przez defaults-extra-file, wiec sekret nigdy nie przechodzi przez argv.
     proxysql_admin_cli:
@@ -73,12 +78,15 @@
           oznacza najemce, a najemca nie zarzadza ta warstwa.
           Uruchom: make platform-proxysql
 
-    - name: "Wymagaj haseł administratora i monitora"
+    - name: "Wymagaj haseł administratora, monitora i konta statystyk"
       ansible.builtin.assert:
         that:
           - proxysql_admin_password | length > 0
           - proxysql_monitor_password | length > 0
-        fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD i PROXYSQL_MONITOR_PASSWORD poza repozytorium."
+          - proxysql_stats_password | length > 0
+        fail_msg: >-
+          Ustaw PROXYSQL_ADMIN_PASSWORD, PROXYSQL_MONITOR_PASSWORD
+          i PROXYSQL_STATS_PASSWORD poza repozytorium.
 
   tasks:
     - name: "Sprawdź dostępność systemd"
@@ -193,7 +201,7 @@
       changed_when: false
       no_log: true
 
-    - name: "Ustaw zdalną tożsamość administracyjną ProxySQL (dla strażnika writera)"
+    - name: "Ustaw zdalną tożsamość administracyjną ProxySQL (operacje mutujące z hosta kontrolnego)"
       ansible.builtin.command:
         argv: "{{ proxysql_admin_cli }}"
         stdin: |
@@ -203,6 +211,38 @@
           LOAD ADMIN VARIABLES TO RUNTIME;
           SAVE ADMIN VARIABLES TO DISK;
       when: proxysql_remote_admin_check.stdout | trim != '1'
+      no_log: true
+      changed_when: true
+
+    # Straznik writera w backupie najemcy dostaje WYLACZNIE to konto. Runner jest
+    # cronem na wezle Galery, wiec jego sekret lezy na dysku bazy — poprzednio
+    # bylo to haslo puli read-write, czyli przejecie jednego wezla dawalo zapis
+    # do ProxySQL calej floty. Konto z admin-stats_credentials nie widzi
+    # schematu konfiguracyjnego i nie moze pisac; zmierzone na green 2026-08-24:
+    #   runtime_mysql_servers -> ERROR 1045 no such table
+    #   UPDATE global_variables -> ERROR 1045 attempt to write a readonly database
+    # Domyslne `stats:stats` znika przy okazji — to poswiadczenie fabryczne.
+    - name: "Sprawdź tożsamość read-only ProxySQL"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: >-
+          SELECT COUNT(*) FROM global_variables
+          WHERE variable_name='admin-stats_credentials'
+            AND variable_value='{{ proxysql_stats_user }}:{{ proxysql_stats_password_sql }}';
+      register: proxysql_stats_check
+      changed_when: false
+      no_log: true
+
+    - name: "Ustaw tożsamość read-only ProxySQL (dla strażnika writera w backupie)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          UPDATE global_variables
+          SET variable_value='{{ proxysql_stats_user }}:{{ proxysql_stats_password_sql }}'
+          WHERE variable_name='admin-stats_credentials';
+          LOAD ADMIN VARIABLES TO RUNTIME;
+          SAVE ADMIN VARIABLES TO DISK;
+      when: proxysql_stats_check.stdout | trim != '1'
       no_log: true
       changed_when: true
 
