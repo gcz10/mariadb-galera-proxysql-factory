@@ -52,11 +52,6 @@ import yaml
 # wspoldzielona — te same adresy w wielu inwentarzach sa poprawne z definicji.
 OWNED_GROUPS = ("galera", "restore")
 
-# Loopback jest wylaczony z porownania miedzy klastrami: klastry kontenerowe
-# (lab-cluster, lab2-cluster) adresuja wezly przez 127.0.0.1 i rozroznia je
-# mapowaniem portow. Dwa hosty na loopbacku nie moga kolidowac w sieci, wiec
-# to nie jest ta sama klasa bledu co wspolny adres routowalny.
-LOOPBACK_PREFIX = "127."
 
 def load_yaml(path):
     with open(path, encoding="utf-8") as handle:
@@ -147,8 +142,6 @@ def main():
     by_addr = defaultdict(list)
     for name, data in clusters.items():
         for host, addr in data["hosts"].items():
-            if addr.startswith(LOOPBACK_PREFIX):
-                continue
             by_addr[addr].append(f"{name}/{host}")
     for addr, owners in sorted(by_addr.items()):
         if len(owners) > 1:

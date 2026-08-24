@@ -155,11 +155,6 @@
       when: inventory_hostname == groups['galera'][0]
 
 
-    - name: "Sprawdź dostępność systemd"
-      ansible.builtin.stat:
-        path: /run/systemd/system
-      register: node_exporter_systemd
-
     - name: "Utwórz unit systemd node_exporter"
       ansible.builtin.copy:
         dest: /etc/systemd/system/node_exporter.service
@@ -188,7 +183,6 @@
         owner: root
         group: root
         mode: "0644"
-      when: node_exporter_systemd.stat.exists
       register: node_exporter_unit
 
     - name: "Włącz i uruchom node_exporter przez systemd"
@@ -197,41 +191,6 @@
         state: "{{ 'restarted' if ((node_exporter_user.changed | default(false)) or (node_exporter_install.changed | default(false)) or (node_exporter_symlink.changed | default(false)) or (node_exporter_runtime_signature.changed | default(false)) or (node_exporter_unit.changed | default(false))) else 'started' }}"
         enabled: true
         daemon_reload: true
-      when: node_exporter_systemd.stat.exists
-    - name: "Zatrzymaj bezpośredni proces po zmianie binarki"
-      ansible.builtin.command:
-        argv:
-          - pkill
-          - -x
-          - node_exporter
-      register: node_exporter_direct_stop
-      changed_when: node_exporter_direct_stop.rc == 0
-      failed_when: node_exporter_direct_stop.rc not in [0, 1]
-      when:
-        - not node_exporter_systemd.stat.exists
-        - (node_exporter_user.changed | default(false)) or (node_exporter_install.changed | default(false)) or (node_exporter_symlink.changed | default(false)) or (node_exporter_runtime_signature.changed | default(false))
-
-
-    - name: "Sprawdź proces node_exporter bez systemd"
-      ansible.builtin.command:
-        argv:
-          - pgrep
-          - -x
-          - node_exporter
-      register: node_exporter_process
-      changed_when: false
-      failed_when: false
-      when: not node_exporter_systemd.stat.exists
-
-    - name: "Uruchom node_exporter bez systemd"
-      ansible.builtin.shell: >-
-        nohup runuser --user node_exporter -- /usr/local/bin/node_exporter {{ node_exporter_args }}
-        > /var/tmp/node_exporter.log 2>&1 &
-      when:
-        - not node_exporter_systemd.stat.exists
-        - node_exporter_process.rc != 0
-      changed_when: true
-
 
     - name: "Czekaj na endpoint node_exporter"
       ansible.builtin.wait_for:

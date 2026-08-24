@@ -82,30 +82,12 @@
   serial: 1
   max_fail_percentage: 0
   any_errors_fatal: true
-  vars:
-    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   tasks:
     - name: "Zatrzymaj MariaDB przez systemd (czyste zamkniecie zapisuje grastate.dat)"
       ansible.builtin.systemd:
         name: mariadb
         state: stopped
-      when: use_systemd
-
-    - name: "Zatrzymaj mariadbd i czekaj na zakonczenie procesu (lab: brak systemd)"
-      # SIGTERM = czyste zamkniecie: grastate.dat dostaje ostateczny seqno
-      # i ewentualne safe_to_bootstrap:1 dopiero po czystym zamknieciu.
-      ansible.builtin.shell: |
-        pkill -x mariadbd || true
-        for _ in $(seq 1 60); do
-          pgrep -x mariadbd >/dev/null || exit 0
-          sleep 1
-        done
-        echo "mariadbd nie zakonczyl sie w 60 s" >&2
-        exit 1
-      changed_when: true
-      when: not use_systemd
-
     - name: "Potwierdz, ze mariadbd stoi na tym wezle"
       ansible.builtin.command:
         argv:

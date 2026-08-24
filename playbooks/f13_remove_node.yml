@@ -237,8 +237,6 @@
   become: true
   gather_facts: true
   any_errors_fatal: true
-  vars:
-    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   tasks:
     - name: "Zatrzymaj i wyłącz mariadb.service na usuwanym węźle"
@@ -246,14 +244,6 @@
         name: mariadb
         state: stopped
         enabled: false
-      when: use_systemd
-
-    - name: "Zatrzymaj mariadbd (lab: brak systemd)"
-      ansible.builtin.shell: >-
-        mariadb-admin --socket=/var/lib/mysql/mysql.sock shutdown 2>/dev/null;
-        sleep 3; pkill -x mariadbd 2>/dev/null; true
-      changed_when: true
-      when: not use_systemd
 
 # === Play 4: zaktualizuj wsrep_cluster_address na ocalałych węzłach ===
 - name: "F13 — zaktualizuj wsrep_cluster_address na ocalałych węzłach"

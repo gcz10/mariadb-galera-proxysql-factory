@@ -29,9 +29,6 @@ HARDCODE_PATTERNS = [
         r"\b(gnode\d+|g9t?node\d+|pnode\d+|rnode\d+|r9t?node\d+"
         r"|galera\d+|infranode)\b"
     ), "lab node name"),
-    # Granice (?<![\w-]) / (?![\w-]) zamiast \b: bez nich nazwa celu
-    # `lab-galera-verify` udawala nazwe klastra `lab-galera`.
-    (re.compile(r"(?<![\w-])(lab_galera|lab-galera|lab-cluster)(?![\w-])"), "lab cluster name"),
 ]
 
 
@@ -100,23 +97,10 @@ def main():
         if not os.path.exists(required):
             failures.append(f"ISC-58 — portable template missing: {required}")
 
-    # ISC-58: roles/playbooks must not reference a specific cluster directory
-    for path in iter_files((".yml", ".yaml", ".j2")):
-        try:
-            text = open(path, encoding="utf-8", errors="replace").read()
-        except OSError:
-            continue
-        if "clusters/lab-cluster" in text:
-            failures.append(
-                f"ISC-58 — {path} references clusters/lab-cluster "
-                f"(must use clusters/<name>/ via the CLUSTER var)"
-            )
-
     if failures:
         for f in failures:
             print(f"FAIL: {f}")
         return 1
-
     print("PASS: ISC-58/59 — factory portable: 0 hardcoded cluster data in "
           "roles/playbooks; example-cluster template present; new cluster = "
           "only clusters/<name>/")

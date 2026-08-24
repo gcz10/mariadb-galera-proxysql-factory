@@ -46,15 +46,9 @@
       register: monitoring_logrotate_debug
       changed_when: false
 
-    - name: "Sprawdź dostępność systemd dla timera rotacji"
-      ansible.builtin.stat:
-        path: /run/systemd/system
-      register: monitoring_logrotate_systemd
-
     - name: "Włącz systemowy timer rotacji logów"
       ansible.builtin.systemd:
         name: logrotate.timer
         enabled: true
         state: started
         daemon_reload: true
-      when: monitoring_logrotate_systemd.stat.exists

@@ -9,8 +9,6 @@
 # ProxySQL mysql_galera_hostgroups automatycznie promuje backup-writera gdy writer
 # pada, więc restart writera jest bezpieczny, ale minimalizujemy churn failoveru.
 #
-# Lab: brak systemd → restart przez pkill mariadbd + start daemon (join, NIE
-# --wsrep-new-cluster, bo klaster już działa). Produkcja: systemctl restart mariadb.
 
 # === Play 0: ustal aktywnego writera i kolejność restartu ===
 - name: "F12 — ustal aktywnego writera (ProxySQL runtime)"
@@ -77,7 +75,6 @@
   any_errors_fatal: true
   vars:
     expected_size: "{{ galera.nodes_expected | default(3) }}"
-    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   tasks:
     - name: "Pomiń writera (restart na końcu, osobny play)"
@@ -94,27 +91,6 @@
       ansible.builtin.systemd_service:
         name: mariadb
         state: restarted
-      when: use_systemd
-
-    - name: "ISC-50: zatrzymaj mariadbd i czekaj na zakończenie procesu (lab: brak systemd)"
-      ansible.builtin.shell: |
-        pkill -x mariadbd || true
-        for _ in $(seq 1 60); do
-          pgrep -x mariadbd >/dev/null || exit 0
-          sleep 1
-        done
-        echo "mariadbd nie zakończył się w 60 s" >&2
-        exit 1
-      changed_when: true
-      when: not use_systemd
-
-    - name: "ISC-50: uruchom mariadbd (lab join — bez --wsrep-new-cluster)"
-      ansible.builtin.shell: >-
-        mariadbd --user=mysql --datadir=/var/lib/mysql
-        --socket=/var/lib/mysql/mysql.sock > /var/log/mariadb/mariadb.log 2>&1 &
-        sleep 8
-      changed_when: true
-      when: not use_systemd
 
     - name: "ISC-51: czekaj na socket MariaDB (wydłużony timeout na wypadek SST/IST)"
       ansible.builtin.wait_for:
@@ -141,7 +117,6 @@
   any_errors_fatal: true
   vars:
     expected_size: "{{ galera.nodes_expected | default(3) }}"
-    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   tasks:
     - name: "Pomiń non-writery (obsłużone w Play 1)"
@@ -158,27 +133,6 @@
       ansible.builtin.systemd_service:
         name: mariadb
         state: restarted
-      when: use_systemd
-
-    - name: "ISC-50: zatrzymaj mariadbd writera i czekaj na zakończenie procesu (lab: brak systemd)"
-      ansible.builtin.shell: |
-        pkill -x mariadbd || true
-        for _ in $(seq 1 60); do
-          pgrep -x mariadbd >/dev/null || exit 0
-          sleep 1
-        done
-        echo "mariadbd writera nie zakończył się w 60 s" >&2
-        exit 1
-      changed_when: true
-      when: not use_systemd
-
-    - name: "ISC-50: uruchom mariadbd writera (lab join)"
-      ansible.builtin.shell: >-
-        mariadbd --user=mysql --datadir=/var/lib/mysql
-        --socket=/var/lib/mysql/mysql.sock > /var/log/mariadb/mariadb.log 2>&1 &
-        sleep 8
-      changed_when: true
-      when: not use_systemd
 
     - name: "ISC-51: czekaj na socket MariaDB writera (wydłużony timeout na wypadek SST/IST)"
       ansible.builtin.wait_for:

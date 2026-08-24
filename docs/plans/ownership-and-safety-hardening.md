@@ -1,7 +1,7 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
-**Status:** W TOKU — P0/P1/P2-6/P2-7/P2-8/P2-9 zamknięte; P3 ma jedną otwartą decyzję (LICENSE), otwarte P2-10 i dług testowy.
-**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3/P1-4/P1-5, P2-6/P2-8/P2-9, P3 (higiena; audyt na kodzie 2026-08-24 potwierdził 10/11 pozycji zamkniętych). P2-7 domknięte: prawo kasowania kopii jest odseparowane od prawa zapisu i zweryfikowane na żywo.
+**Status:** W TOKU — P0/P1/P2-6/P2-7/P2-8/P2-9 zamknięte; P3 ma jedną otwartą decyzję (LICENSE), otwarte P2-10; dług testowy (usunięcie dualnej ścieżki kontenerowej) zamknięty.
+**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3/P1-4/P1-5, P2-6/P2-8/P2-9, P3 (higiena; audyt na kodzie 2026-08-24 potwierdził 10/11 pozycji zamkniętych), dług testowy (usunięcie ścieżki `not use_systemd` i labu kontenerowego). P2-7 domknięte: prawo kasowania kopii jest odseparowane od prawa zapisu i zweryfikowane na żywo.
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
 
@@ -208,10 +208,8 @@ produkcyjny config z `0` bez akceptacji ryzyka → FAIL.
 
 **Koszt:** mały.
 
-**Wynik (`2996474`, `4aeae5f`).** Szablon domyślnie renderuje `1`. Wszystkie
-sześć repozytoryjnych konfiguracji laboratoryjnych zachowuje jawne `0`; dwa
-kontenerowe (`lab-cluster`, `lab2-cluster`) dostały brakujące explicit opt-out,
-żeby converge nie zmienił ich zachowania. Schemat ogranicza wartości do `0/1/2`
+**Wynik (`2996474`, `4aeae5f`).** Szablon domyślnie renderuje `1`. Konfiguracje
+laboratoryjne zachowują jawne `0` (explicit opt-out). Schemat ogranicza wartości do `0/1/2`
 i dodaje boolean `durability_risk_accepted`. Walidator odrzuca produkcyjne `0/2`
 bez jawnej akceptacji, a pominięcie klucza pozostaje bezpieczne.
 
@@ -567,10 +565,37 @@ nowych klastrów, a istniejące wymagałyby migracji danych do nowego bucketa.
   sonda byłaby permanentnie czerwona. Zapisujemy to jako świadomie przyjęte ryzyko
   i włączamy bramkę dopiero przy drugim węźle hypervisora.
 
-## Osobno: dług testowy, który to umożliwił
+## Osobno: dług testowy, który to umożliwił — ZROBIONE
 
-Ścieżka `not use_systemd` żyje w siedmiu playbookach (`bootstrap.yml:15`,
-`site.yml:19`, `f5_join.yml:156`, `f12_rolling_restart.yml:80,144`,
-`f13_remove_node.yml:241`, `cluster_recover.yml:102`). Testowana jest ścieżka,
-której produkcja nie używa, i to w operacjach niszczących. Usunięcie tej gałęzi
-jest warunkiem, żeby kolejne bramki cokolwiek dowodziły — planowane po P0.
+Ścieżka `not use_systemd` / dualna ścieżka kontenerowa została całkowicie usunięta:
+usunięto dualną ścieżkę w 6 playbookach Galery i 4 pomocniczych, a topologię
+kontenerową wycofano z gałęzi `main`. Lab kontenerowy jest zachowany na branchu
+`lab/docker-podman`. W `main` pozostaje wyłącznie topologia VM (systemd zawsze obecny),
+dzięki czemu testy i bramki weryfikują wyłącznie rzeczywistą ścieżkę produkcyjną.
+
+**Defekt wykryty przy usuwaniu.** Sonda `tests/lab/probe-rolling-restart.py`
+rozpoznawała „ten play rusza mariadbd" wyłącznie po komendach ścieżki
+kontenerowej (`pkill mariadbd`, `mariadbd --user`, `--wsrep-new-cluster`).
+Produkcyjny restart przez `ansible.builtin.systemd_service` był dla niej
+niewidzialny, więc bramka ISC-50 **nigdy nie sprawdzała `serial:1` w tym, co
+naprawdę się wykonuje** — sprawdzała to w ścieżce, której produkcja nie używa.
+Po usunięciu kontenerów sonda zgłosiła „no serial:1 Galera lifecycle play found"
+i tym samym sama się zdemaskowała. Wykrywanie ma teraz dwie warstwy: regex na
+surowe komendy (siatka na przyszłą regresję) oraz strukturalny obchód drzewa
+zadań szukający modułu systemd z `name: mariadb*` i `state: restarted|stopped`.
+Obchód strukturalny, nie regex po zrzucie YAML, bo `no_block`/`enabled` rozdziela
+klucze `name` i `state` i dopasowanie po sąsiedztwie by je przepuściło.
+
+**Dowód na żywo (green-r9, 2026-08-24).** `cluster-deploy` `changed=0 skipped=0`
+(wcześniej gałęzie labowe raportowały się tu jako pominięte zadania),
+`platform-proxysql`/`platform-endpoint`/`cluster-monitoring` `changed=0 failed=0`,
+`make cluster-rolling-restart` przejechał 3/3 węzły (`changed=1` każdy, writer
+`grg3` wrócił: `wsrep_local_state=4`, `size=3`, `Primary`, `ready=ON`), bootstrap
+na żywym klastrze odmówił fail-closed, brama po budowie 13/13 PASS.
+
+**Koszt, który trzeba przyjąć.** `lab-split-brain-test` tracił kontenerowy
+poligon. Zamiennikiem NIE jest stack niosący dane: bramki destrukcyjne mają biec
+na jednorazowym najemcy VM (`cluster-build CLUSTER=<nazwa>` na istniejącej
+warstwie wspólnej), nigdy na klastrze, który jest jednocześnie źródłem kopii
+off-cluster. `lab-failover-hard-test` nie traci nic — `tests/lab/chaos-failover.py`
+i tak odmawiał na kontenerach, bo `/proc/sysrq-trigger` nie jest tam zapisywalny.

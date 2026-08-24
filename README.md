@@ -23,8 +23,10 @@ export MINIO_ROOT_PASSWORD='<minio-s3-secret>'
 # Alternatywnie załaduj lokalny, ignorowany plik utworzony dla działającego labu:
 # set -a; . tests/lab/.env; set +a
 
-# Uruchom lab; PMM na czystym volume dostaje powyższe hasło, a orphans są usuwane
-make lab-up
+# Prowizjonowanie VM klastra w Proxmox VE (wymaga PROXMOX_VE_ENDPOINT i poświadczeń PVE):
+# make infra-provision CLUSTER=<nazwa>
+# make cluster-trust-hosts CLUSTER=<nazwa>
+# Bez żywego Proxmoksa można uruchamiać statyczną walidację na CLUSTER=example-cluster.
 
 # WARSTWA WSPOLNA — musi istniec ZANIM powstanie pierwszy klaster. Najemca
 # zaklada dzialajaca pare ProxySQL i wdrozony `admin-check.cnf`; bez nich
@@ -32,9 +34,11 @@ make lab-up
 make platform-trust-hosts
 make platform-build
 
-# Discovery i walidacja wybranego klastra
-make cluster-discover CLUSTER=lab-cluster
-make cluster-validate CLUSTER=lab-cluster
+# Discovery i walidacja wybranego klastra (walidacja statyczna nie wymaga żywych maszyn):
+make cluster-validate CLUSTER=example-cluster
+# Na żywej infrastrukturze VM:
+# make cluster-discover CLUSTER=<nazwa>
+# make cluster-validate CLUSTER=<nazwa>
 
 # Materiał TLS (gdy tls.mode=full). Artefakty są gitignorowane — na nowej
 # maszynie trzeba je wytworzyć, inaczej F3/F7 padną na brakującym pliku.
@@ -70,35 +74,33 @@ tests/lab/tls/issue-node-certs.sh <klaster> <n1=ip1,n2=ip2,n3=ip3> [dni]
 # Nie uruchamiaj bootstrapu na własną rękę przed tym krokiem.
 
 # F4 — initial bootstrap: JEDEN węzeł (galera[0]), wymaga jawnego CONFIRM=yes
-make cluster-bootstrap CLUSTER=lab-cluster CONFIRM=yes
-
+make cluster-bootstrap CLUSTER=<nazwa> CONFIRM=yes
 
 
 # F5 — dołącz pozostałe węzły (SST mariabackup, serial:1)
-make cluster-join CLUSTER=lab-cluster
-make lab-galera-verify
+make cluster-join CLUSTER=<nazwa>
+make lab-galera-verify CLUSTER=<nazwa>
 
 # F7 — ProxySQL (mysql_galera_hostgroups, jeden aktywny writer)
-make cluster-proxysql CLUSTER=lab-cluster
-make lab-proxysql-verify
-
+make cluster-proxysql CLUSTER=<nazwa>
+make lab-proxysql-verify CLUSTER=<nazwa>
 # F11 — monitoring: node_exporter, PMM Inventory/QAN, metryki ProxySQL, logrotate
-make cluster-monitoring CLUSTER=lab-cluster
+make cluster-monitoring CLUSTER=<nazwa>
 # Przy każdej rotacji PMM_MONITOR_PASSWORD zwiększ także
 # monitoring.pmm.credentials_revision w cluster.yml.
 
 # F6 — hardening MariaDB (wymaga konta pmm_monitor z F11)
-make cluster-harden CLUSTER=lab-cluster
-make lab-hardening-verify
+make cluster-harden CLUSTER=<nazwa>
+make lab-hardening-verify CLUSTER=<nazwa>
 
 # F8 — redundantny endpoint (Keepalived VIP, unicast VRRP, failover < RTO).
 # NALEZY DO WARSTWY WSPOLNEJ, nie do klastra — patrz sekcja "Warstwa wspolna".
 make platform-endpoint
-make lab-endpoint-verify
+make lab-endpoint-verify CLUSTER=<nazwa>
 
 # F9 — testy chaos (destrukcyjne, tylko poza produkcją); zasiewają też isa_test
-make lab-failover-test CLUSTER=lab-cluster      # ISC-27/28: kill writera, brak utraty tx
-make lab-split-brain-test CLUSTER=lab-cluster   # ISC-30: partycja sieci, jeden Primary
+make lab-failover-test CLUSTER=<nazwa>        # ISC-27/28: kill writera, brak utraty tx
+make lab-split-brain-test CLUSTER=<nazwa>     # ISC-30: partycja sieci, jeden Primary
 make verify-no-mass-restart                     # ISC-31: brak masowego restartu Galery
 
 # P2: jeden destrukcyjny pomiar utraty kworum na przypietym newclaude17-r9.
@@ -108,25 +110,25 @@ make verify-no-mass-restart                     # ISC-31: brak masowego restartu
 # Artefakt: /var/tmp/quorum-evidence-newclaude17-r9-${run_id}.json
 
 # F10 — konfiguracja schedulera, ręczny backup i potwierdzany restore
-make cluster-backup-configure CLUSTER=lab-cluster
-make cluster-backup CLUSTER=lab-cluster                  # ISC-32/33/34/35
-make lab-backup-verify CLUSTER=lab-cluster               # S3: szyfr/checksum/metadata
-make cluster-restore-drill CLUSTER=lab-cluster CONFIRM=yes
+make cluster-backup-configure CLUSTER=<nazwa>
+make cluster-backup CLUSTER=<nazwa>                    # ISC-32/33/34/35
+make lab-backup-verify CLUSTER=<nazwa>                 # S3: szyfr/checksum/metadata
+make cluster-restore-drill CLUSTER=<nazwa> CONFIRM=yes
 
-make lab-restore-verify CLUSTER=lab-cluster               # integralność i świeżość
-make lab-backup-impact CLUSTER=lab-cluster                # ISC-39, lab-only
+make lab-restore-verify CLUSTER=<nazwa>                 # integralność i świeżość
+make lab-backup-impact CLUSTER=<nazwa>                  # ISC-39, lab-only
 #
 # Backend, scheduler, sekrety, rotacja i diagnostyka:
 # docs/runbooks/backup.md
 
 # F15 — reguły alertów (ISC-47); adres e-mail z monitoring.alerts.email w cluster.yml
-make cluster-alerts CLUSTER=lab-cluster
+make cluster-alerts CLUSTER=<nazwa>
 
 # Kontrakt końcowy: PMM Server i pmm-client z aktywnego lockfile'a (oba 3.9.1);
 # oczekiwane nodes/services wynikają z inventory i cluster.yml, dalej QAN,
 # świeże metryki Galery/lifecycle ORAZ reguły ISC-47
-make cluster-monitoring-refresh CLUSTER=lab-cluster
-make lab-monitoring-verify
+make cluster-monitoring-refresh CLUSTER=<nazwa>
+make lab-monitoring-verify CLUSTER=<nazwa>
 
 # Pelna awaria klastra (cold recovery) wymaga kontrolowanego stopu i jednego
 # bootstrapu; rownolegly `systemctl restart` zostawia NON_PRIM.
@@ -182,10 +184,9 @@ plik per klaster) — przed pierwszym `cluster-proxysql` uruchom
 
 ## Żywa flota
 
-Szybki start powyzej uczy na `lab-cluster` (kontenery). Realne klastry sa dwa i
-chodza na **tym samym kodzie** - roznice niesie wylacznie `versions.lock_file`
+Przykłady statyczne używają szablonu `CLUSTER=example-cluster`. Realne klastry VM działają
+na Proxmox VE na **tym samym kodzie** — różnice niesie wyłącznie `versions.lock_file`
 w `cluster.yml`:
-
 | Klaster | OS | Wezly | TLS | Hostgroupy ProxySQL |
 |---|---|---|---|---|
 | `finalclaude-r10` | Rocky 10 | `f10g1-3` + `f10r1` | `disabled` (kontrast platformowy) | 10/20/30/40 |

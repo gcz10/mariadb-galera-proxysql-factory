@@ -89,32 +89,12 @@
           i PROXYSQL_STATS_PASSWORD poza repozytorium.
 
   tasks:
-    - name: "Sprawdź dostępność systemd"
-      ansible.builtin.stat:
-        path: /run/systemd/system
-      register: proxysql_systemd
-
     - name: "Włącz i uruchom ProxySQL przez systemd"
       ansible.builtin.systemd:
         name: proxysql
         state: started
         enabled: true
         daemon_reload: true
-      when: proxysql_systemd.stat.exists
-
-    - name: "Sprawdź proces ProxySQL bez systemd"
-      ansible.builtin.command: pgrep -x proxysql
-      register: proxysql_process
-      changed_when: false
-      failed_when: false
-      when: not proxysql_systemd.stat.exists
-
-    - name: "Uruchom ProxySQL bez systemd (lab)"
-      ansible.builtin.command: proxysql --idle-threads -c /etc/proxysql.cnf
-      when:
-        - not proxysql_systemd.stat.exists
-        - proxysql_process.rc != 0
-      changed_when: true
 
     - name: "Czekaj na admin port ProxySQL (6032)"
       ansible.builtin.wait_for:

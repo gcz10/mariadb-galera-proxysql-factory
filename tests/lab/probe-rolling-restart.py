@@ -8,7 +8,8 @@ ISC-51: a health gate (wsrep_local_state=4 Synced + Primary + full cluster size)
 
 This probe is two-layered:
   1. STATIC  — parse f12_rolling_restart.yml: every play that targets multiple
-               Galera hosts and cycles mariadbd MUST set serial:1, and MUST poll
+               Galera hosts and cycles mariadbd — through systemd or through a
+               raw shell command — MUST set serial:1, and MUST poll
                wsrep_local_state/cluster_status/cluster_size as a health gate.
   2. RUNTIME — every Galera node reports Synced (state 4), Primary, wsrep_ready=ON
                and the expected cluster size (no node stranded after a restart).
@@ -29,6 +30,11 @@ EXPECTED_SIZE = str(CTX.config["galera"]["nodes_expected"])
 GALERA = CTX.group_hosts("galera")
 PLAYBOOK = REPO_ROOT / "playbooks/f12_rolling_restart.yml"
 
+# Wykrywanie "ten play rusza mariadbd" ma DWIE warstwy, bo restart da sie napisac
+# na dwa sposoby, a bramka serial:1 musi obowiazywac oba.
+#
+# Warstwa 1 (regex): surowe komendy. Zadna z nich nie wystepuje dzis w repo —
+# to siatka na przyszla regresje, gdyby ktos wrocil do restartu przez shell.
 LIFECYCLE = re.compile(
     r"--wsrep-new-cluster"
     r"|mariadbd\s+--user"
@@ -37,6 +43,30 @@ LIFECYCLE = re.compile(
     r"|mariadb-admin\s+shutdown",
     re.IGNORECASE,
 )
+
+# Warstwa 2 (strukturalna): produkcyjna sciezka, czyli systemd. Szukamy po drzewie
+# zadan, a nie regexem po zrzucie YAML, bo klucze modulu rozdziela dowolny inny
+# klucz (`no_block`, `enabled`, `scope`) i sasiedztwo `name`/`state` nie jest pewne.
+SERVICE_MODULES = (
+    "ansible.builtin.systemd_service",
+    "ansible.builtin.systemd",
+    "ansible.builtin.service",
+)
+CYCLE_STATES = frozenset({"restarted", "stopped"})
+
+
+def cycles_mariadb_service(node) -> bool:
+    """Czy w tym poddrzewie jest zadanie zmieniajace stan uslugi MariaDB."""
+    if isinstance(node, list):
+        return any(cycles_mariadb_service(item) for item in node)
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in SERVICE_MODULES and isinstance(value, dict):
+                if "mariadb" in str(value.get("name", "")) and str(value.get("state", "")) in CYCLE_STATES:
+                    return True
+            if cycles_mariadb_service(value):
+                return True
+    return False
 
 
 def targets_multiple_galera(hosts):
@@ -85,7 +115,9 @@ def main():
         if not isinstance(play, dict) or "hosts" not in play:
             continue
         text = yaml.safe_dump(play)
-        if targets_multiple_galera(play["hosts"]) and LIFECYCLE.search(text):
+        if targets_multiple_galera(play["hosts"]) and (
+            LIFECYCLE.search(text) or cycles_mariadb_service(play)
+        ):
             serial = play.get("serial")
             if str(serial) != "1":
                 failures.append(

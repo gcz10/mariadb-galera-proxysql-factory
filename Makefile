@@ -5,7 +5,7 @@
 # galera-rebuild) nie moze startowac domyslnie.
 .DEFAULT_GOAL := help
 
-.PHONY: galera-rebuild cluster-build cluster-recover help lab-up lab-start-services cluster-discover cluster-validate cluster-deploy \
+.PHONY: galera-rebuild cluster-build cluster-recover help cluster-discover cluster-validate cluster-deploy \
         cluster-bootstrap cluster-health cluster-join cluster-proxysql \
         cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan \
@@ -13,7 +13,7 @@
         lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test lab-failover-hard-test cluster-tls-rotate \
         cluster-app-host lab-app-verify lab-app-bench lab-app-degradation-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
-        lab-hardening-verify lab-monitoring-verify lab-pmm-preflight-verify lab-rolling-restart-verify \
+        lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify \
@@ -47,9 +47,8 @@ TF_DIR ?= terraform/$(CLUSTER)
 # kazdej zmianie w Galerze to 11+ min zmarnowane (Docker CE + pull PMM + zimny
 # start PMM + reinstalacja ProxySQL).
 #
-# Lista WYNIKA z inwentarza wskazanego klastra (grupy galera + restore), bo
-# statyczny default `gnode1 gnode2 gnode3 rnode1` byl nazwami VM martwego labu:
-# na kazdym innym klastrze cel destrukcyjny celowal w nieistniejace maszyny.
+# Lista WYNIKA z inwentarza wskazanego klastra (grupy galera + restore):
+# na kazdym innym klastrze cel destrukcyjny celowalby w nieistniejace maszyny.
 # Nazwy hostow w inwentarzu sa tozsame z kluczami zasobow w terraform/<cluster>.
 # Rekurencyjne `=` (nie `:=`): liczy sie dopiero przy uzyciu, wiec `make help`
 # nie czyta zadnego inwentarza. `?=`, nie `=`: zwykle przypisanie w Makefile
@@ -127,19 +126,6 @@ cluster-trust-hosts:  ## Re-skanuj klucze hostow do known_hosts (po re-provision
 
 help:  ## Pokaż dostępne komendy
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-28s %s\n", $$1, $$2}'
-lab-up:  ## Zbuduj i uruchom laboratorium, usuwając osierocone usługi
-	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
-	@test -f tests/lab/ssh_key || ssh-keygen -q -t ed25519 -N '' -f tests/lab/ssh_key
-	@test -f tests/lab/ssh_key.pub || ssh-keygen -y -f tests/lab/ssh_key > tests/lab/ssh_key.pub
-	@chmod 600 tests/lab/ssh_key
-	@chmod 644 tests/lab/ssh_key.pub
-	docker compose -f tests/lab/docker-compose.yml up -d --build --remove-orphans
-
-lab-start-services:  ## Lab-only: (re)start ProxySQL po restarcie kontenera (brak systemd, idempotentny)
-	$(cluster_guard)
-	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
-	ansible proxysql -i clusters/$(CLUSTER)/inventory.yml -m shell -a "pgrep -x proxysql >/dev/null || proxysql --idle-threads -c /etc/proxysql.cnf" $(ANSIBLE_OPTS)
-	ansible proxysql -i clusters/$(CLUSTER)/inventory.yml -m wait_for -a "host=127.0.0.1 port=6032 timeout=20" $(ANSIBLE_OPTS)
 
 
 # Jedna, jawna orkiestracja pelnego budowania klastra: kazdy krok to ISTNIEJACY
@@ -411,7 +397,7 @@ lab-failover-test:  ## F9 — test failover writera (ISC-27/28, lab-only, destru
 # soft nie dotyka: zero utraconych transakcji przy zniknieciu maszyny i powrot
 # wezla po crashu (rejoin). Oddzielny pomiar recznym generatorem po TLS przez VIP
 # dal 15.8 s — inna konfiguracja klienta daje inny wynik, nie porownuj wprost.
-# Wymaga realnych VM — kontenerowy lab nie ma zapisywalnego /proc/sysrq-trigger.
+
 lab-failover-hard-test:  ## F9 — failover przy TWARDEJ utracie maszyny (sysrq, lab-only, destrukcyjny)
 	$(cluster_guard)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
@@ -586,9 +572,6 @@ lab-monitoring-verify:  ## Zweryfikuj natywne PMM Inventory i metryki laboratori
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
 
-lab-pmm-preflight-verify:  ## F11 — sonda: preflight odrzuca runtime PMM spoza lockfile (lab-cluster)
-	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
-	PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" bash tests/lab/probe-pmm-version-preflight.sh
 
 cluster-rolling-restart:  ## F12 — rolling restart Galera serial:1 + brama zdrowia (ISC-50/51)
 	$(cluster_guard)
@@ -660,18 +643,18 @@ lab-drift-verify:  ## F13 — zweryfikuj drift detection (ISC-21)
 	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-drift.py
 
-cluster-remove-node-plan:  ## F13 — read-only plan usunięcia węzła Galera (wymaga node=gnodeX)
+cluster-remove-node-plan:  ## F13 — read-only plan usunięcia węzła Galera (wymaga NODE=<nazwa_wezla>)
 	$(cluster_guard)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
-	@test -n "$(NODE)" || (echo "Ustaw NODE=gnodeX (np. make cluster-remove-node-plan NODE=gnode2)"; exit 1)
+	@test -n "$(NODE)" || (echo "Ustaw NODE=<nazwa_wezla> (np. make cluster-remove-node-plan NODE=grg2)"; exit 1)
 	ansible-playbook playbooks/f13_remove_node_plan.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e node=$(NODE) $(ANSIBLE_OPTS)
 
-cluster-remove-node:  ## F13 — usuń węzeł Galera (confirm-gated, wymaga NODE=gnodeX CONFIRM=yes)
+cluster-remove-node:  ## F13 — usuń węzeł Galera (confirm-gated, wymaga NODE=<nazwa_wezla> CONFIRM=yes)
 	$(cluster_guard)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (destrukcyjne)"; exit 1)
-	@test -n "$(NODE)" || (echo "Ustaw NODE=gnodeX"; exit 1)
+	@test -n "$(NODE)" || (echo "Ustaw NODE=<nazwa_wezla>"; exit 1)
 	ansible-playbook playbooks/f13_remove_node.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e node=$(NODE) -e confirm=yes $(ANSIBLE_OPTS)
 
 cluster-alerts:  ## F15 — provision alert rules ISC-47 (quorum/writer/node loss + freshness)

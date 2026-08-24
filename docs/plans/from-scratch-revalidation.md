@@ -339,6 +339,6 @@ zadanie, nie „naprawiana z palca".
 
 - Nie zmienia adresacji ani zawartości `clusters/*/` — tylko właściciela maszyn
   po stronie Terraform.
-- Nie rusza laboratorium dockerowego (`lab-cluster`, `lab2-cluster`).
+- Nie dotyczy wycofanego labu kontenerowego (zachowanego na branchu `lab/docker-podman`).
 - Nie odbudowuje `claude-r9g` — pokrywa się z `claude-r9t` co do platformy,
   różni tylko brakiem TLS. Definicja zostaje w repo.

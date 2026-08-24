@@ -367,6 +367,26 @@ class ClusterRecoverPlaybookContractTests(unittest.TestCase):
                 return index
         return None
 
+    # Play zatrzymania szukamy po STRUKTURZE zadania, nie po komendzie. Dawna
+    # kotwica brzmiala `pkill -x mariadbd`, czyli komenda sciezki kontenerowej;
+    # gdy ta sciezka znikla, kontrakt przestal cokolwiek sprawdzac, zamiast
+    # upasc na braku serial:1. Pytamy wiec o modul uslugi i docelowy stan.
+    def find_stop_play(self):
+        modules = (
+            "ansible.builtin.systemd",
+            "ansible.builtin.systemd_service",
+            "ansible.builtin.service",
+        )
+        for index, play in enumerate(self.plays):
+            for task in play.get("tasks") or []:
+                for module in modules:
+                    spec = task.get(module)
+                    if not isinstance(spec, dict):
+                        continue
+                    if "mariadb" in str(spec.get("name", "")) and str(spec.get("state", "")) == "stopped":
+                        return index
+        return None
+
     def test_playbook_exists_and_parses(self):
         self.assertTrue(self.plays, "cluster_recover.yml musi byc poprawnym playbookiem")
 
@@ -383,7 +403,7 @@ class ClusterRecoverPlaybookContractTests(unittest.TestCase):
 
     def test_live_primary_guard_precedes_stop(self):
         probe_index = self.find_play("galera_state_probe.yml")
-        stop_index = self.find_play("pkill -x mariadbd")
+        stop_index = self.find_stop_play()
         self.assertIsNotNone(probe_index, "playbook musi sondowac stan wszystkich wezlow")
         self.assertIsNotNone(stop_index, "playbook musi zatrzymywac mariadbd")
         self.assertLess(
@@ -418,7 +438,7 @@ class ClusterRecoverPlaybookContractTests(unittest.TestCase):
 
 
     def test_stop_play_is_serial_and_fail_closed(self):
-        stop_index = self.find_play("pkill -x mariadbd")
+        stop_index = self.find_stop_play()
         self.assertIsNotNone(stop_index)
         stop_play = self.plays[stop_index]
         self.assertEqual(str(stop_play.get("serial")), "1", "stop Galery jest serialny (serial:1)")
@@ -438,7 +458,7 @@ class ClusterRecoverPlaybookContractTests(unittest.TestCase):
         self.assertNotIn("restarted", self.raw)
 
     def test_selection_reads_grastate_after_stop(self):
-        stop_index = self.find_play("pkill -x mariadbd")
+        stop_index = self.find_stop_play()
         select_index = self.find_play("safe_to_bootstrap")
         self.assertIsNotNone(select_index, "wybor wezla czyta grastate.dat (safe_to_bootstrap)")
         self.assertIn("seqno", self.raw, "wybor wezla bierze pod uwage seqno")

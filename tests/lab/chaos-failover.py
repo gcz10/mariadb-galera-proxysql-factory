@@ -19,8 +19,8 @@ import tempfile
 import time
 import yaml
 
-CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
-INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
+CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/example-cluster/cluster.yml")
+INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/example-cluster/inventory.yml")
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
 APP_PW = os.environ.get("APP_DB_PASSWORD", "")
 

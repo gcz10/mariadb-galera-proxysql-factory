@@ -12,7 +12,6 @@
 # ISC-25 (awaria aktywnego ProxySQL < RTO węzła — klient wznawia przez VIP),
 # ISC-26 (VIP nie kieruje ruchu do niesprawnej instancji).
 # VRRP unicast — stabilne w sieciach bez multicast (Docker/OrbStack).
-# Lab: brak systemd — keepalived uruchamiany jako daemon.
 
 - name: "F8 — Keepalived VIP dla endpointu ProxySQL"
   hosts: proxysql
@@ -101,51 +100,12 @@
       register: kl_config
       no_log: true
 
-    - name: "Sprawdź dostępność systemd"
-      ansible.builtin.stat:
-        path: /run/systemd/system
-      register: kl_systemd
-
-    # --- Ścieżka systemd (produkcja) ---
     - name: "Włącz i uruchom keepalived przez systemd"
       ansible.builtin.systemd:
         name: keepalived
         state: "{{ 'restarted' if (kl_config.changed or kl_script.changed) else 'started' }}"
         enabled: true
         daemon_reload: true
-      when: kl_systemd.stat.exists
-
-    # --- Ścieżka bez systemd (laboratorium) ---
-    - name: "Sprawdź proces keepalived bez systemd"
-      ansible.builtin.command: pgrep -x keepalived
-      register: kl_process
-      changed_when: false
-      failed_when: false
-      when: not kl_systemd.stat.exists
-
-    - name: "Zatrzymaj keepalived po zmianie konfiguracji (lab)"
-      ansible.builtin.command: pkill -TERM -x keepalived
-      when:
-        - not kl_systemd.stat.exists
-        - kl_process.rc == 0
-        - kl_config.changed or kl_script.changed
-      changed_when: true
-      failed_when: false
-
-    - name: "Poczekaj na zwolnienie VIP po restarcie (lab)"
-      ansible.builtin.pause:
-        seconds: 2
-      when:
-        - not kl_systemd.stat.exists
-        - kl_process.rc == 0
-        - kl_config.changed or kl_script.changed
-
-    - name: "Uruchom keepalived bez systemd (lab)"
-      ansible.builtin.command: keepalived -D -f /etc/keepalived/keepalived.conf
-      when:
-        - not kl_systemd.stat.exists
-        - (kl_process.rc != 0) or (kl_config.changed or kl_script.changed)
-      changed_when: true
 
     - name: "ISC-24: czekaj na VIP na węźle MASTER"
       # pipefail nie zmienia semantyki: ip zawsze konczy sie rc=0, o wyniku

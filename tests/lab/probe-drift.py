@@ -20,8 +20,8 @@ import sys
 
 import yaml
 
-INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/lab-cluster/inventory.yml")
-CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml")
+INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/example-cluster/inventory.yml")
+CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/example-cluster/cluster.yml")
 PLAYBOOK = "playbooks/f13_drift.yml"
 
 # must compare MAIN (memory) vs DISK — runtime_* carries dynamic data

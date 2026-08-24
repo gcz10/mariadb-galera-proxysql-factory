@@ -16,7 +16,6 @@
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
     gcache_size: "{{ (mariadb_tuning | default({})).gcache_size | default('128M') }}"
     mariadb_config_dir: /etc/my.cnf.d
-    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   pre_tasks:
     - name: "Wymagaj SST_PASSWORD (zapobiega pustemu wsrep_sst_auth)"
@@ -24,21 +23,6 @@
         that:
           - sst_password | length > 0
         fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env). Puste hasło = konto SST bez hasła."
-    - name: "Zabij stary proces MariaDB (tylko lab: brak systemd)"
-      ansible.builtin.shell: "set -o pipefail; lsof -ti /var/lib/mysql/ibdata1 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :4567 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :4568 2>/dev/null | xargs kill -9 2>/dev/null; true"
-      changed_when: false
-      when: not use_systemd
-
-    - name: "Wyczyść aria log (tylko lab: brak systemd, po crashu)"
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /var/lib/mysql/aria_log_control
-        - /var/lib/mysql/aria_log.00000001
-      changed_when: false
-      when: not use_systemd
-
     - name: "Utworz katalogi"
       ansible.builtin.file:
         path: "{{ item.path }}"
@@ -136,32 +120,21 @@
         creates: /var/lib/mysql/mysql
       register: init_result
 
-    - name: "Uruchom MariaDB (tylko lab: bez systemd, jako daemon)"
-      ansible.builtin.shell: |
-        mariadbd --user=mysql --datadir=/var/lib/mysql --socket=/var/lib/mysql/mysql.sock \
-          > /var/log/mariadb/mariadb.log 2>&1 &
-        sleep 15
-      changed_when: false
-      when: not use_systemd
-
-    - name: "Włącz mariadb.service na starcie (produkcja: systemd; start przez bootstrap/join, NIE converge)"
+    - name: "Włącz mariadb.service na starcie (start przez bootstrap/join, NIE converge)"
       ansible.builtin.systemd:
         name: mariadb
         enabled: true
-      when: use_systemd
 
     # rc==0 tego zadania steruje rozgalezieniem TLS (FLUSH SSL bez przestoju vs
     # restart calego klastra) i brama restartu konfiguracji. `systemctl is-active`
     # to DOKLADNIE to zrodlo prawdy; moduly facts (service_facts) daja grubniejszy
     # snapshot (SUB stan 'running' vs ACTIVE 'active') i nie sa rownowazne dla
     # jednostek typu exited/activating. Celowo zostaje command z pointwise noqa.
-    - name: "Sprawdź czy MariaDB działa (produkcja: converge nie startuje zatrzymanego węzła)"
+    - name: "Sprawdź czy MariaDB działa (converge nie startuje zatrzymanego węzła)"
       ansible.builtin.command: systemctl is-active mariadb  # noqa: command-instead-of-module
       register: mariadb_active
       changed_when: false
       failed_when: false
-      when: use_systemd
-
     - name: "TLS: przeladuj certyfikaty bez restartu (FLUSH SSL)"
       ansible.builtin.command:
         argv:
@@ -182,7 +155,6 @@
         health_gate_name: "Brama zdrowia PRZED restartem konfiguracji (Synced+Primary+size)"
         health_retries: 3
       when:
-        - use_systemd
         - config_result.changed
         - (mariadb_active | default({})).rc | default(1) == 0
 
@@ -224,9 +196,7 @@
       ansible.builtin.systemd:
         name: mariadb
         state: restarted
-      when:
-        - use_systemd
-        - (mariadb_active | default({})).rc | default(1) == 0
+      when: (mariadb_active | default({})).rc | default(1) == 0
 
     # CELOWO inline, nie `tasks/assert_galera_healthy.yml`. To handler, czyli inny
     # kontekst wykonania niz zadanie: `include_tasks` w handlerze dziala, ale
@@ -256,6 +226,4 @@
       retries: 30
       delay: 5
       changed_when: false
-      when:
-        - use_systemd
-        - (mariadb_active | default({})).rc | default(1) == 0
+      when: (mariadb_active | default({})).rc | default(1) == 0

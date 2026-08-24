@@ -50,7 +50,7 @@ fi
 PVE_NODE="${PVE_NODE:-pve}"
 PVE_STORAGE="${PVE_STORAGE:-local-zfs}"
 
-# Opcjonalne argumenty po katalogu = nazwy wezlow do zniszczenia (np. gnode1 rnode1).
+# Opcjonalne argumenty po katalogu = nazwy wezlow do zniszczenia (np. grg1 grr1).
 # Bez nich kasujemy CALY klaster.
 shift || true
 NODES=("$@")

@@ -2,7 +2,6 @@
 # F5: Dołącz węzły Galera do Primary Component.
 # Domyślny bootstrap to galera[0]; recovery przekazuje jawny join_bootstrap_node.
 # Satisfies: ISC-14 (SST mariabackup), ISC-29 (auto rejoin).
-# Lab: brak systemd — MariaDB uruchamiana jako daemon.
 
 - name: "F5 — wdróż konfigurację mariabackup SST"
   hosts: galera
@@ -153,7 +152,6 @@
   max_fail_percentage: 0
   vars:
     expected_cluster_size: 3
-    use_systemd: "{{ ansible_facts['service_mgr'] == 'systemd' }}"
 
   tasks:
     - name: "Pomiń faktyczny węzeł Primary"
@@ -172,32 +170,9 @@
       ansible.builtin.meta: end_host
       when: "'4' in (node_state.stdout | default(''))"
 
-    - name: "Zatrzymaj ewentualny proces MariaDB (tylko lab: brak systemd)"
-      ansible.builtin.shell: "pkill -x mariadbd 2>/dev/null; sleep 2; true"
-      changed_when: false
-      when: not use_systemd
-
-    - name: "Usuń aria log (tylko lab: brak systemd)"
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /var/lib/mysql/aria_log_control
-        - /var/lib/mysql/aria_log.00000001
-      changed_when: false
-      when: not use_systemd
-
     - name: "Wydrukuj adres klastra dla dołączającego węzła"
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }} dołącza do klastra jako node {{ galera_node_idx }}"
-
-    - name: "Uruchom MariaDB jako węzeł dołączający — lab (bez systemd)"
-      ansible.builtin.shell: |
-        mariadbd --user=mysql --datadir=/var/lib/mysql \
-          --socket=/var/lib/mysql/mysql.sock \
-          > /var/log/mariadb/mariadb.log 2>&1 &
-      changed_when: true
-      when: not use_systemd
 
     - name: "Katalog drop-in mariadb.service"
       ansible.builtin.file:
@@ -206,7 +181,6 @@
         owner: root
         group: root
         mode: "0755"
-      when: use_systemd
 
     - name: "SST bywa dłuższy niż domyślny TimeoutStartSec — drop-in zapobiega zabiciu mariadbd przez systemd"
       ansible.builtin.copy:
@@ -221,7 +195,6 @@
         owner: root
         group: root
         mode: "0644"
-      when: use_systemd
 
     # `no_block: true` jest tu WARUNKIEM dzialania bramki ponizej, nie optymalizacja.
     # Jednostka ma Type=notify, wiec dla systemd start konczy sie dopiero na
@@ -231,14 +204,13 @@
     # Dokumentacja modulu: "Do not synchronously wait for the requested operation
     # to finish. Enqueued job will continue without Ansible blocking on its
     # completion."
-    - name: "Uruchom MariaDB jako węzeł dołączający — produkcja (start bez blokowania; deadline pilnuje playbook)"
+    - name: "Uruchom MariaDB jako węzeł dołączający (start bez blokowania; deadline pilnuje playbook)"
       ansible.builtin.systemd:
         name: mariadb
         state: started
         enabled: true
         daemon_reload: true
         no_block: true
-      when: use_systemd
 
     # JEDYNY wlasciciel deadline'u dolaczania. `until` jest z zalozenia dla zadan,
     # ktore po drodze padaja ("tasks that are likely to fail"), wiec pierwsze proby

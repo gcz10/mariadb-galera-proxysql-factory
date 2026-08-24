@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 PMM_USER = os.environ.get("PMM_ADMIN_USER", "admin")
 PMM_PASSWORD = os.environ.get("PMM_ADMIN_PASSWORD")
 CONFIG_PATH = os.environ.get(
-    "CLUSTER_CONFIG", "clusters/lab-cluster/cluster.yml"
+    "CLUSTER_CONFIG", "clusters/example-cluster/cluster.yml"
 )
 with open(CONFIG_PATH, encoding="utf-8") as config_file:
     CLUSTER_CONFIG = yaml.safe_load(config_file)
