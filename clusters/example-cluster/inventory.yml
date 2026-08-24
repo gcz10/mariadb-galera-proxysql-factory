@@ -1,14 +1,34 @@
 ---
-# Example inventory — adresy IP żyją TYLKO tutaj, nie w cluster.yml ani rolach.
-# Skopiuj do clusters/<name>/inventory.yml i uzupełnij adresy.
+# Szablon inwentarza najemcy. Skopiuj do `clusters/<name>/inventory.yml`
+# i podstaw wlasne adresy.
+#
+# CZEGO WYMAGAJA TE MASZYNY: dostepu SSH, systemd, Rocky Linux 9 albo 10 oraz
+# konta z sudo. Nic ponadto. Skad pochodza — Proxmox, libvirt, blaszak, chmura,
+# maszyny dostarczone przez klienta — jest bez znaczenia; `make infra-provision`
+# (Terraform + Proxmox VE) to wygoda tego laboratorium, nie wymaganie fabryki.
+#
+# ADRESY ZYJA WYLACZNIE TUTAJ. Nie powtarzaj ich w `cluster.yml` ani w rolach.
+# Kazdy host ma DWA pola adresowe i to nie jest nadmiarowosc:
+#   `ansible_host`          — dokad laczy sie kontroler (moze byc bastion/DNS),
+#   `<rola>_node_address`   — co maszyna rozglasza wewnatrz klastra (wsrep,
+#                             hostgroupy ProxySQL, cele PMM). Przy oddzielnej
+#                             sieci zarzadzania i danych te wartosci sie roznia.
+#
+# Adresy ponizej sa z zakresow prywatnych i celowo nie naleza do zadnej sieci
+# tego laboratorium — szablon nie moze kolidowac z zywym klastrem.
 
 all:
   vars:
     ansible_user: "ansible"
     ansible_become: true
     ansible_python_interpreter: /usr/bin/python3
+    # Klucz i known_hosts sa wlasnoscia operatora, nie repozytorium. Wskaz swoje.
+    # ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
 
   children:
+    # WYMAGANA. Wezly bazy. Liczba musi zgadzac sie z `galera.nodes_expected`
+    # w cluster.yml; nieparzysta, bo kworum.
     galera:
       vars:
         galera_role: "galera"
@@ -16,13 +36,18 @@ all:
         gnode1:
           ansible_host: "10.0.0.11"
           galera_node_idx: 1
+          galera_node_address: "10.0.0.11"
         gnode2:
           ansible_host: "10.0.0.12"
           galera_node_idx: 2
+          galera_node_address: "10.0.0.12"
         gnode3:
           ansible_host: "10.0.0.13"
           galera_node_idx: 3
+          galera_node_address: "10.0.0.13"
 
+    # WYMAGANA. Para ProxySQL. Nalezy do warstwy wspolnej (`platform/<name>/`),
+    # a najemca deklaruje ja po to, zeby wiedziec, gdzie rejestrowac hostgroupy.
     proxysql:
       vars:
         proxysql_role: "proxysql"
@@ -30,11 +55,45 @@ all:
         pnode1:
           ansible_host: "10.0.1.21"
           proxysql_node_idx: 1
+          proxysql_node_address: "10.0.1.21"
         pnode2:
           ansible_host: "10.0.1.22"
           proxysql_node_idx: 2
+          proxysql_node_address: "10.0.1.22"
 
-    # Opcjonalna grupa dla F0 fio benchmark — TYLKO jawne testowe hosty.
+    # WYMAGANA, gdy `backup.enabled: true`. Host cwiczen odtworzeniowych —
+    # `cluster-restore-drill` kasuje na nim datadir, wiec MUSI byc poza klastrem.
+    restore:
+      vars:
+        restore_role: "restore"
+      hosts:
+        rnode1:
+          ansible_host: "10.0.1.31"
+          restore_node_address: "10.0.1.31"
+
+    # OPCJONALNA. Host aplikacyjny — jedyne miejsce, z ktorego sondy patrza na
+    # klaster oczami aplikacji: po sieci, przez VIP. Bez niego `lab-app-verify`
+    # i `lab-app-bench` nie maja skad mierzyc.
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        anode1:
+          ansible_host: "10.0.1.41"
+          app_node_address: "10.0.1.41"
+
+    # WYMAGANA, gdy warstwa wspolna sama hostuje PMM/MinIO. Przy zewnetrznym
+    # PMM albo zewnetrznym S3 zostaw grupe pusta i wskaz endpointy w cluster.yml.
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        inode1:
+          ansible_host: "10.0.1.51"
+          infra_node_address: "10.0.1.51"
+
+    # OPCJONALNA. F0 instaluje `fio` i mierzy dysk WYLACZNIE na hostach z tej
+    # grupy — nigdy na maszynie, ktorej cyklu zycia nie znamy.
     discovery_bench:
       hosts: {}
       vars:

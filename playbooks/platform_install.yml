@@ -197,17 +197,24 @@
         enabled: true
       when: ansible_facts['service_mgr'] == 'systemd'
 
-    - name: "Zainstaluj qemu-guest-agent (Proxmox widzi IP VM + graceful shutdown)"
+    # Jak w f2_install: agent gościa jest sensowny wylacznie pod KVM/QEMU.
+    - name: "Zainstaluj qemu-guest-agent (tylko gosc KVM/QEMU)"
       ansible.builtin.dnf:
         name: qemu-guest-agent
         state: present
+      when:
+        - ansible_facts['virtualization_role'] | default('') == 'guest'
+        - ansible_facts['virtualization_type'] | default('') in ['kvm', 'qemu', 'RHEV']
 
-    - name: "Wlacz qemu-guest-agent (gdy systemd; nieblokujace — wymaga kanalu virtio-serial)"
+    - name: "Wlacz qemu-guest-agent (nieblokujace — wymaga kanalu virtio-serial)"
       ansible.builtin.systemd:
         name: qemu-guest-agent
         state: started
         enabled: true
-      when: ansible_facts['service_mgr'] == 'systemd'
+      when:
+        - ansible_facts['service_mgr'] == 'systemd'
+        - ansible_facts['virtualization_role'] | default('') == 'guest'
+        - ansible_facts['virtualization_type'] | default('') in ['kvm', 'qemu', 'RHEV']
       failed_when: false
       changed_when: false
 

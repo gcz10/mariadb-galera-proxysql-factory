@@ -1,0 +1,76 @@
+---
+# Szablon WARSTWY WSPOLNEJ. Skopiuj do `platform/<name>/platform.yml`
+# i uruchamiaj celami `make platform-* PLATFORM=<name>`.
+#
+# CO TO JEST: para ProxySQL z VIP-em oraz hosty uslug wspierajacych (PMM, S3,
+# relay pocztowy). Jednostka NIEZALEZNA od klastrow — klastry sa jej NAJEMCAMI:
+# rejestruja wlasne hostgroupy przez `make cluster-proxysql`, ale nie instaluja
+# tu pakietow, nie ruszaja VIP-a i nie zarzadzaja materialem TLS frontendu.
+#
+# DLACZEGO OSOBNO: gdy wlascicielem tej warstwy jest jeden z klastrow, jego
+# skasowanie osieroca ProxySQL, VIP i monitoring pozostalych najemcow.
+#
+# Maszyny moga pochodzic skadkolwiek — wymagane jest SSH, systemd i Rocky Linux
+# 9 albo 10. `make infra-provision` (Terraform + Proxmox VE) to jeden ze
+# sposobow ich dostarczenia, nie wymaganie.
+
+platform:
+  name: "example"
+  # `production` jest tu swiadomie odrzucane przez `platform-infra` — patrz
+  # README, sekcja o zakresie.
+  environment: "laboratory"
+  rocky_linux_major: 10
+
+versions:
+  # `locked` bierze dokladnie wersje z lockfile'a; `candidate` dopuszcza
+  # nowsze przy odbudowie. Dla czegokolwiek powaznego: `locked`.
+  policy: "locked"
+  lock_file: "versions/versions-el10.lock.yml"
+
+proxysql:
+  nodes_expected: 2
+  # Tozsamosc TLS WSPOLNEGO endpointu. Jedna para serwuje cala flote jednym
+  # certem, wiec CA jest wspolne, nie klastrowe: podpisanie go CA najemcy
+  # zmusiloby klientow pozostalych do zaufania cudzemu CA, a usuniecie tego
+  # najemcy uniewaznialoby endpoint calej floty.
+  # Sciezki sa wzgledne wobec korzenia repozytorium i naleza do operatora.
+  frontend_tls:
+    ca_reference: "pki/example/ca.pem"
+    certificate_reference: "pki/example/server-cert.pem"
+    private_key_reference: "pki/example/server-key.pem"
+  endpoint:
+    type: "keepalived_vip"
+    # Adres MUSI byc wolny i spoza puli DHCP — przejmuje go Keepalived.
+    address: "10.0.1.20"
+    port: 6033
+
+# Polityka ingress hostow tej warstwy. Te same klucze co u najemcy, bo czyta je
+# wspolny `firewall.yml`; druga konwencja rozwidlilaby playbook.
+# `database_cluster_cidrs` to tutaj zbior sieci, z ktorych NAJEMCY lacza sie do
+# PMM i S3 — nie siec jednej bazy.
+network:
+  application_cidrs: ["10.0.1.0/24"]
+  database_cluster_cidrs: ["10.0.0.0/24"]
+  administration_cidrs: ["10.0.1.0/24"]
+  monitoring_cidrs: ["10.0.1.51/32"]
+
+monitoring:
+  pmm:
+    # Wskaz wlasny PMM. Gdy warstwa hostuje go sama, to adres hosta z grupy
+    # `infra`; przy zewnetrznym PMM — jego URL, a grupa `infra` moze byc pusta.
+    server_url: "https://10.0.1.51"
+    agent_id: "pmm-server"
+    # Namespace PMM tej warstwy. Trzymanie jej w przestrzeni nazw najemcy
+    # oznacza, ze deregistracja najemcy zabiera monitoring calej pary ProxySQL.
+    cluster_name: "example"
+    # `false` wylacznie dla certow self-signed w laboratorium.
+    validate_certs: true
+    # Zwieksz po KAZDEJ rotacji hasla monitora PMM — inaczej agenci zostaja
+    # przy starym poswiadczeniu.
+    credentials_revision: 1
+    backup_retention: 2
+  # Grupy inwentarza, ktore dostaja lokalnego agenta PMM. Pusta lista = flota
+  # bezagentowa (metryki wylacznie przez `perfschema`, bez QAN ze slow logu).
+  agent_groups: ["proxysql"]
+  alerts:
+    email: "ops@example.invalid"

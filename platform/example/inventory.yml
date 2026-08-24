@@ -1,0 +1,43 @@
+---
+# Inwentarz WARSTWY WSPOLNEJ. Skopiuj do `platform/<name>/inventory.yml`.
+#
+# Adresy zyja wylacznie tutaj. `platform.yml` opisuje konfiguracje, nie topologie.
+# Wyjatkiem jest VIP: nalezy do endpointu, wiec stoi w `platform.yml`, i NIE MOZE
+# byc adresem zadnej z tych maszyn.
+
+all:
+  vars:
+    ansible_user: "ansible"
+    ansible_become: true
+    ansible_python_interpreter: /usr/bin/python3
+    # Klucz nalezy do operatora, nie do repozytorium.
+    # ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+
+  children:
+    # WYMAGANA. Para ProxySQL. Dokladnie tyle hostow, ile mowi
+    # `proxysql.nodes_expected`. VIP przejmuje ten z wyzszym priorytetem VRRP,
+    # a `proxysql_node_idx: 1` wyznacza wezel pierwszy.
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        pnode1:
+          ansible_host: "10.0.1.21"
+          proxysql_node_idx: 1
+          proxysql_node_address: "10.0.1.21"
+        pnode2:
+          ansible_host: "10.0.1.22"
+          proxysql_node_idx: 2
+          proxysql_node_address: "10.0.1.22"
+
+    # OPCJONALNA. Hosty uslug wspierajacych flote: PMM, magazyn S3, relay
+    # pocztowy alertow. Zostaw pusta, gdy uzywasz uslug zewnetrznych — wtedy
+    # wskaz je adresami w `platform.yml` i w `cluster.yml` najemcow.
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        inode1:
+          ansible_host: "10.0.1.51"
+          infra_node_address: "10.0.1.51"
