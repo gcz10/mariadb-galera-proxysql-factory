@@ -15,7 +15,7 @@
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-pmm-preflight-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
-        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision \
+        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify \
         platform-validate platform-trust-hosts platform-deploy platform-firewall platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
 
@@ -509,6 +509,12 @@ verify-address-collision:  ## Statyczny guard: adresy wezlow nie kolidują z hyp
 
 verify-no-secrets-leak:  ## Statyczny guard: brak sekretów w repo i argv procesów
 	bash tests/validation/probe-no-secrets-leak.sh
+
+# CI ma ten krok od dawna, lokalnie go nie bylo - martwy import w tescie
+# przechodzil przez pelny `unittest discover` i padal dopiero po pushu.
+# Wersja przypieta identycznie jak w .github/workflows/ci.yml.
+verify-dead-code:  ## Statyczny guard: martwe importy, nieuzywane zmienne, puste f-stringi (pyflakes)
+	python3 -m pyflakes tests roles/galera_backup/filter_plugins roles/galera_backup/files/galera_backup
 
 verify-no-state-latest:  ## Statyczny guard: brak state: latest w rolach i playbookach (ISC-63)
 	bash tests/validation/probe-no-state-latest.sh

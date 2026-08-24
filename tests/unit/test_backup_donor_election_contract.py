@@ -32,12 +32,9 @@ KONTRAKT
    wezla.
 """
 
-import json
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
-
-from importlib.machinery import SourceFileLoader
 
 REPO = Path(__file__).resolve().parents[2]
 PIPELINE_PATH = REPO / "roles" / "galera_backup" / "files" / "galera_backup" / "pipeline.py"
