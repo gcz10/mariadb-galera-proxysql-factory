@@ -307,20 +307,22 @@ warunek. Wariant B: brak zdania o produkcji bez kwalifikatora w README i ISA.
 
 Pozycje tanie, bez ryzyka, do zrobienia razem:
 
-| Pozycja | Dowód |
-|---|---|
-| `cluster_guard` na celach weryfikacyjnych | `Makefile:252,255,291,301,310,477,525,539,572` |
-| Strażniki sekretów na początku bramki, nie po 12 sondach | `Makefile:572-587` |
-| `probe-zero-hardcode.py` skanuje też `Makefile` | `probe-zero-hardcode.py:19` |
-| Usunięcie zgniłych komentarzy (`n16g2/n16g3`, `proxysql-3.0.9`) | `Makefile:371`, `versions/versions.lock.yml:42` |
-| 6 śledzonych `.DS_Store` | `git ls-files` |
-| Rola bez `tasks/` to cichy no-op, nie błąd | `roles: mariadb_install` -> `rc=0`, zero zadań |
-| `galera-rebuild` w `.PHONY` | `Makefile:8-20,52` |
-| `BUILD_SKIP`: sprzężenie seed→backup egzekwowane, nie komentowane | `Makefile:134-141,239` |
-| Trzeci stan w tablicy ISC (`PASS-z-zastrzeżeniem`) | `ISA.md:103` vs `:397` |
-| Aktualizacja ISA: Out of Scope kontra `infra-provision` | `ISA.md:30` vs `Makefile:19` |
-| Piny wersji w krokach `pip install` w CI | `.github/workflows/ci.yml:31,202` |
-| Decyzja o `LICENSE` i o publiczności mapy sieci | brak pliku; `docs/infrastructure-state.md` |
+Statusy zweryfikowane na kodzie 2026-08-24.
+
+| Pozycja | Status | Dowód |
+|---|---|---|
+| `cluster_guard` na celach weryfikacyjnych | otwarte | 29 celów dotyka `CLUSTER` bez guardu, w tym destrukcyjne `lab-failover-hard-test`, `lab-split-brain-test` |
+| Strażniki sekretów na początku bramki, nie po 12 sondach | otwarte | `PMM_ADMIN_PASSWORD` sprawdzany w 13. linii recepty `lab-post-build-gate`; `APP_DB_PASSWORD` bez guardu |
+| `probe-zero-hardcode.py` skanuje też `Makefile` | otwarte | `SCAN_DIRS = ["playbooks", "roles"]` |
+| Usunięcie zgniłych komentarzy (`n16g2/n16g3`, `proxysql-3.0.9`) | otwarte | `Makefile:378`, `versions/versions.lock.yml:42` |
+| 6 śledzonych `.DS_Store` | **zrobione** (`277a587`) | `.gitignore:53` już je ignorował; zostały w indeksie z przeszłości |
+| Rola bez `tasks/` to cichy no-op, nie błąd | otwarte | `roles: mariadb_install` -> `rc=0`, zero zadań |
+| `galera-rebuild` w `.PHONY` | otwarte | jest tylko komentarz `Makefile:5` i definicja `:52` |
+| `BUILD_SKIP`: sprzężenie seed→backup egzekwowane, nie komentowane | otwarte | sprzężenie nadal wyłącznie w komentarzu `Makefile:135-141` |
+| Trzeci stan w tablicy ISC (`PASS-z-zastrzeżeniem`) | otwarte | `grep` po `ISA.md` nie znajduje takiego stanu |
+| Aktualizacja ISA: Out of Scope kontra `infra-provision` | otwarte | `ISA.md:30` nadal wyklucza „tworzenie VM" |
+| Piny wersji w krokach `pip install` w CI | otwarte | trzy niepinowane instalacje: `ci.yml:31,170,214` |
+| Decyzja o `LICENSE` i o publiczności mapy sieci | otwarte | brak pliku `LICENSE`; `docs/infrastructure-state.md` |
 
 ---
 
