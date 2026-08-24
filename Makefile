@@ -5,7 +5,7 @@
 # galera-rebuild) nie moze startowac domyslnie.
 .DEFAULT_GOAL := help
 
-.PHONY: cluster-build cluster-recover help lab-up lab-start-services cluster-discover cluster-validate cluster-deploy \
+.PHONY: galera-rebuild cluster-build cluster-recover help lab-up lab-start-services cluster-discover cluster-validate cluster-deploy \
         cluster-bootstrap cluster-health cluster-join cluster-proxysql \
         cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan \
@@ -15,7 +15,7 @@
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-pmm-preflight-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
-        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision \
+        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify \
         platform-validate platform-trust-hosts platform-deploy platform-firewall platform-infra platform-proxysql platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
 
@@ -32,17 +32,28 @@ PLATFORM ?= shared
 PLATFORM_DIR = platform/$(PLATFORM)
 PLATFORM_OPTS = -i $(PLATFORM_DIR)/inventory.yml -e @$(PLATFORM_DIR)/platform.yml $(ANSIBLE_OPTS)
 
-# Cel mutujący wymaga jawnego CLUSTER= (command line/env), nie domyślnego example-cluster.
-cluster_guard = @case "$(origin CLUSTER)" in file|default|undefined) echo "ERROR: ten cel jest mutujący — podaj CLUSTER=... (domyślny example-cluster niedozwolony)" >&2; exit 1;; esac
+# Cel zwiazany z konkretnym klastrem wymaga jawnego CLUSTER= (command line/env),
+# nie domyslnego example-cluster. Dotyczy tak samo celow mutujacych, jak sond:
+# sonda uruchomiona na example-cluster mierzy fikcyjne 10.0.0.0/24 i mowi o tym
+# dopiero po timeoucie SSH, a `lab-failover-hard-test` bez CLUSTER= to zaproszenie
+# do wykonania operacji niszczacej na cudzym klastrze.
+cluster_guard = @case "$(origin CLUSTER)" in file|default|undefined) echo "ERROR: ten cel dziala na konkretnym klastrze — podaj CLUSTER=... (domyślny example-cluster niedozwolony)" >&2; exit 1;; esac
 
 # TF_DIR domyślnie wyprowadzany z nazwy klastra; nadpisywalny dla nietypowych układów.
 TF_DIR ?= terraform/$(CLUSTER)
 
-# Wezly przebudowywane przy iteracji na samej Galerze. infranode (PMM/MinIO/Maildev,
-# stan monitoringu) i pnode* (ProxySQL) zostaja NIETKNIETE — stawianie ich od nowa
-# przy kazdej zmianie w Galerze to 11+ min zmarnowane (Docker CE + pull PMM +
-# zimny start PMM + reinstalacja ProxySQL).
-GALERA_VMS ?= gnode1 gnode2 gnode3 rnode1
+# Wezly przebudowywane przy iteracji na samej Galerze. Hosty warstwy wspolnej
+# (PMM/MinIO/Maildev, ProxySQL) zostaja NIETKNIETE — stawianie ich od nowa przy
+# kazdej zmianie w Galerze to 11+ min zmarnowane (Docker CE + pull PMM + zimny
+# start PMM + reinstalacja ProxySQL).
+#
+# Lista WYNIKA z inwentarza wskazanego klastra (grupy galera + restore), bo
+# statyczny default `gnode1 gnode2 gnode3 rnode1` byl nazwami VM martwego labu:
+# na kazdym innym klastrze cel destrukcyjny celowal w nieistniejace maszyny.
+# Nazwy hostow w inwentarzu sa tozsame z kluczami zasobow w terraform/<cluster>.
+# Rekurencyjne `=` (nie `:=`): liczy sie dopiero przy uzyciu, wiec `make help`
+# nie czyta zadnego inwentarza.
+GALERA_VMS = $(shell python3 -c "import yaml,sys; c=yaml.safe_load(open('clusters/$(CLUSTER)/inventory.yml'))['all']['children']; print(' '.join(h for g in ('galera','restore') for h in (c.get(g) or {}).get('hosts', {})))" 2>/dev/null)
 # Provider bpg/proxmox uwierzytelnia sie ALBO tokenem API (PROXMOX_VE_API_TOKEN),
 # ALBO haslem (PROXMOX_VE_PASSWORD). Bramka zadajaca wylacznie hasla odbijala
 # operatora uzywajacego tokena — wystarczy dowolne z dwoch.
@@ -53,6 +64,9 @@ galera-rebuild:  ## Przebuduj TYLKO wezly Galera+restore (zachowuje PMM i ProxyS
 	$(cluster_guard)
 	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
 	$(pve_auth_guard)
+	@# Pusta lista to nieczytelny inwentarz albo klaster bez grup galera/restore.
+	@# Bez tej bramki `pve-teardown.sh` dostaje zero argumentow i cel „udaje sukces".
+	@test -n "$(GALERA_VMS)" || { echo "ERROR: nie wyznaczono wezlow z clusters/$(CLUSTER)/inventory.yml (grupy galera/restore)" >&2; exit 1; }
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje $(GALERA_VMS) w $(CLUSTER))"; exit 1)
 	@cd $(TF_DIR) && terraform init -input=false >/dev/null
 	terraform/pve-teardown.sh $(TF_DIR) $(GALERA_VMS)
@@ -74,6 +88,7 @@ cluster-deregister:  ## Usuń obiekty PMM/Grafana/ProxySQL i konto MinIO klastra
 	ansible-playbook playbooks/cluster_deregister.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 cluster-deregister-verify:  ## Zweryfikuj brak sierot w PMM, Grafanie, ProxySQL i kontach MinIO
+	$(cluster_guard)
 	$(TARGET_ENV) python3 tests/lab/probe-orphans.py
 infra-provision:  ## Utwórz VM klastra (parallelism=1 — równoległość wywala locki ZFS na PVE)
 	$(cluster_guard)
@@ -119,6 +134,7 @@ lab-up:  ## Zbuduj i uruchom laboratorium, usuwając osierocone usługi
 	docker compose -f tests/lab/docker-compose.yml up -d --build --remove-orphans
 
 lab-start-services:  ## Lab-only: (re)start ProxySQL po restarcie kontenera (brak systemd, idempotentny)
+	$(cluster_guard)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
 	ansible proxysql -i clusters/$(CLUSTER)/inventory.yml -m shell -a "pgrep -x proxysql >/dev/null || proxysql --idle-threads -c /etc/proxysql.cnf" $(ANSIBLE_OPTS)
 	ansible proxysql -i clusters/$(CLUSTER)/inventory.yml -m wait_for -a "host=127.0.0.1 port=6032 timeout=20" $(ANSIBLE_OPTS)
@@ -132,13 +148,15 @@ lab-start-services:  ## Lab-only: (re)start ProxySQL po restarcie kontenera (bra
 #
 # Kroki warunkowe (seed/backup/alerts/app-host) da sie pominac bez edycji
 # Makefile: BUILD_SKIP="alerts app-host" make cluster-build CLUSTER=... CONFIRM=yes
-# Zaleznosc seed->backup: na PUSTYM klastrze laboratoryjnym pominiencie seed
-# wymaga pominiencia TEZ backupu — restore drill wymaga danych z seeda, nie ma
-# wtedy czego archiwizowac ani przywracac. Seed pomijaj niezaleznie TYLKO wtedy,
-# gdy user data juz istnieje (np. odtwarzasz klaster z istniejacymi bazami).
+# Zaleznosc seed->backup jest EGZEKWOWANA w recepcie cluster-build, nie doradzana:
+# na pustym klastrze pominiecie seed bez pominiecia backupu daje restore drill,
+# ktory nie ma czego przywrocic, wiec bramka konczy sie zielono na pustych danych.
+# Legalne warianty: BUILD_SKIP="seed backup", albo BUILD_SKIP=seed z jawnym
+# EXISTING_DATA=yes (klaster ma juz dane uzytkownika, np. odtwarzasz istniejace bazy).
 # Backup materializuje dowody bramki po budowie: configure -> backup -> restore
 # drill (CONFIRM=yes) -> odswiezenie metryk swiezosci; kazdy krok fail-fast.
 BUILD_SKIP ?=
+EXISTING_DATA ?=
 
 # ---------------------------------------------------------------------------
 # WARSTWA WSPOLNA — cele niezalezne od jakiegokolwiek klastra Galera.
@@ -235,6 +253,20 @@ platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→
 
 cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap→join→proxysql→monitoring→harden→warunkowe→bramka (CLUSTER+CONFIRM=yes)
 	$(cluster_guard)
+	@# Sprzezenie seed->backup bylo dotad WYLACZNIE komentarzem, wiec nie istnialo.
+	@# Pominiecie seed bez pominiecia backupu daje restore drill bez czego przywracac:
+	@# bramka konczy sie zielono na pustych danych. Jedyne legalne wyjscie to jawna
+	@# deklaracja, ze klaster ma juz dane uzytkownika.
+	@case " $(BUILD_SKIP) " in \
+		*" seed "*) \
+			case " $(BUILD_SKIP) " in \
+				*" backup "*) ;; \
+				*) test "$(EXISTING_DATA)" = "yes" || { \
+					echo "ERROR: BUILD_SKIP pomija seed, ale nie backup — restore drill nie mialby czego przywrocic." >&2; \
+					echo "       Pomin tez backup (BUILD_SKIP=\"seed backup\") albo zadeklaruj EXISTING_DATA=yes." >&2; \
+					exit 1; } ;; \
+			esac ;; \
+	esac
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (bootstrap tworzy nowy Primary Component)"; exit 1)
 	$(MAKE) cluster-validate
 	$(MAKE) cluster-deploy
@@ -257,9 +289,11 @@ cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap
 	$(MAKE) lab-post-build-gate
 
 cluster-discover:  ## F0 Discovery — zbierz fakty z hostów (read-only)
+	$(cluster_guard)
 	ansible-playbook playbooks/f0_discovery.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 cluster-validate:  ## Waliduj konfigurację klastra (schema + invariants inventory + preflight)
+	$(cluster_guard)
 	python3 tests/validation/validate-cluster-schema.py clusters/$(CLUSTER)/cluster.yml clusters/schema/cluster.schema.json
 	python3 tests/validation/validate-inventory.py clusters/$(CLUSTER)/inventory.yml clusters/$(CLUSTER)/cluster.yml
 	ansible-playbook playbooks/f2_preflight.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
@@ -275,6 +309,7 @@ cluster-firewall:  ## Wymuś minimalną politykę firewalld według roli hosta
 	$(cluster_guard)
 	ansible-playbook playbooks/firewall.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e firewall_target_hosts=galera:restore $(ANSIBLE_OPTS)
 cluster-firewall-verify:  ## Zweryfikuj dokładną politykę firewalld i Docker ingress
+	$(cluster_guard)
 	CLUSTER_CONFIG=clusters/$(CLUSTER)/cluster.yml CLUSTER_INVENTORY=clusters/$(CLUSTER)/inventory.yml \
 		python3 tests/lab/probe-firewall.py
 
@@ -287,6 +322,7 @@ cluster-bootstrap:  ## F4 — initial bootstrap (JEDEN węzeł, wymaga CONFIRM=y
 	ansible-playbook playbooks/bootstrap.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e confirm=yes $(ANSIBLE_OPTS)
 
 cluster-health:  ## Weryfikuj cluster status (wsrep)
+	$(cluster_guard)
 	@echo "Galera status per node:"
 	@ansible galera -i clusters/$(CLUSTER)/inventory.yml -m shell -a "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e \"SHOW STATUS WHERE Variable_name IN ('wsrep_cluster_status','wsrep_cluster_size','wsrep_connected','wsrep_ready','wsrep_local_state')\"" $(ANSIBLE_OPTS)
 
@@ -296,6 +332,7 @@ cluster-join:  ## F5 — dołącz węzły Galera do Primary Component (SST maria
 	ansible-playbook playbooks/f5_join.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-galera-verify:  ## Zweryfikuj zdrowie klastra Galera (ISC-7/8/9/10/14/16)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-galera-cluster.py
 
 cluster-proxysql:  ## F7 — skonfiguruj ProxySQL (mysql_galera_hostgroups)
@@ -306,6 +343,7 @@ cluster-proxysql:  ## F7 — skonfiguruj ProxySQL (mysql_galera_hostgroups)
 	ansible-playbook playbooks/f7_proxysql.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-proxysql-verify:  ## Zweryfikuj routing ProxySQL (ISC-18/19/20/21/22/23)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-proxysql.py
 
 # `cluster-endpoint` USUNIETY 2026-08-21. VIP .139 (dawniej .133) nalezy do warstwy wspolnej,
@@ -315,9 +353,11 @@ lab-proxysql-verify:  ## Zweryfikuj routing ProxySQL (ISC-18/19/20/21/22/23)
 # definicje klastra asercja fail-closed.
 
 lab-endpoint-verify:  ## Zweryfikuj endpoint VIP ProxySQL (ISC-24/26)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-endpoint.py
 
 lab-failover-test:  ## F9 — test failover writera (ISC-27/28, lab-only, destrukcyjny)
+	$(cluster_guard)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) tests/lab/chaos-failover.py
 
@@ -334,6 +374,7 @@ lab-failover-test:  ## F9 — test failover writera (ISC-27/28, lab-only, destru
 # dal 15.8 s — inna konfiguracja klienta daje inny wynik, nie porownuj wprost.
 # Wymaga realnych VM — kontenerowy lab nie ma zapisywalnego /proc/sysrq-trigger.
 lab-failover-hard-test:  ## F9 — failover przy TWARDEJ utracie maszyny (sysrq, lab-only, destrukcyjny)
+	$(cluster_guard)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) FAILOVER_MODE=hard tests/lab/chaos-failover.py
 
@@ -358,12 +399,14 @@ cluster-app-host:  ## Przygotuj host aplikacyjny (klient + CA klastra) dla grupy
 # przepuscily dwa realne defekty widoczne tylko stad (weryfikacja certu przez VIP,
 # blad protokolu zamiast bledu bazy przy utracie kworum).
 lab-app-verify:  ## Zweryfikuj kontrakt aplikacyjny z hosta `app` (TLS, read-your-writes, transakcje, jeden writer)
+	$(cluster_guard)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" tests/lab/probe-app-conformance.py
 
 # Pomiar Z HOSTA APLIKACYJNEGO, nie z wezla klastra: wczesniejsze benchmarki
 # szly z hosta `restore`, ktory dzieli CPU i siec z warstwa bazodanowa.
 lab-app-bench:  ## Zmierz przepustowosc z hosta `app` (direct vs VIP, TLS vs plaintext)
+	$(cluster_guard)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" tests/lab/bench-app.py
 
@@ -375,7 +418,7 @@ lab-app-degradation-test:  ## P2 quorum loss (TYLKO newclaude17-r9, destrukcyjny
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	@: "$${QUORUM_RUN_ID:?Ustaw unikalny QUORUM_RUN_ID (32 hex)}"
 	@test "$(CLUSTER)" = "newclaude17-r9" || (echo "P2 jest przypiety do CLUSTER=newclaude17-r9"; exit 1)
-	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (SIGKILL na n16g2/n16g3)"; exit 1)
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (SIGKILL na wezlach $(CLUSTER))"; exit 1)
 	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" \
 	  QUORUM_RUN_ID="$${QUORUM_RUN_ID}" \
 	  CONFIRM="$${CONFIRM}" \
@@ -388,6 +431,7 @@ lab-app-degradation-test:  ## P2 quorum loss (TYLKO newclaude17-r9, destrukcyjny
 # moze zabrac WYLACZNIE vrrp_script chk_proxysql. Tryb `node` gasi cala maszyne
 # przez API Proxmoksa i sprawdza klasyczny VRRP.
 lab-proxysql-failover-test:  ## Awaria wezla ProxySQL — przelaczenie VIP, ciaglosc, brak utraty (lab-only)
+	$(cluster_guard)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" \
 	  PROXYSQL_FAILOVER_MODE="$${PROXYSQL_FAILOVER_MODE:-service}" \
@@ -396,6 +440,7 @@ lab-proxysql-failover-test:  ## Awaria wezla ProxySQL — przelaczenie VIP, ciag
 	  tests/lab/chaos-proxysql-failover.py
 
 lab-split-brain-test:  ## F9 — test split-brain / partycji sieci (ISC-30, lab-only, destrukcyjny)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/chaos-split-brain.py
 
 verify-no-mass-restart:  ## F9 — statyczny guard: brak masowego restartu Galery (ISC-31)
@@ -411,6 +456,12 @@ verify-no-conditional-env:  ## Statyczny guard: play-level environment bez warun
 
 verify-proxysql-tenancy:  ## Statyczny guard: klastry na wspólnym ProxySQL mają rozłączne hostgroupy i app_user
 	python3 tests/validation/probe-proxysql-tenancy.py
+
+# Katalog w roles/ bez tasks/main.yml jest dla Ansible poprawna, PUSTA rola:
+# `roles: mariadb_install` konczy sie rc=0 i zerem zadan. Ta sonda nie pozwala
+# zamienic literowki w nazwie roli w cicha zgode.
+verify-role-contract:  ## Statyczny guard: katalog w roles/ to rola albo assety, nigdy cicha atrapa
+	python3 tests/validation/probe-role-contract.py
 
 # Adres hypervisora bierze sie z PROXMOX_VE_ENDPOINT, wiec ta czesc dziala tylko
 # lokalnie; kolizje miedzy klastrami i z VIP-em sa sprawdzane zawsze, takze w CI.
@@ -446,12 +497,15 @@ cluster-restore-drill:  ## F10 — restore drill na czysty host + integralność
 	ansible-playbook playbooks/f10_restore.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e restore_confirm=yes $(ANSIBLE_OPTS)
 
 lab-backup-verify:  ## F10 — zweryfikuj backup w S3 (ISC-32/33/34/35)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-backup.py
 
 lab-restore-verify:  ## F10 — zweryfikuj stan restore drill (ISC-36/37)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-restore.py
 
 lab-backup-impact:  ## F10 — backup pod obciążeniem nie degraduje writera (ISC-39, lab-only)
+	$(cluster_guard)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) tests/lab/backup-impact.py
 
@@ -460,6 +514,7 @@ cluster-harden:  ## F6 — hardening MariaDB: usuń anon/test, root localhost-on
 	ansible-playbook playbooks/f6_hardening.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-hardening-verify:  ## Zweryfikuj hardening MariaDB (ISC-40/41/42)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-hardening.py
 
 # Najemca rejestruje WYLACZNIE wlasne wezly. Eksportery ProxySQL (fcp1/fcp2)
@@ -482,6 +537,7 @@ cluster-monitoring-refresh:  ## F11 — odśwież metryki świeżości (po backu
 	ansible-playbook playbooks/f11_freshness.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-monitoring-verify:  ## Zweryfikuj natywne PMM Inventory i metryki laboratorium
+	$(cluster_guard)
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
 
@@ -495,6 +551,7 @@ cluster-rolling-restart:  ## F12 — rolling restart Galera serial:1 + brama zdr
 	ansible-playbook playbooks/f12_rolling_restart.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-rolling-restart-verify:  ## F12 — zweryfikuj rolling restart (ISC-50/51)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-rolling-restart.py
 
 
@@ -533,9 +590,11 @@ cluster-recover:  ## Cold recovery Galera: serialny stop + bezpieczny bootstrap 
 	$(MAKE) cluster-health
 
 cluster-upgrade-plan:  ## F12 — wygeneruj read-only plan major upgrade (ISC-53/54/56)
+	$(cluster_guard)
 	ansible-playbook playbooks/f12_upgrade_plan.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-upgrade-plan-verify:  ## F12 — zweryfikuj plan major upgrade (ISC-53/54/56)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-upgrade-plan.py
 
 cluster-patch:  ## F12 — rolling patch z canary + brama zdrowia (ISC-52/55/57)
@@ -544,16 +603,20 @@ cluster-patch:  ## F12 — rolling patch z canary + brama zdrowia (ISC-52/55/57)
 	ansible-playbook playbooks/f12_patch.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-patch-verify:  ## F12 — zweryfikuj wzorzec canary patch (ISC-52/55/57)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-patch.py
 
 cluster-drift:  ## F13 — read-only raport dryfu konfiguracji (ISC-21)
+	$(cluster_guard)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
 	ansible-playbook playbooks/f13_drift.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-drift-verify:  ## F13 — zweryfikuj drift detection (ISC-21)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-drift.py
 
 cluster-remove-node-plan:  ## F13 — read-only plan usunięcia węzła Galera (wymaga node=gnodeX)
+	$(cluster_guard)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
 	@test -n "$(NODE)" || (echo "Ustaw NODE=gnodeX (np. make cluster-remove-node-plan NODE=gnode2)"; exit 1)
 	ansible-playbook playbooks/f13_remove_node_plan.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e node=$(NODE) $(ANSIBLE_OPTS)
@@ -572,6 +635,7 @@ cluster-alerts:  ## F15 — provision alert rules ISC-47 (quorum/writer/node los
 	ansible-playbook playbooks/f15_alerts.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-gcache-verify:  ## F0/ISC-68 — zmierz write rate + weryfikuj gcache.size (IST window)
+	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-gcache.py
 
 # Jedno polecenie po zbudowaniu klastra: wszystkie sondy STANU USTALONEGO.
@@ -580,6 +644,12 @@ lab-gcache-verify:  ## F0/ISC-68 — zmierz write rate + weryfikuj gcache.size (
 # kod konczy bramke — nie ma sensu mierzyc dalej na klastrze, ktory nie
 # przeszedl kontraktu.
 lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fail-closed
+	$(cluster_guard)
+	@# Straznicy sekretow PRZED sondami: brak zmiennej wychodzil dopiero w 13. sondzie,
+	@# po kilkunastu minutach pracy calej bramki. Kazdy sekret uzywany nizej jest
+	@# sprawdzany tutaj, nawet jesli jego sonda stoi na koncu listy.
+	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) tests/lab/probe-galera-cluster.py
 	$(TARGET_ENV) tests/lab/probe-proxysql.py
 	$(TARGET_ENV) tests/lab/probe-endpoint.py
@@ -592,6 +662,5 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 	$(TARGET_ENV) tests/lab/probe-patch.py
 	$(TARGET_ENV) tests/lab/probe-drift.py
 	$(TARGET_ENV) tests/lab/probe-gcache.py
-	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
 	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone"

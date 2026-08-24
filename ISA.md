@@ -5,9 +5,11 @@ effort: comprehensive
 effort_source: explicit
 phase: build
 progress: 68/68
-# 67 kryteriow zweryfikowanych na biezacym drzewie (ISC-2 zamkniety swiezym
-# converge 2026-08-14: changed=0 na 6/6). ISC-1 opiera sie na dowodzie
-# historycznym z odbudowy od zera 2026-08-02 — powtorzenie wymaga teardownu.
+# 64 kryteria w pelni spelnione na biezacym dowodzie, 4 z zastrzezeniem (`[~]`):
+# ISC-1 (dowod historyczny z odbudowy 2026-08-02, powtorzenie wymaga teardownu),
+# ISC-22 (izolacja admin/app CIDR dowiedziona tylko w produkcji), ISC-44
+# (nieważny cert nieprzetestowany), ISC-66 (fio nigdy nie uruchomione w F0).
+# Zastrzezenia sa rozpisane w Verification przy kazdym ISC.
 mode: iterate
 started: "2026-07-22T15:27:04Z"
 updated: "2026-08-14T23:10:00Z"
@@ -453,4 +455,4 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 - ~~BLK-5~~ ROZSTRZYGNIĘTY 2026-07-24 — alert delivery = Email (SMTP). Lab: maildev SMTP catcher (172.28.0.70:1025) + GF_SMTP_* na pmm-server; contact point "ISA Email Alerts" + notification policy (managed_by=ansible → email). Dowód: node-loss alert → 1 email dostarczony do maildev.
 
 ## Następny pojedynczy feature
-Wszystkie kryteria fabryki (ISC) PASS — projekt kompletny, wliczając ISC-44 (TLS full: zaimplementowane + zweryfikowane na lab2 — server TLS, replikacja Galera/SST/ProxySQL→backend przez TLS, niezaufany cert odrzucony). Fabryka: dwa niezależne klastry (lab1 tls=disabled, lab2 tls=full — dowód że TLS jest opcjonalny per-klaster), monitoring, backup/restore, alerty (email), rolling ops, drift detection, runbooki, gcache z pomiaru. Do walidacji na stagingowej VM Rocky 9: ścieżka systemd MariaDB (kontenerowy lab bez systemd/PID1).
+Wszystkie kryteria fabryki (ISC) PASS: 64 w pełni, 4 z zastrzeżeniem (`[~]` — ISC-1, ISC-22, ISC-44, ISC-66; powód przy każdym w Verification). Wliczając ISC-44 (TLS full: zaimplementowane + zweryfikowane na lab2 — server TLS, replikacja Galera/SST/ProxySQL→backend przez TLS, niezaufany cert odrzucony; nieważny/wygasły cert pozostaje nieprzetestowany). Fabryka: dwa niezależne klastry (lab1 tls=disabled, lab2 tls=full — dowód że TLS jest opcjonalny per-klaster), monitoring, backup/restore, alerty (email), rolling ops, drift detection, runbooki, gcache z pomiaru. Do walidacji na stagingowej VM Rocky 9: ścieżka systemd MariaDB (kontenerowy lab bez systemd/PID1).
