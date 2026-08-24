@@ -21,7 +21,7 @@
   vars_files:
     - vars/proxysql_hostgroups.yml
   vars:
-    proxysql_monitor_user: "proxysql_monitor"
+    proxysql_monitor_user: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_USER') | default('proxysql_monitor', true) }}"
     proxysql_monitor_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_PASSWORD') }}"
     app_user: "{{ galera_app_user }}"
     app_password: "{{ lookup('ansible.builtin.env', 'APP_DB_PASSWORD') }}"

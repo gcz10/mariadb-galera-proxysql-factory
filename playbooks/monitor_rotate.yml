@@ -1,0 +1,136 @@
+---
+# Rotacja globalnego poswiadczenia monitora ProxySQL — strona NAJEMCY.
+# Satisfies: P1-5 (atomowa procedura expand -> switch -> contract)
+#
+# PROBLEM. `mysql-monitor_username`/`mysql-monitor_password` sa GLOBALNE dla
+# instancji ProxySQL, a konto backendu zaklada kazdy najemca osobno. Zmiana
+# jednej strony bez drugiej daje okno, w ktorym monitor nie moze sie zalogowac
+# i ProxySQL shunuje ZDROWE backendy — calej floty, nie jednego klastra.
+#
+# DLACZEGO DWIE TOZSAMOSCI, A NIE NOWE HASLO DO TEJ SAMEJ. Zmiana hasla istnie-
+# jacego uzytkownika jest natychmiastowa na backendzie, a ProxySQL nadal trzyma
+# stare — czyli dokladnie to okno, ktore mamy zlikwidowac. Dlatego rotacja
+# przerzuca sie miedzy dwiema nazwami: przez chwile OBIE dzialaja, przelaczenie
+# jest pojedyncza zmiana w ProxySQL, a stara znika dopiero po weryfikacji.
+#
+# Wymagania konta wg dokumentacji ProxySQL (backend-monitoring): USAGE do
+# connect/ping/read_only, REPLICATION CLIENT do monitorowania opoznienia.
+# Repo nadaje PROCESS + REPLICATION CLIENT (nadzbior) — bez zmian.
+
+- name: "Rotacja monitora — faza na backendach najemcy"
+  hosts: galera[0]
+  become: true
+  gather_facts: false
+  vars:
+    monitor_user_a: "proxysql_monitor"
+    monitor_user_b: "proxysql_monitor_b"
+    monitor_next_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_PASSWORD_NEXT') }}"
+    proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+  pre_tasks:
+    - name: "Wymagaj jawnej fazy rotacji"
+      ansible.builtin.assert:
+        that:
+          - rotation_phase in ['expand', 'contract']
+        fail_msg: "Ustaw rotation_phase=expand albo rotation_phase=contract"
+
+    - name: "Wymagaj nowego hasla monitora"
+      ansible.builtin.assert:
+        that:
+          - monitor_next_password | length > 0
+        fail_msg: "Ustaw PROXYSQL_MONITOR_PASSWORD_NEXT poza repozytorium."
+
+    # Zrodlem prawdy o AKTUALNEJ tozsamosci jest sam ProxySQL, nie plik stanu
+    # w repo: dzieki temu przerwana rotacja da sie wznowic bez zgadywania.
+    - name: "Odczytaj aktualna tozsamosc monitora z ProxySQL"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --defaults-extra-file=/etc/proxysql/admin-check.cnf
+          - -h127.0.0.1
+          - -P6032
+          - -uadmin
+          - -N
+          - -B
+          - -e
+          - "SELECT variable_value FROM global_variables WHERE variable_name='mysql-monitor_username'"
+      register: monitor_current_raw
+      changed_when: false
+      delegate_to: "{{ groups['proxysql'][0] }}"
+
+    - name: "Wyznacz tozsamosc aktywna i bezczynna"
+      # NAZEWNICTWO JEST TU BEZPIECZNIKIEM. Kuszace `current`/`target` znaczyloby
+      # co innego w kazdej fazie: po switchu "target" to juz konto AKTYWNE, wiec
+      # `contract` skasowalby to, z ktorego ProxySQL wlasnie korzysta, i shunnal
+      # cala flote. Dlatego jedyny podzial to: AKTYWNA (ProxySQL jej uzywa,
+      # nietykalna) i BEZCZYNNA (ta druga). `expand` tworzy bezczynna,
+      # `contract` kasuje bezczynna — ta sama regula w obu fazach.
+      ansible.builtin.set_fact:
+        monitor_active_user: "{{ monitor_current_raw.stdout | trim }}"
+        monitor_idle_user: >-
+          {{ monitor_user_b if (monitor_current_raw.stdout | trim) == monitor_user_a else monitor_user_a }}
+
+    - name: "Odrzuc nieznana tozsamosc monitora"
+      ansible.builtin.assert:
+        that:
+          - monitor_active_user in [monitor_user_a, monitor_user_b]
+        fail_msg: >-
+          ProxySQL uzywa monitora '{{ monitor_active_user }}', ktory nie nalezy do
+          pary rotacyjnej ({{ monitor_user_a }}/{{ monitor_user_b }}). Rotacja
+          przerwana, zeby nie skasowac konta spoza tej procedury.
+
+  tasks:
+    # EXPAND: obie tozsamosci dzialaja rownoczesnie. Konto zaklada sie na
+    # galera[0]; Galera replikuje tabele uprawnien na pozostale wezly.
+    - name: "Expand — utworz bezczynne konto monitora"
+      ansible.mysql.mysql_user:
+        name: "{{ monitor_idle_user }}"
+        password: "{{ monitor_next_password }}"
+        host: "%"
+        priv: "*.*:PROCESS,REPLICATION CLIENT"
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      no_log: true
+      when: rotation_phase == 'expand'
+
+    # Switch bez tego kroku bylby skokiem na oslep: ProxySQL przelaczylby sie na
+    # konto, ktorego istnienia nikt nie potwierdzil na KAZDYM backendzie.
+    - name: "Expand — potwierdz logowanie bezczynnym kontem na KAZDYM backendzie"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - -h
+          - "{{ hostvars[item].galera_node_address }}"
+          - -P
+          - "3306"
+          - -u
+          - "{{ monitor_idle_user }}"
+          - -N
+          - -B
+          - -e
+          - "SELECT 1"
+      environment:
+        MYSQL_PWD: "{{ monitor_next_password }}"
+      loop: "{{ groups['galera'] }}"
+      changed_when: false
+      when: rotation_phase == 'expand'
+
+    # CONTRACT: uruchamiane PO switchu, wiec "bezczynna" to juz konto stare.
+    # Regula jest ta sama co w expand — kasujemy wylacznie to, z ktorego
+    # ProxySQL NIE korzysta.
+    - name: "Contract — odmow kasowania konta, ktorego ProxySQL uzywa"
+      ansible.builtin.assert:
+        that:
+          - monitor_idle_user != monitor_active_user
+        fail_msg: >-
+          Konto bezczynne i aktywne sa tym samym ('{{ monitor_active_user }}') —
+          kasowanie shunneloby cala flote.
+      when: rotation_phase == 'contract'
+
+    - name: "Contract — usun bezczynne (poprzednie) konto monitora"
+      ansible.mysql.mysql_user:
+        name: "{{ monitor_idle_user }}"
+        host: "%"
+        state: absent
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      no_log: true
+      when: rotation_phase == 'contract'

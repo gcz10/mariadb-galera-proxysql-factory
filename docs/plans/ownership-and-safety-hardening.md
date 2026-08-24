@@ -1,7 +1,7 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
-**Status:** W TOKU — utworzony 2026-08-23 na bazie czterech zewnętrznych recenzji.
-**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3, P1-4 (`2996474`, `4aeae5f`), P2-7, P2-8, P2-9 (`48740b1`), P3 (higiena, komplet).
+**Status:** W TOKU — P0/P1/P2-6..9/P3 zamknięte; otwarte P2-10 i dług testowy.
+**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3/P1-4/P1-5, P2-6/P2-7/P2-8/P2-9, P3 (higiena, komplet).
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
 
@@ -217,7 +217,7 @@ bez jawnej akceptacji, a pominięcie klucza pozostaje bezpieczne.
 
 ---
 
-## P1-5. Rotacja globalnego poświadczenia monitora nie ma atomowej procedury
+## P1-5. Rotacja globalnego poświadczenia monitora nie ma atomowej procedury — ZROBIONE
 
 **Problem.** `mysql-monitor_username`/`password` są globalne dla instancji
 ProxySQL (`platform_proxysql.yml:209-237`), a konto backendu tworzy każdy najemca
@@ -238,9 +238,35 @@ kroku żaden backend nie jest `SHUNNED`/`OFFLINE`.
 
 **Koszt:** średni.
 
+**Wynik.** `make platform-monitor-rotate` wykonuje fleet-wide
+`expand -> switch -> contract`. `expand` tworzy bezczynną tożsamość na każdym
+najemcy i potwierdza logowanie na każdym backendzie. `switch` dodatkowo pyta
+sam ProxySQL o wszystkie zarejestrowane backendy (bramka na niepełne `TENANTS`),
+przełącza parę globalną, a następnie wymaga świeżych sukcesów bez
+`connect_error` w `monitor.mysql_server_connect_log`. `contract` usuwa wyłącznie
+tożsamość bezczynną — aktywna jest nietykalna.
+
+**Defekty złapane live.**
+1. Bramka „brak SHUNNED” była niemożliwa: przy `max_writers=1` zdrowe
+   nie-writery są SHUNNED w writer hostgroup. Zastąpiona dowodem logowania
+   monitora z oficjalnej tabeli `monitor.mysql_server_connect_log`.
+2. `serial: 1` sprawiał, że każdy ProxySQL liczył cel osobno; para rozeszła się
+   (`grp1 b->a`, `grp2 a->b`), a contract usunął konto używane przez grp2.
+   Dokumentacja Ansible potwierdza: `run_once` z `serial` działa raz **na batch**.
+   Teraz decyzja zapada raz (`run_once`, bez `serial`) i jest wspólna dla pary.
+3. Zwykły `platform-proxysql` cofał nazwę monitora do hardkodowanej wartości.
+   Interfejs sekretów obejmuje teraz parę `PROXYSQL_MONITOR_USER` +
+   `PROXYSQL_MONITOR_PASSWORD`.
+
+**Dowód green (2026-08-24).** Oba węzły przeszły zgodnie
+`proxysql_monitor -> proxysql_monitor_b`, trzy backendy potwierdzone na każdym,
+zero błędów logowania, stare konto usunięte. Ponowny `platform-proxysql`:
+`changed=0`, tożsamość nie cofnięta.
+
+
 ---
 
-## P2-6. `cluster-build` nie jest wznawialny
+## P2-6. `cluster-build` nie jest wznawialny — ZROBIONE
 
 **Problem.** `cluster-build` zawsze zaczyna od `cluster-validate`, którego
 `playbooks/f2_preflight.yml` wymaga hosta dziewiczego: brak pakietów MariaDB,
@@ -262,6 +288,32 @@ Primary istnieje    -> brak bootstrapu
 sukcesem bez ręcznej interwencji.
 
 **Koszt:** średni.
+
+**Wynik.** F2 wybiera tryb ze stanu hosta, nie z flagi operatora:
+
+- całkowicie czysty (`pakiety=0`, brak datadir, proces STOPPED) -> `fresh`,
+- każdy stan częściowy lub wdrożony -> `converge`.
+
+`converge` jest read-only i fail-closed: wersja `MariaDB-server` musi być
+dokładnie z lockfile, a istniejący datadir wymaga `/etc/my.cnf.d/server.cnf`
+z `wsrep_cluster_name == galera.cluster_name`. Sam datadir nie jest dowodem
+tożsamości; obcy klaster kończy się „Odmowa bez wipe”. Stan „pakiet jest,
+datadir jeszcze nie” jest legalnym przerwaniem po instalacji i może być
+dokończony.
+
+Dokumentacja MariaDB potwierdza, że `wsrep_cluster_name` jest unikalną logiczną
+nazwą wspólną dla wszystkich węzłów. Wdrożony green-r9 przeszedł
+`cluster-validate` (`changed=0`); stary kod odrzucał dokładnie ten przypadek
+jako „host nie jest czysty”.
+
+Pełne kryterium akceptacji potwierdzone na żywym green-r9: drugi
+`make cluster-build CLUSTER=green-r9 CONFIRM=yes` przeszedł od validate do
+bramki końcowej. Pierwszy przebieg ujawnił drugi brak planu: preflight już
+przechodził, ale bezpośredni bootstrap odmawiał żywemu Primary. Tylko graf
+`cluster-build` przekazuje `bootstrap_skip_existing_primary=true`; playbook
+wykrywa Primary i kończy krok `end_play`. Bezpośredni `cluster-bootstrap`
+nadal fail-closed odmawia (anti split-brain). Dowód końcowy: backup
+`galera-green-r9-20260824-164040`, restore 6042 wierszy, bramka 13/13 PASS.
 
 ---
 

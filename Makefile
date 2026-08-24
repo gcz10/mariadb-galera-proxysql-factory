@@ -240,6 +240,40 @@ platform-adopt:  ## Przejmij rejestracje PMM zrobione przez bylego ownera (CONFI
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (usuwa wezly z PMM Inventory)"; exit 1)
 	ansible-playbook playbooks/platform_adopt.yml $(PLATFORM_OPTS) -e confirm=yes
 
+# Rotacja globalnego poswiadczenia monitora ProxySQL (P1-5). Wejsciem jest CALA
+# flota, nie pojedynczy CLUSTER=: para `mysql-monitor_username`/`password` jest
+# globalna dla instancji, a konto backendu zaklada kazdy najemca osobno.
+# Kolejnosc faz JEST kontraktem — zamiana ich miejscami otwiera okno, w ktorym
+# ProxySQL shunuje zdrowe backendy calej floty:
+#   expand   -> na kazdym najemcy powstaje bezczynne konto i loguje sie na kazdym backendzie
+#   switch   -> pojedyncza zmiana pary w ProxySQL + bramka na logu monitora
+#   contract -> dopiero teraz znika konto, ktorego ProxySQL juz nie uzywa
+TENANTS ?= $(filter-out example-cluster,$(notdir $(patsubst %/,%,$(dir $(wildcard clusters/*/inventory.yml)))))
+
+platform-monitor-rotate:  ## Rotuj globalne haslo monitora ProxySQL w calej flocie (expand->switch->contract; CONFIRM=yes)
+	@: "$${PROXYSQL_MONITOR_PASSWORD_NEXT:?Ustaw PROXYSQL_MONITOR_PASSWORD_NEXT poza repozytorium}"
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (zmienia poswiadczenie monitora calej floty)"; exit 1)
+	@test -n "$(TENANTS)" || (echo "ERROR: brak najemcow w clusters/*/inventory.yml"; exit 1)
+	@echo "== faza 1/3 expand: $(TENANTS) =="
+	@for c in $(TENANTS); do \
+		echo "-- expand $$c"; \
+		ansible-playbook playbooks/monitor_rotate.yml -i clusters/$$c/inventory.yml \
+			-e @clusters/$$c/cluster.yml -e rotation_phase=expand $(ANSIBLE_OPTS) || exit 1; \
+	done
+	@echo "== faza 2/3 switch (warstwa wspolna) =="
+	ansible-playbook playbooks/platform_monitor_switch.yml $(PLATFORM_OPTS)
+	@echo "== faza 3/3 contract: $(TENANTS) =="
+	@for c in $(TENANTS); do \
+		echo "-- contract $$c"; \
+		ansible-playbook playbooks/monitor_rotate.yml -i clusters/$$c/inventory.yml \
+			-e @clusters/$$c/cluster.yml -e rotation_phase=contract $(ANSIBLE_OPTS) || exit 1; \
+	done
+	@echo "PASS: rotacja monitora zakonczona dla: $(TENANTS)"
+	@echo "UWAGA: od tej chwili obowiazuje nowa para pokazana w raporcie switch."
+	@echo "       Ustaw PROXYSQL_MONITOR_USER na nowa nazwe i przenies"
+	@echo "       PROXYSQL_MONITOR_PASSWORD_NEXT do PROXYSQL_MONITOR_PASSWORD,"
+	@echo "       inaczej kolejny 'make platform-proxysql' cofnie pare do poprzedniej."
+
 platform-verify:  ## Sondy warstwy wspolnej: para ProxySQL, VIP, TLS endpointu, rejestracja w PMM
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	CLUSTER=$(PLATFORM) CLUSTER_CONFIG=$(PLATFORM_DIR)/platform.yml CLUSTER_INVENTORY=$(PLATFORM_DIR)/inventory.yml \
@@ -275,7 +309,7 @@ cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (bootstrap tworzy nowy Primary Component)"; exit 1)
 	$(MAKE) cluster-validate
 	$(MAKE) cluster-deploy
-	$(MAKE) cluster-bootstrap
+	$(MAKE) cluster-bootstrap ANSIBLE_OPTS="$(ANSIBLE_OPTS) -e bootstrap_skip_existing_primary=true"
 	$(MAKE) cluster-join
 	$(MAKE) cluster-proxysql
 	$(MAKE) cluster-monitoring

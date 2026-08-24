@@ -45,10 +45,21 @@
     - name: "ISC-65: brak żywego Primary Component (anti split-brain)"
       ansible.builtin.assert:
         that:
-          - galera_state_primary | length == 0
+          - >-
+            (galera_state_primary | length == 0)
+            or (bootstrap_skip_existing_primary | default(false) | bool)
         fail_msg: >-
           Żywy Primary Component wykryty: {{ galera_state_primary }}.
           Bootstrap = drugi Primary → split-brain / utrata danych. Dołącz zamiast bootstrappować.
+
+    # TYLKO graf cluster-build moze poprosic o bezpieczny no-op. Bezposrednie
+    # `make cluster-bootstrap` nie przekazuje flagi i nadal fail-closed odmawia.
+    # Stan (zywy Primary), nie intencja operatora, rozstrzyga czy krok jest zbedny.
+    - name: "Wznawialny build — zakoncz krok bootstrap przy istniejacym Primary"
+      ansible.builtin.meta: end_play
+      when:
+        - galera_state_primary | length > 0
+        - bootstrap_skip_existing_primary | default(false) | bool
 
     - name: "Audit#2: nieosiągalne węzły wymagają bootstrap_confirm_all_down=true"
       ansible.builtin.assert:

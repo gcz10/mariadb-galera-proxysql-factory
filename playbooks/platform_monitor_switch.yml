@@ -1,0 +1,178 @@
+---
+# Rotacja globalnego poswiadczenia monitora ProxySQL — krok SWITCH (platforma).
+# Satisfies: P1-5
+#
+# To jedyny moment calej procedury, w ktorym cokolwiek sie przelacza, i jest
+# pojedyncza zmiana: para `mysql-monitor_username`/`mysql-monitor_password`
+# w globalnych zmiennych ProxySQL. Poprzedzajacy `expand` zapewnil, ze konto
+# docelowe istnieje i loguje sie na KAZDYM backendzie KAZDEGO najemcy, wiec
+# przelaczenie nie ma prawa zostawic backendu bez monitora.
+#
+# Dokumentacja ProxySQL (backend-monitoring): `mysql-monitor_username` wymaga
+# USAGE do connect/ping/read_only oraz REPLICATION CLIENT do opoznienia
+# replikacji; zmiana wchodzi przez LOAD MYSQL VARIABLES TO RUNTIME, a utrwala
+# ja SAVE MYSQL VARIABLES TO DISK (proxysql-configuration).
+
+- name: "Rotacja monitora — przelaczenie globalnej pary"
+  hosts: proxysql
+  become: true
+  gather_facts: false
+  # BEZ `serial`. Zmierzone na green: przy `serial: 1` kazdy wezel pary liczyl
+  # tozsamosc docelowa OSOBNO, a ProxySQL Cluster w miedzyczasie synchronizowal
+  # zmienna — grp1 przeszedl b->a, grp2 zaraz potem a->b. Para rozjechala sie,
+  # a `contract` skasowal konto, ktorego grp2 wlasnie uzywal (3 bledy monitora).
+  # Dokumentacja Ansible: "When used together with `serial`, tasks marked as
+  # run_once will be run on one host in each serial batch" — czyli `run_once`
+  # NIE chroni przy `serial`. Decyzja musi zapasc raz dla calej pary.
+  vars:
+    monitor_user_a: "proxysql_monitor"
+    monitor_user_b: "proxysql_monitor_b"
+    monitor_next_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_PASSWORD_NEXT') }}"
+    monitor_next_password_sql: >-
+      {{ monitor_next_password | replace("'", "''") }}
+    proxysql_admin_cli:
+      - mariadb
+      - --defaults-extra-file=/etc/proxysql/admin-check.cnf
+      - -h127.0.0.1
+      - -P6032
+      - -uadmin
+      - -N
+      - -B
+  pre_tasks:
+    - name: "Odrzuc uruchomienie z definicja inna niz platforma"
+      ansible.builtin.assert:
+        that:
+          - platform.name is defined
+          - galera is not defined
+        fail_msg: >-
+          Ten playbook nalezy do warstwy wspolnej. Uruchom: make platform-monitor-rotate
+
+    - name: "Wymagaj nowego hasla monitora"
+      ansible.builtin.assert:
+        that:
+          - monitor_next_password | length > 0
+        fail_msg: "Ustaw PROXYSQL_MONITOR_PASSWORD_NEXT poza repozytorium."
+
+  tasks:
+    # `run_once` + brak `serial`: jedno odczytanie, jedna decyzja, ta sama dla
+    # obu wezlow pary. Dokumentacja Ansible: "with run_once, the results are
+    # applied to all the hosts" — zarowno wynik `register`, jak i `set_fact`.
+    - name: "Odczytaj aktywna tozsamosc monitora (raz dla calej pary)"  # noqa: run-once[task]
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli + ['-e', \"SELECT variable_value FROM global_variables WHERE variable_name='mysql-monitor_username'\"] }}"
+      register: monitor_active_raw
+      changed_when: false
+      run_once: true
+
+    - name: "Wyznacz tozsamosc bezczynna (cel przelaczenia) — raz dla calej pary"  # noqa: run-once[task]
+      ansible.builtin.set_fact:
+        monitor_active_user: "{{ monitor_active_raw.stdout | trim }}"
+        monitor_idle_user: >-
+          {{ monitor_user_b if (monitor_active_raw.stdout | trim) == monitor_user_a else monitor_user_a }}
+      run_once: true
+
+    - name: "Odrzuc nieznana tozsamosc monitora"
+      ansible.builtin.assert:
+        that:
+          - monitor_active_user in [monitor_user_a, monitor_user_b]
+        fail_msg: >-
+          ProxySQL uzywa monitora '{{ monitor_active_user }}' spoza pary rotacyjnej.
+
+    # BRAMKA PRZED PRZELACZENIEM — zamyka dziure "niepelna lista najemcow".
+    # Faza expand chodzi po `TENANTS` podanych przez operatora. Gdyby ktorys
+    # najemca wypadl z tej listy, jego backendy nie znalyby nowego konta,
+    # a switch odcialby im monitoring. Dlatego pytamy sam ProxySQL, KTO jest
+    # u niego zarejestrowany, i sprawdzamy logowanie na kazdym z tych hostow —
+    # niezaleznie od tego, co operator wpisal w TENANTS.
+    - name: "Zbierz wszystkie backendy zarejestrowane w tym ProxySQL"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli + ['-e', 'SELECT DISTINCT hostname FROM runtime_mysql_servers ORDER BY hostname'] }}"
+      register: monitor_registered_backends
+      changed_when: false
+
+    - name: "Odrzuc rotacje bez zarejestrowanych backendow"
+      ansible.builtin.assert:
+        that:
+          - (monitor_registered_backends.stdout_lines | map('trim') | select() | list | length) > 0
+        fail_msg: >-
+          ProxySQL nie ma zarejestrowanych backendow — rotacja nie ma czego
+          zweryfikowac i zostaje przerwana.
+
+    - name: "Potwierdz nowe konto na KAZDYM zarejestrowanym backendzie PRZED switchem"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - -h
+          - "{{ item | trim }}"
+          - -P
+          - "3306"
+          - -u
+          - "{{ monitor_idle_user }}"
+          - -N
+          - -B
+          - -e
+          - "SELECT 1"
+      environment:
+        MYSQL_PWD: "{{ monitor_next_password }}"
+      loop: "{{ monitor_registered_backends.stdout_lines | map('trim') | select() | list }}"
+      changed_when: false
+
+    # Znacznik czasu SPRZED przelaczenia: bramka ponizej patrzy wylacznie na
+    # proby monitora WYKONANE JUZ NOWYM poswiadczeniem. Bez niego stare, udane
+    # wpisy fałszywie potwierdzalyby rotacje.
+    - name: "Zapamietaj znacznik logu monitora sprzed przelaczenia"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli + ['-e', 'SELECT IFNULL(MAX(time_start_us),0) FROM monitor.mysql_server_connect_log'] }}"
+      register: monitor_log_watermark
+      changed_when: false
+
+    - name: "Przelacz globalna pare monitora"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          UPDATE global_variables SET variable_value='{{ monitor_idle_user }}'
+          WHERE variable_name='mysql-monitor_username';
+          UPDATE global_variables SET variable_value='{{ monitor_next_password_sql }}'
+          WHERE variable_name='mysql-monitor_password';
+          LOAD MYSQL VARIABLES TO RUNTIME;
+          SAVE MYSQL VARIABLES TO DISK;
+      no_log: true
+      changed_when: true
+
+    # BRAMKA MIERZY LOGOWANIE MONITORA, NIE STATUS BACKENDU.
+    # Pierwsza wersja czekala na "brak SHUNNED" i nigdy by nie przeszla: przy
+    # `max_writers=1` nie-writery w writer hostgroup sa SHUNNED w normalnym
+    # stanie ustalonym (zmierzone na green: .28/.29 SHUNNED, .30 ONLINE).
+    # Rotujemy poswiadczenie, wiec pytamy wprost o jego skutek —
+    # `monitor.mysql_server_connect_log.connect_error` jest NULL przy sukcesie
+    # (https://proxysql.com/documentation/the-admin-schemas/monitor-schema).
+    # Sam brak bledow nie wystarczy: liczymy tez, ile backendow potwierdzilo
+    # udane polaczenie po znaczniku, zeby "monitor nie dziala wcale" nie
+    # przeszlo jako sukces.
+    - name: "Potwierdz, ze monitor loguje sie nowym poswiadczeniem na kazdym backendzie"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli + ['-e', monitor_gate_sql] }}"
+      vars:
+        monitor_gate_sql: >-
+          SELECT
+          (SELECT COUNT(*) FROM monitor.mysql_server_connect_log
+           WHERE time_start_us > {{ monitor_log_watermark.stdout | trim }} AND connect_error IS NOT NULL),
+          (SELECT COUNT(DISTINCT hostname) FROM monitor.mysql_server_connect_log
+           WHERE time_start_us > {{ monitor_log_watermark.stdout | trim }} AND connect_error IS NULL),
+          (SELECT COUNT(DISTINCT hostname) FROM runtime_mysql_servers)
+      register: monitor_gate
+      until:
+        - monitor_gate.stdout is defined
+        - (monitor_gate.stdout.split() | length) == 3
+        - (monitor_gate.stdout.split()[0] | trim | int) == 0
+        - (monitor_gate.stdout.split()[1] | trim | int) >= (monitor_gate.stdout.split()[2] | trim | int)
+      retries: 18
+      delay: 5
+      changed_when: false
+
+    - name: "Raport rotacji"
+      ansible.builtin.debug:
+        msg: >-
+          monitor {{ monitor_active_user }} -> {{ monitor_idle_user }} na
+          {{ inventory_hostname }}; bledow polaczenia po przelaczeniu: 0,
+          backendow potwierdzonych: {{ monitor_gate.stdout.split()[1] | trim }}

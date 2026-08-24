@@ -129,17 +129,112 @@
       changed_when: false
       register: mariadb_proc
 
-    - name: "Preflight — host czysty (brak MariaDB); ISC-6/audit#3"
+    # AUTO, nie flaga operatora: build ma byc wznawialny po dowolnym przerwaniu.
+    # Calkowicie czysty host idzie sciezka fresh. Jakikolwiek slad MariaDB
+    # uruchamia sciezke converge, ktora NIE WOLNO niczego kasowac — musi dowiesc
+    # wersji i tozsamosci. Stan mieszany (np. pakiet bez datadir) jest legalnym
+    # przerwaniem po instalacji: kolejne fazy maja go dokonczyc.
+    - name: "Preflight — wybierz tryb fresh albo converge ze stanu hosta"
+      ansible.builtin.set_fact:
+        preflight_effective_mode: >-
+          {{ 'fresh'
+             if (mariadb_pkgs | length == 0
+                 and not mariadb_datadir.stat.exists
+                 and mariadb_proc.stdout == 'STOPPED')
+             else 'converge' }}
+      when: "'galera' in group_names"
+
+    - name: "Preflight fresh — host całkowicie czysty"
       ansible.builtin.assert:
         that:
           - mariadb_pkgs | length == 0
           - not mariadb_datadir.stat.exists
           - mariadb_proc.stdout == "STOPPED"
         fail_msg: >-
-          Host nie jest czysty: pakiety=[{{ mariadb_pkgs | join(', ') }}],
-          datadir istnieje={{ mariadb_datadir.stat.exists }}, proces={{ mariadb_proc.stdout }}.
-          F2 oczekuje czystych hostów. Jeśli klaster jest już wdrożony — to oczekiwane:
-          użyj ,make cluster-health' zamiast ,cluster-validate' na wdrożonym klastrze.
-      when: "'galera' in group_names"
+          Tryb fresh wybrany dla nieczystego hosta: pakiety=[{{ mariadb_pkgs | join(', ') }}],
+          datadir={{ mariadb_datadir.stat.exists }}, proces={{ mariadb_proc.stdout }}.
+      when:
+        - "'galera' in group_names"
+        - preflight_effective_mode == 'fresh'
+
+    # Reprodukowalnosc converge: nie wystarczy "MariaDB jest". Ma byc wersja
+    # przypieta lockfile'em. `rpm -q` jest read-only i daje jednoznaczny VERSION.
+    - name: "Preflight converge — odczytaj wersje MariaDB-server"
+      ansible.builtin.command:
+        argv:
+          - rpm
+          - -q
+          - --qf
+          - "%{VERSION}"
+          - MariaDB-server
+      register: deployed_mariadb_version
+      changed_when: false
+      when:
+        - "'galera' in group_names"
+        - preflight_effective_mode == 'converge'
+
+    - name: "Preflight converge — wersja zgodna z lockfile"
+      ansible.builtin.assert:
+        that:
+          - deployed_mariadb_version.stdout | trim == lock.mariadb.version
+        fail_msg: >-
+          MariaDB-server {{ deployed_mariadb_version.stdout | trim }} !=
+          lockfile {{ lock.mariadb.version }}. Build nie wykonuje ukrytego upgrade.
+      when:
+        - "'galera' in group_names"
+        - preflight_effective_mode == 'converge'
+
+    # Dokumentacja MariaDB: wsrep_cluster_name to unikalna logiczna nazwa
+    # wspolna dla wszystkich wezlow klastra. Sam istniejacy datadir NIE jest
+    - name: "Preflight converge — sprawdz plik konfiguracji tozsamosci"
+      ansible.builtin.stat:
+        path: /etc/my.cnf.d/server.cnf
+      register: deployed_cluster_config
+      when:
+        - "'galera' in group_names"
+        - preflight_effective_mode == 'converge'
+        - mariadb_datadir.stat.exists
+
+    - name: "Preflight converge — datadir wymaga konfiguracji tozsamosci"
+      ansible.builtin.assert:
+        that:
+          - deployed_cluster_config.stat.exists
+          - deployed_cluster_config.stat.isreg
+        fail_msg: >-
+          Datadir istnieje, ale /etc/my.cnf.d/server.cnf nie istnieje albo nie
+          jest plikiem. Odmowa: nie da sie dowiesc tozsamosci bez ryzyka wipe.
+      when:
+        - "'galera' in group_names"
+        - preflight_effective_mode == 'converge'
+        - mariadb_datadir.stat.exists
+
+    # dowodem tozsamosci — mogl nalezec do innego najemcy.
+    - name: "Preflight converge — odczytaj tozsamosc klastra z konfiguracji"
+      ansible.builtin.shell: |
+        set -o pipefail
+        awk -F= '
+          /^[[:space:]]*wsrep_cluster_name[[:space:]]*=/ {
+            v=$2; gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", v); print v; exit
+          }' /etc/my.cnf.d/server.cnf
+      args:
+        executable: /bin/bash
+      register: deployed_cluster_name
+      changed_when: false
+      when:
+        - "'galera' in group_names"
+        - preflight_effective_mode == 'converge'
+        - mariadb_datadir.stat.exists
+
+    - name: "Preflight converge — tozsamosc klastra zgodna z cluster.yml"
+      ansible.builtin.assert:
+        that:
+          - deployed_cluster_name.stdout | trim == galera.cluster_name
+        fail_msg: >-
+          Host nalezy do klastra '{{ deployed_cluster_name.stdout | trim }}',
+          a build dotyczy '{{ galera.cluster_name }}'. Odmowa bez wipe.
+      when:
+        - "'galera' in group_names"
+        - preflight_effective_mode == 'converge'
+        - mariadb_datadir.stat.exists
 
   handlers: []
