@@ -314,7 +314,7 @@ Pozycje tanie, bez ryzyka, do zrobienia razem:
 | `probe-zero-hardcode.py` skanuje też `Makefile` | `probe-zero-hardcode.py:19` |
 | Usunięcie zgniłych komentarzy (`n16g2/n16g3`, `proxysql-3.0.9`) | `Makefile:371`, `versions/versions.lock.yml:42` |
 | 6 śledzonych `.DS_Store` | `git ls-files` |
-| Usunięcie pustych szkieletów ról | `roles/mariadb_install`, `roles/preflight`, `roles/proxysql_install` |
+| Rola bez `tasks/` to cichy no-op, nie błąd | `roles: mariadb_install` -> `rc=0`, zero zadań |
 | `galera-rebuild` w `.PHONY` | `Makefile:8-20,52` |
 | `BUILD_SKIP`: sprzężenie seed→backup egzekwowane, nie komentowane | `Makefile:134-141,239` |
 | Trzeci stan w tablicy ISC (`PASS-z-zastrzeżeniem`) | `ISA.md:103` vs `:397` |
@@ -326,8 +326,11 @@ Pozycje tanie, bez ryzyka, do zrobienia razem:
 
 ## Czego ten plan celowo nie robi
 
-- **Nie przepisuje playbooków na role.** Zysk mały, ryzyko duże. Zamiast tego
-  usuwamy trzy puste katalogi ról, które kłamią o strukturze.
+- **Nie przepisuje playbooków na role.** Zysk mały, ryzyko duże. Z trzech
+  „pustych szkieletów" `roles/preflight` i `roles/proxysql_install` w ogóle nie
+  istnieją w repozytorium — git nie wersjonuje pustych katalogów, więc były
+  wyłącznie lokalnym osadem po `ansible-galaxy init`. `roles/mariadb_install`
+  zostaje: trzyma używany `templates/server.cnf.j2`.
 - **Nie przenosi orkiestracji z Makefile do CLI w Pythonie.** Makefile zostaje
   jako interfejs operatora; do danych przenosimy wyłącznie graf zależności F0–F15.
 - **Nie zmienia nazw `F0`–`F15`.** Numery są opisanym protokołem; aliasy podwoiłyby
