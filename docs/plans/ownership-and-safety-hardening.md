@@ -1,7 +1,7 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
-**Status:** W TOKU — P0/P1/P2-6..9/P3 zamknięte; otwarte P2-10 i dług testowy.
-**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3/P1-4/P1-5, P2-6/P2-7/P2-8/P2-9, P3 (higiena, komplet).
+**Status:** W TOKU — P0/P1/P2-6/P2-8/P2-9/P3 zamknięte; P2-7 ma blocker integralności, otwarte P2-10 i dług testowy.
+**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3/P1-4/P1-5, P2-6/P2-8/P2-9, P3 (higiena, komplet). P2-7 funkcjonalnie PASS, security BLOCKED.
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
 
@@ -317,7 +317,7 @@ nadal fail-closed odmawia (anti split-brain). Dowód końcowy: backup
 
 ---
 
-## P2-7. Statyczny scheduler backupu po failoverze może zostać writerem — ZROBIONE
+## P2-7. Statyczny scheduler backupu po failoverze może zostać writerem — FUNKCJONALNIE ZROBIONE; BLOKER INTEGRALNOŚCI
 
 **Problem.** `backup.scheduler.host` jest przypięty do konkretnego węzła, a guard
 `assert_scheduler_is_not_writer` (fail-closed, `E_WRITER`) jest poprawny. Po
@@ -367,6 +367,16 @@ aktywnym writerem:
 
 Artefakt `galera-green-r9-20260824-151333` zweryfikowany (aes-256-cbc, sha256 OK,
 off-cluster w S3). Po przywróceniu preferencji bramka po budowie 13/13 PASS.
+
+**BLOKER przed push.** Elekcja wymaga runnera i `secrets.env` na wszystkich
+trzech węzłach Galery. Obecna polityka MinIO zawiera `s3:DeleteObject`
+(`minio-policy.json.j2`), a runner realnie usuwa obiekty przy retencji
+(`storage/s3.py`). W efekcie kompromitacja dowolnego węzła bazy może teraz
+skasować historię off-cluster — poufność danych live tego nie łagodzi.
+Mitigacja: osobne poświadczenie write/list/read na wszystkich donorach oraz
+delete/prune tylko na jednym koordynatorze (albo udokumentowany Object Lock po
+weryfikacji dokumentacji MinIO). Do czasu tej separacji P2-7 nie jest gotowe
+do wypchnięcia mimo pełnej poprawności funkcjonalnej.
 
 ---
 
