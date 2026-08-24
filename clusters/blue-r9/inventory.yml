@@ -1,0 +1,65 @@
+---
+# Blue Rocky 9 — najemca platformy green. Do tego Terraform root naleza wylacznie
+# bg1-3 i br1; grp1/grp2/grinfra/grapp sa deklarowane jako cele integracji
+# z warstwa wspolna, ktorej ten najemca nie tworzy ani nie niszczy.
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: secrets/ssh_key
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        bg1:
+          ansible_host: "192.168.1.32"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.32"
+        bg2:
+          ansible_host: "192.168.1.33"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.33"
+        bg3:
+          ansible_host: "192.168.1.34"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.34"
+
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        grp1:
+          ansible_host: "192.168.1.24"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.24"
+        grp2:
+          ansible_host: "192.168.1.25"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.25"
+
+    restore:
+      vars:
+        restore_role: "restore"
+      hosts:
+        br1:
+          ansible_host: "192.168.1.35"
+          restore_node_address: "192.168.1.35"
+
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        grapp:
+          ansible_host: "192.168.1.26"
+          app_node_address: "192.168.1.26"
+
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        grinfra:
+          ansible_host: "192.168.1.23"
+          infra_node_address: "192.168.1.23"

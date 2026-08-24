@@ -17,7 +17,13 @@ mariadb:
   eol: "2029-05"
   rpm_release: "1.el9"          # audit#12: potwierdzone na hostach (MariaDB-server-11.4.12-1.el9)
   repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
-  repo_setup_args: "--mariadb-server-version=11.4"
+  # Prefiks `mariadb-` i PELNA wersja sa wymagane: bez nich skrypt konfiguruje
+  # repozytorium SERII (.../mariadb-server/11.4/...), ktore trzyma wylacznie
+  # najnowsza latke. Przypieta wersja znika z niego przy kolejnym wydaniu
+  # upstreamu i swiezy build przestaje byc odtwarzalny — 2026-08-24 wyszlo
+  # 11.4.13 w trakcie budowy, wiec czesc wezlow dostala 11.4.12, a host
+  # dolaczany chwile pozniej juz nie mial jej skad wziac.
+  repo_setup_args: "--mariadb-server-version=mariadb-11.4.12"
   repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"  # audit#6: integralność skryptu (v2026-06-30, 44184B)
   galera_provider: "galera-4"
   galera_provider_version: "26.4.27"   # audit#12: galera-4-26.4.27-1.el9

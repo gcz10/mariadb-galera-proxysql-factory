@@ -56,10 +56,19 @@
         mode: "0755"
         checksum: "sha256:{{ lock.mariadb.repo_setup_sha256 }}"
 
+    # Jak w f2_install: bramka na TRESCI, nie na istnieniu pliku. Host restore
+    # jest odtwarzany co drill, ale gdy przetrwa podbicie wersji, `creates:`
+    # zostawiloby go przy starym repozytorium.
+    - name: "MariaDB repo - sprawdz, czy wskazuje wersje z lockfile ({{ mariadb_version }})"
+      ansible.builtin.command: "grep -q 'mariadb-server/{{ lock.mariadb.version }}/' /etc/yum.repos.d/mariadb.repo"
+      register: restore_repo_pinned
+      failed_when: false
+      changed_when: false
+
     - name: "MariaDB repo - konfiguruj wersje z lockfile ({{ mariadb_version }})"
       ansible.builtin.command: "/usr/local/bin/mariadb_repo_setup {{ lock.mariadb.repo_setup_args }} --skip-check-installed"
-      args:
-        creates: /etc/yum.repos.d/mariadb.repo
+      when: restore_repo_pinned.rc != 0
+      changed_when: true
 
     - name: "Instaluj MariaDB server/backup/klienta (wersje PRZYPIETE z lockfile; audit#12)"
       ansible.builtin.dnf:

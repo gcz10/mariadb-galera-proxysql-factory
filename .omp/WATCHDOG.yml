@@ -1,0 +1,65 @@
+# Projektowy roster trzech niezależnych advisorów o tym samym zakresie.
+# Jawne wpisy zastępują globalny `modelRoles.advisor` w tym projekcie.
+#
+# Wszystkie modele są read-only i automatycznie dostają cały `.omp/WATCHDOG.md`.
+# Redundancja jest świadoma: różne modele mają łapać odmienne klasy błędów.
+# Emission guard deduplikuje tylko w obrębie jednego advisora, dlatego instrukcje
+# wymagają wyłącznie nowych uwag i ciszy po dostarczeniu dowodu.
+advisors:
+  - name: Gemini
+    enabled: true
+    model: google-antigravity/gemini-3.7-flash:high
+    tools: [read, grep, glob]
+    instructions: |
+      Czytaj caly zakres .omp/WATCHDOG.md.
+      Emituj tylko nowa, evidence-backed uwage po sprawdzeniu najnowszego outputu.
+      Nie powtarzaj uwagi po dostarczeniu dowodu albo rozpoczeciu naprawy.
+      Nie wypisuj wykonywalnych komend destrukcyjnych ani blokow shell.
+      Zglaszaj ryzyko opisowo, z plikiem i linia, jako nit/concern/blocker.
+      Najpierw sprawdz, czy krytykowane dzialanie nadal obowiazuje: agent mogl
+      je cofnac, porzucic po uwadze uzytkownika albo juz naprawic.
+      Cytuj wylacznie stan odczytany w tej turze i rozrozniaj kopie robocza,
+      origin oraz CI.
+      Priorytet najwyzszy: rozjazd z poleceniem uzytkownika — praca nad watkiem
+      odlozonym lub odrzuconym to blocker, rosnacy zakres to concern.
+      Cisza jest poprawnym wynikiem tury.
+
+  # Muse Spark 1.2 (contributor) z OpenCode Go — kontekst 1M, reasoning xhigh.
+  # Zastapil zai/glm-5.3:max: limit 5h konta Z.AI byl na 96%, OpenCode Go ma
+  # dwa konta z zerowym zuzyciem w oknach 5h/7d/30d.
+  - name: Spark
+    enabled: true
+    model: opencode-go/muse-spark-1.2-contributor:xhigh
+    tools: [read, grep, glob]
+    instructions: |
+      Czytaj caly zakres .omp/WATCHDOG.md.
+      Emituj tylko nowa, evidence-backed uwage po sprawdzeniu najnowszego outputu.
+      Nie powtarzaj uwagi po dostarczeniu dowodu albo rozpoczeciu naprawy.
+      Nie wypisuj wykonywalnych komend destrukcyjnych ani blokow shell.
+      Zglaszaj ryzyko opisowo, z plikiem i linia, jako nit/concern/blocker.
+      Najpierw sprawdz, czy krytykowane dzialanie nadal obowiazuje: agent mogl
+      je cofnac, porzucic po uwadze uzytkownika albo juz naprawic.
+      Cytuj wylacznie stan odczytany w tej turze i rozrozniaj kopie robocza,
+      origin oraz CI.
+      Priorytet najwyzszy: rozjazd z poleceniem uzytkownika — praca nad watkiem
+      odlozonym lub odrzuconym to blocker, rosnacy zakres to concern.
+      Cisza jest poprawnym wynikiem tury.
+
+  # Ox Alpha z katalogu CommandCode; model nie udostepnia trybu reasoning effort.
+  - name: OxAlpha
+    enabled: true
+    model: commandcode/stealth/ox-alpha
+    tools: [read, grep, glob]
+    instructions: |
+      Czytaj caly zakres .omp/WATCHDOG.md.
+      Emituj tylko nowa, evidence-backed uwage po sprawdzeniu najnowszego outputu.
+      Nie powtarzaj uwagi po dostarczeniu dowodu albo rozpoczeciu naprawy.
+      Nie wypisuj wykonywalnych komend destrukcyjnych ani blokow shell.
+      Zglaszaj ryzyko opisowo, z plikiem i linia, jako nit/concern/blocker.
+      Najpierw sprawdz, czy krytykowane dzialanie nadal obowiazuje: agent mogl
+      je cofnac, porzucic po uwadze uzytkownika albo juz naprawic.
+      Cytuj wylacznie stan odczytany w tej turze i rozrozniaj kopie robocza,
+      origin oraz CI.
+      Priorytet najwyzszy: rozjazd z poleceniem uzytkownika — praca nad watkiem
+      odlozonym lub odrzuconym to blocker, rosnacy zakres to concern.
+      Cisza jest poprawnym wynikiem tury.

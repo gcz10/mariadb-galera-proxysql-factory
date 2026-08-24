@@ -56,6 +56,10 @@ import yaml
 
 DEFAULT_BASE = 10
 DEFAULT_APP_USER = "app_user"
+
+# Odwzorowanie z playbooks/vars/proxysql_hostgroups.yml: jedna baza rezerwuje
+# cztery kolejne hostgroupy co 10, nie jeden identyfikator.
+HOSTGROUP_ROLES = (("writer", 0), ("backup_writer", 10), ("reader", 20), ("offline", 30))
 # Material, ktory najemca wolno sobie deklarowac — reszta nalezy do platformy.
 TENANT_TLS_REFS = ("ca_reference",)
 PLATFORM_TLS_REFS = ("ca_reference", "certificate_reference", "private_key_reference")
@@ -174,18 +178,28 @@ def check_tenant_disjointness(clusters, root, violations):
     for endpoint, tenants in sorted(by_endpoint.items()):
         if len(tenants) < 2:
             continue
-        seen_base = {}
+        # Baza NIE jest pojedynczym identyfikatorem: zajmuje cztery hostgroupy
+        # (base, +10, +20, +30). Porownywanie samych baz przepuszcza sasiadow —
+        # 890 i 900 sa "rozne", a jednak 900 to backup_writer najemcy z baza 890,
+        # wiec jego failover pisalby do cudzych wezlow. Porownujemy caly zakres.
+        claimed = {}
         seen_user = {}
         for entry in tenants:
-            other = seen_base.get(entry["base"])
-            if other:
-                violations.append(
-                    f"{endpoint}: {entry['name']} i {other} maja te sama "
-                    f"proxysql.hostgroup_base={entry['base']} — f7 drugiego skasuje "
-                    f"backendy pierwszego ({entry['path']})"
-                )
-            else:
-                seen_base[entry["base"]] = entry["name"]
+            collision = False
+            for role, offset in HOSTGROUP_ROLES:
+                hg = entry["base"] + offset
+                owner = claimed.get(hg)
+                if owner:
+                    violations.append(
+                        f"{endpoint}: {entry['name']} ({role} hostgroup {hg}) zajmuje "
+                        f"hostgroupe najemcy {owner[0]} ({owner[1]}) — bazy "
+                        f"{entry['base']} i {owner[2]} zachodza na siebie, wiec ruch "
+                        f"jednego klastra trafi do wezlow drugiego ({entry['path']})"
+                    )
+                    collision = True
+            if not collision:
+                for role, offset in HOSTGROUP_ROLES:
+                    claimed[entry["base"] + offset] = (entry["name"], role, entry["base"])
 
             other_user = seen_user.get(entry["app_user"])
             if other_user:

@@ -21,7 +21,9 @@ mariadb:
   eol: "2029-05"
   rpm_release: "1.el10"            # zweryfikowane w repodata: MariaDB-server-11.4.12-1.el10
   repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
-  repo_setup_args: "--mariadb-server-version=11.4"
+  # Pelna wersja z prefiksem: repozytorium serii trzyma tylko najnowsza latke,
+  # wiec przypiecie do "11.4" nie jest przypieciem (patrz komentarz w EL9).
+  repo_setup_args: "--mariadb-server-version=mariadb-11.4.12"
   # Skrypt repo_setup jest OS-agnostyczny — ta sama suma co w lockfile EL9 (v2026-06-30, 44184B).
   repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"
   galera_provider: "galera-4"
