@@ -222,7 +222,7 @@ platform-verify:  ## Sondy warstwy wspolnej: para ProxySQL, VIP, TLS endpointu, 
 	CLUSTER=$(PLATFORM) CLUSTER_CONFIG=$(PLATFORM_DIR)/platform.yml CLUSTER_INVENTORY=$(PLATFORM_DIR)/inventory.yml \
 	  PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-platform.py
 
-platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→infra→proxysql→endpoint→monitoring→alerts→sonda
+platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→firewall→infra→proxysql→endpoint→monitoring→alerts→sonda
 	$(MAKE) platform-validate
 	$(MAKE) platform-deploy
 	$(MAKE) platform-firewall
@@ -233,7 +233,7 @@ platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→
 	$(MAKE) platform-alerts
 	$(MAKE) platform-verify
 
-cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap→join→proxysql→monitoring→harden→endpoint→warunkowe→bramka (CLUSTER+CONFIRM=yes)
+cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap→join→proxysql→monitoring→harden→warunkowe→bramka (CLUSTER+CONFIRM=yes)
 	$(cluster_guard)
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (bootstrap tworzy nowy Primary Component)"; exit 1)
 	$(MAKE) cluster-validate
