@@ -22,13 +22,19 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          # ansible-core 2.21.x wymaga Pythona >=3.12 (requires_python, PyPI).
+          python-version: '3.12'
 
       - name: Install Python deps
         # minio: importowane przez tests/lab/probe-backup.py, ktore laduje
         # test jednostkowy test_probe_backup.py. Bez tego job pada na
         # ModuleNotFoundError, a cala bramka jakosci przestaje blokowac merge.
-        run: pip install ansible-core jsonschema pyyaml minio
+        # Piny ==: CI ma byc powtarzalny niezaleznie od upstreamu, tak jak
+        # lockfile'e (versions/*.lock.yml, .terraform.lock.hcl). Podbijajac
+        # wersje: aktualna sprawdz na pypi.org/pypi/<pakiet>/json;
+        # ansible-core trzymaj zgodny z baseline w
+        # versions/compatibility-report.md (wymaga Pythona >=3.12).
+        run: pip install ansible-core==2.21.2 jsonschema==4.26.0 pyyaml==6.0.3 minio==7.2.20
 
       - name: Install Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
@@ -165,9 +171,11 @@ jobs:
       - name: python compile (tests + validation)
         run: python3 -m compileall -q tests
 
+      # Pin ==: powtarzalnosc CI niezaleznie od upstreamu; wersje do podbicia
+      # sprawdzaj na pypi.org/pypi/pyflakes/json.
       - name: pyflakes (martwe importy, nieuzywane zmienne, puste f-stringi)
         run: |
-          python3 -m pip install -q pyflakes
+          python3 -m pip install -q pyflakes==3.4.0
           python3 -m pyflakes tests roles/galera_backup/filter_plugins roles/galera_backup/files/galera_backup
 
       - name: Static guards (mass restart, double bootstrap, zero hardcode, conditional env, proxysql tenancy, secret leak, no state latest)
@@ -210,8 +218,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - run: pip install ansible-lint ansible-core
+          # ansible-core 2.21.x wymaga Pythona >=3.12 (requires_python, PyPI).
+          python-version: '3.12'
+      # ansible-lint ma twardy require na ansible-core (requires_dist na
+      # PyPI: ansible-core!=2.17.*,>=2.16.19), wiec para jest przypinana
+      # razem. Podbicie: sprawdz requires_dist na
+      # pypi.org/pypi/ansible-lint/json i utrzymaj ansible-core zgodny
+      # z versions/compatibility-report.md.
+      - run: pip install ansible-lint==26.8.0 ansible-core==2.21.2
       - run: ansible-galaxy collection install -r requirements.yml
       - run: ansible-lint playbooks roles
         env:
