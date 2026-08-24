@@ -19,7 +19,7 @@ principal_stated_goal_locked: "2026-07-22T15:27:04Z"
 
 ## Problem
 
-Potrzeba powtarzalnej, idempotentnej fabryki produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących hostach Rocky Linux 9. Dziś brak zautomatyzowanej, dowodzonej ścieżki: nowy klaster powinien powstawać wyłącznie przez dodanie `clusters/<name>/` (inventory + konfiguracja), a każdy stan HA, bezpieczeństwa, backupu i odtwarzania musi być potwierdzony wykonywalnym probe'em i dowodem — a nie jednorazowym skryptem Bash ani monolitycznym playbookiem. VM istnieją przed uruchomieniem Ansible; projekt nie tworzy VM ani nie zarządza VMware ESXi/vCenter, siecią fizyczną ani storagem hypervisora.
+Potrzeba powtarzalnej, idempotentnej fabryki produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących hostach Rocky Linux 9. Dziś brak zautomatyzowanej, dowodzonej ścieżki: nowy klaster powinien powstawać wyłącznie przez dodanie `clusters/<name>/` (inventory + konfiguracja), a każdy stan HA, bezpieczeństwa, backupu i odtwarzania musi być potwierdzony wykonywalnym probe'em i dowodem — a nie jednorazowym skryptem Bash ani monolitycznym playbookiem. VM tworzy Terraform w Proxmox VE przed uruchomieniem Ansible (`terraform/`, cel `infra-provision`); projekt nie zarządza VMware ESXi/vCenter, nie przenosi VM oraz nie zarządza siecią fizyczną ani storagem hypervisora.
 
 ## Vision
 
@@ -27,11 +27,12 @@ Repozytorium Ansible, w którym nowy niezależny klaster Galera+ProxySQL powstaj
 
 ## Out of Scope
 
-- tworzenie VM,
+Tworzenie VM jest w zakresie: maszyny klastrów i warstwy współdzielonej powstają przez Terraform na Proxmox VE (`terraform/`, cel `infra-provision`, provider `bpg/proxmox`). Poza zakresem pozostaje:
+
 - zarządzanie ESXi lub vCenter,
-- przenoszenie VM,
-- automatyzacja anti-affinity VMware (rekomendacja w dokumentacji, bez walidacji vCenter),
-- fizyczna sieć i storage hypervisora,
+- przenoszenie VM (przebudowa klastra to destroy + provision od zera, nie migracja),
+- automatyzacja anti-affinity VM (rekomendacja operacyjna bez walidacji; flota działa na pojedynczym węźle PVE — świadomie przyjęte ryzyko),
+- fizyczna sieć, storage i konfiguracja samego węzła PVE (istniejące `vmbr0`, `local-zfs`, zaimportowane obrazy cloud-init i pool poprzedzają `infra-provision`),
 - multi-DC/WAN Galera w v1,
 - Kubernetes operator,
 - MaxScale lub HAProxy jako alternatywa dla ProxySQL,
@@ -57,7 +58,7 @@ Repozytorium Ansible, w którym nowy niezależny klaster Galera+ProxySQL powstaj
 
 ## Constraints
 
-- Hosty: istniejące Rocky Linux 9 (VMware ESXi), konfigurowane przez Ansible; VM tworzone poza zakresem.
+- Hosty: VM Rocky Linux 9/10 na Proxmox VE tworzone Terraformem (`make infra-provision`) i konfigurowane przez Ansible; ESXi/vCenter oraz przenoszenie VM poza zakresem.
 - Wersje przypięte `versions.lock.yml`; produkcja wyłącznie `versions.policy: locked`; nigdy `state: latest`; brak dynamicznej zmiany major series; deployment zatrzymuje się, gdy pakiet z lockfile niedostępny.
 - Galera: 3 pełne węzły, `max_writers: 1`, read/write split wyłączony, SST przez `mariadb-backup`, nieparzysta liczba głosów i ochrona quorum.
 - ProxySQL: 2 węzły, natywny `mysql_galera_hostgroups`, admin port ograniczony do administration CIDR.
@@ -73,9 +74,10 @@ Repozytorium Ansible, w którym nowy niezależny klaster Galera+ProxySQL powstaj
 Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w kolejności feature'ów F0–F14, zamykając każde kryterium wyłącznie na dowodzie. Po zakmnięciu zakresu v1: drugi niezależny klaster powstaje z tego samego kodu wyłącznie przez nowy `clusters/<name>/`, zwykły converge drugiego klastra jest idempotentny, runbook total outage sprawdzony na środowisku testowym, repo bez sekretów, ISA aktualnym systemem zapisu projektu.
 
 ## Criteria
+Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; `[ ]` — otwarte; `[~]` — PASS z zastrzeżeniem: kontrakt dotrzymany, ale dowód obejmuje tylko część kryterium lub część środowisk albo jest historyczny i nieodtwarzalny bez destrukcji — dokładne zastrzeżenie w Verification przy danym ISC.
 
 ### Instalacja i idempotencja
-- [x] ISC-1: Deployment na czystych hostach Rocky Linux 9 kończy się sukcesem (site.yml exit 0, wszystkie taski PASS).
+- [~] ISC-1: Deployment na czystych hostach Rocky Linux 9 kończy się sukcesem (site.yml exit 0, wszystkie taski PASS).
 - [x] ISC-2: Drugi uruchomiony converge na niezmiennym klastrze raportuje `changed=0` na wszystkich hostach.
 - [x] ISC-3: Wersje MariaDB, mariadb-backup, Galera provider, ProxySQL i kolekcji Ansible są dokładnie zgodne z `versions.lock.yml`.
 - [x] ISC-4: SELinux pozostaje w trybie Enforcing po pełnym deploy.
@@ -100,7 +102,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - [x] ISC-19: Węzeł non-Primary, non-Synced, not Ready lub przekraczający zatwierdzony lag jest wyłączony z ruchu ProxySQL.
 - [x] ISC-20: Monitorowanie Galery w ProxySQL osiąga poprawny stan w określonym progu czasu po deploy.
 - [x] ISC-21: Konfiguracja runtime i disk ProxySQL jest zgodna z repo (brak driftu po converge).
-- [x] ISC-22: Admin port ProxySQL (6032) nie jest osiągalny z application CIDR.
+- [~] ISC-22: Admin port ProxySQL (6032) nie jest osiągalny z application CIDR.
 - [x] ISC-23: Anti: Read/write splitting pozostaje wyłączony, dopóki osobna analiza aplikacji go nie zatwierdzi.
 
 ### Endpoint HA
@@ -130,7 +132,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - [x] ISC-41: Root nie loguje się zdalnie (tylko localhost/UNIX socket).
 - [x] ISC-42: Konta SST, monitor i app mają minimalne uprawnienia (least privilege).
 - [x] ISC-43: Anti: Sekrety nie występują w repo, logach CI, diffach ani argv procesu.
-- [x] ISC-44: W trybie `tls.mode=full` połączenie z niezaufanym lub nieważnym certyfikatem jest odrzucane.
+- [~] ISC-44: W trybie `tls.mode=full` połączenie z niezaufanym lub nieważnym certyfikatem jest odrzucane.
 - [x] ISC-45: W trybie `tls.mode=disabled` w profilu production powstaje jawne ostrzeżenie i udokumentowane risk acceptance.
 
 ### Obserwowalność
@@ -157,7 +159,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 - [x] ISC-62: README i runbooki obejmują bootstrap, total outage, node replacement, backup, restore, upgrade i decommission.
 
 ### F0 Discovery
-- [x] ISC-66: Raport discovery zawiera fakty: OS/kernel, CPU/RAM/NUMA, dyski/filesystem/mount/wolne miejsce, IOPS+fsync (fio), DNS/routing/osigalność portów, chrony/NTP, SELinux/firewalld, repozytoria+pakiety, istniejące MariaDB/ProxySQL, monitoring, secret backend, audyt PK, write rate.
+- [~] ISC-66: Raport discovery zawiera fakty: OS/kernel, CPU/RAM/NUMA, dyski/filesystem/mount/wolne miejsce, IOPS+fsync (fio), DNS/routing/osigalność portów, chrony/NTP, SELinux/firewalld, repozytoria+pakiety, istniejące MariaDB/ProxySQL, monitoring, secret backend, audyt PK, write rate.
 - [x] ISC-67: Anti: F0 discovery nie modyfikuje stanu usług produkcyjnych (read-only względem usług).
 - [x] ISC-68: `gcache.size` jest wyliczony z mierzonego write rate i wymaganego okna IST i zapisany w raporcie/Decisions.
 
