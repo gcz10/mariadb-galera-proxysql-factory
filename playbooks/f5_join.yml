@@ -223,23 +223,78 @@
         mode: "0644"
       when: use_systemd
 
-    - name: "Uruchom MariaDB jako węzeł dołączający — produkcja (systemctl start → SST/IST)"
+    # `no_block: true` jest tu WARUNKIEM dzialania bramki ponizej, nie optymalizacja.
+    # Jednostka ma Type=notify, wiec dla systemd start konczy sie dopiero na
+    # "READY=1", a drop-in wylacza logike timeoutu (TimeoutStartSec=infinity).
+    # Blokujacy `state: started` przy zawieszonym SST NIE WRACA NIGDY, wiec bounded
+    # wait ponizej byl kodem nieosiagalnym: playbook wisial bez limitu i bez sladu.
+    # Dokumentacja modulu: "Do not synchronously wait for the requested operation
+    # to finish. Enqueued job will continue without Ansible blocking on its
+    # completion."
+    - name: "Uruchom MariaDB jako węzeł dołączający — produkcja (start bez blokowania; deadline pilnuje playbook)"
       ansible.builtin.systemd:
         name: mariadb
         state: started
         enabled: true
         daemon_reload: true
+        no_block: true
       when: use_systemd
 
-    - name: "Czekaj na osiągnięcie stanu Synced (SST dużej bazy trwa od minut do godzin)"
-      ansible.builtin.shell: >
-        mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW STATUS WHERE Variable_name='wsrep_local_state'" 2>/dev/null
-      register: join_state
-      until: "'4' in (join_state.stdout | default(''))"
-      retries: "{{ galera_join_wait_retries | default(360) | int }}"
-      delay: 5
-      changed_when: false
+    # JEDYNY wlasciciel deadline'u dolaczania. `until` jest z zalozenia dla zadan,
+    # ktore po drodze padaja ("tasks that are likely to fail"), wiec pierwsze proby
+    # bez socketu to poprawny stan przejsciowy — porazka pada dopiero po wyczerpaniu
+    # `retries`. Domyslnie 360 x 5 s = 30 min.
+    - name: "Dołączanie węzła z jawnym oknem czasowym"
+      block:
+        - name: "Czekaj na osiągnięcie stanu Synced (SST dużej bazy trwa od minut do godzin)"
+          ansible.builtin.shell: >
+            mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+            "SHOW STATUS WHERE Variable_name='wsrep_local_state'" 2>/dev/null
+          register: join_state
+          until: "'4' in (join_state.stdout | default(''))"
+          retries: "{{ galera_join_wait_retries | default(360) | int }}"
+          delay: 5
+          changed_when: false
+      rescue:
+        # Bez tego operator dostawal wylacznie "until nie spelnione" i musial
+        # sam wchodzic na wezel. Trzy pytania rozstrzygaja przypadek: czy jednostka
+        # jeszcze wstaje, co mowi log, i czy transfer w ogole ruszyl.
+        - name: "Diagnostyka — stan jednostki systemd"
+          ansible.builtin.command: systemctl status mariadb --no-pager --lines=0
+          register: sst_unit_status
+          changed_when: false
+          failed_when: false
+
+        - name: "Diagnostyka — ogon journala mariadb"
+          ansible.builtin.command: journalctl -u mariadb --no-pager --lines=50
+          register: sst_journal
+          changed_when: false
+          failed_when: false
+
+        - name: "Diagnostyka — stan wsrep_local_state i postęp SST"
+          ansible.builtin.shell: >
+            mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
+            "SHOW STATUS WHERE Variable_name IN
+            ('wsrep_local_state','wsrep_local_state_comment','wsrep_cluster_status')" 2>&1;
+            ls -la /var/lib/mysql/.sst 2>&1 || true
+          register: sst_progress
+          changed_when: false
+          failed_when: false
+
+        - name: "Przekrocz okno dołączania z kompletem dowodów"
+          ansible.builtin.fail:
+            msg: |
+              {{ inventory_hostname }} nie osiagnal stanu Synced w oknie
+              {{ (galera_join_wait_retries | default(360) | int) * 5 }} s.
+              Jednostka pozostaje w stanie startu (TimeoutStartSec=infinity celowo
+              nie pozwala systemd przerwac transferu) — decyzje o przerwaniu
+              podejmuje operator na podstawie ponizszych danych.
+
+              [systemctl] {{ sst_unit_status.stdout | default('brak') }}
+
+              [wsrep + katalog SST] {{ sst_progress.stdout | default('brak') }}
+
+              [journal -50] {{ sst_journal.stdout | default('brak') }}
 
     # CELOWO inline, nie `tasks/assert_galera_healthy.yml`. Helper asertuje
     # `wsrep_cluster_size == expected_size`, a dolaczanie wezla pilnuje INNEGO

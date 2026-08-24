@@ -1,7 +1,7 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
 **Status:** W TOKU — utworzony 2026-08-23 na bazie czterech zewnętrznych recenzji.
-**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3, P1-4 (`2996474`, `4aeae5f`), P2-9 (`48740b1`), P3 (higiena, komplet).
+**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3, P1-4 (`2996474`, `4aeae5f`), P2-8, P2-9 (`48740b1`), P3 (higiena, komplet).
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
 
@@ -282,7 +282,7 @@ nadal PASS.
 
 ---
 
-## P2-8. Nieograniczone okno startu przy SST
+## P2-8. Nieograniczone okno startu przy SST — ZROBIONE
 
 **Problem.** `playbooks/f5_join.yml` instaluje drop-in `TimeoutStartSec=infinity`,
 a potem wykonuje blokujące `systemd: state=started`. Własny bounded wait
@@ -297,6 +297,35 @@ stan transferu SST.
 i zwraca komplet diagnostyki.
 
 **Koszt:** mały.
+
+**Wynik.** `f5_join.yml` startuje jednostkę z `no_block: true`, więc bounded wait
+przestał być kodem nieosiągalnym i jest JEDYNYM właścicielem deadline'u
+(domyślnie 360 × 5 s). Przekroczenie okna wpada w `rescue`, który zbiera
+`systemctl status`, ogon journala oraz `wsrep_local_state` + stan katalogu SST,
+i dopiero wtedy kończy się błędem z kompletem dowodów.
+
+`TimeoutStartSec=infinity` **zostaje celowo**. MariaDB dokumentuje, że od systemd
+236 działa `EXTEND_TIMEOUT_USEC=` i „manual override of TimeoutStartSec is often
+unnecessary"; flota jest w tym reżimie (systemd 252, mariadbd 11.4.12 zawiera
+15 odwołań do tego protokołu). Mimo to skończony timeout oznaczałby, że systemd
+ubija mariadbd w połowie transferu danych, gdyby przedłużanie z jakiegokolwiek
+powodu nie zadziałało. Deadline należy do playbooka, który potrafi zebrać
+diagnostykę; systemd ma nie przerywać SST.
+
+**Dowód (green, 2026-08-24).** Zatrzymany `grg2`, porty 4567/4444/4568
+zablokowane na czas próby, okno skrócone do 3 prób:
+
+```
+Uruchom MariaDB ... (start bez blokowania)  -> changed
+Czekaj na Synced                            -> FAILED - RETRYING (359 retries left)
+Przekrocz okno dołączania                   -> blad po 15 s + diagnostyka
+  [systemctl] Active: activating (start) since ... 17s ago
+  [wsrep]     ERROR 2002 socket (111); /var/lib/mysql/.sst nie istnieje
+```
+
+Linia `FAILED - RETRYING` jest dowodem osiągalności bramki: pod blokującym
+startem nie mogłaby wystąpić. Po zdjęciu blokady `make cluster-join` przywrócił
+`size=3`, wszystkie węzły `Primary`/`Synced`; bramka po budowie 13/13 PASS.
 
 ---
 
