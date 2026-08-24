@@ -17,7 +17,7 @@
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify \
-        platform-validate platform-trust-hosts platform-deploy platform-firewall platform-infra platform-proxysql platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
+        platform-validate platform-trust-hosts platform-deploy platform-firewall platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
 
 CLUSTER ?= example-cluster
 ANSIBLE_OPTS ?=
