@@ -34,7 +34,7 @@ jobs:
         # wersje: aktualna sprawdz na pypi.org/pypi/<pakiet>/json;
         # ansible-core trzymaj zgodny z baseline w
         # versions/compatibility-report.md (wymaga Pythona >=3.12).
-        run: pip install ansible-core==2.21.2 jsonschema==4.26.0 pyyaml==6.0.3 minio==7.2.20
+        run: pip install ansible-core==2.21.3 jsonschema==4.26.0 pyyaml==6.0.3 minio==7.2.20
 
       - name: Install Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
@@ -226,7 +226,7 @@ jobs:
       # razem. Podbicie: sprawdz requires_dist na
       # pypi.org/pypi/ansible-lint/json i utrzymaj ansible-core zgodny
       # z versions/compatibility-report.md.
-      - run: pip install ansible-lint==26.8.0 ansible-core==2.21.2
+      - run: pip install ansible-lint==26.8.0 ansible-core==2.21.3
       - run: ansible-galaxy collection install -r requirements.yml
       - run: ansible-lint playbooks roles
         env:

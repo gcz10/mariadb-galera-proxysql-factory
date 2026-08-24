@@ -53,7 +53,7 @@
 
 | Wartość | Wartość | Źródło |
 |---|---|---|
-| ansible-core | **2.21.2** (2026-07-13) | pypi.org, ansible.com |
+| ansible-core | **2.21.3** (2026-08-10) | pypi.org, ansible.com |
 | ansible.mysql | **5.1.0** | github.com/ansible-collections/ansible.mysql |
 
 **Ważne:** `community.mysql` jest **deprecated** → rename na `ansible.mysql`. FQCN zmienia się z `community.mysql.mysql_query` na `ansible.mysql.mysql_query`. Redirecty działają, ale playbooki muszą używać `ansible.mysql.*`. Planowane usunięcie redirectów w Ansible 17. Dodatkowo `ansible.mariadb` wprowadzona 2026-07 (przyszła dedykowana kolekcja MariaDB); `ansible.mysql` wspiera MariaDB do mid-2027.
@@ -81,7 +81,7 @@
 | MariaDB 11.4.12 | LTS | RPM oficjalne repo | Galera 4 wbudowana | Wsparcie do 2029-05 |
 | ProxySQL 3.0.9 | Stable | RPM oficjalne repo | `mysql_galera_hostgroups` | Security CVEs patchowane |
 | Galera 4 (galera-4) | wsrep API 26 | z MariaDB repo | — | MariaDB 11.x wylacznie |
-| ansible-core 2.21.2 | latest | — | — | ansible.mysql 5.1.0 |
+| ansible-core 2.21.3 | latest | — | — | ansible.mysql 5.1.0 |
 | ansible.mysql 5.1.0 | active | — | — | MariaDB wspierana do mid-2027 |
 | PMM Server 3.9.1 | security release | kontener, nie RPM | natywne metryki MariaDB/Galera | digest + trwały volume; backup przed upgrade |
 | node_exporter 1.12.1 | latest stable 2026-07-14 | oficjalny tarball per arch | external service w PMM | amd64/arm64 SHA-256 przypięte |
