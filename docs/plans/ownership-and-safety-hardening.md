@@ -161,6 +161,23 @@ Grep po `$PROXYSQL_ADMIN_PASSWORD` na wszystkich czterech węzłach klastra
 przeszły nowym poświadczeniem (`galera-green-r9-20260824-122356`, 4536
 wierszy zweryfikowanych), bramka po budowie 13/13 PASS.
 
+**Zgodność z dokumentacją ProxySQL.** Pomiar pokrywa się ze specyfikacją:
+`admin-stats_credentials` to poświadczenia, które „are not allowed to update
+internal data structures (...) neither to read configuration tables. They are
+only allowed to read from the statistics and monitoring tables"
+(global-variables/admin-variables); `stats_mysql_connection_pool` ma
+kolumny `hostgroup`/`srv_host`/`srv_port`/`status`
+(the-admin-schemas/stats/stats-mysql); `ONLINE` znaczy „fully operational"
+(main-runtime/mysql-tables); zmiana wchodzi przez `LOAD ADMIN VARIABLES TO
+RUNTIME` + `SAVE ADMIN VARIABLES TO DISK` (the-admin-schemas/admin-commands).
+
+**Sprawdzone ryzyko: pusta pula.** Tabela statystyczna mogłaby teoretycznie nie
+mieć wiersza dla hostgroupy bez ruchu — wtedy strażnik nie znalazłby writera
+i backup padłby fail-closed z mylącym komunikatem. Zmierzone na `grp2`, który
+nie trzyma VIP-a i nie widzi ruchu aplikacji: komplet trzech wierszy hg 890
+z poprawnym `status`, w tym wiersz o `ConnOK=0, Queries=0`. Wiersze powstają
+z konfiguracji i monitoringu, nie z ruchu — ryzyko nie materializuje się.
+
 ---
 
 ## P1-4. Domyślna trwałość jest ustawiona w złą stronę — ZROBIONE

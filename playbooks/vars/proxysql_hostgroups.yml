@@ -41,5 +41,15 @@ proxysql_remote_admin_user: "isa_admin"
 #   SELECT hostname FROM runtime_mysql_servers                                 -> ERROR 1045: no such table
 #   UPDATE global_variables ...                                                -> ERROR 1045: attempt to write a readonly database
 #
+# Zgodne z dokumentacja, nie tylko z pomiarem:
+# - admin-stats_credentials to poswiadczenia read-only, ktore "are not allowed
+#   to update internal data structures (...) neither to read configuration
+#   tables. They are only allowed to read from the statistics and monitoring
+#   tables" (https://proxysql.com/documentation/global-variables/admin-variables)
+# - stats_mysql_connection_pool ma kolumny hostgroup/srv_host/srv_port/status
+#   (https://proxysql.com/documentation/the-admin-schemas/stats/stats-mysql)
+# - status ONLINE = "backend server is fully operational", SHUNNED = czasowo
+#   wylaczony (https://proxysql.com/documentation/main-runtime/mysql-tables)
+#
 # Dlatego straznik czyta tabele statystyczna, a nie schemat konfiguracyjny.
 proxysql_stats_user: "isa_stats"
