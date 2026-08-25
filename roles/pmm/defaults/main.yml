@@ -86,3 +86,10 @@ pmm_agent_hosts: >-
   {{ hostvars | dict2items
      | selectattr('value.pmm_local_agent_id', 'defined')
      | map(attribute='key') | list }}
+
+# Uslugi warstwy wspolnej zadeklarowane przez platforme. Monitoring bywa
+# prowadzony osobno, wiec `pmm` nie zawsze jest jej czescia. Najemca nie ma
+# bloku `infra`, dlatego domyslka utrzymuje dotychczasowe zachowanie: wymog
+# poswiadczen PMM obowiazuje, dopoki ktos jawnie nie zadeklaruje inaczej.
+pmm_declared_services: >-
+  {{ ((platform | default({})).infra | default({})).services | default(['pmm']) }}

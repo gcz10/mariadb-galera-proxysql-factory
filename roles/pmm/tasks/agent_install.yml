@@ -3,10 +3,14 @@
   ansible.builtin.meta: end_host
   when: not (pmm_agent_target | bool)
 
+# Warstwa wspolna moze prowadzic monitoring OSOBNO — wtedy nie deklaruje `pmm`
+# w `platform.infra.services` i nie ma czego rejestrowac. Najemca bloku `infra`
+# nie ma, wiec domyslka utrzymuje wymog tak jak dotad.
 - name: "Wymagaj hasla PMM poza repozytorium"
   ansible.builtin.assert:
     that: pmm_admin_password | length > 0
     fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium."
+  when: "'pmm' in pmm_declared_services"
 
 # Eksportery tworzone nizej przez API PMM sa walidowane POLACZENIEM: PMM
 # loguje sie jako pmm_monitor i odrzuca zadanie golym HTTP 400, gdy konta
