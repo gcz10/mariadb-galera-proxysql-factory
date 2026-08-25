@@ -54,12 +54,27 @@ curl -sk -H "$H" -X POST "$EP/api2/json/nodes/$NODE/qemu" \
   --data-urlencode "ipconfig0=gw=192.168.1.1,ip=192.168.1.36/24" \
   --data-urlencode "nameserver=1.1.1.1 8.8.8.8"
 
-# 2. Rozmiar dysku — osobnym wywolaniem, inaczej zostanie rozmiar obrazu (10G).
+# 2. POCZEKAJ, az tworzenie sie SKONCZY. `POST /qemu` zwraca UPID natychmiast,
+#    a import obrazu trwa i trzyma blokade pliku konfiguracji. Kazde kolejne
+#    wywolanie wysłane w tym czasie tez zwraca UPID — i cicho pada w tle na
+#    `can't lock file ... got timeout`. Sam sie na to nabralem 2026-08-25:
+#    resize i start "przeszly", a maszyny stały puste bez dysku i nazwy.
+wait_task() {  # $1 = UPID
+  while [ "$(curl -sk -H "$H" "$EP/api2/json/nodes/$NODE/tasks/$1/status" \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["status"])')" != "stopped" ]; do
+    sleep 5
+  done
+  curl -sk -H "$H" "$EP/api2/json/nodes/$NODE/tasks/$1/status" \
+    | python3 -c 'import json,sys; print("exit:", json.load(sys.stdin)["data"].get("exitstatus"))'
+}
+wait_task "$CREATE_UPID"   # UPID zwrocony przez POST /qemu
+
+# 3. Rozmiar dysku — osobnym wywolaniem, inaczej zostanie rozmiar obrazu (10G).
+#    Tez zwraca UPID: sprawdz jego wynik, nie samo przyjecie zlecenia.
 curl -sk -H "$H" -X PUT "$EP/api2/json/nodes/$NODE/qemu/9780/resize" \
   --data-urlencode "disk=virtio0" --data-urlencode "size=40G"
 
-# 3. Start. Import dysku trzyma blokade pliku konfiguracji: start tuz po
-#    utworzeniu konczy sie `can't lock file ... got timeout`. Ponow z odstepem.
+# 4. Start.
 curl -sk -H "$H" -X POST "$EP/api2/json/nodes/$NODE/qemu/9780/status/start"
 ```
 
