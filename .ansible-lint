@@ -1,6 +1,12 @@
 # Konfiguracja ansible-lint. Kazda pozycja ma uzasadnienie — lista wyjatkow bez
 # powodu zamienia sie w smietnik, do ktorego dopisuje sie wszystko, co przeszkadza.
 
+# Profil PRZYPIETY jawnie. Do 2026-08-25 nie bylo tu tej linii i lint dzialal na
+# domysle narzedzia — czyli surowosc bramki zmienialaby sie sama przy aktualizacji
+# ansible-lint, w obie strony. CoP (automation-good-practices, Testing) wskazuje
+# `production` jako profil dla kodu wdrazanego na produkcje.
+profile: production
+
 exclude_paths:
   - .ansible/            # kolekcje instalowane przez ansible-galaxy, nie nasz kod
   - .worktrees/          # rownolegle checkouty innych galezi

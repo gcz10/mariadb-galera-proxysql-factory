@@ -760,6 +760,11 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 	@# sprawdzany tutaj, nawet jesli jego sonda stoi na koncu listy.
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	@# PIERWSZA, nie ostatnia: uruchamia converge po raz drugi, wiec wszystkie
+	@# sondy ponizej mierza stan JUZ PO nim. Odwrotna kolejnosc dawalaby zielone
+	@# swiatlo stanowi, ktorego nikt potem nie sprawdzil. CoP stawia ten warunek
+	@# bezwarunkowo, a repo mialo tu dziure mimo 501 testow jednostkowych.
+	$(TARGET_ENV) tests/lab/probe-idempotence.py
 	$(TARGET_ENV) tests/lab/probe-galera-cluster.py
 	$(TARGET_ENV) tests/lab/probe-proxysql.py
 	$(TARGET_ENV) tests/lab/probe-endpoint.py
