@@ -65,18 +65,30 @@ Dalej normalna ścieżka z README: `cluster-trust-hosts`, PKI, `cluster-validate
 ```bash
 # 1. NAJPIERW wyrejestruj najemce z warstwy wspolnej — inaczej w ProxySQL
 #    zostana hostgroupy wskazujace na nieistniejace adresy, a w PMM martwe uslugi.
-make cluster-deregister CLUSTER=<nazwa> CONFIRM=yes
+CLUSTER=nazwa-najemcy
+make cluster-deregister CLUSTER="$CLUSTER" CONFIRM=yes
 
-# 2. Maszyny (nie ma stanu Terraforma, wiec wprost przez API).
-for id in 9780 9781 9782; do
+# 2. POTWIERDZ TOZSAMOSC, zanim cokolwiek skasujesz. VMID to trzy cyfry roznicy
+#    od cudzego, zywego wezla, a `DELETE` nie pyta o zdanie. Ta petla NIE kasuje:
+#    wypisuje nazwe i adres kazdego VMID i ma sie zgadzac z inwentarzem najemcy.
+export VMIDS="9780 9781 9782"
+for id in $VMIDS; do
+  curl -sk -H "$H" "$EP/api2/json/nodes/$NODE/qemu/$id/config" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin)['data']; print('$id', d.get('name'), d.get('ipconfig0'))"
+done
+grep -E 'ansible_host' "clusters/$CLUSTER/inventory.yml"
+
+# 3. Dopiero gdy obie listy sie zgadzaja — kasowanie.
+for id in $VMIDS; do
   curl -sk -H "$H" -X POST "$EP/api2/json/nodes/$NODE/qemu/$id/status/stop"
   curl -sk -H "$H" -X DELETE "$EP/api2/json/nodes/$NODE/qemu/$id?purge=1&destroy-unreferenced-disks=1"
 done
 
-# 3. Sieroty ZFS. `purge=1` zwykle wystarcza, ale wolumen `-cloudinit` potrafi
-#    zostac i wtedy PONOWNE uzycie tego VMID pada na `dataset already exists`.
+# 4. Sieroty ZFS. `purge=1` zwykle wystarcza, ale wolumen `-cloudinit` potrafi
+#    zostac i wtedy PONOWNE uzycie tego VMID (takze przez Terraform) pada na
+#    `dataset already exists`. Sprawdz i skasuj recznie, jesli cos zostalo.
 curl -sk -H "$H" "$EP/api2/json/nodes/$NODE/storage/local-zfs/content" \
-  | python3 -c "import json,sys;[print(c['volid']) for c in json.load(sys.stdin)['data'] if any(f'vm-{i}-' in c['volid'] for i in (9780,9781,9782))]"
+  | python3 -c "import json,sys,os;[print(c['volid']) for c in json.load(sys.stdin)['data'] if any(f'vm-{i}-' in c['volid'] for i in os.environ['VMIDS'].split())]"
 ```
 
 ## Artefakty w repozytorium

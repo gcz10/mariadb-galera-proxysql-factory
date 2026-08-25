@@ -61,3 +61,6 @@ clusters/*/recover-bootstrap-node
 # Watchdog agenta: konfiguracja lokalna operatora, nie kontrakt repozytorium.
 .omp/WATCHDOG.md
 .omp/WATCHDOG.yml
+
+# Katalogi tymczasowe testow bramki zaufania hostom (clusters/trust-*).
+clusters/trust-*/

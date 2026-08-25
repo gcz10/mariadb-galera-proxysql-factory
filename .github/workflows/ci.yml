@@ -75,6 +75,10 @@ jobs:
           for inv in clusters/*/inventory.yml; do
             [ -f "$inv" ] || continue
             cdir=$(dirname "$inv")
+            # Katalog bez cluster.yml nie jest klastrem — to resztka po
+            # przerwanym przebiegu. Walidator dostalby nieistniejaca sciezke
+            # i wywalil cala bramke zamiast pominac smiec.
+            [ -f "$cdir/cluster.yml" ] || { echo "SKIP (brak cluster.yml): $cdir"; continue; }
             if python3 tests/validation/validate-inventory.py "$inv" "$cdir/cluster.yml"; then
               echo "OK: $inv"
             else
