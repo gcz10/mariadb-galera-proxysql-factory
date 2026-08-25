@@ -114,6 +114,8 @@ TLS_MODE = CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled")
 # metryki backupu nie istnieja i NIE MOGA byc wymagane — inaczej monitoring
 # zglasza brak czegos, czego nikt nie obiecal, a bramka nigdy nie jest zielona.
 BACKUP_ENABLED = bool(CLUSTER_CONFIG.get("backup", {}).get("enabled", True))
+# Rejestracja w PMM jest deklaracja klastra, tak samo jak backup.
+MONITORING_ENABLED = bool(CLUSTER_CONFIG.get("monitoring", {}).get("enabled", True))
 EXPECTED_CONFIG_METRICS = {
     "isa_restore_test_monitoring_enabled": (
         1
@@ -200,6 +202,15 @@ def wait_for_fresh_metrics(queries, started_at, timeout=90):
 
 
 def main():
+    # Klaster moze nie byc rejestrowany w PMM: bywa deweloperski albo obserwowany
+    # innym systemem. Bez tego sonda oblewala go za brak rejestracji, ktorej nikt
+    # nie obiecal, i klaster nigdy nie przechodzil bramki po budowie.
+    if not MONITORING_ENABLED:
+        print(
+            "SKIP: monitoring wylaczony w cluster.yml (monitoring.enabled=false) — "
+            "klaster nie jest rejestrowany w PMM"
+        )
+        return 0
     if not PMM_PASSWORD:
         print("PMM_ADMIN_PASSWORD is required", file=sys.stderr)
         return 2

@@ -627,6 +627,10 @@
             "slowlog"
           ],
           "description": "Zrodlo danych QAN. 'slowlog' wymaga LOKALNEGO pmm-agenta (monitoring.agent_groups) czytajacego plik oraz mariadb_tuning.slow_query_log=ON; klaster agentless moze uzyc tylko 'perfschema'. Domyslnie perfschema."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Czy klaster jest rejestrowany w PMM. Pominiecie = true (zgodnosc wsteczna). false oznacza klaster obserwowany innym systemem albo w ogole nieobserwowany: kroki rejestracji i reguly alertowe nie powstaja, a sondy monitoringu raportuja SKIP zamiast udawac zielone."
         }
       }
     },

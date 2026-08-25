@@ -39,6 +39,20 @@ PLATFORM_OPTS = -i $(PLATFORM_DIR)/inventory.yml -e @$(PLATFORM_DIR)/platform.ym
 # do wykonania operacji niszczacej na cudzym klastrze.
 cluster_guard = @case "$(origin CLUSTER)" in file|default|undefined) echo "ERROR: ten cel dziala na konkretnym klastrze — podaj CLUSTER=... (domyślny example-cluster niedozwolony)" >&2; exit 1;; esac
 
+# Monitoring jest DEKLARACJA klastra, tak samo jak backup. Klaster moze go nie
+# miec: bywa deweloperski albo obserwowany cudzym systemem. Bez tego przelacznika
+# `cluster-build` zawsze zadal PMM i rejestrowal wezly w serwerze, ktorego moglo
+# nie byc, a brama po budowie oblewala taki klaster za brak rejestracji.
+# Zmienna liczona per-cel: nie chcemy czytac YAML-a przy kazdym wywolaniu make.
+#
+# UWAGA na semantyke recept: kazda linia to OSOBNA powloka, wiec `exit 0` w
+# pierwszej linii NIE pomija kolejnych. Cele ponizej maja wiec caly korpus w
+# jednym bloku `if`, a nie straznik w osobnej linii — pierwsza wersja tej zmiany
+# wygladala na dzialajaca (test zwracal `false`), a mimo to uruchamiala wszystkie
+# playbooki.
+monitoring_enabled = $(shell python3 -c "import yaml,sys; c=yaml.safe_load(open('clusters/$(CLUSTER)/cluster.yml')) or {}; print(str((c.get('monitoring') or {}).get('enabled', True)).lower())" 2>/dev/null || echo true)
+monitoring_skip_note = echo "SKIP: monitoring.enabled=false w clusters/$(CLUSTER)/cluster.yml — pomijam rejestracje w PMM"
+
 # TF_DIR domyślnie wyprowadzany z nazwy klastra; nadpisywalny dla nietypowych układów.
 TF_DIR ?= terraform/$(CLUSTER)
 
@@ -554,18 +568,21 @@ lab-hardening-verify:  ## Zweryfikuj hardening MariaDB (ISC-40/41/42)
 # robil to najemca, deregistracja tego klastra zabierala monitoring calej pary.
 # Z tego samego powodu znika stad straznik PROXYSQL_ADMIN_PASSWORD: zadny
 # z pozostalych krokow nie laczy sie juz z portem admina ProxySQL.
-cluster-monitoring:  ## F11 — zarejestruj hosty i usługi w natywnym PMM Inventory
+cluster-monitoring:  ## F11 — zarejestruj hosty i usługi w natywnym PMM Inventory (gdy monitoring.enabled)
 	$(cluster_guard)
-	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
-	@: "$${PMM_MONITOR_PASSWORD:?Ustaw PMM_MONITOR_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/f11_node_exporter.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
-	ansible-playbook playbooks/f11_pmm_agent.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
-	ansible-playbook playbooks/f11_pmm_client.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
-	ansible-playbook playbooks/f11_freshness.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	@if [ "$(monitoring_enabled)" != "true" ]; then $(monitoring_skip_note); exit 0; fi; \
+	set -e; \
+	: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"; \
+	: "$${PMM_MONITOR_PASSWORD:?Ustaw PMM_MONITOR_PASSWORD poza repozytorium}"; \
+	ansible-playbook playbooks/f11_node_exporter.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS); \
+	ansible-playbook playbooks/f11_pmm_agent.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS); \
+	ansible-playbook playbooks/f11_pmm_client.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS); \
+	ansible-playbook playbooks/f11_freshness.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS); \
 	ansible-playbook playbooks/f11_log_lifecycle.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 cluster-monitoring-refresh:  ## F11 — odśwież metryki świeżości (po backup/restore)
 	$(cluster_guard)
+	@if [ "$(monitoring_enabled)" != "true" ]; then $(monitoring_skip_note); exit 0; fi; \
 	ansible-playbook playbooks/f11_freshness.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-monitoring-verify:  ## Zweryfikuj natywne PMM Inventory i metryki laboratorium
@@ -658,9 +675,10 @@ cluster-remove-node:  ## F13 — usuń węzeł Galera (confirm-gated, wymaga NOD
 	@test -n "$(NODE)" || (echo "Ustaw NODE=<nazwa_wezla>"; exit 1)
 	ansible-playbook playbooks/f13_remove_node.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e node=$(NODE) -e confirm=yes $(ANSIBLE_OPTS)
 
-cluster-alerts:  ## F15 — provision alert rules ISC-47 (quorum/writer/node loss + freshness)
+cluster-alerts:  ## F15 — reguly alertowe ISC-47 (gdy monitoring.enabled)
 	$(cluster_guard)
-	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	@if [ "$(monitoring_enabled)" != "true" ]; then $(monitoring_skip_note); exit 0; fi; \
+	: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"; \
 	ansible-playbook playbooks/f15_alerts.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 lab-gcache-verify:  ## F0/ISC-68 — zmierz write rate + weryfikuj gcache.size (IST window)
