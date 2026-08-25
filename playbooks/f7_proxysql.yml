@@ -134,12 +134,57 @@
     # `mysql-ssl_p2s_ca` — drugi klaster z tls.mode=full nadpisywal CA pierwszego,
     # a ProxySQL ufal juz tylko temu, kto uruchomil f7 jako ostatni. Bledu nie bylo
     # widac, dopoki TLS mial wlaczony tylko jeden klaster.
+    # NAZWA PLIKU ZALEZY OD TRESCI (`ca-<skrot>.pem`), i to nie jest ozdoba.
+    #
+    # ProxySQL buforuje kontekst TLS POD SCIEZKA. Podmiana zawartosci pod ta sama
+    # nazwa NIE tworzy nowego kontekstu: proces dalej ufa CA, ktore wczytal przy
+    # starcie. Zlapane 2026-08-25 na odbudowie `orion-r9` — najemca postawiony
+    # od nowa pod ta sama nazwa dostal nowe CA, plik na ProxySQL byl juz nowy
+    # (odcisk zgodny co do bajtu), a monitor i tak dostawal
+    # `certificate signature failure`, dopoki nie zrestartowalem uslugi. Skutek
+    # byl dotkliwy: wszystkie backendy SHUNNED, hostgroupa writera pusta, a po
+    # godzinie nieudanych handshake'ow wezly zablokowaly adres ProxySQL przez
+    # `max_connect_errors`.
+    #
+    # Dokumentacja ProxySQL (SSL Support -> Backend certificates renewal) podaje
+    # dokladnie te droge: wskazac NOWA sciezke i przeladowac konfiguracje —
+    # operacja jest wtedy atomowa. Skrot z tresci daje to za darmo, bo kazde nowe
+    # CA to nowa nazwa pliku, wiec nowy kontekst.
+    # Sciezka jak w tls_certs.yml: `ca_reference` jest wzgledem KORZENIA repo,
+    # a nie katalogu playbooka — `lookup('file')` bez tego szuka w playbooks/.
+    - name: "TLS: policz skrót CA najemcy (nazwa pliku = treść)"
+      ansible.builtin.set_fact:
+        proxysql_ca_src: "{{ tls.ca_reference if tls.ca_reference.startswith('/') else (playbook_dir | dirname) ~ '/' ~ tls.ca_reference }}"
+        proxysql_ca_basename: "ca-{{ lookup('ansible.builtin.file', tls.ca_reference if tls.ca_reference.startswith('/') else (playbook_dir | dirname) ~ '/' ~ tls.ca_reference) | hash('sha256') | truncate(12, true, '') }}.pem"
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
     - name: "TLS: rozprowadź CA na węzeł ProxySQL (walidacja backendu; gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
       vars:
         tls_file_owner: proxysql
         tls_deploy_key: false
         tls_dir: "{{ proxysql_cluster_tls_dir }}"
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
+    - name: "TLS: zapisz CA pod nazwą zależną od treści"
+      ansible.builtin.copy:
+        src: "{{ proxysql_ca_src }}"
+        dest: "{{ proxysql_cluster_tls_dir }}/{{ proxysql_ca_basename }}"
+        owner: proxysql
+        group: proxysql
+        mode: "0644"
+      register: proxysql_backend_ca
+      when: (tls | default({})).mode | default('disabled') == 'full'
+
+    # Stare odciski tego najemcy sa smieciem, ale kasujemy je DOPIERO po tym, jak
+    # nowa sciezka trafi do konfiguracji — inaczej ProxySQL zostalby bez pliku,
+    # do ktorego wciaz sie odwoluje.
+    - name: "TLS: znajdź nieaktualne CA tego najemcy"
+      ansible.builtin.find:
+        paths: "{{ proxysql_cluster_tls_dir }}"
+        patterns: "ca-*.pem"
+        excludes: "{{ proxysql_ca_basename }}"
+      register: proxysql_stale_ca
       when: (tls | default({})).mode | default('disabled') == 'full'
 
     # Lista hostow budowana JAWNA PETLA, nie `regex_replace` z backreferencja.
@@ -153,7 +198,7 @@
         argv: "{{ proxysql_admin_cli }}"
         stdin: >-
           SELECT COUNT(*) FROM mysql_servers_ssl_params
-          WHERE ssl_ca='{{ proxysql_cluster_tls_dir }}/ca.pem'
+          WHERE ssl_ca='{{ proxysql_cluster_tls_dir }}/{{ proxysql_ca_basename }}'
           AND hostname IN ({% for b in galera_backends %}'{{ b }}'{% if not loop.last %},{% endif %}{% endfor %});
       register: proxysql_tls_ca_rows
       changed_when: false
@@ -170,7 +215,7 @@
           WHERE hostname IN ({% for b in galera_backends %}'{{ b }}'{% if not loop.last %},{% endif %}{% endfor %});
           {% for backend in galera_backends %}
           INSERT INTO mysql_servers_ssl_params (hostname, port, username, ssl_ca)
-          VALUES ('{{ backend }}', 3306, '', '{{ proxysql_cluster_tls_dir }}/ca.pem');
+          VALUES ('{{ backend }}', 3306, '', '{{ proxysql_cluster_tls_dir }}/{{ proxysql_ca_basename }}');
           {% endfor %}
           LOAD MYSQL SERVERS TO RUNTIME;
           SAVE MYSQL SERVERS TO DISK;
@@ -179,6 +224,16 @@
       when:
         - (tls | default({})).mode | default('disabled') == 'full'
         - (proxysql_tls_ca_rows.stdout | default('0') | trim | int) != (galera_backends | length)
+
+    # Dopiero teraz: konfiguracja wskazuje juz nowy plik i zostala przeladowana.
+    - name: "TLS: usuń nieaktualne CA tego najemcy"
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ proxysql_stale_ca.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      when: (tls | default({})).mode | default('disabled') == 'full'
 
     - name: "Sprawdź aktualne backendy Galera"
       ansible.builtin.command:
@@ -255,6 +310,26 @@
         or (stale_galera_hg.stdout | trim | int) > 0
       changed_when: true
       no_log: true
+
+    # ProxySQL 3.9.1 nie odswieza kontekstu backend TLS po samej podmianie
+    # mysql_servers_ssl_params + LOAD TO RUNTIME. Dowod live: nowy plik i nowa
+    # sciezka byly w runtime, mariadb CLI z tego samego kp2 laczyl sie poprawnie,
+    # a proces ProxySQL nadal zwracal certificate signature failure. Restart
+    # natychmiast przywrocil backend. Play ma serial:1, wiec druga instancja i VIP
+    # pozostaja dostepne.
+    - name: "TLS: przeładuj proces ProxySQL po zmianie CA backendu"
+      ansible.builtin.systemd_service:
+        name: proxysql
+        state: restarted
+      when: proxysql_backend_ca.changed | default(false)
+
+    - name: "TLS: czekaj na admin port po przeładowaniu backend CA"
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6032
+        state: started
+        timeout: 30
+      when: proxysql_backend_ca.changed | default(false)
 
     - name: "Sprawdź aktualnego app_user w ProxySQL"
       ansible.builtin.command:

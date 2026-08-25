@@ -84,8 +84,11 @@ mariadb_tuning:
   max_connections: 50                # produkcja: peak_connections + zapas
   # TYLKO lab: jawny opt-out; pominięcie => 1. Production wymaga 1 albo risk acceptance.
   innodb_flush_log_at_trx_commit: 0
-  gcache_size: "256M"                 # ISC-68: 256M pokrywa write_rate ~84 kB/s przy oknie IST 30 min
-                                      # (zmierzone na og3; domyslne 128M szablonu bramka odrzucila)
+  gcache_size: "512M"                # ISC-68: policz swoja wartosc:
+                                     #   tests/validation/calc-gcache.py --write-rate <B/s> --window 30
+                                     # Default ma ZAPAS celowo. Do 2026-08-25 stalo tu 128M, czyli
+                                     # dokladnie podloga formuly: klaster zbudowany wg README padal
+                                     # na ostatniej bramce, gdy zmierzony ruch przekroczyl ~74 kB/s.
 
 availability:
   rto_node_failure: "2m"
@@ -129,5 +132,9 @@ monitoring:
     credentials_revision: 1
   alerts:
     email: "ops@claude.local"
-    folder_uid: ""                   # puste = wyprowadzone `isa-alerts-<cluster_name>`
+    folder_uid: ""                   # PUSTE = wyprowadz `isa-alerts-<cluster_name>`.
+                                     # Nie wpisuj tu wspolnej wartosci: tytul folderu jest
+                                     # per najemca, ale `uid` musi byc unikalny w CALEJ Grafanie.
+                                     # Do 2026-08-25 szablon dawal tu `isa-alerts`, wiec drugi
+                                     # najemca tego samego PMM dostawal 412 (uid zajety).
     datasource_uid: ""
