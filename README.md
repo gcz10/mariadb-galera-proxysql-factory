@@ -17,6 +17,18 @@ laboratorium i jest **opcjonalny**: żaden cel wołany przez `cluster-build` ani
 `platform-build` go nie uruchamia i żaden nie czyta stanu Terraforma. Cała wiedza
 o topologii pochodzi z `clusters/<name>/inventory.yml` i `platform/<name>/inventory.yml`.
 
+Zweryfikowane, nie zadeklarowane: najemca `nova-r9` powstał na maszynach
+utworzonych wyłącznie przez REST API hypervisora, a cała budowa przebiegła
+z atrapą `terraform` na początku `PATH`, która przy każdym wywołaniu kończy
+się błędem. Nie strzeliła ani razu.
+
+Symetrycznie do tego: **cele niszczące maszyny są terraformowe** i wymagają
+katalogu `terraform/<nazwa>`. Skoro fabryka nie tworzy Twoich maszyn, nie kasuje
+ich też za Ciebie — pełny cykl dla maszyn z innego źródła opisuje
+[runbook](docs/runbooks/machines-from-elsewhere.md). Warstwę logiczną fabryka
+sprząta po sobie zawsze: `make cluster-deregister` usuwa najemcę z ProxySQL
+i PMM niezależnie od pochodzenia maszyn.
+
 ### Własne hosty, krok po kroku
 
 Kolejność poniżej odtwarza budowę, którą przeszedł ten repozytorium na świeżych
