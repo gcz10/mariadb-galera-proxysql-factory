@@ -7,6 +7,7 @@
   become: true
   serial: 1
   vars_files:
+    - vars/secret_policy.yml
     - "../{{ versions.lock_file }}"
   environment:
     PMM_AGENT_SERVER_ADDRESS: "{{ pmm_server_host }}:443"

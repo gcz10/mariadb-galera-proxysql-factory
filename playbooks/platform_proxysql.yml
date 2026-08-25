@@ -21,6 +21,7 @@
   serial: 1
   max_fail_percentage: 0
   vars_files:
+    - vars/secret_policy.yml
     # Te same wspolne stale co dla najemcy: proxysql_remote_admin_user MUSI byc
     # zapisany tu raz (platforma), a czytany przez f10_backup.yml na wezle
     # Galera — dwie rozne nazwy rozwiazalyby brame ISC-39. Zmienne galera_*
@@ -81,7 +82,7 @@
     - name: "Wymagaj haseł administratora, monitora i konta statystyk"
       ansible.builtin.assert:
         that:
-          - proxysql_admin_password | length > 0
+          - proxysql_admin_password | length >= (isa_min_secret_length | default(12))
           - proxysql_monitor_password | length > 0
           - proxysql_stats_password | length > 0
         fail_msg: >-

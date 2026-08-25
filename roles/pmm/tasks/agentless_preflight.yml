@@ -2,7 +2,7 @@
 - name: "Wymagaj bezpiecznego URL i danych administratora PMM"
   ansible.builtin.assert:
     that:
-      - pmm_admin_password | length > 0
+      - pmm_admin_password | length >= (isa_min_secret_length | default(12))
       - pmm_api_url is match('^https://')
       - pmm_environment_effective != 'production' or pmm_validate_certs_effective
     fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium oraz użyj PMM URL z https://."

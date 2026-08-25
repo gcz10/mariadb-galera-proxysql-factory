@@ -42,6 +42,7 @@
   become: true
   gather_facts: false
   vars_files:
+    - vars/secret_policy.yml
     - vars/proxysql_hostgroups.yml
   vars:
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
@@ -50,7 +51,7 @@
   tasks:
     - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
       ansible.builtin.assert:
-        that: [proxysql_admin_password | length > 0]
+        that: [proxysql_admin_password | length >= (isa_min_secret_length | default(12))]
         fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
     - name: "Writer ONLINE (writer HG)"
       ansible.builtin.command:

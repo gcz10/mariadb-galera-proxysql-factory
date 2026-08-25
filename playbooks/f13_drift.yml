@@ -16,6 +16,8 @@
 # === Play 1: ProxySQL runtime vs disk ===
 - name: "F13 — drift ProxySQL (runtime vs disk)"
   hosts: proxysql
+  vars_files:
+    - vars/secret_policy.yml
   become: true
   gather_facts: false
   any_errors_fatal: true
@@ -36,7 +38,7 @@
   tasks:
     - name: "Wymagaj PROXYSQL_ADMIN_PASSWORD"
       ansible.builtin.assert:
-        that: [proxysql_admin_password | length > 0]
+        that: [proxysql_admin_password | length >= (isa_min_secret_length | default(12))]
         fail_msg: "Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium."
 
     - name: "Drift ProxySQL — runtime vs disk per tabela (checksum)"

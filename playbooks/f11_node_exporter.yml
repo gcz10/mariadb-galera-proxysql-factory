@@ -16,6 +16,7 @@
   become: true
   serial: 1
   vars_files:
+    - vars/secret_policy.yml
     - "../{{ versions.lock_file }}"
 
 

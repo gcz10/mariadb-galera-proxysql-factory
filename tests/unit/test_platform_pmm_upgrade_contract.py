@@ -243,12 +243,15 @@ class PlatformPmmUpgradeSafetyContractTests(unittest.TestCase):
         )
         self.assertTrue(secret_guard["no_log"])
         conditions = secret_guard["ansible.builtin.assert"]["that"]
+        # Prog pochodzi z polityki (playbooks/vars/secret_policy.yml), nie z
+        # liczby wpisanej tutaj — inaczej podniesienie progu wymagaloby edycji
+        # w kilku plikach naraz i rozjechaloby sie przy pierwszym przeoczeniu.
         self.assertEqual(
             conditions,
             [
-                "'pmm' not in infra_services or pmm_admin_password | length >= 12",
+                "'pmm' not in infra_services or pmm_admin_password | length >= (isa_min_secret_length | default(12))",
                 "'minio' not in infra_services or minio_root_user | length >= 3",
-                "'minio' not in infra_services or minio_root_password | length >= 12",
+                "'minio' not in infra_services or minio_root_password | length >= (isa_min_secret_length | default(12))",
             ],
         )
         platform = yaml.safe_load(

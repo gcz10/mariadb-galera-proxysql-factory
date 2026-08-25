@@ -8,6 +8,8 @@
 
 - name: "Infra — wymagaj ownership warstwy wspólnej"
   hosts: infra
+  vars_files:
+    - vars/secret_policy.yml
   become: false
   gather_facts: false
   any_errors_fatal: true
@@ -94,9 +96,9 @@
     - name: "Wymagaj sekretow zadeklarowanych uslug"
       ansible.builtin.assert:
         that:
-          - "'pmm' not in infra_services or pmm_admin_password | length >= 12"
+          - "'pmm' not in infra_services or pmm_admin_password | length >= (isa_min_secret_length | default(12))"
           - "'minio' not in infra_services or minio_root_user | length >= 3"
-          - "'minio' not in infra_services or minio_root_password | length >= 12"
+          - "'minio' not in infra_services or minio_root_password | length >= (isa_min_secret_length | default(12))"
         fail_msg: >-
           Ustaw sekrety uslug zadeklarowanych w platform.infra.services:
           PMM_ADMIN_PASSWORD dla pmm, MINIO_ROOT_USER i MINIO_ROOT_PASSWORD dla minio.

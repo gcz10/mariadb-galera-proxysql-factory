@@ -17,6 +17,7 @@
   connection: local
   gather_facts: false
   vars_files:
+    - vars/secret_policy.yml
     - vars/proxysql_hostgroups.yml
   vars:
     ansible_become: false
@@ -270,7 +271,7 @@
     - name: "Wymagaj PMM_ADMIN_PASSWORD i adresu alertów"
       ansible.builtin.assert:
         that:
-          - pmm_admin_password | length > 0
+          - pmm_admin_password | length >= (isa_min_secret_length | default(12))
           - f15_email | length > 3
           - "'@' in f15_email"
         fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium i monitoring.alerts.email w definicji (cluster.yml albo platform.yml)."

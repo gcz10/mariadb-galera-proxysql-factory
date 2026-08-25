@@ -8,7 +8,7 @@
 # nie ma, wiec domyslka utrzymuje wymog tak jak dotad.
 - name: "Wymagaj hasla PMM poza repozytorium"
   ansible.builtin.assert:
-    that: pmm_admin_password | length > 0
+    that: pmm_admin_password | length >= (isa_min_secret_length | default(12))
     fail_msg: "Ustaw PMM_ADMIN_PASSWORD poza repozytorium."
   when: "'pmm' in pmm_declared_services"
 

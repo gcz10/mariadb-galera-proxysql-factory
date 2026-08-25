@@ -8,6 +8,7 @@
   gather_facts: false
   become: false
   vars_files:
+    - vars/secret_policy.yml
     - "../{{ versions.lock_file }}"
   vars:
     ansible_become: false

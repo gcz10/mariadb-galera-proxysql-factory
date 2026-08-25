@@ -15,6 +15,8 @@
 
 - name: "F8 — Keepalived VIP dla endpointu ProxySQL"
   hosts: proxysql
+  vars_files:
+    - vars/secret_policy.yml
   serial: 1
   max_fail_percentage: 0
   become: true
@@ -56,11 +58,19 @@
           - proxysql.endpoint.address | length > 0
         fail_msg: "F8 wymaga proxysql.endpoint.type=keepalived_vip z ustawionym address."
 
-    - name: "Wymagaj hasła VRRP"
+    # VRRP przenosi haslo w polu o stalej dlugosci i keepalived uzywa WYLACZNIE
+    # osmiu pierwszych znakow (dokumentacja upstreamu). Haslo dluzsze nie jest
+    # mocniejsze, tylko mylace: w magazynie sekretow widac 32 znaki, a
+    # uwierzytelnianie porownuje osiem. Dlatego gorna granica jest bramka.
+    - name: "Wymagaj hasła VRRP dokładnie tej długości, którą protokół zużywa"
       ansible.builtin.assert:
         that:
           - keepalived_auth_pass | length > 0
-        fail_msg: "Ustaw KEEPALIVED_AUTH_PASS poza repozytorium."
+          - keepalived_auth_pass | length <= isa_vrrp_auth_length
+        fail_msg: >-
+          KEEPALIVED_AUTH_PASS ma {{ keepalived_auth_pass | length }} znakow.
+          VRRP zuzywa tylko {{ isa_vrrp_auth_length }} pierwszych, wiec dluzsze
+          haslo daje falszywe poczucie sily — skroc je do {{ isa_vrrp_auth_length }}.
 
     # Host bez domyslnej trasy (albo z nietypowa konfiguracja sieci) da tu pusta
     # nazwe, a keepalived.conf z pustym `interface` powstaje bez bledu i dopiero
