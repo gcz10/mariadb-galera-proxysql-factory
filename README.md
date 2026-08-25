@@ -19,28 +19,65 @@ o topologii pochodzi z `clusters/<name>/inventory.yml` i `platform/<name>/invent
 
 ### Własne hosty, krok po kroku
 
+Kolejność poniżej odtwarza budowę, którą przeszedł ten repozytorium na świeżych
+maszynach. Każdy krok, którego brak zatrzymał tamten przebieg, jest tu wypisany —
+łącznie z tymi, które wyglądają na oczywiste.
+
 ```bash
-# 1. Warstwa wspólna: para ProxySQL z VIP-em, monitoring, magazyn kopii.
+# 0. Sekrety. Fabryka nie trzyma ich w repozytorium i odmawia startu bez nich.
+#    Minimum 12 znaków (polityka: playbooks/vars/secret_policy.yml).
+#    WYJĄTEK: KEEPALIVED_AUTH_PASS ma DOKŁADNIE do 8 znaków — VRRP używa tylko
+#    tylu, więc dłuższe hasło jest odrzucane jako mylące.
+export PMM_ADMIN_PASSWORD='...'         # gdy monitoring.enabled (domyślnie tak)
+export PMM_MONITOR_PASSWORD='...'
+export PROXYSQL_ADMIN_PASSWORD='...'
+export PROXYSQL_STATS_PASSWORD='...'
+export PROXYSQL_MONITOR_PASSWORD='...'
+export APP_DB_PASSWORD='...'
+export KEEPALIVED_AUTH_PASS='8znakow'
+export SST_PASSWORD='...'
+
+# 1. Warstwa wspólna: para ProxySQL z VIP-em, opcjonalnie PMM i magazyn kopii.
 cp -r platform/example platform/<nazwa>
 $EDITOR platform/<nazwa>/inventory.yml   # adresy Twoich maszyn
-$EDITOR platform/<nazwa>/platform.yml    # VIP, PMM, ścieżki TLS, polityka ingress
+$EDITOR platform/<nazwa>/platform.yml    # VIP, `infra.services`, PMM, ingress
 
 # 2. Najemca: węzły bazy.
 cp -r clusters/example-cluster clusters/<nazwa>
 $EDITOR clusters/<nazwa>/inventory.yml   # adresy węzłów Galery
-$EDITOR clusters/<nazwa>/cluster.yml     # nazwa klastra, backup, monitoring
+$EDITOR clusters/<nazwa>/cluster.yml     # nazwa wsrep, hostgroup_base, app_user
 
-# 3. Materiał TLS i klucz SSH należą do Ciebie, nie do repozytorium.
-#    Wskaż własny klucz w inwentarzu (`ansible_ssh_private_key_file`),
-#    a certyfikaty wygeneruj narzędziami z `pki/` albo podstaw swoje.
+# 3. Zaufanie kluczom hostów. Inwentarze wymuszają StrictHostKeyChecking=yes,
+#    więc BEZ tego kroku Ansible zgłosi UNREACHABLE na każdej maszynie.
+make platform-trust-hosts PLATFORM=<nazwa>
+make cluster-trust-hosts CLUSTER=<nazwa>
 
-# 4. Bramki statyczne PRZED dotknięciem maszyn — walidują schemat i inwentarz.
+# 4. Materiał TLS (gdy tls.mode=full). Dwa CA: endpointu i klastra.
+pki/generate.sh <platforma> <p1,p2,ip-p1,ip-p2,ip-vip>
+pki/generate.sh <klaster> <g1,g2,g3,ip-g1,ip-g2,ip-g3>
+pki/issue-node-certs.sh <klaster> <g1=ip-g1,g2=ip-g2,g3=ip-g3>
+
+# 5. Bramki statyczne PRZED dotknięciem maszyn.
 make cluster-validate CLUSTER=<nazwa>
 
-# 5. Budowa.
-make platform-build PLATFORM=<nazwa>
+# 6. Budowa. Na świeżym obrazie chmurowym pierwszy przebieg potrafi zażądać
+#    restartu do zainstalowanego kernela — playbook powie to wprost.
+make platform-build PLATFORM=<nazwa> ANSIBLE_OPTS="-e allow_kernel_reboot=yes"
 make cluster-build CLUSTER=<nazwa> CONFIRM=yes
 ```
+
+Czego brak zatrzyma budowę, choć nie widać tego w powyższych komendach:
+
+- **host w grupie `app`** — jedyne miejsce, z którego bramka warstwy mierzy TLS
+  endpointu po sieci. Bez niego `platform-verify` kończy się `UNDETERMINED`,
+  bo sonda odmawia zielonego bez pomiaru;
+- **`backup.enabled: false`**, gdy nie masz jeszcze magazynu S3 — inaczej budowa
+  wejdzie w konfigurację kopii i ćwiczenie odtworzeniowe;
+- **`monitoring.enabled: false`**, gdy nie stawiasz PMM albo używasz własnego
+  systemu — inaczej kroki rejestracji zażądają serwera, którego nie ma;
+- **`hostgroup_base` rozłączna z innymi najemcami** tej samej pary ProxySQL.
+  Baza rezerwuje CZTERY hostgroupy (`base`, +10, +20, +30), więc 890 i 900 to
+  kolizja, mimo że wyglądają na różne.
 
 Interfejs sieciowy dla VIP-a wykrywany jest z domyślnej trasy hosta; przy
 nietypowej konfiguracji sieci wskaż go jawnie przez `proxysql_endpoint_interface`.
