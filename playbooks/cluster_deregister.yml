@@ -33,6 +33,10 @@
   become: false
   gather_facts: false
 
+  vars:
+    # `become: false` to slowo kluczowe play'a, a `ansible_become`
+    # z inwentarza jest ZMIENNA i wygrywa z nim w precedencji.
+    ansible_become: false
   tasks:
     - name: "Ustal czy klaster korzysta z zarzadzanego MinIO"
       # Ten sam predykat "zarzadzane MinIO" co w roles/galera_backup/tasks/main.yml,
@@ -85,6 +89,9 @@
   become: false
   gather_facts: false
   vars:
+    # `become: false` to slowo kluczowe play'a, a `ansible_become`
+    # z inwentarza jest ZMIENNA i wygrywa z nim w precedencji.
+    ansible_become: false
     pmm_api_url: "{{ lookup('ansible.builtin.env', 'PMM_SERVER_URL') | default((monitoring | default({})).get('pmm', {}).get('server_url', 'https://192.168.1.130'), true) | regex_replace('/$', '') }}"
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     cluster_label: "{{ (monitoring | default({})).get('pmm', {}).get('cluster_name', cluster.name) }}"
@@ -398,6 +405,10 @@
   become: false
   gather_facts: false
 
+  vars:
+    # `become: false` to slowo kluczowe play'a, a `ansible_become`
+    # z inwentarza jest ZMIENNA i wygrywa z nim w precedencji.
+    ansible_become: false
   tasks:
     - name: "Odwolaj konto MinIO wylacznie dla zarzadzanej instancji tego inventory"
       # include_role (a nie include_tasks) po to, zeby filtry roli —

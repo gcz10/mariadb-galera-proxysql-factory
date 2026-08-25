@@ -128,25 +128,68 @@ infra-provision:  ## Utwórz VM klastra (parallelism=1 — równoległość wywa
 # Petla per-host, bo ssh-keyscan potrafi zlapac host ZANIM cloud-init wystartuje
 # sshd z ostatecznymi kluczami (wyscig — zlapalem to raz na .33). Wtedy scan zapisuje
 # klucz tymczasowy i polaczenie pada. Dlatego: scan -> probka polaczenia -> retry.
+#
+# DWA ROZNE NIEPOWODZENIA, DWA BUDZETY CZASU. Do 2026-08-25 host, ktorego w ogole
+# nie ma, przechodzil te sama sciezke co host z niestabilnym kluczem: 12 prob po
+# ~15 s = 3 minuty CISZY na kazdy adres. Pierwszy przebieg wg README na swiezo
+# skopiowanym szablonie (z adresami 10.0.1.x) wygladal wiec na zawieszenie.
+# Teraz najpierw pytamy, czy sshd w ogole odpowiada (banner z keyscan), i jesli
+# nie — konczymy ten host po ~30 s, wypisujac go od razu.
+TRUST_HOST_PROBES ?= 6
+TRUST_KEYSCAN_TIMEOUT ?= 5
+TRUST_KEY_RETRIES ?= 12
+# ansible-inventory rozwiazuje dziedziczenie all/group/host vars, wiec uzywamy
+# TEJ SAMEJ tozsamosci i portu co pozniejszy Ansible — nie hardcodujemy root ani
+# secrets/ssh_key, bo szablon dokumentuje wlasnie uzytkownika nie-root z sudo.
+cluster_trust_targets = $(shell ansible-inventory -i clusters/$(CLUSTER)/inventory.yml --list | python3 -c 'import json,os,shlex,sys; h=json.load(sys.stdin).get("_meta",{}).get("hostvars",{}); print(" ".join(shlex.quote("{}|{}|{}|{}".format(v.get("ansible_host",n),v.get("ansible_port",22),v.get("ansible_user","root"),os.path.expanduser(v.get("ansible_ssh_private_key_file","secrets/ssh_key")))) for n,v in sorted(h.items())))')
 cluster-trust-hosts:  ## Re-skanuj klucze hostow do known_hosts (po re-provision)
 	$(cluster_guard)
 	@mkdir -p clusters/$(CLUSTER)
-	@ok=0; total=0; \
-	for ip in $$(grep -oE 'ansible_host:[[:space:]]+"?[0-9.]+"?' clusters/$(CLUSTER)/inventory.yml | grep -oE '[0-9.]+' | sort -u); do \
-		total=$$((total+1)); good=0; \
-		for try in 1 2 3 4 5 6 7 8 9 10 11 12; do \
-			ssh-keygen -R $$ip -f clusters/$(CLUSTER)/known_hosts >/dev/null 2>&1 || true; \
-			ssh-keyscan -H $$ip >> clusters/$(CLUSTER)/known_hosts 2>/dev/null || true; \
+	@ok=0; total=0; dead=""; \
+	for target in $(cluster_trust_targets); do \
+		ip=$${target%%|*}; rest=$${target#*|}; port=$${rest%%|*}; \
+		rest=$${rest#*|}; user=$${rest%%|*}; key=$${rest#*|}; \
+		lookup="$$ip"; [ "$$port" = "22" ] || lookup="[$$ip]:$$port"; \
+		total=$$((total+1)); good=0; alive=0; auth_failed=0; probe=0; \
+		while [ "$$probe" -lt "$(TRUST_HOST_PROBES)" ]; do \
+			probe=$$((probe+1)); \
+			if ssh-keyscan -T "$(TRUST_KEYSCAN_TIMEOUT)" -p "$$port" "$$ip" 2>/dev/null | grep -q .; then alive=1; break; fi; \
+			sleep 1; \
+		done; \
+		if [ "$$alive" = "0" ]; then \
+			echo "  $$lookup: sshd nie odpowiada — host nie istnieje albo jeszcze nie wstal"; \
+			dead="$$dead $$lookup"; continue; \
+		fi; \
+		errfile=$$(mktemp); try=0; \
+		while [ "$$try" -lt "$(TRUST_KEY_RETRIES)" ]; do \
+			try=$$((try+1)); \
+			ssh-keygen -R "$$lookup" -f clusters/$(CLUSTER)/known_hosts >/dev/null 2>&1 || true; \
+			ssh-keyscan -T "$(TRUST_KEYSCAN_TIMEOUT)" -p "$$port" -H "$$ip" >> clusters/$(CLUSTER)/known_hosts 2>/dev/null || true; \
 			sort -u clusters/$(CLUSTER)/known_hosts -o clusters/$(CLUSTER)/known_hosts 2>/dev/null || true; \
-			if ssh -i secrets/ssh_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=clusters/$(CLUSTER)/known_hosts -o ConnectTimeout=5 -o ConnectionAttempts=1 -o BatchMode=yes -o PasswordAuthentication=no root@$$ip true 2>/dev/null; then \
+			if ssh -i "$$key" -p "$$port" -o StrictHostKeyChecking=yes -o UserKnownHostsFile=clusters/$(CLUSTER)/known_hosts -o ConnectTimeout=5 -o ConnectionAttempts=1 -o BatchMode=yes -o PasswordAuthentication=no "$$user@$$ip" true 2>"$$errfile"; then \
 				good=1; break; \
 			fi; \
+			if grep -qi "Permission denied" "$$errfile"; then auth_failed=1; break; fi; \
 			sleep 5; \
 		done; \
-		[ "$$good" = "1" ] && ok=$$((ok+1)) || echo "UWAGA: $$ip nie odpowiada po 12 probach"; \
+		rm -f "$$errfile"; \
+		if [ "$$good" = "1" ]; then ok=$$((ok+1)); \
+		elif [ "$$auth_failed" = "1" ]; then \
+			echo "  $$lookup: sshd odpowiada, ale odrzuca $$user z kluczem $$key"; dead="$$dead $$lookup"; \
+		else \
+			echo "  $$lookup: sshd odpowiada, ale klucz hosta nie ustabilizowal sie po $(TRUST_KEY_RETRIES) probach"; dead="$$dead $$lookup"; \
+		fi; \
 	done; \
+	if [ "$$total" -eq 0 ]; then \
+		echo "brak hostow: ansible-inventory nie zwrocilo zadnego ansible_host dla clusters/$(CLUSTER)/inventory.yml" >&2; \
+		exit 1; \
+	fi; \
 	echo "known_hosts: $$ok/$$total hostow zwerifikowanych (ssh OK)"; \
-	[ "$$ok" = "$$total" ] || exit 1
+	if [ "$$ok" != "$$total" ]; then \
+		echo "NIEOSIAGALNE:$$dead" >&2; \
+		echo "Sprawdz ansible_host/ansible_port/ansible_user/ansible_ssh_private_key_file w inventory.yml." >&2; \
+		exit 1; \
+	fi
 
 help:  ## Pokaż dostępne komendy
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-28s %s\n", $$1, $$2}'
@@ -349,7 +392,7 @@ cluster-discover:  ## F0 Discovery — zbierz fakty z hostów (read-only)
 cluster-validate:  ## Waliduj konfigurację klastra (schema + invariants inventory + preflight)
 	$(cluster_guard)
 	python3 tests/validation/validate-cluster-schema.py clusters/$(CLUSTER)/cluster.yml clusters/schema/cluster.schema.json
-	python3 tests/validation/validate-inventory.py clusters/$(CLUSTER)/inventory.yml clusters/$(CLUSTER)/cluster.yml
+	python3 tests/validation/validate-inventory.py clusters/$(CLUSTER)/inventory.yml clusters/$(CLUSTER)/cluster.yml --require-known-hosts
 	ansible-playbook playbooks/f2_preflight.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 cluster-deploy:  ## F2+F3 — instaluj pakiety + konfiguruj (idempotentny converge)

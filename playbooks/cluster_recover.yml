@@ -304,6 +304,10 @@
         mode: "0644"
       delegate_to: localhost
       become: false
+      vars:
+        # Task delegowany dziedziczy connection vars z `all`, a
+        # `ansible_become` z inventory wygrywa ze slowem `become: false`.
+        ansible_become: false
 
     - name: "Podsumowanie wyboru wezla bootstrap"
       ansible.builtin.debug:

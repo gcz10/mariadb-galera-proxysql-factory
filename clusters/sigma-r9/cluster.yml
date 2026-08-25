@@ -1,10 +1,10 @@
 ---
-# Example cluster — szablon konfiguracji. Skopiuj do clusters/<name>/cluster.yml.
+# `sigma-r9`: klaster dowodowy zbudowany od zera sciezka opisana w README.
 # Walidowane przez clusters/schema/cluster.schema.json.
 # Nie wpisuj adresów IP tutaj — adresy żyją w inventory.yml.
 
 cluster:
-  name: "example-cluster"
+  name: "sigma-r9"
   environment: "laboratory"
   profile: "laboratory"
 
@@ -16,7 +16,7 @@ versions:
   lock_file: "versions/versions.lock.yml"
 
 galera:
-  cluster_name: "example_galera"
+  cluster_name: "sg_galera"
   nodes_expected: 3
 
 proxysql:
@@ -26,42 +26,36 @@ proxysql:
   # +30 (offline). Sasiednie bazy sa wiec kolizja, mimo ze wygladaja inaczej:
   # przy 890 i 900 wezly drugiego najemcy laduja w puli, na ktora pierwszy
   # przelacza sie przy failoverze writera. Kolejnemu klastrowi daj base+40.
-  hostgroup_base: 10
+  hostgroup_base: 90
   # Wpis w `mysql_users` jest GLOBALNY dla instancji ProxySQL: dwaj najemcy
   # z ta sama nazwa uzytkownika to jeden wpis i ruch obu trafi do jednego
   # klastra. Nazwa musi byc unikalna w obrebie wspolnego endpointu.
-  app_user: "app_user_example"
+  app_user: "app_user_sg"
   frontend_tls:
     # WYLACZNIE ca_reference: cert i klucz frontendu naleza do warstwy wspolnej,
     # ktora serwuje cala flote jednym certem. Wskaz CA tej warstwy.
-    ca_reference: "pki/example/ca.pem"
+    ca_reference: "pki/kobalt/ca.pem"
   endpoint:
     type: "keepalived_vip"
-    # Musi byc DOKLADNIE ten VIP, ktory wystawia warstwa wspolna
-    # (platform/example/platform.yml). Najemca go nie tworzy — tylko mu ufa.
-    address: "10.0.1.20"
+    # VIP warstwy `kobalt`; najemca go nie tworzy — tylko mu ufa.
+    address: "192.168.1.31"
     port: 6033
 
 # TLS opcjonalne per-klaster. mode=full => serwer prezentuje cert, replikacja Galera
 # + SST + ProxySQL->backend szyfrowane. references = ścieżki na hoście kontrolnym
 # (references wskazuja sciezki na hoscie kontrolnym lub artefakty PKI produkcji).
 tls:
-  # DOMYSLNIE `full`, bo domyslna wartosc to decyzja podjeta za operatora.
-  # Do 2026-08-25 szablon startowal z `disabled`: klaster zbudowany doslownie
-  # wg README wstawal ZDROWY, przechodzil bramke i wozil ruch bazodanowy jawnym
-  # tekstem, a jedyna wzmianka o tym byla nawiasem w kroku 4. Kto chce plaintext,
-  # niech go napisze wprost — nie odziedziczy go przez przeoczenie.
-  mode: "full"                        # disabled | full
-  ca_reference: ""                   # CA (pem)
-  certificate_reference: ""          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
-  private_key_reference: ""          # klucz prywatny serwera
+  mode: "full"                    # disabled | full
+  ca_reference: "pki/sg9/ca.pem"                   # CA (pem)
+  certificate_reference: "pki/sg9/server-cert.pem"          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
+  private_key_reference: "pki/sg9/server-key.pem"          # klucz prywatny serwera
   require_secure_transport: false    # true => wymusza TLS na WSZYSTKICH poł. TCP (klienci muszą mieć TLS)
 
 network:
-  application_cidrs: []
-  database_cluster_cidrs: []
-  administration_cidrs: []
-  monitoring_cidrs: []
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.28/32"]
 
 
 storage:
@@ -90,7 +84,7 @@ availability:
   rto_node_failure: "2m"
 
 backup:
-  enabled: true
+  enabled: false
   destination: "smb"
   full_backup_schedule: "0 2 * * *"
   incremental_backup_schedule: "disabled"
@@ -101,7 +95,7 @@ backup:
   restore_test_schedule: "0 4 * * 0"
   scheduler:
     mode: "manual"
-    host: "gnode1"
+    host: "sg1"
     timezone: "UTC"
   smb:
     source: "//nas01.example.invalid/backups"
@@ -121,12 +115,13 @@ backup:
 
 monitoring:
   pmm:
-    server_url: "https://pmm.example.invalid"
+    server_url: "https://192.168.1.28"
     agent_id: "pmm-server"
-    cluster_name: "example-cluster"
-    validate_certs: true
+    cluster_name: "sigma-r9"
+    validate_certs: false
     credentials_revision: 1
+  agent_groups: ["galera"]
   alerts:
-    email: "alerts@example.invalid"
+    email: "ops@claude.local"
     folder_uid: "isa-alerts"
     datasource_uid: ""

@@ -57,3 +57,7 @@ clusters/*/recover-bootstrap-node
 
 # Scratch procesu subagent-driven-development (ledger, briefy, raporty zadan)
 .superpowers/
+
+# Watchdog agenta: konfiguracja lokalna operatora, nie kontrakt repozytorium.
+.omp/WATCHDOG.md
+.omp/WATCHDOG.yml

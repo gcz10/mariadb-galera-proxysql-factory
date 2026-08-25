@@ -41,6 +41,21 @@ class ProductionDurabilityValidatorTests(unittest.TestCase):
         self.base["cluster"]["environment"] = "production"
         self.base["cluster"]["profile"] = "production"
         self.base["versions"]["policy"] = "locked"
+        # Ten test izoluje polityke trwalosci, wiec baza musi byc poprawnym
+        # NIE-szablonowym klastrem — inaczej bramka placeholderow zaslania
+        # wynik, ktory mierzymy.
+        self.base["cluster"]["name"] = "durability-test"
+        self.base["galera"]["cluster_name"] = "durability_galera"
+        self.base["proxysql"]["app_user"] = "app_user_durability"
+        self.base["tls"]["mode"] = "disabled"
+        for field in (
+            "administration_cidrs", "database_cluster_cidrs",
+            "application_cidrs", "monitoring_cidrs",
+        ):
+            self.base["network"][field] = ["192.0.2.0/24"]
+        self.base["backup"]["enabled"] = False
+        self.base["monitoring"]["enabled"] = False
+        self.base["monitoring"]["pmm"]["cluster_name"] = "durability-test"
         self.tmp = tempfile.TemporaryDirectory()
 
     def tearDown(self):

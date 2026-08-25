@@ -8,12 +8,16 @@ Sprawdza to, czego schema cluster.yml NIE obejmuje:
   - rozłączność grupy restore względem galera/proxysql (ochrona przed restore na żywym klastrze)
   - VIP endpoint nie koliduje z adresem żadnego węzła
   - każdy węzeł galera/proxysql ma swój *_node_address
+  - opcjonalnie (`--require-known-hosts`) każdy adres ma zaufany klucz hosta
 
 Użycie:
-  validate-inventory.py <inventory.yml> [cluster.yml]
+  validate-inventory.py <inventory.yml> [cluster.yml] [--require-known-hosts]
 Wyjście: 0 = OK, !=0 = naruszenie (lista wypisana na stderr).
 """
+import subprocess
 import sys
+from pathlib import Path
+
 import yaml
 
 
@@ -26,15 +30,27 @@ def collect_hosts(node, out):
     for child in (node.get("children") or {}).values():
         collect_hosts(child, out)
 
+def known_hosts_name(address, port):
+    """Nazwa, pod jaka OpenSSH zapisuje endpoint w known_hosts."""
+    return str(address) if int(port) == 22 else f"[{address}]:{port}"
+
+
 
 def main():
     if len(sys.argv) < 2:
-        print("usage: validate-inventory.py <inventory.yml> [cluster.yml]", file=sys.stderr)
+        print(
+            "usage: validate-inventory.py <inventory.yml> [cluster.yml] "
+            "[--require-known-hosts]",
+            file=sys.stderr,
+        )
         return 2
     inv_path = sys.argv[1]
     cluster = {}
-    if len(sys.argv) >= 3:
-        with open(sys.argv[2]) as f:
+    args = sys.argv[2:]
+    require_known_hosts = "--require-known-hosts" in args
+    cluster_paths = [arg for arg in args if arg != "--require-known-hosts"]
+    if cluster_paths:
+        with open(cluster_paths[0]) as f:
             cluster = yaml.safe_load(f) or {}
 
     with open(inv_path) as f:
@@ -95,6 +111,7 @@ def main():
     # 5a) tożsamość POŁĄCZENIA = ansible_host + ansible_port.
     # Lab Docker legalnie współdzieli 127.0.0.1 i różni się portem — sam host nie wystarczy.
     conn_owner = {}
+    ssh_endpoints = set()
     for gname, hosts in groups.items():
         if gname == "_root":
             continue
@@ -102,7 +119,9 @@ def main():
             ah = (hv or {}).get("ansible_host")
             if not ah:
                 continue
-            conn = "{}:{}".format(ah, (hv or {}).get("ansible_port", 22))
+            port = int((hv or {}).get("ansible_port", 22))
+            conn = "{}:{}".format(ah, port)
+            ssh_endpoints.add((str(ah), port))
             if conn in conn_owner and conn_owner[conn] != (gname, h):
                 errors.append(
                     f"połączenie {conn} współdzielone przez '{h}' [{gname}]"
@@ -133,6 +152,50 @@ def main():
     if vip and vip in addr_owner:
         g, h = addr_owner[vip]
         errors.append(f"VIP endpoint {vip} koliduje z adresem węzła '{h}' [{g}]")
+
+    # 7) known_hosts pokrywa KAZDY host inwentarza.
+    #
+    # POWSTAL Z CZYSTEGO PRZEBIEGU (sigma-r9, 2026-08-25). Inwentarz poprawiony
+    # PO `make cluster-trust-hosts` mial dwa nowe adresy bez klucza. Nic tego nie
+    # sprawdzalo, wiec budowa przeszla deploy, bootstrap, join i ProxySQL, a padla
+    # dopiero w monitoringu, po pieciu minutach: "No ED25519 host key is known for
+    # 192.168.1.32". Inwentarz wymusza StrictHostKeyChecking=yes, wiec brak wpisu
+    # jest bledem konfiguracji, ktory da sie zobaczyc BEZ dotykania maszyn.
+    # Wyjatek przysluguje PLIKOWI szablonu, nie jego `cluster.name`: kopia,
+    # w ktorej operator zapomnial zmienic nazwe, musi wpasc w bramke.
+    template_path = (
+        Path(__file__).resolve().parents[2]
+        / "clusters" / "example-cluster" / "inventory.yml"
+    )
+    is_template = Path(inv_path).resolve() == template_path.resolve()
+    known_hosts = Path(inv_path).parent / "known_hosts"
+    if require_known_hosts and not is_template:
+        if known_hosts.exists():
+            # Wpisy bywaja zahaszowane (`ssh-keyscan -H`), wiec pytamy ssh-keygen -F,
+            # zamiast szukac adresu tekstem — inaczej kazdy zahaszowany known_hosts
+            # wygladalby na pusty.
+            missing = sorted(
+                known_hosts_name(address, port)
+                for address, port in ssh_endpoints
+                if subprocess.run(
+                    [
+                        "ssh-keygen", "-F", known_hosts_name(address, port),
+                        "-f", str(known_hosts),
+                    ],
+                    capture_output=True,
+                ).returncode != 0
+            )
+            if missing:
+                errors.append(
+                    f"known_hosts nie zna hostow: {', '.join(missing)} — uruchom "
+                    f"`make cluster-trust-hosts CLUSTER={Path(inv_path).parent.name}` "
+                    "(inwentarz wymusza StrictHostKeyChecking=yes)"
+                )
+        elif ssh_endpoints:
+            errors.append(
+                f"brak {known_hosts} — uruchom "
+                f"`make cluster-trust-hosts CLUSTER={Path(inv_path).parent.name}`"
+            )
 
     if errors:
         print(f"INVARIANT FAIL ({inv_path}):", file=sys.stderr)

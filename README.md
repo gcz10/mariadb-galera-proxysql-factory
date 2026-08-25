@@ -54,22 +54,25 @@ cp -r platform/example platform/<nazwa>
 $EDITOR platform/<nazwa>/inventory.yml   # adresy Twoich maszyn
 $EDITOR platform/<nazwa>/platform.yml    # VIP, `infra.services`, PMM, ingress
 
-# 2. Najemca: węzły bazy.
+# 2. Najemca: węzły bazy. Gdy dokładasz klaster do ISTNIEJĄCEJ platformy,
+#    pomijasz krok 1 i wskazujesz jej ProxySQL/VIP/PMM/CA w tej definicji.
 cp -r clusters/example-cluster clusters/<nazwa>
-$EDITOR clusters/<nazwa>/inventory.yml   # adresy węzłów Galery
-$EDITOR clusters/<nazwa>/cluster.yml     # nazwa wsrep, hostgroup_base, app_user
+$EDITOR clusters/<nazwa>/inventory.yml
+$EDITOR clusters/<nazwa>/cluster.yml
 
 # 3. Zaufanie kluczom hostów. Inwentarze wymuszają StrictHostKeyChecking=yes,
 #    więc BEZ tego kroku Ansible zgłosi UNREACHABLE na każdej maszynie.
 make platform-trust-hosts PLATFORM=<nazwa>
 make cluster-trust-hosts CLUSTER=<nazwa>
 
-# 4. Materiał TLS (gdy tls.mode=full). Dwa CA: endpointu i klastra.
+# 4. Materiał TLS (`tls.mode=full` jest bezpiecznym defaultem). Dwa CA:
+#    endpointu wspólnej platformy i własne każdego klastra.
 pki/generate.sh <platforma> <p1,p2,ip-p1,ip-p2,ip-vip>
 pki/generate.sh <klaster> <g1,g2,g3,ip-g1,ip-g2,ip-g3>
 pki/issue-node-certs.sh <klaster> <g1=ip-g1,g2=ip-g2,g3=ip-g3>
 
-# 5. Bramki statyczne PRZED dotknięciem maszyn.
+# 5. Bramki PRZED zmianą maszyn: schemat i inventory są statyczne, potem
+#    read-only SSH preflight sprawdza system i wersję Rocky Linux.
 make cluster-validate CLUSTER=<nazwa>
 
 # 6. Budowa. Na świeżym obrazie chmurowym pierwszy przebieg potrafi zażądać
@@ -78,18 +81,38 @@ make platform-build PLATFORM=<nazwa> ANSIBLE_OPTS="-e allow_kernel_reboot=yes"
 make cluster-build CLUSTER=<nazwa> CONFIRM=yes
 ```
 
-Czego brak zatrzyma budowę, choć nie widać tego w powyższych komendach:
+Po skopiowaniu szablonu uzupełnij **całą** listę poniżej. `cluster-validate`
+odrzuca teraz placeholdery, puste CIDR-y, brak materiału TLS i niepełne
+`known_hosts`; wcześniej część z nich wychodziła dopiero po kilku minutach
+budowy.
 
-- **host w grupie `app`** — jedyne miejsce, z którego bramka warstwy mierzy TLS
-  endpointu po sieci. Bez niego `platform-verify` kończy się `UNDETERMINED`,
-  bo sonda odmawia zielonego bez pomiaru;
-- **`backup.enabled: false`**, gdy nie masz jeszcze magazynu S3 — inaczej budowa
-  wejdzie w konfigurację kopii i ćwiczenie odtworzeniowe;
-- **`monitoring.enabled: false`**, gdy nie stawiasz PMM albo używasz własnego
-  systemu — inaczej kroki rejestracji zażądają serwera, którego nie ma;
-- **`hostgroup_base` rozłączna z innymi najemcami** tej samej pary ProxySQL.
-  Baza rezerwuje CZTERY hostgroupy (`base`, +10, +20, +30), więc 890 i 900 to
-  kolizja, mimo że wyglądają na różne.
+**`inventory.yml`:**
+
+- `ansible_user`, `ansible_become` i `ansible_ssh_private_key_file`;
+- wszystkie hosty `galera` oraz ich oba adresy (`ansible_host` i
+  `galera_node_address`);
+- hosty istniejącej platformy: `proxysql`, `app` oraz `infra`, gdy używasz PMM;
+- usuń grupę `restore`, jeśli `backup.enabled: false`;
+- po **każdej** zmianie adresów ponów `make cluster-trust-hosts`.
+
+**`cluster.yml`:**
+
+- `cluster.name`, `galera.cluster_name`, unikalny `proxysql.app_user`;
+- `proxysql.hostgroup_base` rozłączna z innymi najemcami tej pary ProxySQL.
+  Baza rezerwuje CZTERY hostgroupy (`base`, +10, +20, +30), więc 890 i 900
+  kolidują, mimo że wyglądają na różne;
+- `proxysql.endpoint.address` i `.port` z platformy oraz
+  `proxysql.frontend_tls.ca_reference` wskazujące CA endpointu platformy;
+- dla domyślnego `tls.mode: full`: `tls.ca_reference`,
+  `tls.certificate_reference`, `tls.private_key_reference` do materiału
+  wygenerowanego w kroku 4;
+- wszystkie cztery listy `network.*_cidrs` niepuste: aplikacja, Galera,
+  administracja i monitoring;
+- `backup.enabled: false`, gdy magazynu jeszcze nie ma; przy `true` wypełnij
+  blok wybranego backendu i harmonogram;
+- `monitoring.enabled: false`, gdy nie używasz PMM; przy `true` ustaw
+  `pmm.server_url`, `pmm.cluster_name`, `pmm.validate_certs`,
+  `agent_groups`, `credentials_revision` i rzeczywisty adres alertów.
 
 Interfejs sieciowy dla VIP-a wykrywany jest z domyślnej trasy hosta; przy
 nietypowej konfiguracji sieci wskaż go jawnie przez `proxysql_endpoint_interface`.
@@ -111,10 +134,10 @@ export MINIO_ROOT_PASSWORD='<minio-s3-secret>'
 # Alternatywnie załaduj lokalny, ignorowany plik utworzony dla działającego labu:
 # set -a; . tests/lab/.env; set +a
 
-# Prowizjonowanie VM klastra w Proxmox VE (wymaga PROXMOX_VE_ENDPOINT i poświadczeń PVE):
+# Opcjonalne prowizjonowanie VM klastra w Proxmox VE (wymaga endpointu i
+# poświadczeń PVE). Maszyny z innego źródła pomijają ten cel:
 # make infra-provision CLUSTER=<nazwa>
 # make cluster-trust-hosts CLUSTER=<nazwa>
-# Bez żywego Proxmoksa można uruchamiać statyczną walidację na CLUSTER=example-cluster.
 
 # WARSTWA WSPOLNA — musi istniec ZANIM powstanie pierwszy klaster. Najemca
 # zaklada dzialajaca pare ProxySQL i wdrozony `admin-check.cnf`; bez nich
@@ -122,14 +145,17 @@ export MINIO_ROOT_PASSWORD='<minio-s3-secret>'
 make platform-trust-hosts
 make platform-build
 
-# Discovery i walidacja wybranego klastra (walidacja statyczna nie wymaga żywych maszyn):
-make cluster-validate CLUSTER=example-cluster
-# Na żywej infrastrukturze VM:
+# Pełne `cluster-validate` wymaga SSH do węzłów: po dwóch statycznych
+# walidatorach uruchamia read-only preflight systemu i wersji Rocky Linux.
+# Bez żywych maszyn wykonaj tylko walidatory repozytoryjne:
+python3 tests/validation/validate-cluster-schema.py clusters/example-cluster/cluster.yml clusters/schema/cluster.schema.json
+python3 tests/validation/validate-inventory.py clusters/example-cluster/inventory.yml clusters/example-cluster/cluster.yml
+# Na żywej infrastrukturze:
 # make cluster-discover CLUSTER=<nazwa>
 # make cluster-validate CLUSTER=<nazwa>
 
-# Materiał TLS (gdy tls.mode=full). Artefakty są gitignorowane — na nowej
-# maszynie trzeba je wytworzyć, inaczej F3/F7 padną na brakującym pliku.
+# Materiał TLS (`tls.mode=full` jest defaultem). Artefakty są gitignorowane —
+# na nowej maszynie trzeba je wytworzyć, inaczej bramka statyczna odmówi budowy.
 #   1) CA + cert KLASTRA (ścieżki z tls.*_reference w cluster.yml); SAN musi
 #      pokrywać nazwy ORAZ adresy węzłów — Galera łączy się po adresie.
 pki/generate.sh <klaster> <n1,n2,n3,ip1,ip2,ip3>

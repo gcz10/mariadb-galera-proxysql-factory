@@ -122,6 +122,77 @@ def main():
     if ep_type and ep_type != "keepalived_vip":
         print(f"WARN: endpoint.type='{ep_type}' — Interview decision was keepalived_vip; verify this is intentional")
 
+    # Check: definicja skopiowana z szablonu i NIEDOKONCZONA.
+    #
+    # POWSTAL Z CZYSTEGO PRZEBIEGU (sigma-r9, 2026-08-25): `cp -r
+    # clusters/example-cluster`, podmiana adresow i nazwy — i ta bramka
+    # powiedziala "schema valid, semantic checks passed", choc definicja nadal
+    # kierowala do nieistniejacego VIP-a `10.0.1.20`, miala PUSTE sciezki TLS
+    # przy `tls.mode: full` i wskazywala PMM pod `pmm.example.invalid`. Bramka
+    # statyczna ma oszczedzic dojscie do maszyn — a przepuszczala definicje,
+    # ktora nie mogla zadzialac.
+    #
+    # Sprawdzamy sygnaly BEZ falszywych trafien: `.invalid` jest zarezerwowane
+    # przez RFC 6761 i z definicji sie nie rozwiazuje, a identyfikatory
+    # `example*` pochodza wprost z szablonu w tym repo. Adresow NIE oceniamy:
+    # `10.0.1.0/24` bywa czyjas prawdziwa siecia.
+    # Wyjatek przysluguje PLIKOWI szablonu, nie jego wartosci `cluster.name`.
+    # Kopia, w ktorej operator nie zmienil nazwy, nadal ma zostac odrzucona.
+    template_path = (
+        Path(__file__).resolve().parents[2]
+        / "clusters" / "example-cluster" / "cluster.yml"
+    )
+    is_template = cluster_path.resolve() == template_path.resolve()
+    if not is_template:
+        if str(cluster.get("tls", {}).get("mode", "")) == "full":
+            for field in ("ca_reference", "certificate_reference", "private_key_reference"):
+                if not str(cluster.get("tls", {}).get(field, "")).strip():
+                    errors.append(
+                        f"tls.mode=full, ale tls.{field} jest puste — "
+                        "wygeneruj material PKI i wskaz sciezki (patrz README krok 4)"
+                    )
+
+        # `playbooks/firewall.yml` zada tych czterech list NIEPUSTYCH, a szablon
+        # ma trzy z nich puste. Bez tej kopii kontraktu tutaj operator dowiaduje
+        # sie o tym dopiero po kilku minutach converge, na maszynie — bramka
+        # statyczna istnieje wlasnie po to, zeby tam nie dojsc.
+        for field in ("administration_cidrs", "database_cluster_cidrs",
+                      "application_cidrs", "monitoring_cidrs"):
+            if not (cluster.get("network", {}) or {}).get(field):
+                errors.append(
+                    f"network.{field} jest puste — polityka firewalld wymaga jawnych "
+                    "zrodel ruchu (ta sama asercja stoi w playbooks/firewall.yml)"
+                )
+
+        # `.invalid` liczy sie tylko tam, gdzie blok jest WLACZONY: klaster ze
+        # swiadomie wylaczonym backupem ma prawo trzymac placeholder w `s3.endpoint`.
+        enabled_endpoints = []
+        if bool(cluster.get("backup", {}).get("enabled", True)):
+            enabled_endpoints.append(("backup.s3.endpoint", cluster.get("backup", {}).get("s3", {}).get("endpoint", "")))
+            enabled_endpoints.append(("backup.smb.source", cluster.get("backup", {}).get("smb", {}).get("source", "")))
+        if bool(cluster.get("monitoring", {}).get("enabled", True)):
+            enabled_endpoints.append(("monitoring.pmm.server_url", cluster.get("monitoring", {}).get("pmm", {}).get("server_url", "")))
+            # Alert do `.invalid` nie odbije sie bledem — po prostu nigdy nie
+            # dojdzie. Cicha utrata powiadomienia jest gorsza niz brak reguly.
+            enabled_endpoints.append(("monitoring.alerts.email", cluster.get("monitoring", {}).get("alerts", {}).get("email", "")))
+        for field, value in enabled_endpoints:
+            if ".invalid" in str(value):
+                errors.append(
+                    f"{field}='{value}' — domena .invalid nigdy sie nie rozwiaze "
+                    "(RFC 6761); podaj prawdziwy adres albo wylacz ten blok deklaracja"
+                )
+
+        template_leftovers = {
+            "galera.cluster_name": (cluster.get("galera", {}).get("cluster_name", ""), "example_galera"),
+            "proxysql.app_user": (cluster.get("proxysql", {}).get("app_user", ""), "app_user_example"),
+            "monitoring.pmm.cluster_name": (cluster.get("monitoring", {}).get("pmm", {}).get("cluster_name", ""), "example-cluster"),
+        }
+        for field, (value, placeholder) in template_leftovers.items():
+            if str(value) == placeholder:
+                errors.append(
+                    f"{field}='{value}' zostalo z szablonu — kazdy najemca musi miec wlasna wartosc"
+                )
+
     if errors:
         print(f"FAIL: {cluster_path}")
         for e in errors:

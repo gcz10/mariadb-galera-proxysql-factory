@@ -38,6 +38,10 @@
   gather_facts: false
   vars_files:
     - "../{{ versions.lock_file }}"
+  vars:
+    # `become: false` to slowo kluczowe play'a, a `ansible_become`
+    # z inwentarza jest ZMIENNA i wygrywa z nim w precedencji.
+    ansible_become: false
   roles:
     - role: pmm
       vars:

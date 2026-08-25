@@ -22,6 +22,9 @@
   become: false
   gather_facts: false
   vars:
+    # `become: false` to slowo kluczowe play'a, a `ansible_become`
+    # z inwentarza jest ZMIENNA i wygrywa z nim w precedencji.
+    ansible_become: false
     pmm_url: "{{ monitoring.pmm.server_url | regex_replace('/$', '') }}"
     pmm_user: "admin"
     pmm_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"

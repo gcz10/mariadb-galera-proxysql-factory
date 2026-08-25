@@ -34,11 +34,6 @@ SECRET = CTX.env_secret("GALERA_BACKUP_S3_SECRET_KEY") or CTX.env_secret(
     "MINIO_ROOT_PASSWORD"
 )
 
-endpoint_text = str(CLUSTER["backup"]["s3"]["endpoint"])
-configured_endpoint = urlparse(
-    endpoint_text if "://" in endpoint_text else f"//{endpoint_text}"
-)
-configured_host = configured_endpoint.hostname or ""
 inventory_addresses = {}
 for group in CTX.inventory.get("all", {}).get("children", {}).values():
     for host, values in (group.get("hosts", {}) or {}).items():
@@ -47,14 +42,6 @@ for group in CTX.inventory.get("all", {}).get("children", {}).values():
             inventory_addresses[host] = host_vars["ansible_host"]
         else:
             inventory_addresses.setdefault(host, host)
-probe_host = inventory_addresses.get(configured_host, configured_host)
-PROBE_SECURE = bool(
-    CLUSTER["backup"]["s3"].get("secure", configured_endpoint.scheme == "https")
-)
-probe_port = configured_endpoint.port or (443 if PROBE_SECURE else 80)
-PROBE_ENDPOINT = PROBE_ENDPOINT_OVERRIDE or f"{probe_host}:{probe_port}"
-
-BUCKET = CLUSTER["backup"]["s3"]["bucket"]
 CLUSTER_NAME = CLUSTER["cluster"]["name"]
 REQUIRED_META = [
     "cluster_name",
@@ -84,12 +71,42 @@ def main():
     # endpoint i konczyla bramke jako UNDETERMINED, wiec taki klaster NIGDY nie
     # mogl przejsc. Odmowa pomiaru jest tu poprawna odpowiedzia, ale musi byc
     # jawna: nie twierdzimy, ze kopia istnieje.
-    if not (CTX.config.get("backup") or {}).get("enabled", True):
+    backup = CTX.config.get("backup") or {}
+    if not backup.get("enabled", True):
         print(
             "SKIP: backup wylaczony w cluster.yml (backup.enabled=false) — "
             "brak kopii do zweryfikowania"
         )
         return 0
+
+    # To jest sonda S3, nie uniwersalna sonda kazdego magazynu. Decyzja o
+    # backendzie MUSI zapasc przed odczytem `backup.s3`: legalna konfiguracja
+    # SMB/filesystem nie ma tego bloku wcale. Wlaczony backup bez sondy nie jest
+    # jednak zielony — to jawny brak pomiaru.
+    destination = str(backup.get("destination", "s3"))
+    if destination != "s3":
+        undetermined.append(f"brak sondy dla destination={destination}")
+        return finish(failures, undetermined, "")
+
+    s3 = backup.get("s3") or {}
+    endpoint_text = str(s3.get("endpoint", ""))
+    bucket = str(s3.get("bucket", ""))
+    if not endpoint_text or not bucket:
+        failures.append(
+            "backup.destination=s3 wymaga backup.s3.endpoint i backup.s3.bucket"
+        )
+        return finish(failures, undetermined, "")
+
+    configured_endpoint = urlparse(
+        endpoint_text if "://" in endpoint_text else f"//{endpoint_text}"
+    )
+    configured_host = configured_endpoint.hostname or ""
+    probe_host = inventory_addresses.get(configured_host, configured_host)
+    probe_secure = bool(
+        s3.get("secure", configured_endpoint.scheme == "https")
+    )
+    probe_port = configured_endpoint.port or (443 if probe_secure else 80)
+    probe_endpoint = PROBE_ENDPOINT_OVERRIDE or f"{probe_host}:{probe_port}"
     if not ACCESS or not SECRET:
         failures.append(
             "S3 credentials must be set in environment "
@@ -98,10 +115,10 @@ def main():
         return finish(failures, undetermined, "")
 
     client = Minio(
-        PROBE_ENDPOINT,
+        probe_endpoint,
         access_key=ACCESS,
         secret_key=SECRET,
-        secure=PROBE_SECURE,
+        secure=probe_secure,
         http_client=urllib3.PoolManager(
             timeout=Timeout(connect=5, read=30),
             retries=False,
@@ -110,15 +127,15 @@ def main():
 
     # ISC-32: backup exists in off-cluster object storage.
     try:
-        bucket_exists = client.bucket_exists(BUCKET)
+        bucket_exists = client.bucket_exists(bucket)
     except Exception as exc:
         undetermined.append(
-            f"S3 {PROBE_ENDPOINT} nie odpowiada: {type(exc).__name__}: {str(exc)[:160]}"
+            f"S3 {probe_endpoint} nie odpowiada: {type(exc).__name__}: {str(exc)[:160]}"
         )
         return finish(failures, undetermined, "")
     if not bucket_exists:
         failures.append(
-            f"ISC-32 — backup bucket '{BUCKET}' does not exist (no off-cluster backup)"
+            f"ISC-32 — backup bucket '{bucket}' does not exist (no off-cluster backup)"
         )
         return finish(failures, undetermined, "")
 
@@ -126,7 +143,7 @@ def main():
     # connectivity failure at the initial bucket check above is undetermined.
     try:
         data = (
-            client.get_object(BUCKET, "galera-backup-owner.json")
+            client.get_object(bucket, "galera-backup-owner.json")
             .read()
             .decode("utf-8")
         )
@@ -153,19 +170,19 @@ def main():
     try:
         metas = sorted(
             o.object_name
-            for o in client.list_objects(BUCKET, prefix=prefix, recursive=True)
+            for o in client.list_objects(bucket, prefix=prefix, recursive=True)
             if o.object_name.endswith("/metadata.json")
         )
     except Exception as exc:
         undetermined.append(
-            f"S3 {PROBE_ENDPOINT} przerwalo odczyt obiektow: "
+            f"S3 {probe_endpoint} przerwalo odczyt obiektow: "
             f"{type(exc).__name__}: {str(exc)[:160]}"
         )
         return finish(failures, undetermined, "")
 
     check(
         len(metas) > 0,
-        f"ISC-32 — no backups found under prefix s3://{BUCKET}/{prefix}",
+        f"ISC-32 — no backups found under prefix s3://{bucket}/{prefix}",
         failures,
     )
     if not metas:
@@ -176,12 +193,12 @@ def main():
         objs = {
             o.object_name
             for o in client.list_objects(
-                BUCKET, prefix=latest + "/", recursive=True
+                bucket, prefix=latest + "/", recursive=True
             )
         }
     except Exception as exc:
         undetermined.append(
-            f"S3 {PROBE_ENDPOINT} przerwalo odczyt artefaktu: "
+            f"S3 {probe_endpoint} przerwalo odczyt artefaktu: "
             f"{type(exc).__name__}: {str(exc)[:160]}"
         )
         return finish(failures, undetermined, "")
@@ -199,12 +216,12 @@ def main():
         checksum_path = os.path.join(tmp, "backup.sha256")
         metadata_path = os.path.join(tmp, "metadata.json")
         try:
-            client.fget_object(BUCKET, f"{latest}/backup.tar.enc", enc)
-            client.fget_object(BUCKET, f"{latest}/backup.sha256", checksum_path)
-            client.fget_object(BUCKET, f"{latest}/metadata.json", metadata_path)
+            client.fget_object(bucket, f"{latest}/backup.tar.enc", enc)
+            client.fget_object(bucket, f"{latest}/backup.sha256", checksum_path)
+            client.fget_object(bucket, f"{latest}/metadata.json", metadata_path)
         except Exception as exc:
             undetermined.append(
-                f"S3 {PROBE_ENDPOINT} nie dostarczyl artefaktu: "
+                f"S3 {probe_endpoint} nie dostarczyl artefaktu: "
                 f"{type(exc).__name__}: {str(exc)[:160]}"
             )
             return finish(failures, undetermined, "")
@@ -280,7 +297,7 @@ def main():
         return finish(
             failures,
             undetermined,
-            f"backup verified — {latest} off-cluster in s3://{BUCKET}, encrypted "
+            f"backup verified — {latest} off-cluster in s3://{bucket}, encrypted "
             f"({meta.get('encryption', 'aes-256-cbc')}), sha256 OK, metadata "
             f"{meta.get('mariadb_version', 'unknown')} "
             f"seqno={meta.get('wsrep_seqno', 'unknown')} "
