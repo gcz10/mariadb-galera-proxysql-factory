@@ -35,9 +35,16 @@ CLUSTER = CTX.config["cluster"]["name"]
 INVENTORY = os.environ.get("CLUSTER_INVENTORY", f"clusters/{CLUSTER}/inventory.yml")
 CONFIG = os.environ.get("CLUSTER_CONFIG", f"clusters/{CLUSTER}/cluster.yml")
 
-# Dokladnie to, co robi `cluster-deploy`. Firewall pomijamy swiadomie: ma wlasny
-# parametr `firewall_target_hosts` i jest czescia innego celu.
-PLAYBOOKS = ["playbooks/f2_install.yml", "playbooks/site.yml"]
+# DOKLADNIE to, co uruchamia `cluster-deploy` — z firewallem wlacznie. Pierwsza
+# wersja tej sondy pomijala `firewall.yml`, tlumaczac to "innym celem", co bylo
+# nieprawda: Makefile:403 uruchamia go w tym samym celu, tyle ze z wlasna
+# zmienna. Bramka obejmujaca dwa z trzech playbookow dawalaby zielone swiatlo
+# trzeciemu, ktorego nikt nie mierzy — a to on dotyka regul firewalla.
+PLAYBOOKS = [
+    ("playbooks/f2_install.yml", []),
+    ("playbooks/site.yml", []),
+    ("playbooks/firewall.yml", ["-e", "firewall_target_hosts=galera:restore"]),
+]
 
 RECAP_LINE = re.compile(
     r"^(?P<host>\S+)\s*:\s*ok=\d+\s+changed=(?P<changed>\d+)\s+unreachable=(?P<unreachable>\d+)"
@@ -45,9 +52,10 @@ RECAP_LINE = re.compile(
 )
 
 
-def run(playbook, failures, undetermined):
+def run(entry, failures, undetermined):
+    playbook, extra = entry
     proc = subprocess.run(
-        ["ansible-playbook", playbook, "-i", INVENTORY, "-e", f"@{CONFIG}"],
+        ["ansible-playbook", playbook, "-i", INVENTORY, "-e", f"@{CONFIG}", *extra],
         capture_output=True, text=True,
     )
     recap = {}
@@ -88,7 +96,7 @@ def main():
         failures,
         undetermined,
         f"idempotencja converge potwierdzona - changed=0 na wszystkich hostach "
-        f"({', '.join(PLAYBOOKS)})",
+        f"({', '.join(name for name, _ in PLAYBOOKS)})",
     )
 
 
