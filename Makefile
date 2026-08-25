@@ -209,14 +209,15 @@ platform-endpoint:  ## Redundantny endpoint ProxySQL (Keepalived VIP) — WYLACZ
 # writer". Z `noDataState: Alerting` palila sie odtad na stale, czyli przestala
 # odrozniac sprawny klaster od zepsutego. Wykryte przy odbudowie pary od zera.
 platform-monitoring:  ## Zarejestruj wezly i eksportery warstwy wspolnej w PMM
-	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
-	@: "$${PMM_MONITOR_PASSWORD:?Ustaw PMM_MONITOR_PASSWORD poza repozytorium}"
+	@# Sekrety asertuja playbooki (f11_pmm_agent, f11_proxysql_metrics): tylko
+	@# one widza, czy platforma deklaruje `pmm` w infra.services. Twardy wymog
+	@# w recepcie blokowal warstwe z monitoringiem prowadzonym osobno.
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
 	ansible-playbook playbooks/f11_pmm_agent.yml $(PLATFORM_OPTS)
 	ansible-playbook playbooks/f11_proxysql_metrics.yml $(PLATFORM_OPTS)
 
 platform-alerts:  ## Reguly alertowe warstwy wspolnej (namespace isa-shared-*)
-	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	@# f15_alerts.yml sam wymaga PMM_ADMIN_PASSWORD i adresu alertow.
 	ansible-playbook playbooks/f15_alerts.yml $(PLATFORM_OPTS)
 
 # Migracja istniejacej floty: usuwa z PMM wezly zarejestrowane pod adresami

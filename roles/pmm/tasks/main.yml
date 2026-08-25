@@ -14,6 +14,20 @@
     or ((pmm_mode | default('')) == 'agent' and (pmm_stage | default('')) in ['preflight', 'legacy_cleanup'])
     or ((pmm_mode | default('')) == 'agentless' and (pmm_stage | default('')) == 'install')
 
+# Sekrety PMM asertuje ROLA, nie recepta Makefile'a ani wrapper: tylko definicja
+# wie, czy monitoring w ogole istnieje. Warstwa wspolna bez `pmm` w
+# `platform.infra.services` nie ma czego rejestrowac, a twardy wymog hasla w
+# Makefile blokowal jej budowe — konfiguracje legalna, gdy PMM stoi osobno.
+# Najemca nie deklaruje `infra`, wiec domyslka wlacza wymog tak jak dotad.
+- name: "PMM — wymagaj sekretow, gdy definicja deklaruje monitoring"
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') | length >= 12
+      - lookup('ansible.builtin.env', 'PMM_MONITOR_PASSWORD') | length >= 12
+    fail_msg: "Ustaw PMM_ADMIN_PASSWORD i PMM_MONITOR_PASSWORD poza repozytorium."
+  when: "'pmm' in ((platform | default({})).infra | default({})).services | default(['pmm'])"
+  no_log: true
+
 - name: "PMM — wstepna weryfikacja API agentless"
   ansible.builtin.include_tasks: agentless_preflight.yml
   when: pmm_mode == 'agentless' and pmm_stage == 'preflight'
