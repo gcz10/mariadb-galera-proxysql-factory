@@ -53,6 +53,16 @@ cluster_guard = @case "$(origin CLUSTER)" in file|default|undefined) echo "ERROR
 monitoring_enabled = $(shell python3 -c "import yaml,sys; c=yaml.safe_load(open('clusters/$(CLUSTER)/cluster.yml')) or {}; print(str((c.get('monitoring') or {}).get('enabled', True)).lower())" 2>/dev/null || echo true)
 monitoring_skip_note = echo "SKIP: monitoring.enabled=false w clusters/$(CLUSTER)/cluster.yml — pomijam rejestracje w PMM"
 
+# Backup jest DEKLARACJA klastra — dokladnie tak samo jak monitoring wyzej.
+# Honorowaly go SONDY (`SKIP: backup wylaczony w cluster.yml`), a RECEPTY nie:
+# `cluster-build` wolal konfiguracje kopii bezwarunkowo, wiec najemca z
+# `backup.enabled: false` przechodzil deploy, bootstrap, join, ProxySQL,
+# monitoring i hardening, po czym padal na braku poswiadczen S3 magazynu,
+# ktorego swiadomie nie ma. Jedynym obejsciem bylo `BUILD_SKIP=backup`, czyli
+# powtorzenie w wywolaniu tego, co juz stalo w konfiguracji.
+backup_enabled = $(shell python3 -c "import yaml,sys; c=yaml.safe_load(open('clusters/$(CLUSTER)/cluster.yml')) or {}; print(str((c.get('backup') or {}).get('enabled', True)).lower())" 2>/dev/null || echo true)
+backup_skip_note = echo "SKIP: backup.enabled=false w clusters/$(CLUSTER)/cluster.yml — pomijam konfiguracje kopii"
+
 # TF_DIR domyślnie wyprowadzany z nazwy klastra; nadpisywalny dla nietypowych układów.
 TF_DIR ?= terraform/$(CLUSTER)
 
@@ -297,16 +307,20 @@ cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap
 	@# Pominiecie seed bez pominiecia backupu daje restore drill bez czego przywracac:
 	@# bramka konczy sie zielono na pustych danych. Jedyne legalne wyjscie to jawna
 	@# deklaracja, ze klaster ma juz dane uzytkownika.
-	@case " $(BUILD_SKIP) " in \
-		*" seed "*) \
-			case " $(BUILD_SKIP) " in \
-				*" backup "*) ;; \
-				*) test "$(EXISTING_DATA)" = "yes" || { \
-					echo "ERROR: BUILD_SKIP pomija seed, ale nie backup — restore drill nie mialby czego przywrocic." >&2; \
-					echo "       Pomin tez backup (BUILD_SKIP=\"seed backup\") albo zadeklaruj EXISTING_DATA=yes." >&2; \
-					exit 1; } ;; \
-			esac ;; \
-	esac
+	@# Na klastrze z `backup.enabled: false` drillu nie ma w ogole, wiec zadanie
+	@# EXISTING_DATA bylo pytaniem o dane dla przebiegu, ktory nie nastapi.
+	@if [ "$(backup_enabled)" = "true" ]; then \
+		case " $(BUILD_SKIP) " in \
+			*" seed "*) \
+				case " $(BUILD_SKIP) " in \
+					*" backup "*) ;; \
+					*) test "$(EXISTING_DATA)" = "yes" || { \
+						echo "ERROR: BUILD_SKIP pomija seed, ale nie backup — restore drill nie mialby czego przywrocic." >&2; \
+						echo "       Pomin tez backup (BUILD_SKIP=\"seed backup\") albo zadeklaruj EXISTING_DATA=yes." >&2; \
+						exit 1; } ;; \
+				esac ;; \
+		esac; \
+	fi
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (bootstrap tworzy nowy Primary Component)"; exit 1)
 	$(MAKE) cluster-validate
 	$(MAKE) cluster-deploy
@@ -525,21 +539,27 @@ verify-no-state-latest:  ## Statyczny guard: brak state: latest w rolach i playb
 verify-docs-fetch-hook:  ## Statyczny guard: hook blokujacy scraping dokumentacji przez curl
 	node tests/validation/probe-docs-fetch-hook.ts
 
-cluster-backup-configure:  ## F10 — skonfiguruj runner, minio identity i cron dla klastra
+cluster-backup-configure:  ## F10 — skonfiguruj runner, minio identity i cron dla klastra (gdy backup.enabled)
 	$(cluster_guard)
+	@if [ "$(backup_enabled)" != "true" ]; then $(backup_skip_note); exit 0; fi; \
+	set -e; \
 	ansible-playbook playbooks/f10_backup.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e galera_backup_action=configure $(ANSIBLE_OPTS)
 
-cluster-backup:  ## F10 — backup → destination storage via galera-backup runner
+cluster-backup:  ## F10 — backup → destination storage via galera-backup runner (gdy backup.enabled)
 	$(cluster_guard)
+	@if [ "$(backup_enabled)" != "true" ]; then $(backup_skip_note); exit 0; fi; \
+	set -e; \
 	ansible-playbook playbooks/f10_backup.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e galera_backup_action=run $(ANSIBLE_OPTS)
 
 lab-seed-smoke:  ## LAB — zasiej minimalne dane user-space, bez których drill restore pada
 	$(cluster_guard)
 	ansible-playbook playbooks/lab_seed_smoke.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
-cluster-restore-drill:  ## F10 — restore drill na czysty host + integralność (wymaga CONFIRM=yes)
+cluster-restore-drill:  ## F10 — restore drill na czysty host + integralność (CONFIRM=yes, gdy backup.enabled)
 	$(cluster_guard)
-	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (drill kasuje datadir hosta grupy restore)"; exit 1)
+	@if [ "$(backup_enabled)" != "true" ]; then $(backup_skip_note); exit 0; fi; \
+	test "$(CONFIRM)" = "yes" || { echo "Wymaga CONFIRM=yes (drill kasuje datadir hosta grupy restore)" >&2; exit 1; }; \
+	set -e; \
 	ansible-playbook playbooks/f10_restore.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e restore_confirm=yes $(ANSIBLE_OPTS)
 
 lab-backup-verify:  ## F10 — zweryfikuj backup w S3 (ISC-32/33/34/35)
