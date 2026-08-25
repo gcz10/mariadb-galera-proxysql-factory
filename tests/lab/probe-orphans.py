@@ -422,7 +422,16 @@ def main() -> int:
     # 3. MinIO (service accounts)
     # ==========================================================================
     backup_cfg = ctx.config.get("backup", {})
-    if backup_cfg.get("destination") == "s3":
+    backup_enabled = bool(backup_cfg.get("enabled", True))
+    if backup_cfg.get("destination") == "s3" and not backup_enabled:
+        # Wylaczona kopia nigdy nie zalozyla konta serwisowego, wiec nie ma czego
+        # osierocic. Do 2026-08-25 bramkowal tu SAM backend: `nova-r9` mial
+        # `enabled: false` obok `destination: s3`, wiec sonda szla do MinIO po
+        # konta, ktorych nikt nie tworzyl, i konczyla UNDETERMINED. Werdykt
+        # "nie zmierzono" na klastrze, ktory wlasnie kasujesz, jest gorszy niz
+        # brak sekcji: wyglada jak ryzyko, a jest artefaktem bramkowania.
+        print("SKIP: backup wylaczony w cluster.yml — brak konta MinIO do osierocenia")
+    elif backup_cfg.get("destination") == "s3":
         # Sam bucket nie jest sierota; jego retencja to decyzja operatora.
         minio_user = ctx.env_secret("MINIO_ROOT_USER")
         minio_password = ctx.env_secret("MINIO_ROOT_PASSWORD")
