@@ -62,12 +62,20 @@
     # wylaczonym TLS f11_freshness publikuje isa_tls_cert_expiry_unixtime=0, wiec
     # regula liczaca "ile zostalo do wygasniecia" widzialaby cert przeterminowany
     # o pol wieku i palila sie wiecznie na klastrze, ktory certu nie ma.
+    # `requires_backup` dziala jak `requires_tls`: regula o swiezosci kopii na
+    # klastrze BEZ backupu nie ma czego mierzyc i pali sie wiecznie, zamieniajac
+    # alerting w szum, ktory operator wycisza — a wtedy nie zadziala takze wtedy,
+    # gdy naprawde bedzie mial racje.
     f15_effective_rules: >-
       {{ f15_shared_rules
          if galera is not defined
-         else ((f15_cluster_rules | rejectattr('requires_tls', 'defined') | list)
+         else ((f15_cluster_rules
+                | rejectattr('requires_tls', 'defined')
+                | rejectattr('requires_backup', 'defined') | list)
                + (f15_cluster_rules | selectattr('requires_tls', 'defined') | list
-                  if ((tls | default({})).mode | default('disabled')) == 'full' else [])) }}
+                  if ((tls | default({})).mode | default('disabled')) == 'full' else [])
+               + (f15_cluster_rules | selectattr('requires_backup', 'defined') | list
+                  if (backup | default({})).enabled | default(false) else [])) }}
     f15_cluster_rules:
       - uid: "isa-{{ cluster_label }}-node-loss"
         title: "Galera node loss (cluster size < expected)"
@@ -149,6 +157,7 @@
         noDataState: "Alerting"
 
       - uid: "isa-{{ cluster_label }}-backup-failed"
+        requires_backup: true
         title: "Backup run failed"
         expr: "(min(galera_backup_last_run_success{cluster=\"{{ cluster_label }}\"}) or vector(0)) != bool 1"
         summary: "Last Galera backup run failed or metrics missing for cluster {{ cluster_label }}"
@@ -156,6 +165,7 @@
         noDataState: "Alerting"
         pending_for: "0s"
       - uid: "isa-{{ cluster_label }}-backup-stale"
+        requires_backup: true
         title: "Backup freshness stale"
         expr: "(time() - (max(galera_backup_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool ({{ backup_freshness_sla_hours }} * 3600)"
         summary: "Last successful backup older than {{ backup_freshness_sla_hours }} hours (or freshness metric missing)"
@@ -169,12 +179,14 @@
       # Regula bierze `max` z obu. Wczesniej czytala wylacznie pierwsza, wiec
       # mierzyla "kiedy ostatnio puszczono Ansible", a nie "kiedy udal sie drill".
       - uid: "isa-{{ cluster_label }}-restore-drill-stale"
+        requires_backup: true
         title: "Restore drill stale (no successful drill in 8 days)"
         expr: "(time() - max((max(isa_restore_test_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0)) or (max(galera_restore_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0)))) > bool (8 * 24 * 3600)"
         summary: "Last successful restore drill older than 8 days (schedule: {{ backup.restore_test_schedule }}) or drill metric missing"
         severity: "critical"
         noDataState: "Alerting"
       - uid: "isa-{{ cluster_label }}-backup-metrics-frozen"
+        requires_backup: true
         title: "Backup metrics file frozen (node_exporter serves stale .prom)"
         # PromQL kotwiczy `=~` z OBU stron, a etykieta `file` niesie pelna sciezke
         # (/var/lib/node_exporter/textfile_collector/...), wiec bez wiodacego `.*`

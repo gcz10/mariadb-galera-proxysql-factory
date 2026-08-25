@@ -40,6 +40,30 @@
             10
           ],
           "description": "Major Rocky Linux maszyn warstwy wspolnej. Do 2026-08-21 pakiety wspolnej pary ProxySQL wybieral lockfile klastra-wlasciciela, wiec przy dwoch najemcach na roznych EL major kazdy przebieg ownera nadpisywal pakiety drugiego — stad major jest tu wlasnoscia platformy, nie najemcy."
+        },
+        "infra": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Uslugi warstwy wspolnej na hoscie grupy infra. Pominiecie = pelny zestaw (zgodnosc wstecz). Rozdzielenie istnieje, bo monitoring, magazyn kopii i relay maja rozne cykle zycia: przebudowa jednego nie moze niszczyc pozostalych.",
+          "properties": {
+            "services": {
+              "type": "array",
+              "minItems": 0,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "pmm",
+                  "minio",
+                  "maildev"
+                ]
+              },
+              "description": "Ktore uslugi stawia infra_services.yml. Pusta lista = host infra bez uslug kontenerowych."
+            }
+          },
+          "required": [
+            "services"
+          ]
         }
       }
     },

@@ -18,7 +18,11 @@
     state_file: "{{ textfile_dir }}/isa_monitoring_state.prom"
     config_file: "{{ textfile_dir }}/isa_monitoring_config.prom"
     cluster_label: "{{ monitoring.pmm.cluster_name }}"
-    restore_host: "{{ groups['restore'][0] }}"
+    # Klaster bez cwiczen odtworzeniowych (backup wylaczony) nie ma grupy
+    # `restore` i to jest legalne. Bez tego domyslnika play wywracal sie na
+    # `object of type 'dict' has no attribute 'restore'` — bledzie, ktory nie
+    # mowi operatorowi nic o przyczynie.
+    restore_host: "{{ (groups['restore'] | default([]) | first) | default('') }}"
 
   tasks:
     - name: "Odczytaj unixtime ostatniego udanego restore drill (restore[0])"
@@ -29,8 +33,11 @@
           python3 -c "import json,sys; d=json.load(open('$f')); ls=d.get('last_success') or {}; print(ls.get('unixtime', 0) if ls.get('command') == 'restore' else 0)";
         else echo 0; fi
       register: restore_epoch
-      delegate_to: "{{ restore_host }}"
+      # `delegate_to` jest rozwiazywane PRZED `when`, wiec pusty ciag wywala
+      # zadanie mimo pominiecia. Cel musi byc zawsze poprawnym hostem.
+      delegate_to: "{{ restore_host if restore_host | length > 0 else inventory_hostname }}"
       changed_when: false
+      when: restore_host | length > 0
 
     # === Wygaśnięcie certyfikatu TLS (0 gdy tls.mode != full) ===
     - name: "Odczytaj unixtime wygaśnięcia certyfikatu TLS (0 gdy disabled)"
@@ -63,7 +70,7 @@
           # Wartość 0 oznacza brak potwierdzonego sukcesu.
           # HELP isa_restore_test_last_success_unixtime Unix time of the last successful restore drill.
           # TYPE isa_restore_test_last_success_unixtime gauge
-          isa_restore_test_last_success_unixtime{cluster="{{ cluster_label }}"} {{ restore_epoch.stdout | trim | int }}
+          isa_restore_test_last_success_unixtime{cluster="{{ cluster_label }}"} {{ restore_epoch.stdout | default('0') | trim | int }}
           # HELP isa_tls_cert_expiry_unixtime Unix time when the monitored certificate expires.
           # TYPE isa_tls_cert_expiry_unixtime gauge
           isa_tls_cert_expiry_unixtime{cluster="{{ cluster_label }}"} {{ tls_expiry_epoch.stdout | trim | int }}
@@ -87,7 +94,7 @@
           isa_backup_monitoring_enabled{cluster="{{ cluster_label }}"} {{ backup.enabled | ternary(1, 0) }}
           # HELP isa_restore_test_monitoring_enabled Whether restore drill freshness is required.
           # TYPE isa_restore_test_monitoring_enabled gauge
-          isa_restore_test_monitoring_enabled{cluster="{{ cluster_label }}"} {{ (backup.restore_test_schedule | length > 0) | ternary(1, 0) }}
+          isa_restore_test_monitoring_enabled{cluster="{{ cluster_label }}"} {{ ((backup.enabled | default(false)) and (backup.restore_test_schedule | default('') | length > 0) and (backup.restore_test_schedule != 'disabled')) | ternary(1, 0) }}
           # HELP isa_tls_monitoring_enabled Whether certificate expiry monitoring is required.
           # TYPE isa_tls_monitoring_enabled gauge
           isa_tls_monitoring_enabled{cluster="{{ cluster_label }}"} {{ ((tls | default({})).mode | default('disabled') == 'full') | ternary(1, 0) }}

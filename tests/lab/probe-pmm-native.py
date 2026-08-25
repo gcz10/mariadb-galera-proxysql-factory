@@ -110,25 +110,39 @@ EXPECTED_PMM_VERSION = str(VERSION_LOCK["pmm"]["version"])
 # bylo na sztywno 0 i kazdy klaster z tls.mode=full oblewal sonde, mimo ze
 # playbook publikowal poprawna 1.
 TLS_MODE = CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled")
+# Klaster moze swiadomie nie miec kopii (magazyn bywa usluga zewnetrzna). Wtedy
+# metryki backupu nie istnieja i NIE MOGA byc wymagane — inaczej monitoring
+# zglasza brak czegos, czego nikt nie obiecal, a bramka nigdy nie jest zielona.
+BACKUP_ENABLED = bool(CLUSTER_CONFIG.get("backup", {}).get("enabled", True))
 EXPECTED_CONFIG_METRICS = {
     "isa_restore_test_monitoring_enabled": (
-        1 if str(CLUSTER_CONFIG["backup"].get("restore_test_schedule", "")) else 0
+        1
+        if BACKUP_ENABLED and str(CLUSTER_CONFIG["backup"].get("restore_test_schedule", ""))
+        else 0
     ),
     "isa_tls_monitoring_enabled": 1 if TLS_MODE == "full" else 0,
 }
 # ISC-49 freshness unixtimes: non-zero + within an age window after F10 runs.
 BACKUP_FRESHNESS_SLA_HOURS = int(CLUSTER_CONFIG["backup"]["freshness_sla_hours"])
-EXPECTED_FRESHNESS_METRICS = {
-    # metric name → max acceptable age in hours
-    "isa_restore_test_last_success_unixtime": 8 * 24,  # weekly schedule + 1d grace
-}
-EXPECTED_GALERA_BACKUP_METRICS = [
-    "galera_backup_last_success_unixtime",
-    "galera_backup_last_failure_unixtime",
-    "galera_backup_last_run_success",
-    "galera_backup_last_size_bytes",
-    "galera_backup_last_duration_seconds",
-]
+EXPECTED_FRESHNESS_METRICS = (
+    {
+        # metric name → max acceptable age in hours
+        "isa_restore_test_last_success_unixtime": 8 * 24,  # weekly schedule + 1d grace
+    }
+    if BACKUP_ENABLED
+    else {}
+)
+EXPECTED_GALERA_BACKUP_METRICS = (
+    [
+        "galera_backup_last_success_unixtime",
+        "galera_backup_last_failure_unixtime",
+        "galera_backup_last_run_success",
+        "galera_backup_last_size_bytes",
+        "galera_backup_last_duration_seconds",
+    ]
+    if BACKUP_ENABLED
+    else []
+)
 # TLS cert expiry: 0 when tls.mode != full; future epoch when full.
 TLS_EXPIRY_DISABLED_EXPECTED = TLS_MODE != "full"
 ALL_STATE_METRICS = (
@@ -231,7 +245,7 @@ def main():
     # powstaje dla TEGO klastra. Sama lista UID-ow tego nie widzi i sonda
     # zadalaby od klastra regul, ktorych f15 u niego swiadomie nie tworzy.
     rule_blocks = re.split(r'^\s*-\s*uid:\s*', alerts_source, flags=re.M)[1:]
-    rule_suffixes, shared_suffixes, tls_suffixes = [], [], []
+    rule_suffixes, shared_suffixes, tls_suffixes, backup_suffixes = [], [], [], []
     for block in rule_blocks:
         m = re.match(r'"isa-(\{\{\s*cluster_label\s*\}\}|shared)-([a-z0-9-]+)"', block)
         if not m:
@@ -244,6 +258,8 @@ def main():
             shared_suffixes.append(suffix)
         elif re.search(r'^\s+requires_tls:\s*true', body, re.M):
             tls_suffixes.append(suffix)
+        elif re.search(r'^\s+requires_backup:\s*true', body, re.M):
+            backup_suffixes.append(suffix)
         else:
             rule_suffixes.append(suffix)
     if not rule_suffixes:
@@ -258,6 +274,10 @@ def main():
     if tls_full:
         # Bez TLS metryka wygasania ma wartosc 0 i regula nie ma sensu.
         expected_alert_rules |= {f"isa-{_cl}-{suffix}" for suffix in tls_suffixes}
+    if BACKUP_ENABLED:
+        # Symetrycznie do TLS: bez backupu te reguly nie maja czego mierzyc i
+        # paliłyby sie wiecznie, wiec f15 ich nie tworzy.
+        expected_alert_rules |= {f"isa-{_cl}-{suffix}" for suffix in backup_suffixes}
     managed_alert_rules = [
         rule
         for rule in alert_rules
@@ -317,19 +337,22 @@ def main():
         f"ISC-47 zarzadzane reguly alertowe sie pala: {firing}",
         failures,
     )
-    backup_failure_rule = next(
-        (
-            rule
-            for rule in managed_alert_rules
-            if rule.get("uid") == f"isa-{_cl}-backup-failed"
-        ),
-        {},
-    )
-    check(
-        backup_failure_rule.get("for") == "0s",
-        "Backup failure alert must evaluate immediately (for=0s)",
-        failures,
-    )
+    # Regula o nieudanym backupie powstaje tylko na klastrze z backupem — na
+    # klastrze bez kopii jej brak jest poprawny, a nie luka w alertowaniu.
+    if BACKUP_ENABLED:
+        backup_failure_rule = next(
+            (
+                rule
+                for rule in managed_alert_rules
+                if rule.get("uid") == f"isa-{_cl}-backup-failed"
+            ),
+            {},
+        )
+        check(
+            backup_failure_rule.get("for") == "0s",
+            "Backup failure alert must evaluate immediately (for=0s)",
+            failures,
+        )
     # Reguly zwracaja 0 przy zdrowym klastrze (nie pusty wektor), wiec NoData oznacza
     # realna utrate zbierania metryk. Reguly KRYTYCZNE musza wtedy alarmowac (fail-closed).
     # Jedyny wyjatek to warning-level "not Synced": jego fallback (`or vector(4)`) celowo

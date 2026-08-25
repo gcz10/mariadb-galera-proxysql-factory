@@ -183,10 +183,10 @@ platform-deploy:  ## Instaluj pakiety warstwy wspolnej (ProxySQL wg lockfile EL1
 platform-firewall:  ## Polityka firewalld hostow warstwy wspolnej (proxysql, infra, app)
 	ansible-playbook playbooks/firewall.yml $(PLATFORM_OPTS) -e firewall_target_hosts=proxysql:infra:app
 
-platform-infra:  ## Uslugi wspierajace na fcinfra: PMM + MinIO + Maildev
-	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
-	@: "$${MINIO_ROOT_USER:?Ustaw MINIO_ROOT_USER poza repozytorium}"
-	@: "$${MINIO_ROOT_PASSWORD:?Ustaw MINIO_ROOT_PASSWORD poza repozytorium}"
+platform-infra:  ## Uslugi warstwy wspolnej zadeklarowane w platform.infra.services
+	@# Sekrety asertuje playbook, bo tylko on wie, KTORE uslugi platforma
+	@# deklaruje. Twardy wymog MINIO_* w recepcie blokowal warstwe bez MinIO —
+	@# konfiguracje calkowicie legalna, bo magazyn kopii moze stac gdziekolwiek.
 	ansible-playbook playbooks/infra_services.yml $(PLATFORM_OPTS)
 
 platform-proxysql:  ## Konfiguruj sama pare ProxySQL (frontend TLS, ustawienia globalne)

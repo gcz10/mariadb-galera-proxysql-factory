@@ -34,10 +34,16 @@ class PlatformPmmUpgradeSafetyContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.text = PLAYBOOK.read_text(encoding="utf-8")
         cls.plays = yaml.safe_load(cls.text)
+        # Play wyszukujemy po TRESCI, nie po tytule: tytul jest opisem dla
+        # operatora i zmienil sie przy rozdzielaniu uslug warstwy wspolnej,
+        # przez co kontrakt przestal cokolwiek sprawdzac (StopIteration).
         play = next(
             item
             for item in cls.plays
-            if item.get("name") == "Infra — PMM, MinIO i Maildev"
+            if any(
+                "infra_pmm_upgrade.yml" in str(task.get("ansible.builtin.include_tasks", ""))
+                for task in (item.get("tasks") or [])
+            )
         )
         cls.play = play
         cls.play_vars = play["vars"]
@@ -227,18 +233,22 @@ class PlatformPmmUpgradeSafetyContractTests(unittest.TestCase):
         conditions = "\n".join(config_guard["ansible.builtin.assert"]["that"])
         self.assertIn("monitoring.pmm.backup_retention", conditions)
         self.assertNotIn("no_log", config_guard)
+        # Sekret jest wymagany WTEDY, gdy platforma deklaruje usluge, ktora go
+        # uzywa. Twarde zadanie MINIO_* blokowalo warstwe bez magazynu kopii —
+        # konfiguracje legalna, bo S3 bywa usluga zewnetrzna.
         secret_guard = next(
             task
             for task in self.play["pre_tasks"]
-            if task.get("name") == "Wymagaj sekretów infra"
+            if str(task.get("name", "")).startswith("Wymagaj sekret")
         )
         self.assertTrue(secret_guard["no_log"])
+        conditions = secret_guard["ansible.builtin.assert"]["that"]
         self.assertEqual(
-            secret_guard["ansible.builtin.assert"]["that"],
+            conditions,
             [
-                "pmm_admin_password | length >= 12",
-                "minio_root_user | length >= 3",
-                "minio_root_password | length >= 12",
+                "'pmm' not in infra_services or pmm_admin_password | length >= 12",
+                "'minio' not in infra_services or minio_root_user | length >= 3",
+                "'minio' not in infra_services or minio_root_password | length >= 12",
             ],
         )
         platform = yaml.safe_load(

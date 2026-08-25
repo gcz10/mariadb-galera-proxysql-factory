@@ -78,6 +78,18 @@ def check(cond, msg, failures):
 def main():
     failures = []
     undetermined = []
+
+    # Klaster moze swiadomie nie miec kopii — magazyn bywa usluga zewnetrzna,
+    # ktorej lab nie stawia. Bez tego sonda probowala rozwiazac placeholderowy
+    # endpoint i konczyla bramke jako UNDETERMINED, wiec taki klaster NIGDY nie
+    # mogl przejsc. Odmowa pomiaru jest tu poprawna odpowiedzia, ale musi byc
+    # jawna: nie twierdzimy, ze kopia istnieje.
+    if not (CTX.config.get("backup") or {}).get("enabled", True):
+        print(
+            "SKIP: backup wylaczony w cluster.yml (backup.enabled=false) — "
+            "brak kopii do zweryfikowania"
+        )
+        return 0
     if not ACCESS or not SECRET:
         failures.append(
             "S3 credentials must be set in environment "

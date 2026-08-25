@@ -142,6 +142,12 @@ def validate_pair(cluster_path: Path, inventory_path: Path) -> list[str]:
     backup = cluster.get("backup", {})
     env = cluster.get("cluster", {}).get("environment", "")
 
+    # Klaster ze swiadomie wylaczonym backupem nie planuje niczego, wiec pola
+    # harmonogramu niosa wtedy sentinel `disabled`, a nie wyrazenie cron.
+    # Bez tego wyjatku walidator zadal poprawnego crona od klastra, ktory z
+    # zalozenia nie robi kopii — i blokowal cala bramke repozytorium.
+    backup_enabled = backup.get("enabled", True) is True
+
     # Scheduler check
     scheduler = backup.get("scheduler")
     if not scheduler:
@@ -155,9 +161,8 @@ def validate_pair(cluster_path: Path, inventory_path: Path) -> list[str]:
             )
 
     # Cron schedule check
-    cron_expr = backup.get("full_backup_schedule", "")
-    cron_errs = validate_cron(cron_expr)
-    errors.extend(cron_errs)
+    if backup_enabled:
+        errors.extend(validate_cron(backup.get("full_backup_schedule", "")))
 
     # Incremental schedule check
     incr_expr = backup.get("incremental_backup_schedule", "")

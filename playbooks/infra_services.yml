@@ -29,13 +29,18 @@
   vars:
     firewall_target_hosts: infra
 
-- name: "Infra — PMM, MinIO i Maildev"
+- name: "Infra — uslugi warstwy wspolnej zadeklarowane przez platforme"
   hosts: infra
   become: true
   gather_facts: true
   serial: 1
   max_fail_percentage: 0
   vars:
+    # Sklad uslug jest DEKLARACJA platformy. Domyslnie pelny zestaw, bo tak
+    # dzialaly wszystkie istniejace platformy — ale monitoring, magazyn kopii i
+    # relay maja rozne cykle zycia i musza dac sie stawiac osobno. Zroslo sie to
+    # w jeden zestaw i przebudowa PMM zabierala ze soba magazyn kopii floty.
+    infra_services: "{{ platform.infra.services | default(['pmm', 'minio', 'maildev']) }}"
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
     minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
@@ -60,12 +65,10 @@
         +
         (network.monitoring_cidrs | product(['443']) | list)
       }}
-    infra_published_ports:
-      - 80
-      - 443
-      - 9000
-      - 9001
-      - 8025
+    infra_published_ports: >-
+      {{ (['pmm'] | intersect(infra_services) | ternary([80, 443], []))
+         + (['minio'] | intersect(infra_services) | ternary([9000, 9001], []))
+         + (['maildev'] | intersect(infra_services) | ternary([8025], [])) }}
 
   pre_tasks:
     - name: "Załaduj lockfile wersji"
@@ -80,23 +83,23 @@
           - groups['infra'] | length == 1
           - ansible_facts.architecture == 'x86_64'
           - lock.docker.engine_version | length > 0
-          - lock.pmm.image_digest is match('^sha256:[0-9a-f]{64}$')
-          - lock.minio.image_digest is match('^sha256:[0-9a-f]{64}$')
+          - "'pmm' not in infra_services or lock.pmm.image_digest is match('^sha256:[0-9a-f]{64}$')"
+          - "'minio' not in infra_services or lock.minio.image_digest is match('^sha256:[0-9a-f]{64}$')"
           - monitoring.pmm.backup_retention | int >= 1
           - monitoring.pmm.backup_retention | int <= 5
         fail_msg: >-
           Infra wymaga jednego hosta x86_64, środowiska nieprodukcyjnego,
           poprawnych lockfile'ów i retencji backupów PMM 1..5.
 
-    - name: "Wymagaj sekretów infra"
+    - name: "Wymagaj sekretow zadeklarowanych uslug"
       ansible.builtin.assert:
         that:
-          - pmm_admin_password | length >= 12
-          - minio_root_user | length >= 3
-          - minio_root_password | length >= 12
+          - "'pmm' not in infra_services or pmm_admin_password | length >= 12"
+          - "'minio' not in infra_services or minio_root_user | length >= 3"
+          - "'minio' not in infra_services or minio_root_password | length >= 12"
         fail_msg: >-
-          Ustaw PMM_ADMIN_PASSWORD, MINIO_ROOT_USER i MINIO_ROOT_PASSWORD
-          poza repozytorium.
+          Ustaw sekrety uslug zadeklarowanych w platform.infra.services:
+          PMM_ADMIN_PASSWORD dla pmm, MINIO_ROOT_USER i MINIO_ROOT_PASSWORD dla minio.
       no_log: true
 
   tasks:
@@ -238,6 +241,7 @@
       ansible.builtin.meta: flush_handlers
     - name: "PMM — zabezpiecz zmianę obrazu"
       ansible.builtin.include_tasks: tasks/infra_pmm_upgrade.yml
+      when: "'pmm' in infra_services"
 
 
     - name: "Utwórz prywatny katalog konfiguracji infra"
@@ -276,15 +280,12 @@
         or 'Recreated' in (infra_compose_up.stdout ~ infra_compose_up.stderr)
         or 'Started' in (infra_compose_up.stdout ~ infra_compose_up.stderr)
 
-    - name: "Czekaj na porty usług infra"
+    - name: "Czekaj na porty zadeklarowanych usług"
       ansible.builtin.wait_for:
         host: "{{ ansible_host }}"
         port: "{{ item }}"
-        timeout: 300
-      loop:
-        - 443
-        - 9000
-        - 8025
+        timeout: 180
+      loop: "{{ infra_published_ports }}"
 
     - name: "Sprawdź gotowość PMM"
       ansible.builtin.uri:
@@ -296,6 +297,7 @@
       until: pmm_readiness.status == 200
       retries: 60
       delay: 5
+      when: "'pmm' in infra_services"
 
     - name: "Sprawdź gotowość MinIO"
       ansible.builtin.uri:
@@ -306,6 +308,7 @@
       until: minio_readiness.status == 200
       retries: 30
       delay: 2
+      when: "'minio' in infra_services"
 
     - name: "Sprawdź gotowość Maildev"
       ansible.builtin.uri:
@@ -316,6 +319,7 @@
       until: maildev_readiness.status == 200
       retries: 30
       delay: 2
+      when: "'maildev' in infra_services"
 
     - name: "Pobierz listę uruchomionych usług Compose"
       ansible.builtin.command:
@@ -331,12 +335,18 @@
       register: infra_running_services
       changed_when: false
 
-    - name: "Potwierdź komplet usług infra"
+    - name: "Potwierdź komplet zadeklarowanych usług"
       ansible.builtin.assert:
         that:
-          - infra_running_services.stdout_lines | sort == ['maildev', 'minio', 'pmm-server']
-        fail_msg: "Nie wszystkie usługi infra są uruchomione: {{ infra_running_services.stdout_lines }}"
-        success_msg: "PMM, MinIO i Maildev działają na {{ inventory_hostname }}."
+          - infra_running_services.stdout_lines | sort == expected_infra_containers
+        fail_msg: >-
+          Dziala {{ infra_running_services.stdout_lines }},
+          a platforma deklaruje {{ expected_infra_containers }}.
+        success_msg: "Uslugi {{ expected_infra_containers | join(', ') }} dzialaja na {{ inventory_hostname }}."
+      vars:
+        # Nazwa uslugi w compose rozni sie od nazwy w deklaracji tylko dla PMM.
+        expected_infra_containers: >-
+          {{ infra_services | map('regex_replace', '^pmm$', 'pmm-server') | sort | list }}
 
 
     # Na trwałym volume docelowe haslo moze byc juz ustawione — wtedy pierwszy
@@ -353,6 +363,7 @@
           - 200
           - 401
       register: pmm_admin_auth
+      when: "'pmm' in infra_services"
       no_log: true
 
     - name: "PMM — zmien domyslne haslo admina przez Grafana User API (uri, bez wycieku w argv)"
@@ -370,10 +381,13 @@
           confirmNew: "{{ pmm_admin_password }}"
         status_code:
           - 200
-      when: pmm_admin_auth.status == 401
+      when:
+        - "'pmm' in infra_services"
+        - pmm_admin_auth.status | default(0) == 401
       no_log: true
     - name: "PMM — zastosuj retencję zweryfikowanych backupów"
       ansible.builtin.include_tasks: tasks/infra_pmm_backup_retention.yml
+      when: "'pmm' in infra_services"
 
   handlers:
     - name: "Restart Docker po zmianie sysctl ip_forward"

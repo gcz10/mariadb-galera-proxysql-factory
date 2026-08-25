@@ -41,6 +41,12 @@ def schedule_max_age_days(cron):
 def main():
     failures = []
     undetermined = []
+
+    # Symetrycznie do probe-backup: bez wlaczonego backupu nie ma cwiczenia
+    # odtworzeniowego do zmierzenia, a klaster bez kopii jest legalny.
+    if not CLUSTER.get("backup", {}).get("enabled", True):
+        print("SKIP: backup wylaczony w cluster.yml — brak drillu do zweryfikowania")
+        return 0
     result = run_ansible(
         CTX,
         "restore",

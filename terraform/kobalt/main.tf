@@ -10,9 +10,8 @@ terraform {
 
 provider "proxmox" {} # endpoint + api_token + insecure z env PROXMOX_VE_*
 
-# Drugi najemca warstwy wspolnej `green`, budowany dla dowodu, ze fabryka stawia
-# klaster obok istniejacego bez dotykania go. ProxySQL, VIP, PMM, MinIO i host
-# aplikacyjny naleza do terraform/green/ i NIE sa tu zarzadzane.
+# Warstwa wspolna `kobalt`: monitoring i para ProxySQL z VIP-em. BEZ magazynu
+# kopii — S3 jest usluga zewnetrzna i nie dzieli cyklu zycia z monitoringiem.
 locals {
   node_name = "pve"
   pool_id   = "claude-isa"
@@ -23,13 +22,15 @@ locals {
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
 
-  # Aktywny skan 2026-08-24: .32-.35 wolne (.38 w rejestrze zajetych).
-  # VMID 9760-9763 wolne w PVE.
+  # Aktywny skan 2026-08-24: .28-.30 wolne, .31 zarezerwowane pod VIP.
   vms = {
-    bg1 = { id = 9760, ip = 32, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    bg2 = { id = 9761, ip = 33, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    bg3 = { id = 9762, ip = 34, role = "galera", cpu = 2, ram = 3072, disk = 40 }
-    br1 = { id = 9763, ip = 35, role = "restore", cpu = 1, ram = 2560, disk = 40 }
+    kmon = { id = 9770, ip = 28, role = "infra", cpu = 2, ram = 5120, disk = 40 }
+    kp1  = { id = 9771, ip = 29, role = "proxysql", cpu = 2, ram = 3072, disk = 40 }
+    kp2  = { id = 9772, ip = 30, role = "proxysql", cpu = 2, ram = 3072, disk = 40 }
+    # Jedyny host patrzacy na klaster OCZAMI APLIKACJI: po sieci, przez VIP.
+    # Bez niego bramka warstwy nie ma skad zmierzyc TLS endpointu i konczy sie
+    # UNDETERMINED — sonda odmawia zielonego bez pomiaru.
+    kapp = { id = 9776, ip = 32, role = "app", cpu = 1, ram = 3072, disk = 40 }
   }
 }
 
@@ -46,8 +47,8 @@ module "vms" {
 
   vms = local.vms
 
-  tags               = ["rocky9", "galera", "blue-r9", "bl9"]
-  description_prefix = "blue-r9 Rocky 9"
+  tags               = ["rocky9", "platform", "kobalt"]
+  description_prefix = "kobalt platforma Rocky 9"
   description_dash   = "-"
 
   disk_file_format = "raw"
@@ -60,6 +61,6 @@ module "vms" {
 output "vms" {
   value = module.vms.vms
 }
-output "shared_vip" {
-  value = "192.168.1.27 (terraform/green/)"
+output "vip" {
+  value = "192.168.1.31 (Keepalived, wdrazany przez make platform-endpoint)"
 }
