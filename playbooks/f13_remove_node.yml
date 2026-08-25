@@ -42,7 +42,11 @@
     - name: "Audit#18: plan musi istnieć (uruchom najpierw f13_remove_node_plan.yml)"
       ansible.builtin.assert:
         that:
-          - not f13_plan_raw.failed
+          # `failed_when: false` na slurpie ZERUJE pole `failed`, wiec warunek
+          # `not f13_plan_raw.failed` przechodzil zawsze — takze przy braku pliku.
+          # Przebieg wywracal sie dopiero linijke nizej, na `.content`, bledem
+          # o slowniku bez atrybutu. Pytamy wprost o to, czego uzywamy dalej.
+          - f13_plan_raw.content is defined
         fail_msg: >-
           Brak artefaktu planu dla {{ node }}. Uruchom najpierw:
           make cluster-remove-node-plan CLUSTER={{ cluster.name }} NODE={{ node }}
