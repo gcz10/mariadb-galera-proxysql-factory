@@ -1,0 +1,76 @@
+---
+# Najemca `orion-r9`. Wezly og1-og3 powstaly Terraformem (terraform/orion-r9),
+# rownolegle z `vega-r9`, ktory te same trzy wezly dostaje z golego REST API.
+#
+# ADRESY ZYJA WYLACZNIE TUTAJ. Kazdy host ma dwa pola adresowe i to nie jest
+# nadmiarowosc: `ansible_host` mowi, dokad laczy sie kontroler, a
+# `<rola>_node_address` — co maszyna rozglasza wewnatrz klastra (wsrep,
+# hostgroupy ProxySQL, cele PMM). W tym laboratorium sa rowne.
+#
+# kp1/kp2, kapp i kmon naleza do warstwy wspolnej `kobalt`; ten najemca ich nie
+# tworzy ani nie niszczy — rejestruje sie w nich.
+all:
+  vars:
+    # Obraz Rocky 9 GenericCloud wpuszcza klucz operatora prosto do roota, wiec
+    # sudo nie jest tu do niczego potrzebne. Szablon zaklada uzytkownika
+    # nie-root z sudo i to tez jest poprawne — fabryka nie wymaga zadnego z tych
+    # wariantow, wymaga tylko, zeby inwentarz mowil prawde o maszynie.
+    ansible_user: "root"
+    ansible_become: false
+    ansible_ssh_private_key_file: secrets/ssh_key
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        og1:
+          ansible_host: "192.168.1.43"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.43"
+        og2:
+          ansible_host: "192.168.1.44"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.44"
+        og3:
+          ansible_host: "192.168.1.45"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.45"
+
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        kp1:
+          ansible_host: "192.168.1.29"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.29"
+        kp2:
+          ansible_host: "192.168.1.30"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.30"
+
+    # Grupy `restore` nie ma celowo: `backup.enabled: false`, wiec nie ma czego
+    # odtwarzac, a README kaze ja wtedy usunac.
+
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        kapp:
+          ansible_host: "192.168.1.32"
+          app_node_address: "192.168.1.32"
+
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        kmon:
+          ansible_host: "192.168.1.28"
+          infra_node_address: "192.168.1.28"
+
+    discovery_bench:
+      hosts: {}
+      vars:
+        allow_bench: true

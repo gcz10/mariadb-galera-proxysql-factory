@@ -1,4 +1,11 @@
 ---
+# ARCHIWUM — maszyny nv1-nv3 (VMID 9780-9782, .36/.37/.39) zostaly zniszczone
+# 2026-08-25 po zakonczeniu przebiegu. Definicja ZOSTAJE jako slad: to pierwszy
+# najemca zbudowany bez Terraforma, z maszyn utworzonych golym REST API.
+# NIE URUCHAMIAJ na niej `cluster-build` — adresy .36/.37/.39 nie odpowiadaja
+# zadnym maszynom, a rezerwacja tych adresow jest tu celowa, zeby kolejny
+# najemca ich nie przejal.
+#
 # Najemca warstwy `kobalt`, DRUGI na tej samej parze ProxySQL.
 # Maszyny powstaly przez REST API hypervisora, nie przez Terraform.
 # Backup wylaczony swiadomie — magazyn S3 jest usluga zewnetrzna i nie powstaje

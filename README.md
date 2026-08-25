@@ -113,6 +113,12 @@ budowy.
 - `monitoring.enabled: false`, gdy nie używasz PMM; przy `true` ustaw
   `pmm.server_url`, `pmm.cluster_name`, `pmm.validate_certs`,
   `agent_groups`, `credentials_revision` i rzeczywisty adres alertów.
+- `mariadb_tuning.gcache_size` — bufor, z którego wracający węzeł dostaje IST
+  zamiast pełnego SST. Domyślne `512M` ma zapas, ale własną wartość policz:
+  `tests/validation/calc-gcache.py --write-rate <B/s> --window 30`, gdzie write
+  rate bierzesz z `f0_discovery` albo z `probe-gcache.py` na żywym klastrze.
+  Za mała wartość nie psuje działania — kosztuje pełny SST przy każdym powrocie
+  węzła i jest odrzucana przez bramkę po budowie;
 
 Interfejs sieciowy dla VIP-a wykrywany jest z domyślnej trasy hosta; przy
 nietypowej konfiguracji sieci wskaż go jawnie przez `proxysql_endpoint_interface`.

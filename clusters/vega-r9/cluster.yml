@@ -4,7 +4,7 @@
 # Nie wpisuj adresów IP tutaj — adresy żyją w inventory.yml.
 
 cluster:
-  name: "example-cluster"
+  name: "vega-r9"
   environment: "laboratory"
   profile: "laboratory"
 
@@ -16,7 +16,7 @@ versions:
   lock_file: "versions/versions.lock.yml"
 
 galera:
-  cluster_name: "example_galera"
+  cluster_name: "vg_galera"
   nodes_expected: 3
 
 proxysql:
@@ -26,20 +26,20 @@ proxysql:
   # +30 (offline). Sasiednie bazy sa wiec kolizja, mimo ze wygladaja inaczej:
   # przy 890 i 900 wezly drugiego najemcy laduja w puli, na ktora pierwszy
   # przelacza sie przy failoverze writera. Kolejnemu klastrowi daj base+40.
-  hostgroup_base: 10
+  hostgroup_base: 170
   # Wpis w `mysql_users` jest GLOBALNY dla instancji ProxySQL: dwaj najemcy
   # z ta sama nazwa uzytkownika to jeden wpis i ruch obu trafi do jednego
   # klastra. Nazwa musi byc unikalna w obrebie wspolnego endpointu.
-  app_user: "app_user_example"
+  app_user: "app_user_vg"
   frontend_tls:
     # WYLACZNIE ca_reference: cert i klucz frontendu naleza do warstwy wspolnej,
     # ktora serwuje cala flote jednym certem. Wskaz CA tej warstwy.
-    ca_reference: "pki/example/ca.pem"
+    ca_reference: "pki/kobalt/ca.pem"
   endpoint:
     type: "keepalived_vip"
     # Musi byc DOKLADNIE ten VIP, ktory wystawia warstwa wspolna
     # (platform/example/platform.yml). Najemca go nie tworzy — tylko mu ufa.
-    address: "10.0.1.20"
+    address: "192.168.1.31"
     port: 6033
 
 # TLS opcjonalne per-klaster. mode=full => serwer prezentuje cert, replikacja Galera
@@ -52,16 +52,16 @@ tls:
   # tekstem, a jedyna wzmianka o tym byla nawiasem w kroku 4. Kto chce plaintext,
   # niech go napisze wprost — nie odziedziczy go przez przeoczenie.
   mode: "full"                        # disabled | full
-  ca_reference: ""                   # CA (pem)
-  certificate_reference: ""          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
-  private_key_reference: ""          # klucz prywatny serwera
+  ca_reference: "pki/vg9/ca.pem"                   # CA (pem)
+  certificate_reference: "pki/vg9/server-cert.pem"          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
+  private_key_reference: "pki/vg9/server-key.pem"          # klucz prywatny serwera
   require_secure_transport: false    # true => wymusza TLS na WSZYSTKICH poł. TCP (klienci muszą mieć TLS)
 
 network:
-  application_cidrs: []
-  database_cluster_cidrs: []
-  administration_cidrs: []
-  monitoring_cidrs: []
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.28/32"]
 
 
 storage:
@@ -84,17 +84,14 @@ mariadb_tuning:
   max_connections: 50                # produkcja: peak_connections + zapas
   # TYLKO lab: jawny opt-out; pominięcie => 1. Production wymaga 1 albo risk acceptance.
   innodb_flush_log_at_trx_commit: 0
-  gcache_size: "512M"                # ISC-68: policz swoja wartosc:
-                                     #   tests/validation/calc-gcache.py --write-rate <B/s> --window 30
-                                     # Default ma ZAPAS celowo. Do 2026-08-25 stalo tu 128M, czyli
-                                     # dokladnie podloga formuly: klaster zbudowany wg README padal
-                                     # na ostatniej bramce, gdy zmierzony ruch przekroczyl ~74 kB/s.
+  gcache_size: "256M"                 # ISC-68: 256M pokrywa write_rate ~84 kB/s przy oknie IST 30 min
+                                      # (zmierzone na og3; domyslne 128M szablonu bramka odrzucila)
 
 availability:
   rto_node_failure: "2m"
 
 backup:
-  enabled: true
+  enabled: false
   destination: "smb"
   full_backup_schedule: "0 2 * * *"
   incremental_backup_schedule: "disabled"
@@ -105,7 +102,7 @@ backup:
   restore_test_schedule: "0 4 * * 0"
   scheduler:
     mode: "manual"
-    host: "gnode1"
+    host: "vg1"
     timezone: "UTC"
   smb:
     source: "//nas01.example.invalid/backups"
@@ -125,16 +122,12 @@ backup:
 
 monitoring:
   pmm:
-    server_url: "https://pmm.example.invalid"
+    server_url: "https://192.168.1.28"
     agent_id: "pmm-server"
-    cluster_name: "example-cluster"
-    validate_certs: true
+    cluster_name: "vega-r9"
+    validate_certs: false
     credentials_revision: 1
   alerts:
-    email: "alerts@example.invalid"
-    folder_uid: ""                   # PUSTE = wyprowadz `isa-alerts-<cluster_name>`.
-                                     # Nie wpisuj tu wspolnej wartosci: tytul folderu jest
-                                     # per najemca, ale `uid` musi byc unikalny w CALEJ Grafanie.
-                                     # Do 2026-08-25 szablon dawal tu `isa-alerts`, wiec drugi
-                                     # najemca tego samego PMM dostawal 412 (uid zajety).
+    email: "ops@claude.local"
+    folder_uid: ""                   # puste = wyprowadzone `isa-alerts-<cluster_name>`
     datasource_uid: ""

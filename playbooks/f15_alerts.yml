@@ -26,7 +26,11 @@
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     pmm_validate_certs: "{{ monitoring.get('pmm', {}).get('validate_certs', true) | bool }}"
     cluster_label: "{{ monitoring.pmm.cluster_name }}"
-    folder_uid: "{{ (monitoring.alerts | default({})).folder_uid | default('isa-alerts-' ~ cluster_label) }}"
+    # `default(..., true)` a nie samo `default`: pusty string tez ma wpasc na
+    # wyprowadzenie. Szablon do 2026-08-25 wysylal twarde `isa-alerts` — wspolne
+    # dla WSZYSTKICH najemcow — wiec drugi klaster na tym samym PMM dostawal
+    # od Grafany 412 (uid zajety), mimo ze tytul folderu jest per najemca.
+    folder_uid: "{{ (monitoring.alerts | default({})).folder_uid | default('isa-alerts-' ~ cluster_label, true) }}"
     ds_uid: "{{ (monitoring.alerts | default({})).datasource_uid | default('') }}"
     backup_freshness_sla_hours: "{{ backup.freshness_sla_hours }}"
     f15_email: "{{ (monitoring.alerts | default({})).email | default('') }}"

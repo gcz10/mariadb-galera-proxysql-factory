@@ -1,4 +1,10 @@
 ---
+# ARCHIWUM — maszyny sg1-sg3 (VMID 9790-9792, .40/.41/.42) zostaly zniszczone
+# 2026-08-25 po zakonczeniu przebiegu. Definicja ZOSTAJE jako slad: to na tym
+# klastrze wyszlo osiem defektow sciezki zakladania nowego klastra, naprawionych
+# w e3eca9b. NIE URUCHAMIAJ na niej `cluster-build` — adresy nie odpowiadaja
+# zadnym maszynom, a ich rezerwacja jest tu celowa.
+#
 # `sigma-r9`: klaster dowodowy zbudowany od zera sciezka opisana w README.
 # Walidowane przez clusters/schema/cluster.schema.json.
 # Nie wpisuj adresów IP tutaj — adresy żyją w inventory.yml.
@@ -123,5 +129,5 @@ monitoring:
   agent_groups: ["galera"]
   alerts:
     email: "ops@claude.local"
-    folder_uid: "isa-alerts"
+    folder_uid: ""                   # puste = wyprowadzone `isa-alerts-<cluster_name>`
     datasource_uid: ""
