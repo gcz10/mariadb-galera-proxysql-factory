@@ -35,8 +35,14 @@ EP="${PROXMOX_VE_ENDPOINT%/}"; H="Authorization: PVEAPIToken=$PROXMOX_VE_API_TOK
 
 # 1. Utworzenie. `sshkeys` musi byc zakodowane URI (PVE odrzuca surowy klucz),
 #    a `size=` przy `import-from` jest IGNOROWANE — dysk dostaje rozmiar obrazu.
+#    `pool` NIE jest ozdoba. Terraform ustawia je przez `pool_id`
+#    (terraform/modules/pve_vm_set/main.tf:29) i pula jest JEDYNYM markerem
+#    wlasnosci na wspoldzielonym hyperwizorze. Do 2026-08-25 ten runbook o tym
+#    milczal i szesc recznie utworzonych maszyn wypadlo poza `claude-isa`.
+POOL=claude-isa
 curl -sk -H "$H" -X POST "$EP/api2/json/nodes/$NODE/qemu" \
   --data-urlencode "vmid=9780" --data-urlencode "name=nv1" \
+  --data-urlencode "pool=$POOL" \
   --data-urlencode "cores=2" --data-urlencode "cpu=host" \
   --data-urlencode "memory=3072" --data-urlencode "balloon=0" \
   --data-urlencode "agent=enabled=1,type=virtio" \
@@ -70,11 +76,22 @@ make cluster-deregister CLUSTER="$CLUSTER" CONFIRM=yes
 
 # 2. POTWIERDZ TOZSAMOSC, zanim cokolwiek skasujesz. VMID to trzy cyfry roznicy
 #    od cudzego, zywego wezla, a `DELETE` nie pyta o zdanie. Ta petla NIE kasuje:
-#    wypisuje nazwe i adres kazdego VMID i ma sie zgadzac z inwentarzem najemcy.
+#    wypisuje nazwe, adres i pule kazdego VMID.
+#
+#    Pula ma TRZY stany, nie dwa. `claude-isa` to nasze. CUDZA pula to STOP.
+#    BRAK puli NIE dowodzi niczego: maszyny tworzone recznie przed 2026-08-25
+#    nie dostawaly `pool`, wiec legacy wyglada jak cudze. Wtedy rozstrzyga
+#    zgodnosc nazwy i adresu z inwentarzem najemcy, ktory wlasnie kasujesz.
 export VMIDS="9780 9781 9782"
+members=$(curl -sk -H "$H" "$EP/api2/json/pools/claude-isa" \
+  | python3 -c "import json,sys; print(' '.join(str(m['vmid']) for m in json.load(sys.stdin)['data']['members'] if m.get('type')=='qemu'))")
 for id in $VMIDS; do
+  case " $members " in
+    *" $id "*) owner="claude-isa" ;;
+    *)         owner="BRAK PULY - rozstrzygnij nazwa i adresem" ;;
+  esac
   curl -sk -H "$H" "$EP/api2/json/nodes/$NODE/qemu/$id/config" \
-    | python3 -c "import json,sys; d=json.load(sys.stdin)['data']; print('$id', d.get('name'), d.get('ipconfig0'))"
+    | python3 -c "import json,sys; d=json.load(sys.stdin)['data']; print('$id', d.get('name'), d.get('ipconfig0'), '| pula: $owner')"
 done
 grep -E 'ansible_host' "clusters/$CLUSTER/inventory.yml"
 
