@@ -1,8 +1,6 @@
 ---
-# ARCHIWUM — m7g1-m7g3 (VMID 9887-9889, .93-.95) zniszczone 2026-08-27.
-# Zastapione przez `clusters/cassiopeiav8-r9`; nie uruchamiaj `cluster-build`.
 cluster:
-  name: "mirav7-r9"
+  name: "orionv8-r9"
   environment: "laboratory"
   profile: "laboratory"
 
@@ -14,7 +12,7 @@ versions:
   lock_file: "versions/versions.lock.yml"
 
 galera:
-  cluster_name: "mirav7_galera"
+  cluster_name: "orionv8_galera"
   nodes_expected: 3
 
 proxysql:
@@ -24,20 +22,20 @@ proxysql:
   # +30 (offline). Sasiednie bazy sa wiec kolizja, mimo ze wygladaja inaczej:
   # przy 890 i 900 wezly drugiego najemcy laduja w puli, na ktora pierwszy
   # przelacza sie przy failoverze writera. Kolejnemu klastrowi daj base+40.
-  hostgroup_base: 50
+  hostgroup_base: 450
   # Wpis w `mysql_users` jest GLOBALNY dla instancji ProxySQL: dwaj najemcy
   # z ta sama nazwa uzytkownika to jeden wpis i ruch obu trafi do jednego
   # klastra. Nazwa musi byc unikalna w obrebie wspolnego endpointu.
-  app_user: "app_user_mv7"
+  app_user: "app_user_ov8"
   frontend_tls:
     # WYLACZNIE ca_reference: cert i klucz frontendu naleza do warstwy wspolnej,
     # ktora serwuje cala flote jednym certem. Wskaz CA tej warstwy.
-    ca_reference: "pki/lithiumv7/ca.pem"
+    ca_reference: "pki/xenonv8/ca.pem"
   endpoint:
     type: "keepalived_vip"
     # Musi byc DOKLADNIE ten VIP, ktory wystawia warstwa wspolna
     # (platform/example/platform.yml). Najemca go nie tworzy — tylko mu ufa.
-    address: "192.168.1.89"
+    address: "192.168.1.122"
     port: 6033
 
 tls:
@@ -47,16 +45,16 @@ tls:
   # tekstem, a jedyna wzmianka o tym byla nawiasem w kroku 4. Kto chce plaintext,
   # niech go napisze wprost — nie odziedziczy go przez przeoczenie.
   mode: "full"                        # disabled | full
-  ca_reference: "pki/mv7/ca.pem"                   # CA (pem)
-  certificate_reference: "pki/mv7/server-cert.pem"          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
-  private_key_reference: "pki/mv7/server-key.pem"          # klucz prywatny serwera
+  ca_reference: "pki/ov8/ca.pem"                   # CA (pem)
+  certificate_reference: "pki/ov8/server-cert.pem"          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
+  private_key_reference: "pki/ov8/server-key.pem"          # klucz prywatny serwera
   require_secure_transport: false    # true => wymusza TLS na WSZYSTKICH poł. TCP (klienci muszą mieć TLS)
 
 network:
   application_cidrs: ["192.168.1.0/24"]
   database_cluster_cidrs: ["192.168.1.0/24"]
   administration_cidrs: ["192.168.1.0/24"]
-  monitoring_cidrs: ["192.168.1.85/32"]
+  monitoring_cidrs: ["192.168.1.118/32"]
 
 
 storage:
@@ -98,7 +96,7 @@ backup:
   restore_test_schedule: "0 4 * * 0"
   scheduler:
     mode: "manual"
-    host: "m7g1"
+    host: "o8db1"
     timezone: "UTC"
   smb:
     source: "//nas01.example.invalid/backups"
@@ -118,9 +116,9 @@ backup:
 
 monitoring:
   pmm:
-    server_url: "https://192.168.1.85"
+    server_url: "https://192.168.1.118"
     agent_id: "pmm-server"
-    cluster_name: "mirav7-r9"
+    cluster_name: "orionv8-r9"
     validate_certs: false
     credentials_revision: 1
   alerts:

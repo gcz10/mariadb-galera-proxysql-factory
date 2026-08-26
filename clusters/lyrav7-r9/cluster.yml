@@ -1,5 +1,6 @@
 ---
-
+# ARCHIWUM — l7g1-l7g3 (VMID 9884-9886, .90-.92) zniszczone 2026-08-27.
+# Zastapione przez `clusters/orionv8-r9`; nie uruchamiaj `cluster-build`.
 cluster:
   name: "lyrav7-r9"
   environment: "laboratory"

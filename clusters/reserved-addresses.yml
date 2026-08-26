@@ -56,6 +56,11 @@ reserved:
       Zywy host spoza zarzadzanej floty (ping + SSH/22). Wykryty aktywnym
       skanem 2026-08-24 przed budowa stacku green.
 
+  - address: "192.168.1.113"
+    reason: >-
+      Zywy host spoza zarzadzanej floty (odpowiada na ping). Wykryty aktywnym
+      skanem 2026-08-27 przed budowa stacku v8; nie wystepuje w inventory PVE.
+
   - address: "192.168.1.135"
     reason: >-
       Zywy host fizyczny w LAN (MAC 10:f6:5:44:94:bd, odpowiada na ping).
