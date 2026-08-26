@@ -33,6 +33,23 @@ do klastra źródłowego jako nadmiarowy węzeł.
 # Zmienne jak dla providera terraform: PROXMOX_VE_ENDPOINT + PROXMOX_VE_API_TOKEN
 EP="${PROXMOX_VE_ENDPOINT%/}"; H="Authorization: PVEAPIToken=$PROXMOX_VE_API_TOKEN"
 
+# 0. WOLNY VMID TO NIE TO SAMO CO WOLNY MAGAZYN. Lista maszyn i pule nie widza
+#    wolumenow po nieudanym albo przerwanym tworzeniu: zostaje wtedy sam
+#    `vm-<id>-cloudinit` (4 MB), bez maszyny i bez wpisu w puli. Kolejny `POST`
+#    na ten VMID pada na `zfs error: dataset already exists`, a Terraform
+#    zatrzymuje sie w polowie apply. Zlapane 2026-08-25 na VMID 9861.
+#    Sprawdz OBA zrodla, zanim wybierzesz numer:
+for id in 9780 9781 9782; do
+  used_vm=$(curl -sk -H "$H" "$EP/api2/json/nodes/$NODE/qemu" \
+    | python3 -c "import json,sys; print(any(int(v['vmid'])==$id for v in json.load(sys.stdin)['data']))")
+  used_vol=$(curl -sk -H "$H" "$EP/api2/json/nodes/$NODE/storage/local-zfs/content" \
+    | python3 -c "import json,sys; print([c['volid'] for c in json.load(sys.stdin)['data'] if str(c.get('vmid'))=='$id'])")
+  echo "$id: maszyna=$used_vm wolumeny=$used_vol"
+done
+#    Oba musza byc puste. Wolumen bez maszyny kasuj DOPIERO po sprawdzeniu, ze
+#    nie odwoluje sie do niego zadna konfiguracja VM ani zaden wpis w puli —
+#    procedura jak przy sierotach w sekcji o niszczeniu.
+
 # 1. Utworzenie. `sshkeys` musi byc zakodowane URI (PVE odrzuca surowy klucz),
 #    a `size=` przy `import-from` jest IGNOROWANE — dysk dostaje rozmiar obrazu.
 #    `pool` NIE jest ozdoba. Terraform ustawia je przez `pool_id`
