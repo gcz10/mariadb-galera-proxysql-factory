@@ -16,19 +16,23 @@
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code \
-        infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify \
+        infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify fleet-state \
         platform-validate platform-trust-hosts platform-deploy platform-firewall platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
 
 CLUSTER ?= example-cluster
 ANSIBLE_OPTS ?=
 TARGET_ENV = CLUSTER=$(CLUSTER) CLUSTER_CONFIG=clusters/$(CLUSTER)/cluster.yml CLUSTER_INVENTORY=clusters/$(CLUSTER)/inventory.yml
 
-# Warstwa wspolna (ProxySQL fcp1/fcp2 + VIP + fcinfra + fcapp) jest jednostka
-# NIEZALEZNA od klastrow. Wczesniej jej wlascicielem byl klaster Galera przez
-# `proxysql.role: owner`, wiec skasowanie tego klastra osierocalo cala warstwe.
-# Nie ma tu odpowiednika `cluster_guard`: definicja jest dokladnie jedna, wiec
-# nie da sie przypadkiem trafic w cudza.
-PLATFORM ?= shared
+# Warstwa wspolna (para ProxySQL + VIP + host monitoringu + host aplikacyjny) jest
+# jednostka NIEZALEZNA od klastrow. Wczesniej jej wlascicielem byl klaster Galera
+# przez `proxysql.role: owner`, wiec skasowanie tego klastra osierocalo cala warstwe.
+#
+# Domyslny cel to SZABLON, nie instancja. Wczesniej stalo tu `shared` — konkretna
+# warstwa, ktora z czasem przestala istniec, wiec `make platform-*` bez argumentu
+# celowalo w martwe maszyny zamiast odmowic. Warstw jest w repo wiecej niz jedna,
+# a szablon ma adresy `10.0.x`, wiec brak jawnego PLATFORM= konczy sie bledem,
+# nie cicha operacja na cudzej infrastrukturze.
+PLATFORM ?= example
 PLATFORM_DIR = platform/$(PLATFORM)
 PLATFORM_OPTS = -i $(PLATFORM_DIR)/inventory.yml -e @$(PLATFORM_DIR)/platform.yml $(ANSIBLE_OPTS)
 
@@ -333,6 +337,14 @@ platform-verify:  ## Sondy warstwy wspolnej: para ProxySQL, VIP, TLS endpointu, 
 	CLUSTER=$(PLATFORM) CLUSTER_CONFIG=$(PLATFORM_DIR)/platform.yml CLUSTER_INVENTORY=$(PLATFORM_DIR)/inventory.yml \
 	  PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-platform.py
 
+# Stan floty NIE jest dokumentem. Recznie wpisywany snapshot ogloszil kiedys
+# jako aktywny stack, ktorego maszyn nie bylo od dwoch dni. Zamiar mieszka
+# w `clusters/<nazwa>/` i `platform/<nazwa>/`, rzeczywistosc na hypervisorze,
+# a historia w `docs/records/`. Ten cel zestawia pierwsze z drugim na zywo.
+fleet-state:  ## Co naprawde zyje: maszyny w puli, definicje w repo, wspolne endpointy
+	@: "$${PROXMOX_VE_API_TOKEN:?Ustaw PROXMOX_VE_API_TOKEN poza repozytorium}"
+	python3 tests/lab/fleet-state.py
+
 platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→firewall→infra→proxysql→endpoint→monitoring→alerts→sonda
 	$(MAKE) platform-validate
 	$(MAKE) platform-deploy
@@ -510,11 +522,10 @@ lab-app-bench:  ## Zmierz przepustowosc z hosta `app` (direct vs VIP, TLS vs pla
 # Sondy stanu ustalonego mowia, ze wszystko dziala, dopoki wszystko dziala.
 # Ta sprawdza, co aplikacja widzi przy utracie kworum: czy zapis zostaje
 # odrzucony (bezpieczenstwo) i czy blad da sie odroznic od awarii sieci.
-lab-app-degradation-test:  ## P2 quorum loss (TYLKO newclaude17-r9, destrukcyjny; CONFIRM=yes)
+lab-app-degradation-test:  ## P2 quorum loss (destrukcyjny, wymaga CLUSTER i CONFIRM=yes)
 	$(cluster_guard)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	@: "$${QUORUM_RUN_ID:?Ustaw unikalny QUORUM_RUN_ID (32 hex)}"
-	@test "$(CLUSTER)" = "newclaude17-r9" || (echo "P2 jest przypiety do CLUSTER=newclaude17-r9"; exit 1)
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (SIGKILL na wezlach $(CLUSTER))"; exit 1)
 	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" \
 	  QUORUM_RUN_ID="$${QUORUM_RUN_ID}" \

@@ -17,10 +17,10 @@ laboratorium i jest **opcjonalny**: żaden cel wołany przez `cluster-build` ani
 `platform-build` go nie uruchamia i żaden nie czyta stanu Terraforma. Cała wiedza
 o topologii pochodzi z `clusters/<name>/inventory.yml` i `platform/<name>/inventory.yml`.
 
-Zweryfikowane, nie zadeklarowane: najemca `nova-r9` powstał na maszynach
-utworzonych wyłącznie przez REST API hypervisora, a cała budowa przebiegła
-z atrapą `terraform` na początku `PATH`, która przy każdym wywołaniu kończy
-się błędem. Nie strzeliła ani razu.
+Zweryfikowane, nie zadeklarowane: najemca powstał na maszynach utworzonych
+wyłącznie przez REST API hypervisora, a cała budowa przebiegła z atrapą
+`terraform` na początku `PATH`, która przy każdym wywołaniu kończy się błędem.
+Nie strzeliła ani razu. Przebieg i nazwy w `docs/records/`.
 
 Symetrycznie do tego: **cele niszczące maszyny są terraformowe** i wymagają
 katalogu `terraform/<nazwa>`. Skoro fabryka nie tworzy Twoich maszyn, nie kasuje
@@ -246,11 +246,11 @@ make lab-failover-test CLUSTER=<nazwa>        # ISC-27/28: kill writera, brak ut
 make lab-split-brain-test CLUSTER=<nazwa>     # ISC-30: partycja sieci, jeden Primary
 make verify-no-mass-restart                     # ISC-31: brak masowego restartu Galery
 
-# P2: jeden destrukcyjny pomiar utraty kworum na przypietym newclaude17-r9.
+# P2: jeden destrukcyjny pomiar utraty kworum.
 # APP_DB_PASSWORD musi byc wyeksportowane; run ID generuje operator:
 # run_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
-# QUORUM_RUN_ID="$run_id" make lab-app-degradation-test CLUSTER=newclaude17-r9 CONFIRM=yes
-# Artefakt: /var/tmp/quorum-evidence-newclaude17-r9-${run_id}.json
+# QUORUM_RUN_ID="$run_id" make lab-app-degradation-test CLUSTER=<nazwa> CONFIRM=yes
+# Artefakt: /var/tmp/quorum-evidence-<nazwa>-${run_id}.json
 
 # F10 — konfiguracja schedulera, ręczny backup i potwierdzany restore
 make cluster-backup-configure CLUSTER=<nazwa>
@@ -289,11 +289,12 @@ Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje reguły zdrowi
 
 ## Warstwa wspolna
 
-ProxySQL `fcp1`/`fcp2`, VIP `192.168.1.139:6033`, `fcinfra` (PMM + MinIO +
-maildev) i host aplikacyjny `fcapp` to **jednostka niezalezna od klastrow**,
-opisana w `platform/shared/` (`platform.yml` + `inventory.yml`). Klastry Galera
-sa jej **najemcami**: `make cluster-proxysql` rejestruje ich hostgroupy
-i uzytkownika, i tylko tyle.
+Para wezlow ProxySQL, VIP Keepalived, host monitoringu (PMM, opcjonalnie MinIO
+i maildev) oraz host aplikacyjny to **jednostka niezalezna od klastrow**, opisana
+w `platform/<nazwa>/` (`platform.yml` + `inventory.yml`). Klastry Galera sa jej
+**najemcami**: `make cluster-proxysql` rejestruje ich hostgroupy i uzytkownika,
+i tylko tyle. Jedna warstwa obsluguje wielu najemcow, ktorych rozdziela wylacznie
+rozlacznosc hostgroup i kont — pilnuje jej `make verify-proxysql-tenancy`.
 
 Do 2026-08-21 wlascicielem warstwy byl klaster (`proxysql.role: owner`), wiec
 jego skasowanie osierocilo by ProxySQL, VIP, PMM i MinIO. Pole `role` juz nie
@@ -327,22 +328,31 @@ plik per klaster) — przed pierwszym `cluster-proxysql` uruchom
 
 ## Żywa flota
 
-Przykłady statyczne używają szablonu `CLUSTER=example-cluster`. Realne klastry VM działają
-na Proxmox VE na **tym samym kodzie** — różnice niesie wyłącznie `versions.lock_file`
-w `cluster.yml`:
-| Klaster | OS | Wezly | TLS | Hostgroupy ProxySQL |
-|---|---|---|---|---|
-| `finalclaude-r10` | Rocky 10 | `f10g1-3` + `f10r1` | `disabled` (kontrast platformowy) | 10/20/30/40 |
-| `newclaude17-r9` | Rocky 9 | `n17g1-3` + `n17r1` (restore) | `full`, SST szyfrowany | 850/860/870/880 |
+Przykłady statyczne używają szablonu `CLUSTER=example-cluster`. Realne klastry VM
+działają na Proxmox VE na **tym samym kodzie** — różnice niesie wyłącznie
+`versions.lock_file` w `cluster.yml`. Każda komenda ze Szybkiego startu działa na
+nich przez `CLUSTER=<nazwa>`.
 
-Warstwa wspolna dla obu: `fcp1`/`fcp2` (ProxySQL w HA, VIP `192.168.1.139:6033`)
-oraz `fcinfra` (PMM, MinIO, maildev). Jedna para ProxySQL obsluguje cala flote,
-a klastry rozdziela wylacznie rozlacznosc hostgroup i uzytkownikow - pilnuje jej
-sonda `make verify-proxysql-tenancy`.
+**Tego pliku nie pytaj, co teraz żyje.** Klastry powstają i znikają w każdej
+sesji, więc wpisana tu tabela maszyn kłamie w ciągu godzin — dokładnie tak
+skończył poprzedni spis, ogłaszając jako aktywny stack skasowany dwa dni
+wcześniej. Podział źródeł prawdy:
 
-Każda komenda ze Szybkiego startu działa na nich przez `CLUSTER=<nazwa>`, np.
-`make cluster-backup CLUSTER=newclaude17-r9`. Aktualny stan maszyn, adresy i
-dowody z żywej instalacji: `docs/infrastructure-state.md`.
+| Pytanie | Źródło |
+|---|---|
+| Jaki jest zamiar? | `clusters/<nazwa>/` i `platform/<nazwa>/` — walidowane schematem |
+| Co naprawdę teraz działa? | `make fleet-state` — odczyt z hypervisora |
+| Jak było kiedyś? | `docs/records/<data>-*.md` — zamrożone, nieaktualizowane |
+
+`make fleet-state` zestawia definicje z repo z maszynami w puli i pokazuje, które
+są żywe, zatrzymane albo są już tylko archiwum, kto dzieli wspólny endpoint i czy
+ten endpoint odpowiada. Zasady, które nie zależą od floty — limit zasobów, zakresy
+VMID poza tą automatyzacją, reguła przynależności do puli — w
+`docs/infrastructure-state.md`.
+
+Że README pozostanie wolne od nazw instancji, pilnuje `make verify-zero-hardcode`:
+nazwy czyta z katalogów `clusters/*/` i `platform/*/`, więc bramka obejmuje każdy
+nowy klaster w chwili powstania.
 
 ## Struktura
 
@@ -367,4 +377,5 @@ Nowy klaster = nowy katalog `clusters/<name>/`. Kod ról nie zawiera danych klas
 
 Pełny kontrakt pracy, format ISA i wymagania w `MASTER_PROMPT.md`.
 Bieżący stan projektu w `ISA.md` (log decyzji na końcu pliku).
-Stan infrastruktury — maszyny, klastry, rozbieżności — w `docs/infrastructure-state.md`.
+Stan floty na żywo — `make fleet-state`; zasady niezależne od floty —
+`docs/infrastructure-state.md`; historia przebiegów — `docs/records/`.
