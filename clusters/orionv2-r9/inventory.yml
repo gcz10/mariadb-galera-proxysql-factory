@@ -1,0 +1,61 @@
+---
+# orionv2-r9: węzły o2g1-o2g3 tworzy Terraform; kp1/kp2, kapp i kmon należą
+# do istniejącej warstwy wspólnej kobalt.
+all:
+  vars:
+    ansible_user: "root"
+    ansible_become: false
+    ansible_ssh_private_key_file: secrets/ssh_key
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        o2g1:
+          ansible_host: "192.168.1.51"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.51"
+        o2g2:
+          ansible_host: "192.168.1.52"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.52"
+        o2g3:
+          ansible_host: "192.168.1.53"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.53"
+
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        kp1:
+          ansible_host: "192.168.1.29"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.29"
+        kp2:
+          ansible_host: "192.168.1.30"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.30"
+
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        kapp:
+          ansible_host: "192.168.1.32"
+          app_node_address: "192.168.1.32"
+
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        kmon:
+          ansible_host: "192.168.1.28"
+          infra_node_address: "192.168.1.28"
+
+    discovery_bench:
+      hosts: {}
+      vars:
+        allow_bench: true
