@@ -123,6 +123,11 @@ def definitions() -> list[dict]:
                     "hosts": inventory_hosts(entry / "inventory.yml", kind),
                     "vip": endpoint.get("address"),
                     "port": endpoint.get("port"),
+                    # Kolejnosc jest kontraktem, nie konwencja: writer/backup/
+                    # reader/offline = base, +10, +20, +30 (probe-proxysql-tenancy.py).
+                    # Drukujemy ja z legenda, bo cztery gole liczby czyta sie
+                    # opacznie, a oba ID realnie istnieja — pomylka writera
+                    # z backupem nie rzucilaby sie w oczy w samym raporcie.
                     "hostgroups": (
                         "/".join(str(base + n) for n in (0, 10, 20, 30))
                         if isinstance(base, int)
@@ -174,7 +179,7 @@ def main() -> int:
         )
 
     print()
-    print(f"# definicje w repo ({len(defs)})")
+    print(f"# definicje w repo ({len(defs)})  —  hg: writer/backup/reader/offline")
     for d in defs:
         present = [h for h in d["hosts"] if h in live]
         running = [h for h in present if live[h]["status"] == "running"]
