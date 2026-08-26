@@ -529,7 +529,7 @@ nieaktualna: 10 z 11 pozycji technicznych było już zamkniętych w kodzie).
 | Trzeci stan w tablicy ISC (`PASS-z-zastrzeżeniem`) | **zrobione** | `ISA.md:79` definiuje `[~]`; użyty na ISC-1, ISC-22, ISC-44, ISC-66 |
 | Aktualizacja ISA: Out of Scope kontra `infra-provision` | **zrobione** | `ISA.md:32` deklaruje tworzenie VM w zakresie (Terraform, `infra-provision`) |
 | Piny wersji w krokach `pip install` w CI | **zrobione** | `.github/workflows/ci.yml:37,178,229` — wszystkie z `==` |
-| Decyzja o `LICENSE` i o publiczności mapy sieci | otwarte | brak pliku `LICENSE`; `docs/infrastructure-state.md` — decyzja właściciela, nie kod |
+| Decyzja o `LICENSE` i o publiczności mapy sieci | otwarte | brak pliku `LICENSE`; mapa sieci w zamrożonym `docs/records/2026-08-26-fleet-snapshot.md` — decyzja właściciela, nie kod |
 
 ---
 

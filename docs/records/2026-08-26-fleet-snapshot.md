@@ -10,7 +10,10 @@
 >
 > Stan rzeczywisty daje dziś `make fleet-state` (odczyt z hypervisora).
 > Zasady niezależne od floty zostały w `docs/infrastructure-state.md`.
-> Poniższa treść jest zachowana **bez poprawek**, jako zapis tego, co było.
+> Treść poniżej `## Treść zachowana` jest zachowana dosłownie, z dwoma
+> wyjątkami z czasu zamrażania: usunięto wstępny blockquote (powtórzony niżej
+> w oryginale) i doprecyzowano nagłówek sekcji `green`, bo „aktywny" przestało
+> być prawdą tego samego dnia.
 
 ## Pula w dniu zamrożenia — zmierzone `make fleet-state`
 
@@ -38,6 +41,10 @@ trzy: jedna platforma i dwaj najemcy.
 TLS, limity systemd, dekompozycja runnera, rotacja poswiadczen), 2026-08-24
 (czysty stack green na osobnych nazwach/IP/VMID) — zaznaczone w sekcjach.
 **Zebrany z:** `terraform`, `ansible`, ProxySQL admin, PMM, MinIO, `qm list`.
+
+> Ten plik jest **datowanym zdjęciem**, nie źródłem prawdy. Źródłem prawdy dla
+> zamiaru są `clusters/<name>/` i `terraform/<name>/`; dla rzeczywistości —
+> hypervisor.  *(oryginalny wstęp, przywrócony w chwili zamrożenia)*
 
 ## Stack `green` — aktywny w chwili zapisu (2026-08-24)
 

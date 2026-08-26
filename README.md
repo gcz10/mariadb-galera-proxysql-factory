@@ -20,7 +20,8 @@ o topologii pochodzi z `clusters/<name>/inventory.yml` i `platform/<name>/invent
 Zweryfikowane, nie zadeklarowane: najemca powstał na maszynach utworzonych
 wyłącznie przez REST API hypervisora, a cała budowa przebiegła z atrapą
 `terraform` na początku `PATH`, która przy każdym wywołaniu kończy się błędem.
-Nie strzeliła ani razu. Przebieg i nazwy w `docs/records/`.
+Nie strzeliła ani razu. Procedurę dla maszyn spoza Terraforma opisuje
+`docs/runbooks/machines-from-elsewhere.md`.
 
 Symetrycznie do tego: **cele niszczące maszyny są terraformowe** i wymagają
 katalogu `terraform/<nazwa>`. Skoro fabryka nie tworzy Twoich maszyn, nie kasuje
