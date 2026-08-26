@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional
 
 from ..errors import BackupError, combine_failures
 from ..fsutil import file_sha256_and_size, remove_tree_or_raise
+from ..runner import CommandRunner
 from ..textutil import normalize_smb_source, sanitize_cluster_name, validate_smb_options
 from .artifacts import (
     ArtifactSet,
@@ -349,9 +350,7 @@ class SMBBackend:
         password: str,
         domain: Optional[str],
         cluster_name: str,
-        # Typ realny: Optional[CommandRunner]. Klasa zostaje w entrypoincie do
-        # czasu wydzielenia runner.py, a `Any` unika cyklu import<->fasada.
-        runner: Optional[Any] = None,
+        runner: CommandRunner,
     ):
         self.source = source
         self.mount_point = Path(mount_point).resolve()
@@ -364,10 +363,8 @@ class SMBBackend:
         self._credentials_file: Optional[Path] = None
         self._is_mounted = False
         self._cifs_unavailable_reason = ""
-        # Mount/umount go through the shared CommandRunner so the argv guard and
-        # redactor cover them; credentials stay in the 0600 credentials file and
-        # never enter argv. Tests construct SMBBackend without a runner, in which
-        # case the raw subprocess fallback preserves the historical behaviour.
+        # Mount/umount idą przez CommandRunner: strażnik argv, redakcja sekretów
+        # w logach oraz egzekucja limitu czasu. Brak runnera jest zabroniony.
         self._runner = runner
 
     def _check_cifs_available(self) -> tuple[bool, str, str]:
@@ -485,16 +482,10 @@ class SMBBackend:
             raise BackupError("E_STORAGE", message) from exc
 
     def _exec_mount(self, cmd: list[str]) -> tuple[int, str, str]:
-        if self._runner is not None:
-            return self._runner.run(cmd)
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        return proc.returncode, proc.stdout, proc.stderr
+        return self._runner.run(cmd)
 
     def _exec_umount(self) -> tuple[int, str, str]:
-        if self._runner is not None:
-            return self._runner.run(["umount", str(self.mount_point)])
-        proc = subprocess.run(["umount", str(self.mount_point)], capture_output=True, text=True)
-        return proc.returncode, proc.stdout, proc.stderr
+        return self._runner.run(["umount", str(self.mount_point)])
 
     def __enter__(self):
         return self
@@ -622,9 +613,7 @@ class SMBBackend:
         try:
             code, out, err = self._exec_mount(cmd)
             if code != 0:
-                detail = err or out
-                if self._runner is not None:
-                    detail = self._runner.redactor.redact(detail)
+                detail = self._runner.redactor.redact(err or out)
                 raise BackupError("E_STORAGE", f"SMB mount command failed: {detail}")
             self._is_mounted = True
         except Exception as exc:

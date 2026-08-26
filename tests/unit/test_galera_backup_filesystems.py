@@ -308,16 +308,26 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
 
 class ManagedSMBTests(unittest.TestCase):
 
+    def setUp(self):
+        super().setUp()
+        self.runner = pipeline.CommandRunner(set())
+
+    def _make_smb(self, **kwargs):
+        defaults = {
+            "source": "//nas/backups",
+            "mount_point": "/mnt/smb",
+            "options": ["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
+            "username": "smbuser",
+            "password": "smbpassword",
+            "domain": None,
+            "cluster_name": "claude-r10b",
+            "runner": self.runner,
+        }
+        defaults.update(kwargs)
+        return pipeline.SMBBackend(**defaults)
+
     def test_missing_cifs_module_diagnostic_without_mount(self):
-        smb = pipeline.SMBBackend(
-            source="//nas/backups",
-            mount_point="/mnt/smb",
-            options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-            username="smbuser",
-            password="smbpassword",
-            domain="DOMAIN",
-            cluster_name="claude-r10b",
-        )
+        smb = self._make_smb(domain="DOMAIN")
 
         with patch.object(smb, "_check_cifs_available", return_value=(False, "6.12.0-211.16.1.el10_2", "6.12.0-211.39.1.el10_2")):
             with patch.object(smb, "_exec_mount") as mock_mount:
@@ -341,15 +351,7 @@ class ManagedSMBTests(unittest.TestCase):
     def test_runtime_rejects_noncanonical_smb_source_before_mount(self):
         for source in ("//nas/share/", "//nas/share/nested", "//nas", "nas/share"):
             with self.subTest(source=source), tempfile.TemporaryDirectory() as td:
-                smb = pipeline.SMBBackend(
-                    source=source,
-                    mount_point=Path(td) / "managed",
-                    options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-                    username="smbuser",
-                    password="smbpassword",
-                    domain=None,
-                    cluster_name="claude-r10b",
-                )
+                smb = self._make_smb(source=source, mount_point=Path(td) / "managed")
                 with patch.object(smb, "_check_cifs_available", return_value=(True, "6.12", "6.12")):
                     with patch.object(smb, "_exec_mount") as mount:
                         with self.assertRaises(pipeline.BackupError) as raised:
@@ -360,15 +362,7 @@ class ManagedSMBTests(unittest.TestCase):
     def test_credentials_file_and_mount_argv_safety(self):
         with tempfile.TemporaryDirectory() as td:
             mount_path = Path(td)
-            smb = pipeline.SMBBackend(
-                source="//nas/backups",
-                mount_point=mount_path,
-                options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-                username="smbuser",
-                password="smbpassword",
-                domain="MYDOMAIN",
-                cluster_name="claude-r10b",
-            )
+            smb = self._make_smb(mount_point=mount_path, domain="MYDOMAIN")
 
             mounted_cmds = []
 
@@ -413,15 +407,7 @@ class ManagedSMBTests(unittest.TestCase):
     def test_managed_smb_creates_missing_mount_point_before_mount(self):
         with tempfile.TemporaryDirectory() as td:
             mount_path = Path(td) / "managed"
-            smb = pipeline.SMBBackend(
-                source="//nas/backups",
-                mount_point=mount_path,
-                options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-                username="smbuser",
-                password="smbpassword",
-                domain=None,
-                cluster_name="claude-r10b",
-            )
+            smb = self._make_smb(mount_point=mount_path)
 
             mount_observations = []
             def fake_exec_mount(cmd):
@@ -449,15 +435,7 @@ class ManagedSMBTests(unittest.TestCase):
             self.assertEqual(mount_observations, [(True, 0o750)])
 
     def test_cleanup_credentials_and_umount_on_failure(self):
-        smb = pipeline.SMBBackend(
-            source="//nas/backups",
-            mount_point="/mnt/smb",
-            options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-            username="smbuser",
-            password="smbpassword",
-            domain=None,
-            cluster_name="claude-r10b",
-        )
+        smb = self._make_smb()
 
         cred_file_created = []
 
@@ -479,15 +457,7 @@ class ManagedSMBTests(unittest.TestCase):
         for cp in cred_file_created:
             self.assertFalse(os.path.exists(cp))
     def test_missing_mount_cifs_is_reported_as_cifs_unavailable(self):
-        smb = pipeline.SMBBackend(
-            source="//nas/backups",
-            mount_point="/mnt/smb",
-            options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-            username="smbuser",
-            password="smbpassword",
-            domain=None,
-            cluster_name="claude-r10b",
-        )
+        smb = self._make_smb()
         probe_result = MagicMock(returncode=0, stdout="6.12.0-test\n", stderr="")
 
         with patch("shutil.which", return_value=None):
@@ -498,15 +468,7 @@ class ManagedSMBTests(unittest.TestCase):
         self.assertEqual(running_kernel, "6.12.0-test")
 
     def test_missing_mount_cifs_preflight_names_userspace_remediation(self):
-        smb = pipeline.SMBBackend(
-            source="//nas/backups",
-            mount_point="/mnt/smb",
-            options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-            username="smbuser",
-            password="smbpassword",
-            domain=None,
-            cluster_name="claude-r10b",
-        )
+        smb = self._make_smb()
         probe_result = MagicMock(returncode=0, stdout="6.12.0-test\n", stderr="")
 
         with patch("shutil.which", return_value=None):
@@ -521,15 +483,7 @@ class ManagedSMBTests(unittest.TestCase):
 
     def test_preflight_rejects_wrong_observed_smb_source(self):
         with tempfile.TemporaryDirectory() as td:
-            smb = pipeline.SMBBackend(
-                source="//nas/backups",
-                mount_point=td,
-                options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-                username="smbuser",
-                password="smbpassword",
-                domain=None,
-                cluster_name="claude-r10b",
-            )
+            smb = self._make_smb(mount_point=td)
             observed = {
                 "target": str(Path(td).resolve()),
                 "source": "//other/share",
@@ -554,15 +508,7 @@ class ManagedSMBTests(unittest.TestCase):
 
     def test_preflight_normalizes_equivalent_smb_sources(self):
         with tempfile.TemporaryDirectory() as td:
-            smb = pipeline.SMBBackend(
-                source="//NAS/backups",
-                mount_point=td,
-                options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-                username="smbuser",
-                password="smbpassword",
-                domain=None,
-                cluster_name="claude-r10b",
-            )
+            smb = self._make_smb(source="//NAS/backups", mount_point=td)
             observed = {
                 "target": str(Path(td).resolve()),
                 "source": "//nas/backups",
@@ -584,15 +530,7 @@ class ManagedSMBTests(unittest.TestCase):
 
     def test_preflight_rejects_missing_observed_smb_security_option(self):
         with tempfile.TemporaryDirectory() as td:
-            smb = pipeline.SMBBackend(
-                source="//nas/backups",
-                mount_point=td,
-                options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-                username="smbuser",
-                password="smbpassword",
-                domain=None,
-                cluster_name="claude-r10b",
-            )
+            smb = self._make_smb(mount_point=td)
             observed = {
                 "target": str(Path(td).resolve()),
                 "source": "//nas/backups",
@@ -624,15 +562,7 @@ class ManagedSMBTests(unittest.TestCase):
                 json.dumps({"format_version": 1, "cluster_name": "another-cluster"}),
                 encoding="utf-8",
             )
-            smb = pipeline.SMBBackend(
-                source="//nas/backups",
-                mount_point=mount_path,
-                options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-                username="smbuser",
-                password="smbpassword",
-                domain=None,
-                cluster_name="claude-r10b",
-            )
+            smb = self._make_smb(mount_point=mount_path)
             observed = {
                 "target": str(mount_path.resolve()),
                 "source": "//nas/backups",
@@ -658,15 +588,7 @@ class ManagedSMBTests(unittest.TestCase):
 
     def test_unmount_failure_removes_credentials_and_returns_failure(self):
         with tempfile.TemporaryDirectory() as td:
-            smb = pipeline.SMBBackend(
-                source="//nas/backups",
-                mount_point=td,
-                options=["vers=3.1.1", "seal", "nosuid", "nodev", "noexec"],
-                username="smbuser",
-                password="smbpassword",
-                domain=None,
-                cluster_name="claude-r10b",
-            )
+            smb = self._make_smb(mount_point=td)
             credentials_file = smb._create_credentials_file()
             smb._credentials_file = credentials_file
             smb._is_mounted = True

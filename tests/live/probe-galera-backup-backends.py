@@ -184,6 +184,7 @@ def run_on_node_preflight(cluster_name: str = "claude-r10b") -> Tuple[bool, Dict
         password="password",
         domain=None,
         cluster_name=cluster_name,
+        runner=mod.CommandRunner(set()),
     )
     details: Dict[str, Any] = {
         "cifs_module_error": False,
@@ -496,6 +497,7 @@ def run_on_node_full(
             password=password if mode == "smb" else f"{password}-deliberately-wrong",
             domain=None,
             cluster_name=cluster_name,
+            runner=mod.CommandRunner(set()),
         )
         if mode == "wrong-password":
             failure = None

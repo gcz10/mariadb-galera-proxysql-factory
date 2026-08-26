@@ -52,7 +52,7 @@ import tempfile
 import time
 from pathlib import Path
 import yaml
-
+from _probe_common import _HEADER_RE
 from _quorum_evidence import (
     LOCAL_ACCEPTANCE,
     OUTCOME_CLEAN,
@@ -209,12 +209,30 @@ def validate_target(
 def sh(host, script, timeout=120):
     cmd = [ANSIBLE, host, "-i", INVENTORY, "-m", "ansible.builtin.shell", "-a", script]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    out = r.stdout
-    m = re.search(rf'^{re.escape(host)}\s*\|\s*\w+\s*\|\s*rc=(\d+)\s*>>?\s*$', out, re.M)
-    if not m:
-        return 1, (out + r.stderr).strip()
-    return int(m.group(1)), out[m.end():].strip()
+    lines = (r.stdout + r.stderr).splitlines()
+    body_lines = []
+    found_host = False
+    rc = r.returncode
+    for line in lines:
+        m = _HEADER_RE.match(line.strip())
+        if m and m.group("host") == host:
+            found_host = True
+            status = m.group("status").rstrip("!")
+            rest = m.group("rest").strip()
+            rc_match = re.search(r"rc=(\d+)", rest)
+            if rc_match:
+                rc = int(rc_match.group(1))
+            elif status in ("FAILED", "UNREACHABLE"):
+                rc = rc if rc != 0 else 1
+            body_lines = []
+        elif found_host:
+            if _HEADER_RE.match(line.strip()):
+                break
+            body_lines.append(line)
 
+    if not found_host:
+        return r.returncode if r.returncode != 0 else 1, (r.stdout + r.stderr).strip()
+    return rc, "\n".join(body_lines).strip()
 
 def safe_sh(host, script, timeout=120):
     try:
