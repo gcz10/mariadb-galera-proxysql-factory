@@ -1,7 +1,7 @@
 ---
-# Example cluster — szablon konfiguracji. Skopiuj do clusters/<name>/cluster.yml.
-# Walidowane przez clusters/schema/cluster.schema.json.
-# Nie wpisuj adresów IP tutaj — adresy żyją w inventory.yml.
+# ARCHIWUM — maszyny l6g1-l6g3 (VMID 9874-9876, .79-.81) zniszczone 2026-08-27.
+# Zastapione przez stack v7: `clusters/lyrav7-r9`.
+# NIE URUCHAMIAJ `cluster-build`: ani adresy, ani ta platforma juz nie zyja.
 
 cluster:
   name: "lyrav6-r9"

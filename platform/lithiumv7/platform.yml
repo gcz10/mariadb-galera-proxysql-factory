@@ -1,9 +1,6 @@
 ---
-# ARCHIWUM — maszyny hmon/hp1/hp2/happ (VMID 9870-9873, .74-.77) zniszczone
-# 2026-08-27. Zastapione przez stack v7: `platform/lithiumv7`.
-# NIE URUCHAMIAJ `platform-build`: ani adresy, ani ta platforma juz nie zyja.
 platform:
-  name: "heliumv6"
+  name: "lithiumv7"
   environment: "laboratory"
   rocky_linux_major: 9
   infra:
@@ -14,23 +11,23 @@ versions:
 proxysql:
   nodes_expected: 2
   frontend_tls:
-    ca_reference: "pki/heliumv6/ca.pem"
-    certificate_reference: "pki/heliumv6/server-cert.pem"
-    private_key_reference: "pki/heliumv6/server-key.pem"
+    ca_reference: "pki/lithiumv7/ca.pem"
+    certificate_reference: "pki/lithiumv7/server-cert.pem"
+    private_key_reference: "pki/lithiumv7/server-key.pem"
   endpoint:
     type: "keepalived_vip"
-    address: "192.168.1.78"
+    address: "192.168.1.89"
     port: 6033
 network:
   application_cidrs: ["192.168.1.0/24"]
   database_cluster_cidrs: ["192.168.1.0/24"]
   administration_cidrs: ["192.168.1.0/24"]
-  monitoring_cidrs: ["192.168.1.74/32"]
+  monitoring_cidrs: ["192.168.1.85/32"]
 monitoring:
   pmm:
-    server_url: "https://192.168.1.74"
+    server_url: "https://192.168.1.85"
     agent_id: "pmm-server"
-    cluster_name: "heliumv6"
+    cluster_name: "lithiumv7"
     validate_certs: false
     credentials_revision: 1
     backup_retention: 2
