@@ -1,7 +1,8 @@
 ---
-# Example cluster — szablon konfiguracji. Skopiuj do clusters/<name>/cluster.yml.
-# Walidowane przez clusters/schema/cluster.schema.json.
-# Nie wpisuj adresów IP tutaj — adresy żyją w inventory.yml.
+# ARCHIWUM — maszyny o2g1-o2g3 (VMID 9820-9822, .51/.52/.53) zniszczone
+# 2026-08-25 po pelnym przebiegu zakonczonym zielona brama. Definicja zostaje
+# jako slad: Terraform -> Ansible -> brama, bez poprawek w trakcie budowy.
+# NIE URUCHAMIAJ `cluster-build`: te adresy nie odpowiadaja juz maszynom.
 
 cluster:
   name: "orionv2-r9"

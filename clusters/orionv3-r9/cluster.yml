@@ -1,11 +1,10 @@
 ---
-# ARCHIWUM — maszyny v2g1-v2g3 (VMID 9830-9832, .54/.55/.56) zniszczone
-# 2026-08-25 po pelnym przebiegu zakonczonym zielona brama. Definicja zostaje
-# jako slad: REST API Proxmoxa -> Ansible -> brama.
-# NIE URUCHAMIAJ `cluster-build`: te adresy nie odpowiadaja juz maszynom.
+# Example cluster — szablon konfiguracji. Skopiuj do clusters/<name>/cluster.yml.
+# Walidowane przez clusters/schema/cluster.schema.json.
+# Nie wpisuj adresów IP tutaj — adresy żyją w inventory.yml.
 
 cluster:
-  name: "vegav2-r9"
+  name: "orionv3-r9"
   environment: "laboratory"
   profile: "laboratory"
 
@@ -17,7 +16,7 @@ versions:
   lock_file: "versions/versions.lock.yml"
 
 galera:
-  cluster_name: "vegav2_galera"
+  cluster_name: "orionv3_galera"
   nodes_expected: 3
 
 proxysql:
@@ -27,11 +26,11 @@ proxysql:
   # +30 (offline). Sasiednie bazy sa wiec kolizja, mimo ze wygladaja inaczej:
   # przy 890 i 900 wezly drugiego najemcy laduja w puli, na ktora pierwszy
   # przelacza sie przy failoverze writera. Kolejnemu klastrowi daj base+40.
-  hostgroup_base: 250
+  hostgroup_base: 290
   # Wpis w `mysql_users` jest GLOBALNY dla instancji ProxySQL: dwaj najemcy
   # z ta sama nazwa uzytkownika to jeden wpis i ruch obu trafi do jednego
   # klastra. Nazwa musi byc unikalna w obrebie wspolnego endpointu.
-  app_user: "app_user_vv2"
+  app_user: "app_user_ov3"
   frontend_tls:
     # WYLACZNIE ca_reference: cert i klucz frontendu naleza do warstwy wspolnej,
     # ktora serwuje cala flote jednym certem. Wskaz CA tej warstwy.
@@ -53,9 +52,9 @@ tls:
   # tekstem, a jedyna wzmianka o tym byla nawiasem w kroku 4. Kto chce plaintext,
   # niech go napisze wprost — nie odziedziczy go przez przeoczenie.
   mode: "full"                        # disabled | full
-  ca_reference: "pki/vv2/ca.pem"                   # CA (pem)
-  certificate_reference: "pki/vv2/server-cert.pem"          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
-  private_key_reference: "pki/vv2/server-key.pem"          # klucz prywatny serwera
+  ca_reference: "pki/ov3/ca.pem"                   # CA (pem)
+  certificate_reference: "pki/ov3/server-cert.pem"          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
+  private_key_reference: "pki/ov3/server-key.pem"          # klucz prywatny serwera
   require_secure_transport: false    # true => wymusza TLS na WSZYSTKICH poł. TCP (klienci muszą mieć TLS)
 
 network:
@@ -106,7 +105,7 @@ backup:
   restore_test_schedule: "0 4 * * 0"
   scheduler:
     mode: "manual"
-    host: "v2g1"
+    host: "o3g1"
     timezone: "UTC"
   smb:
     source: "//nas01.example.invalid/backups"
@@ -128,7 +127,7 @@ monitoring:
   pmm:
     server_url: "https://192.168.1.28"
     agent_id: "pmm-server"
-    cluster_name: "vegav2-r9"
+    cluster_name: "orionv3-r9"
     validate_certs: false
     credentials_revision: 1
   alerts:

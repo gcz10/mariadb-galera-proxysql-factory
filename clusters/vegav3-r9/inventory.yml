@@ -1,0 +1,63 @@
+---
+# Najemca `vegav3-r9`. Wezly powstaly przez: gole REST API wg docs/runbooks/machines-from-elsewhere.md.
+# kp1/kp2, kapp i kmon naleza do warstwy wspolnej `kobalt`.
+all:
+  vars:
+    ansible_user: "root"
+    ansible_become: false
+    ansible_ssh_private_key_file: secrets/ssh_key
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        v3g1:
+          ansible_host: "192.168.1.60"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.60"
+        v3g2:
+          ansible_host: "192.168.1.61"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.61"
+        v3g3:
+          ansible_host: "192.168.1.62"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.62"
+
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        kp1:
+          ansible_host: "192.168.1.29"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.29"
+        kp2:
+          ansible_host: "192.168.1.30"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.30"
+
+    # Grupy `restore` nie ma: `backup.enabled: false`.
+
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        kapp:
+          ansible_host: "192.168.1.32"
+          app_node_address: "192.168.1.32"
+
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        kmon:
+          ansible_host: "192.168.1.28"
+          infra_node_address: "192.168.1.28"
+
+    discovery_bench:
+      hosts: {}
+      vars:
+        allow_bench: true
