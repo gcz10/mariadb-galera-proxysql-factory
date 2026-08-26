@@ -86,6 +86,27 @@ odrzuca teraz placeholdery, puste CIDR-y, brak materiału TLS i niepełne
 `known_hosts`; wcześniej część z nich wychodziła dopiero po kilku minutach
 budowy.
 
+**`platform/<nazwa>/platform.yml` — gdy stawiasz warstwę wspólną (krok 1):**
+
+- `platform.name` oraz `platform.rocky_linux_major` zgodne z obrazem maszyn;
+- `platform.infra.services` — lista usług tej warstwy, np. `["pmm", "maildev"]`;
+  pusta lista jest legalna, gdy monitoring stoi poza fabryką;
+- `versions.policy` i `versions.lock_file` — `versions/versions.lock.yml` dla
+  Rocky 9, `versions/versions-el10.lock.yml` dla Rocky 10;
+- `proxysql.endpoint.address` — VIP, który **nie jest adresem żadnej maszyny**
+  z `inventory.yml`, oraz `.port`;
+- `proxysql.frontend_tls.{ca,certificate,private_key}_reference` — materiał
+  wygenerowany w kroku 4 dla **pary ProxySQL i VIP-a**, nie dla klastra;
+- wszystkie cztery listy `network.*_cidrs` niepuste;
+- `monitoring.pmm.server_url` i `pmm.cluster_name`, a przy własnym PMM
+  z certyfikatem self-signed `pmm.validate_certs: false`;
+- `monitoring.alerts.email` — adres, który naprawdę odbiera pocztę.
+
+**`platform/<nazwa>/inventory.yml`:** grupy `proxysql` (dwa węzły z
+`proxysql_node_idx` i `proxysql_node_address`), `infra` (host PMM) oraz `app`
+— host aplikacyjny jest WYMAGANY, bo bez niego sonda warstwy nie ma skąd
+zmierzyć TLS endpointu i kończy się `UNDETERMINED`.
+
 **`inventory.yml`:**
 
 - `ansible_user`, `ansible_become` i `ansible_ssh_private_key_file`;
