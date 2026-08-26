@@ -23,8 +23,8 @@ offline/runtime jest celowa, nie redundancja do usuniecia.
 
 Uzycie:
   validate-platform.py [platform.yml] [platform.schema.json] [inventory.yml]
-  (bez argumentow: platform/shared/platform.yml, platform/schema/platform.schema.json,
-   platform/shared/inventory.yml — uklad celu platform-validate z Makefile)
+  (bez argumentow: szablon platform/example — Makefile ZAWSZE podaje jawne
+   sciezki $(PLATFORM_DIR), wiec domyslne sluza tylko odpaleniu recznemu)
 Wyjście: 0 = PASS, 1 = FAIL, 2 = błąd użycia.
 """
 import json
@@ -34,9 +34,9 @@ from pathlib import Path
 import yaml
 from jsonschema import validate, ValidationError
 
-DEFAULT_PLATFORM = "platform/shared/platform.yml"
+DEFAULT_PLATFORM = "platform/example/platform.yml"
 DEFAULT_SCHEMA = "platform/schema/platform.schema.json"
-DEFAULT_INVENTORY = "platform/shared/inventory.yml"
+DEFAULT_INVENTORY = "platform/example/inventory.yml"
 
 # Adresy klastrowe inwentarza — kazdy z nich jest tozsamosci sieciowa hosta pod
 # utrzymaniem warstwy wspolnej, wiec kazdy koliduje z VIP.

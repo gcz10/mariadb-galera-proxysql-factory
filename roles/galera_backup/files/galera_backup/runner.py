@@ -1,8 +1,8 @@
 """Uruchamianie podprocesow z redakcja sekretow i straznikiem argv.
 
-`CommandRunner` nie jest podmieniany jako atrybut modulu — testy patchuja jego
-METODE (`patch.object(mod.CommandRunner, "_exec")`). Dziala to niezaleznie od
-tego, ktory modul klase definiuje, bo fasada re-eksportuje TEN SAM obiekt klasy.
+`CommandRunner` enkapsuluje uruchamianie procesow (`subprocess.Popen` /
+`subprocess.run`), rejestruje kazde wywolanie z redakcja znanych sekretow,
+pilnuje limitu czasu i obsluguje timeouty bez wycieku procesow potomnych.
 """
 
 from __future__ import annotations

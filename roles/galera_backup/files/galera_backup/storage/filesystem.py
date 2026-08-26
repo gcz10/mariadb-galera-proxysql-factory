@@ -1,6 +1,5 @@
 """Backend lokalnego systemu plikow oraz SMB/CIFS."""
 
-# Patrz komentarz w s3.py — adnotacje leniwe, `CommandRunner` zostaje w entrypoincie.
 from __future__ import annotations
 
 import json

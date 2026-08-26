@@ -1,9 +1,8 @@
 """Pomocnicy odtwarzania: zgodnosc wersji, bezpieczenstwo tar, czyszczenie datadir.
 
-Zadna z tych funkcji nie jest podmieniana przez `patch.object`, a jedynym ich
-wywolujacym jest `run_restore`, ktory zostaje w entrypoincie — dlatego mozna je
-bylo przeniesc bez ruszania mockow. Testy siegaja po nie przez fasade
-(`self.mod.is_safe_tar_member` itd.) i dzialaja bez zmian.
+Czyste pomocniki procesu odtwarzania uzywane przez `pipeline.run_restore`:
+bezpieczenstwo archiwum tar, inspekcja metadanych kopii, czyszczenie datadir,
+przygotowanie bazy z mariabackup i kontrolowany start weryfikacyjny.
 """
 
 from __future__ import annotations

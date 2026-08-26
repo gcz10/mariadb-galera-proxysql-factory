@@ -63,7 +63,7 @@ def main():
         hosts = {}
         collect_hosts(gval, hosts)
         groups[gname] = hosts
-    # hosts定义 bezpośrednio w all (bez children)
+    # hosty zdefiniowane bezposrednio w all (bez children)
     collect_hosts(all_root, groups.setdefault("_root", {}))
 
     errors = []

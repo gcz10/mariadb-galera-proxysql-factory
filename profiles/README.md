@@ -1,4 +1,4 @@
-# Profile — do uzupełnienia w F2; utworzone inkrementalnie, gdy realizują aktywny feature.
+# Profile srodowiskowe — wartosci referencyjne dla pola `cluster.profile` w cluster.yml
 
 # production:
 #   versions_policy: locked

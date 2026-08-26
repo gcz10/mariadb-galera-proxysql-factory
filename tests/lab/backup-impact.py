@@ -28,7 +28,7 @@ APP_PW = os.environ.get("APP_DB_PASSWORD", "")
 FLOW_THRESHOLD_NS = 2_000_000_000     # 2s cumulative flow-control pause
 COMMIT_GAP_THRESHOLD = 8.0            # max seconds writer may stall
 WORKLOAD_LOCAL = "tests/lab/workload-numbered.sh"
-# Klient obciazenia: preferuj dedykowany host aplikacyjny (fcapp), zeby workload
+# Klient obciazenia: preferuj dedykowany host aplikacyjny (grupa `app`), zeby
 # nie konkurowal o CPU/IO z mariabackup na wezle scheduler. Fallback na galera[0]
 # jesli inventory nie ma grupy `app`.
 _inv = yaml.safe_load(open(INVENTORY))

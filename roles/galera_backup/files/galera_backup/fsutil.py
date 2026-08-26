@@ -1,10 +1,9 @@
 """Operacje plikowe: sumy kontrolne, zapis atomowy, usuwanie drzew.
 
-Czego tu NIE ma i dlaczego: `selinux_is_enabled` oraz `restore_default_context`
-zostaja w entrypoincie, bo oba sa podmieniane przez `patch.object(self.mod, ...)`,
-a drugie wola pierwsze. Przeniesienie ich tutaj sprawiloby, ze wywolanie
-rozwiazywaloby sie w przestrzeni TEGO modulu i mock z testu przestalby cokolwiek
-przechwytywac — testy dalej zielone, ale nic nie sprawdzaja.
+Czyste pomocniki plikowe bez zaleznosci od runnera ani kontekstu wykonawczego.
+Funkcje zalezne od kontekstu SELinux (`selinux_is_enabled`,
+`restore_default_context`) mieszkaja w `pipeline.py`, gdzie operuje na nich
+runner i testy jednostkowe.
 """
 
 import hashlib

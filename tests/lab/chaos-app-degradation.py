@@ -124,12 +124,15 @@ WRITER_HG = HG_BASE
 OFFLINE_HG = HG_BASE + 30
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-EXPECTED_CLUSTER = "newclaude17-r9"
-EXPECTED_CONFIG = (REPO_ROOT / "clusters/newclaude17-r9/cluster.yml").resolve()
-EXPECTED_INVENTORY = (REPO_ROOT / "clusters/newclaude17-r9/inventory.yml").resolve()
-EXPECTED_GALERA = {"n17g1", "n17g2", "n17g3"}
-EXPECTED_PROXYSQL = {"fcp1", "fcp2"}
-EXPECTED_APP = {"fcapp"}
+# Cel testu wyprowadzamy z KONFIGURACJI, nie z listy dopuszczonych instancji.
+# Wczesniej stalo tu przypiecie do jednego klastra: nazwa plus trzy grupy
+# hostow na sztywno. Po zniszczeniu tego klastra cel odrzucal KAZDY zywy
+# klaster — a sondy statyczne tego nie widzialy, bo tests/ jest poza skanem
+# ISC-59. Bezpieczenstwa destrukcyjnego testu pilnuja niezalezne warunki
+# w validate_target: CONFIRM=yes, srodowisko laboratory, zgodnosc
+# CLUSTER=config=inwentarz oraz nietrywialna topologia pomiaru.
+EXPECTED_CONFIG = (REPO_ROOT / "clusters" / CLUSTER_NAME / "cluster.yml").resolve()
+EXPECTED_INVENTORY = (REPO_ROOT / "clusters" / CLUSTER_NAME / "inventory.yml").resolve()
 APP_CNF = "/run/isa-app-degradation.cnf"
 PROXYSQL_LOG = "/var/lib/proxysql/proxysql.log"
 ADMIN_CLIENT = ("mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf "
@@ -175,22 +178,28 @@ def validate_target(
     if confirm is None:
         confirm = CONFIRM
     errors = []
-    if operator_cluster != EXPECTED_CLUSTER:
-        errors.append(f"CLUSTER must be {EXPECTED_CLUSTER}, got {operator_cluster!r}")
+    if operator_cluster != cluster_name:
+        errors.append(
+            f"CLUSTER ({operator_cluster!r}) must match cluster name "
+            f"in config ({cluster_name!r})"
+        )
     if confirm != "yes":
         errors.append(f"CONFIRM must be 'yes', got {confirm!r}")
-    if cluster_name != EXPECTED_CLUSTER:
-        errors.append(f"cluster name must be {EXPECTED_CLUSTER}, got {cluster_name}")
     if Path(config_path).resolve() != EXPECTED_CONFIG:
         errors.append(f"config path must resolve to {EXPECTED_CONFIG}")
     if Path(inventory_path).resolve() != EXPECTED_INVENTORY:
         errors.append(f"inventory path must resolve to {EXPECTED_INVENTORY}")
-    if set(galera_hosts) != EXPECTED_GALERA:
-        errors.append(f"Galera hosts must be {sorted(EXPECTED_GALERA)}")
-    if set(proxy_hosts) != EXPECTED_PROXYSQL:
-        errors.append(f"ProxySQL hosts must be {sorted(EXPECTED_PROXYSQL)}")
-    if set(app_hosts) != EXPECTED_APP:
-        errors.append(f"app hosts must be {sorted(EXPECTED_APP)}")
+    if len(galera_hosts) != NODES_EXPECTED:
+        errors.append(
+            f"Galera group has {len(galera_hosts)} hosts, "
+            f"nodes_expected={NODES_EXPECTED}"
+        )
+    if len(galera_hosts) < 2:
+        errors.append("quorum loss needs at least 2 Galera nodes")
+    if not proxy_hosts:
+        errors.append("ProxySQL group is empty")
+    if not app_hosts:
+        errors.append("app group is empty — measurement runs from the application host")
     if ENVIRONMENT != "laboratory":
         errors.append(f"environment must be laboratory, got {ENVIRONMENT!r}")
     if not re.fullmatch(r"[0-9a-f]{32}", RUN_ID):
@@ -511,19 +520,17 @@ def new_record():
         "external_gates": {
             "platform_verify": {"ok": None, "command": "make platform-verify", "rc": None},
             "post_build_gate": {
-                "ok": None,
-                "command": "make lab-post-build-gate CLUSTER=newclaude17-r9",
+                "command": f"make lab-post-build-gate CLUSTER={CLUSTER_NAME}",
                 "rc": None,
             },
         },
     }
 
-
 def write_artifact(record):
-    path = Path(f"/var/tmp/quorum-evidence-{EXPECTED_CLUSTER}-{RUN_ID}.json")
+    path = Path(f"/var/tmp/quorum-evidence-{CLUSTER_NAME}-{RUN_ID}.json")
     fd, local_path = tempfile.mkstemp(
         dir=path.parent,
-        prefix=f"quorum-evidence-{EXPECTED_CLUSTER}-{RUN_ID}-",
+        prefix=f"quorum-evidence-{CLUSTER_NAME}-{RUN_ID}-",
         suffix=".tmp",
         text=True,
     )

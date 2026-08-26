@@ -1,8 +1,5 @@
 """Backend S3 / MinIO."""
 
-# `from __future__ import annotations` jak w entrypoincie: adnotacje pozostaja
-# leniwe, wiec nazwy uzywane WYLACZNIE w podpisach (np. CommandRunner, ktory
-# zostal w entrypoincie) nie musza byc tu importowane i nie tworza cyklu.
 from __future__ import annotations
 
 import json

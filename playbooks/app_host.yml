@@ -26,7 +26,7 @@
 
   vars:
     # Host aplikacyjny nalezy do warstwy WSPOLNEJ, a ta stoi na innej platformie
-    # niz czesc klastrow, ktore obsluguje (dzis: shared = EL10, newclaude8-r9 = EL9).
+    # niz czesc klastrow, ktore obsluguje (platforma na EL10, najemcy na EL9).
     # Lockfile jest zwiazany z platforma — `f2_preflight.yml` wprost asertuje
     # zgodnosc lock.rocky_linux.major z hostem. Branie lockfile'a KLASTRA konczy
     # sie "No package MariaDB-client-11.4.12-1.el9 available" na Rocky 10

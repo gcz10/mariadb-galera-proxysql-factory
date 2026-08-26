@@ -360,7 +360,7 @@ nowy klaster w chwili powstania.
 ```
 clusters/<name>/     — inventory.yml + cluster.yml + secrets per klaster
 versions/            — lockfile, discovered-versions, compatibility-report
-profiles/            — production/staging/laboratory
+profiles/            — specyfikacja profili srodowiskowych (README.md)
 playbooks/           — feature po feature (F0-F15) + tasks/ z helperami wspoldzielonymi
 roles/               — standardowe katalogi, gdy potrzebne
   galera_backup/files/

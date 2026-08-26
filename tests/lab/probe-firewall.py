@@ -25,7 +25,7 @@ GROUPS = INVENTORY["all"]["children"]
 NETWORK = CONFIG["network"]
 
 # Wlascicielem polityki hosta jest ta warstwa, ktora go tworzy. Definicja
-# najemcy deklaruje wspolne fcp1/fcp2/fcinfra/fcapp, zeby sie do nich laczyc —
+# najemcy deklaruje wspolne hosty warstwy (grupy proxysql/infra/app), zeby sie
 # sprawdzanie ICH regul przeciw CIDR-om najemcy cementowaloby blad, ktory
 # bramka wlasciciela w playbooks/firewall.yml wlasnie zamyka.
 TENANT_GROUPS = ("galera", "restore")
@@ -245,7 +245,9 @@ def main() -> int:
     # Zapytania o chain padaja na hostach bez xtables (chain nie istnieje), wiec
     # odpytujemy wylacznie hosty, na ktorych filtr moze w ogole dzialac.
     if xtables_missing:
-        return failures
+        for failure in failures:
+            print(f"FAIL: {failure}")
+        return 1
 
     docker_chain = run_command("infra", "iptables -S ISA-INFRA")
     docker_hook = run_command("infra", "iptables -S DOCKER-USER")
