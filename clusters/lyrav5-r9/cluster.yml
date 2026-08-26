@@ -1,11 +1,10 @@
 ---
-# ARCHIWUM — maszyny o3g1-o3g3 (VMID 9840-9842, .57/.58/.59) zniszczone
-# 2026-08-25 razem z warstwa `kobalt`, ktora ten najemca uzywal. Zastapione
-# przez stack v5: platforma `argonv5` + `lyrav5-r9` i `mirav5-r9`.
-# NIE URUCHAMIAJ `cluster-build`: ani te adresy, ani ta platforma juz nie zyja.
+# Example cluster — szablon konfiguracji. Skopiuj do clusters/<name>/cluster.yml.
+# Walidowane przez clusters/schema/cluster.schema.json.
+# Nie wpisuj adresów IP tutaj — adresy żyją w inventory.yml.
 
 cluster:
-  name: "orionv3-r9"
+  name: "lyrav5-r9"
   environment: "laboratory"
   profile: "laboratory"
 
@@ -17,7 +16,7 @@ versions:
   lock_file: "versions/versions.lock.yml"
 
 galera:
-  cluster_name: "orionv3_galera"
+  cluster_name: "lyrav5_galera"
   nodes_expected: 3
 
 proxysql:
@@ -27,20 +26,20 @@ proxysql:
   # +30 (offline). Sasiednie bazy sa wiec kolizja, mimo ze wygladaja inaczej:
   # przy 890 i 900 wezly drugiego najemcy laduja w puli, na ktora pierwszy
   # przelacza sie przy failoverze writera. Kolejnemu klastrowi daj base+40.
-  hostgroup_base: 290
+  hostgroup_base: 10
   # Wpis w `mysql_users` jest GLOBALNY dla instancji ProxySQL: dwaj najemcy
   # z ta sama nazwa uzytkownika to jeden wpis i ruch obu trafi do jednego
   # klastra. Nazwa musi byc unikalna w obrebie wspolnego endpointu.
-  app_user: "app_user_ov3"
+  app_user: "app_user_lv5"
   frontend_tls:
     # WYLACZNIE ca_reference: cert i klucz frontendu naleza do warstwy wspolnej,
     # ktora serwuje cala flote jednym certem. Wskaz CA tej warstwy.
-    ca_reference: "pki/kobalt/ca.pem"
+    ca_reference: "pki/argonv5/ca.pem"
   endpoint:
     type: "keepalived_vip"
     # Musi byc DOKLADNIE ten VIP, ktory wystawia warstwa wspolna
     # (platform/example/platform.yml). Najemca go nie tworzy — tylko mu ufa.
-    address: "192.168.1.31"
+    address: "192.168.1.67"
     port: 6033
 
 # TLS opcjonalne per-klaster. mode=full => serwer prezentuje cert, replikacja Galera
@@ -53,16 +52,16 @@ tls:
   # tekstem, a jedyna wzmianka o tym byla nawiasem w kroku 4. Kto chce plaintext,
   # niech go napisze wprost — nie odziedziczy go przez przeoczenie.
   mode: "full"                        # disabled | full
-  ca_reference: "pki/ov3/ca.pem"                   # CA (pem)
-  certificate_reference: "pki/ov3/server-cert.pem"          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
-  private_key_reference: "pki/ov3/server-key.pem"          # klucz prywatny serwera
+  ca_reference: "pki/lv5/ca.pem"                   # CA (pem)
+  certificate_reference: "pki/lv5/server-cert.pem"          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
+  private_key_reference: "pki/lv5/server-key.pem"          # klucz prywatny serwera
   require_secure_transport: false    # true => wymusza TLS na WSZYSTKICH poł. TCP (klienci muszą mieć TLS)
 
 network:
   application_cidrs: ["192.168.1.0/24"]
   database_cluster_cidrs: ["192.168.1.0/24"]
   administration_cidrs: ["192.168.1.0/24"]
-  monitoring_cidrs: ["192.168.1.28/32"]
+  monitoring_cidrs: ["192.168.1.63/32"]
 
 
 storage:
@@ -106,7 +105,7 @@ backup:
   restore_test_schedule: "0 4 * * 0"
   scheduler:
     mode: "manual"
-    host: "o3g1"
+    host: "lg1"
     timezone: "UTC"
   smb:
     source: "//nas01.example.invalid/backups"
@@ -126,9 +125,9 @@ backup:
 
 monitoring:
   pmm:
-    server_url: "https://192.168.1.28"
+    server_url: "https://192.168.1.63"
     agent_id: "pmm-server"
-    cluster_name: "orionv3-r9"
+    cluster_name: "lyrav5-r9"
     validate_certs: false
     credentials_revision: 1
   alerts:

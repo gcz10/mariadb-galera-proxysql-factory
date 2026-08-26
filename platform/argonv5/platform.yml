@@ -1,0 +1,42 @@
+---
+# Wspolna warstwa v5: PMM + Maildev, para ProxySQL, VIP i host aplikacyjny.
+# Bez MinIO — aktywne klastry maja backup.enabled=false.
+platform:
+  name: "argonv5"
+  environment: "laboratory"
+  rocky_linux_major: 9
+  infra:
+    services: ["pmm", "maildev"]
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/versions.lock.yml"
+
+proxysql:
+  nodes_expected: 2
+  frontend_tls:
+    ca_reference: "pki/argonv5/ca.pem"
+    certificate_reference: "pki/argonv5/server-cert.pem"
+    private_key_reference: "pki/argonv5/server-key.pem"
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.67"
+    port: 6033
+
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.63/32"]
+
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.63"
+    agent_id: "pmm-server"
+    cluster_name: "argonv5"
+    validate_certs: false
+    credentials_revision: 1
+    backup_retention: 2
+  agent_groups: ["proxysql"]
+  alerts:
+    email: "ops@claude.local"

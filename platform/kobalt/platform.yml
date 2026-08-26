@@ -1,4 +1,8 @@
 ---
+# ARCHIWUM — maszyny kmon/kp1/kp2/kapp (VMID 9770-9772, 9776) zniszczone
+# 2026-08-25. Warstwa zastapiona przez `platform/argonv5` (PMM .63, para
+# ProxySQL .64/.65, VIP .67, host aplikacyjny .66).
+#
 # Warstwa wspolna `kobalt`: monitoring (PMM) i para ProxySQL z VIP-em.
 #
 # BEZ MAGAZYNU KOPII. `infra.services` deklaruje wylacznie pmm i maildev — S3

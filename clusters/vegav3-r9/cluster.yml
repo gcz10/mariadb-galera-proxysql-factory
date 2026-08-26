@@ -1,7 +1,7 @@
 ---
-# Example cluster — szablon konfiguracji. Skopiuj do clusters/<name>/cluster.yml.
-# Walidowane przez clusters/schema/cluster.schema.json.
-# Nie wpisuj adresów IP tutaj — adresy żyją w inventory.yml.
+# ARCHIWUM — maszyny v3g1-v3g3 (VMID 9850-9852, .60/.61/.62) zniszczone
+# 2026-08-25 razem z warstwa `kobalt`. Zastapione przez stack v5.
+# NIE URUCHAMIAJ `cluster-build`: ani te adresy, ani ta platforma juz nie zyja.
 
 cluster:
   name: "vegav3-r9"
