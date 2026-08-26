@@ -1,7 +1,7 @@
 ---
-# Example cluster — szablon konfiguracji. Skopiuj do clusters/<name>/cluster.yml.
-# Walidowane przez clusters/schema/cluster.schema.json.
-# Nie wpisuj adresów IP tutaj — adresy żyją w inventory.yml.
+# ARCHIWUM — maszyny m5g1-m5g3 (VMID 9867-9869, .71/.72/.73) zniszczone
+# 2026-08-26 razem z platforma `argonv5`. Zastapione przez stack v6.
+# NIE URUCHAMIAJ `cluster-build`: ani adresy, ani ta platforma juz nie zyja.
 
 cluster:
   name: "mirav5-r9"
