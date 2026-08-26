@@ -89,8 +89,10 @@ budowy.
 **`platform/<nazwa>/platform.yml` — gdy stawiasz warstwę wspólną (krok 1):**
 
 - `platform.name` oraz `platform.rocky_linux_major` zgodne z obrazem maszyn;
-- `platform.infra.services` — lista usług tej warstwy, np. `["pmm", "maildev"]`;
-  pusta lista jest legalna, gdy monitoring stoi poza fabryką;
+- `platform.infra.services` — usługi tej warstwy; dozwolone wartości to
+  `pmm`, `minio` i `maildev`. Pusta lista jest legalna, gdy monitoring stoi poza
+  fabryką. POMINIĘCIE bloku to co innego niż pusta lista: znaczy „pełny zestaw",
+  więc dostaniesz też MinIO, nawet jeśli magazyn kopii masz gdzie indziej;
 - `versions.policy` i `versions.lock_file` — `versions/versions.lock.yml` dla
   Rocky 9, `versions/versions-el10.lock.yml` dla Rocky 10;
 - `proxysql.endpoint.address` — VIP, który **nie jest adresem żadnej maszyny**
