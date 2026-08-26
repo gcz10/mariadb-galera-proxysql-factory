@@ -174,6 +174,7 @@
         group: proxysql
         mode: "0644"
       register: proxysql_backend_ca
+      notify: "proxysql-ca-reload"
       when: (tls | default({})).mode | default('disabled') == 'full'
 
     # Stare odciski tego najemcy sa smieciem, ale kasujemy je DOPIERO po tym, jak
@@ -317,19 +318,13 @@
     # a proces ProxySQL nadal zwracal certificate signature failure. Restart
     # natychmiast przywrocil backend. Play ma serial:1, wiec druga instancja i VIP
     # pozostaja dostepne.
-    - name: "TLS: przeładuj proces ProxySQL po zmianie CA backendu"
-      ansible.builtin.systemd_service:
-        name: proxysql
-        state: restarted
-      when: proxysql_backend_ca.changed | default(false)
-
-    - name: "TLS: czekaj na admin port po przeładowaniu backend CA"
-      ansible.builtin.wait_for:
-        host: 127.0.0.1
-        port: 6032
-        state: started
-        timeout: 30
-      when: proxysql_backend_ca.changed | default(false)
+    #
+    # `flush_handlers` TUTAJ, a nie na koncu play: audyt logowania ponizej
+    # sprawdza polaczenie aplikacji przez ProxySQL, wiec musi zobaczyc proces
+    # z JUZ przeladowanym kontekstem TLS. Handler odpalony domyslnie po
+    # ostatnim zadaniu przyszedlby po tym audycie.
+    - name: "TLS: zastosuj przeładowanie przed audytem logowania"
+      ansible.builtin.meta: flush_handlers
 
     - name: "Sprawdź aktualnego app_user w ProxySQL"
       ansible.builtin.command:
@@ -453,4 +448,20 @@
     - name: "Wydrukuj status serwerów ProxySQL"
       ansible.builtin.debug:
         msg: "{{ server_status.stdout_lines }}"
-  handlers: []
+  handlers:
+    # Dwa zadania, JEDEN temat `listen`: nazwy handlerow musza byc unikalne,
+    # a przy duplikacie Ansible uruchomilby tylko ostatni — czyli czekanie na
+    # port bez restartu. Handlery z tym samym `listen` ida w kolejnosci definicji.
+    - name: "Przeładuj ProxySQL po zmianie CA backendu"
+      ansible.builtin.systemd_service:
+        name: proxysql
+        state: restarted
+      listen: "proxysql-ca-reload"
+
+    - name: "Czekaj na admin port ProxySQL po przeładowaniu"
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6032
+        state: started
+        timeout: 30
+      listen: "proxysql-ca-reload"
