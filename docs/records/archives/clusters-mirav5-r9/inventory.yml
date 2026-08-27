@@ -1,0 +1,61 @@
+---
+# Najemca `mirav5-r9` na warstwie wspolnej `argonv5`. Wezly powstaly przez: gole REST API wg docs/runbooks/machines-from-elsewhere.md.
+# ap1/ap2 (ProxySQL), aapp (host aplikacyjny) i amon (PMM) naleza do platformy.
+all:
+  vars:
+    ansible_user: "root"
+    ansible_become: false
+    ansible_ssh_private_key_file: secrets/ssh_key
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        mg1:
+          ansible_host: "192.168.1.71"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.71"
+        mg2:
+          ansible_host: "192.168.1.72"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.72"
+        mg3:
+          ansible_host: "192.168.1.73"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.73"
+
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        ap1:
+          ansible_host: "192.168.1.64"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.64"
+        ap2:
+          ansible_host: "192.168.1.65"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.65"
+
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        aapp:
+          ansible_host: "192.168.1.66"
+          app_node_address: "192.168.1.66"
+
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        amon:
+          ansible_host: "192.168.1.63"
+          infra_node_address: "192.168.1.63"
+
+    discovery_bench:
+      hosts: {}
+      vars:
+        allow_bench: true

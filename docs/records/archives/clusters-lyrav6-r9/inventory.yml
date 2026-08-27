@@ -1,0 +1,51 @@
+---
+# lyrav6-r9: Terraform; wspolna platforma heliumv6.
+all:
+  vars:
+    ansible_user: "root"
+    ansible_become: false
+    ansible_ssh_private_key_file: secrets/ssh_key
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+  children:
+    galera:
+      vars: { galera_role: "galera" }
+      hosts:
+        l6g1:
+          ansible_host: "192.168.1.79"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.79"
+        l6g2:
+          ansible_host: "192.168.1.80"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.80"
+        l6g3:
+          ansible_host: "192.168.1.81"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.81"
+    proxysql:
+      vars: { proxysql_role: "proxysql" }
+      hosts:
+        hp1:
+          ansible_host: "192.168.1.75"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.75"
+        hp2:
+          ansible_host: "192.168.1.76"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.76"
+    app:
+      vars: { app_role: "app" }
+      hosts:
+        happ:
+          ansible_host: "192.168.1.77"
+          app_node_address: "192.168.1.77"
+    infra:
+      vars: { infra_role: "infra" }
+      hosts:
+        hmon:
+          ansible_host: "192.168.1.74"
+          infra_node_address: "192.168.1.74"
+    discovery_bench:
+      hosts: {}
+      vars: { allow_bench: true }

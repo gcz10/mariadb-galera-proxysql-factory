@@ -1,0 +1,53 @@
+---
+# ARCHIWUM — maszyny kmon/kp1/kp2/kapp (VMID 9770-9772, 9776) zniszczone
+# 2026-08-25. Warstwa zastapiona przez `platform/argonv5` (PMM .63, para
+# ProxySQL .64/.65, VIP .67, host aplikacyjny .66).
+#
+# Warstwa wspolna `kobalt`: monitoring (PMM) i para ProxySQL z VIP-em.
+#
+# BEZ MAGAZYNU KOPII. `infra.services` deklaruje wylacznie pmm i maildev — S3
+# jest usluga zewnetrzna i nie ma powodu dzielic cyklu zycia z monitoringiem.
+# Poprzednia warstwa trzymala PMM, MinIO i relay jako jeden nierozdzielny
+# zestaw: przebudowa monitoringu niszczyla magazyn kopii calej floty.
+
+platform:
+  name: "kobalt"
+  environment: "laboratory"
+  rocky_linux_major: 9
+  infra:
+    services: ["pmm", "maildev"]
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/versions.lock.yml"
+
+proxysql:
+  nodes_expected: 2
+  # Tozsamosc TLS WSPOLNEGO endpointu: jedna para serwuje cala flote jednym
+  # certem, wiec CA jest wspolne, nie klastrowe.
+  frontend_tls:
+    ca_reference: "pki/kobalt/ca.pem"
+    certificate_reference: "pki/kobalt/server-cert.pem"
+    private_key_reference: "pki/kobalt/server-key.pem"
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.31"
+    port: 6033
+
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.28/32"]
+
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.28"
+    agent_id: "pmm-server"
+    cluster_name: "kobalt"
+    validate_certs: false
+    credentials_revision: 1
+    backup_retention: 2
+  agent_groups: ["proxysql"]
+  alerts:
+    email: "ops@claude.local"

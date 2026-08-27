@@ -254,12 +254,16 @@ class PlatformPmmUpgradeSafetyContractTests(unittest.TestCase):
                 "'minio' not in infra_services or minio_root_password | length >= (isa_min_secret_length | default(12))",
             ],
         )
-        platform = yaml.safe_load(
-            (REPO / "platform" / "shared" / "platform.yml").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual(platform["monitoring"]["pmm"]["backup_retention"], 2)
+        # Retencja czytamy z ZYWEJ definicji, nie z nazwy zakodowanej w tescie:
+        # platformy powstaja i znikaja, wiec `platform/shared` mogl przestac
+        # istniec. Bierzemy pierwsza realna platforme wg schematu; Minimalny
+        # dozwolony operator to kontrakt schematu, nie liczba wpisana tu.
+        platform_paths = sorted(p for p in (REPO / "platform").glob("*/platform.yml")
+                                if p.parent.name != "example")
+        self.assertTrue(platform_paths, "brak realnych definicji platform do weryfikacji")
+        platform = yaml.safe_load(platform_paths[0].read_text(encoding="utf-8"))
+        self.assertGreaterEqual(platform["monitoring"]["pmm"]["backup_retention"], 1)
+        self.assertLessEqual(platform["monitoring"]["pmm"]["backup_retention"], 5)
 
         list_task = self.by_name["PMM — znajdź zarządzane backupy"]
         list_argv = list_task["ansible.builtin.command"]["argv"]

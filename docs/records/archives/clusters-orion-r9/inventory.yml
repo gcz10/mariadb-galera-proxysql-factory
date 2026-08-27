@@ -1,0 +1,68 @@
+---
+# Najemca `orion-r9`. Wezly powstaly przez: Terraform (terraform/orion-r9).
+# kp1/kp2, kapp i kmon naleza do warstwy wspolnej `kobalt` — ten najemca ich nie
+# tworzy, tylko sie w nich rejestruje.
+#
+# Obraz Rocky 9 GenericCloud wpuszcza klucz operatora prosto do roota, wiec sudo
+# nie jest tu potrzebne. Szablon zaklada uzytkownika nie-root z sudo i to tez
+# jest poprawne — inwentarz ma mowic prawde o maszynie, nie powtarzac szablon.
+all:
+  vars:
+    ansible_user: "root"
+    ansible_become: false
+    ansible_ssh_private_key_file: secrets/ssh_key
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+  children:
+    galera:
+      vars:
+        galera_role: "galera"
+      hosts:
+        og1:
+          ansible_host: "192.168.1.43"
+          galera_node_idx: 1
+          galera_node_address: "192.168.1.43"
+        og2:
+          ansible_host: "192.168.1.44"
+          galera_node_idx: 2
+          galera_node_address: "192.168.1.44"
+        og3:
+          ansible_host: "192.168.1.45"
+          galera_node_idx: 3
+          galera_node_address: "192.168.1.45"
+
+    proxysql:
+      vars:
+        proxysql_role: "proxysql"
+      hosts:
+        kp1:
+          ansible_host: "192.168.1.29"
+          proxysql_node_idx: 1
+          proxysql_node_address: "192.168.1.29"
+        kp2:
+          ansible_host: "192.168.1.30"
+          proxysql_node_idx: 2
+          proxysql_node_address: "192.168.1.30"
+
+    # Grupy `restore` nie ma: `backup.enabled: false`, wiec nie ma czego odtwarzac.
+
+    app:
+      vars:
+        app_role: "app"
+      hosts:
+        kapp:
+          ansible_host: "192.168.1.32"
+          app_node_address: "192.168.1.32"
+
+    infra:
+      vars:
+        infra_role: "infra"
+      hosts:
+        kmon:
+          ansible_host: "192.168.1.28"
+          infra_node_address: "192.168.1.28"
+
+    discovery_bench:
+      hosts: {}
+      vars:
+        allow_bench: true

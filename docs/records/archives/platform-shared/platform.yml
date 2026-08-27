@@ -1,0 +1,73 @@
+---
+# Warstwa wspolna floty ISA — jednostka NIEZALEZNA od klastrow Galera.
+#
+# DLACZEGO ISTNIEJE OSOBNO:
+# Do 2026-08-21 wlascicielem tej warstwy byl klaster Galera (`finalclaude-r10`
+# mial `proxysql.role: owner` w swoim cluster.yml). To lamalo wymaganie, ze
+# warstwa wspolna nie moze byc wlasnoscia zadnego klastra: skasowanie ownera
+# osierocilo by pare ProxySQL, VIP, PMM i MinIO, a pozostali najemcy jechaliby
+# dalej na infrastrukturze, ktorej nikt nie moze zaktualizowac ani odtworzyc.
+#
+# Maszyny tej warstwy tworzy `terraform/shared/` — ten katalog opisuje wylacznie
+# ich KONFIGURACJE. Klastry Galera sa NAJEMCAMI: rejestruja wlasne hostgroupy
+# i uzytkownika przez `make cluster-proxysql`, ale nie instaluja tu pakietow,
+# nie ruszaja VIP-a i nie zarzadzaja materialem TLS frontendu.
+#
+# Rozlacznosci najemcow na wspolnym ProxySQL pilnuje
+# `tests/validation/probe-proxysql-tenancy.py`.
+
+platform:
+  name: "shared"
+  environment: "laboratory"
+  # fcp1/fcp2/fcinfra/fcapp powstaja z obrazu Rocky 10 w terraform/shared/main.tf.
+  # Lockfile najemcy (EL9 dla klastrow r9) nie ma tu zastosowania — to byl jeden
+  # z objawow sprzezenia: pakiety warstwy wspolnej wybieral lockfile klastra.
+  rocky_linux_major: 10
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/versions-el10.lock.yml"
+
+proxysql:
+  nodes_expected: 2
+  # Tozsamosc TLS WSPOLNEGO endpointu. Jedna para ProxySQL serwuje cala flote
+  # jednym certem frontendu, wiec CA jest wspolne, nie klastrowe: podpisanie go
+  # CA najemcy zmusiloby klientow pozostalych do zaufania cudzemu CA, a usuniecie
+  # tego najemcy uniewaznialoby endpoint calej floty.
+  frontend_tls:
+    ca_reference: "pki/shared/ca.pem"
+    certificate_reference: "pki/shared/server-cert.pem"
+    private_key_reference: "pki/shared/server-key.pem"
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.139"
+    port: 6033
+
+# Polityka ingress hostow warstwy wspolnej, zapisana tymi samymi kluczami
+# co u najemcow (clusters/<name>/cluster.yml): import firewall.yml oraz filtr
+# DOCKER-USER w infra_services.yml czytaja dokladnie te pola, wiec druga
+# konwencja rozwidlilaby wspolny playbook. Nazwa database_cluster_cidrs
+# zostaje mimo braku wezlow Galera — na hoscie wspolnym to zbior CIDR-ow,
+# z ktorych KLASTRY NAJEMCOW lacza sie do PMM (443) i MinIO (9000), a nie
+# siec jednej bazy.
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.130/32"]
+
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.130"
+    agent_id: "pmm-server"
+    # Namespace PMM warstwy wspolnej. Wczesniej fcp1/fcp2 siedzialy pod
+    # `fc10-galera-*`, czyli w przestrzeni nazw NAJEMCY — deregistracja tego
+    # najemcy zabralaby monitoring calej wspolnej pary.
+    cluster_name: "shared"
+    validate_certs: false
+    credentials_revision: 3
+    # Zachowuj biezacy rollback i jedna poprzednia zweryfikowana generacje.
+    backup_retention: 2
+  agent_groups: ["proxysql"]
+  alerts:
+    email: "ops@claude.local"

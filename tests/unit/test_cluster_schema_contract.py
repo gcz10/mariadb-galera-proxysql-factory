@@ -201,8 +201,11 @@ class ClusterSchemaContractTests(unittest.TestCase):
 
     def test_real_clusters_validate(self):
         # Wszystkie realne cluster.yml trzymaja sie kontraktu po sprzataniu.
+        # Katalogi archiwalne zadepozycono w docs/records/archives i nie licza
+        # sie do puli; dolna granica 1 chroni przed pustym globem ukrywajacym
+        # blad sciezki, a nie przed wymogiem konkretnej liczby klastrow.
         paths = sorted((WORKSPACE_ROOT / "clusters").glob("*/cluster.yml"))
-        self.assertGreaterEqual(len(paths), 5)
+        self.assertGreaterEqual(len(paths), 1)
         for path in paths:
             with self.subTest(cluster=path.parent.name):
                 import yaml
