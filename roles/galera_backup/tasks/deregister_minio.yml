@@ -149,7 +149,8 @@
               | default([])
               | map(attribute='stdout')
               | list
-              | minio_access_keys_named('galera-backup-prune-' ~ cluster.name)
+              | minio_access_keys_named(('galera-backup-prune-' ~ cluster.name)
+              | minio_service_account_name)
             )
           }}
       no_log: true

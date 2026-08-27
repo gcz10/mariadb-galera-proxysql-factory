@@ -2,9 +2,36 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable
 from typing import Any
+
+
+def minio_service_account_name(candidate: str, max_len: int = 32) -> str:
+    """Return `candidate` bounded to `max_len` characters, deterministically.
+
+    MinIO odrzuca nazwy kont serwisowe dluzsze niz 32 znaki ("name must not
+    be longer than 32 characters" — zmierzone 2026-08-27: najemca o
+    15-znakowej nazwie daje 35-znakowego kandydata). Uzycie w playbooku jest
+    potokowe: `('galera-backup-prune-' ~ cluster.name) |
+    minio_service_account_name` — filtr dostaje CALA zlozona nazwe i sam ja
+    skraca. Nazwa musi byc DETERMINISTYCZNA: ta sama funkcja nadaje ja przy
+    provision (`--name`) i odnajduje przy derejestracji
+    (`minio_access_keys_named`). Skrot: pierwsze `max_len-13` znakow kandydata
+    + `-` + 12 hex sha256 pelnej nazwy — stabilne miedzy przebiegami, a
+    kolizja wymaga zderzenia nazw roznych klasterow w jednym 12-znakowym
+    skrocie.
+    """
+    if not isinstance(candidate, str) or not candidate:
+        raise ValueError("MinIO service-account name must be a non-empty string")
+    if not isinstance(max_len, int) or max_len < 14:
+        raise ValueError("max_len must leave room for '-' and a 12-char digest")
+    if len(candidate) <= max_len:
+        return candidate
+    keep = max_len - 13
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]
+    return f"{candidate[:keep]}-{digest}"
 
 
 def _json_object(raw: str, source: str) -> dict[str, Any]:
@@ -75,5 +102,6 @@ class FilterModule:
     def filters(self) -> dict[str, object]:
         return {
             "minio_service_account_keys": minio_service_account_keys,
+            "minio_service_account_name": minio_service_account_name,
             "minio_access_keys_named": minio_access_keys_named,
         }

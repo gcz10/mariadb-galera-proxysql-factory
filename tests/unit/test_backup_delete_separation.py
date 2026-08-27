@@ -344,10 +344,15 @@ class TestMinioProvisioning(unittest.TestCase):
             for argv in self._argv_tasks(self.provision)
             if "--name" in argv
         }
-        self.assertIn(
-            "galera-backup-prune-{{ cluster.name }}",
-            names,
-            f"brak konta retencji w provisioningu MinIO; znalezione nazwy: {names}",
+        # Nazwa retencyjna MUSI pochodzi od nazwy klastra i MUSI przechodzic
+        # przez `minio_service_account_name`: MinIO odrzuca nazwy > 32 znakow,
+        # a filtr gwarantuje te sama, deterministyczna nazwe przy derejestracji
+        # (selekcja przez minio_access_keys_named nizej). Surowe
+        # `galera-backup-prune-{{ cluster.name }}` rozjonaloby sie od najemcy
+        # o dluzszej nazwie — zmierzone 2026-08-27.
+        self.assertTrue(
+            any("minio_service_account_name" in name for name in names),
+            f"konto retencji nie uzywa ograniczonej nazwy; znalezione: {names}",
         )
         self.assertIn("galera-backup-{{ cluster.name }}", names)
 

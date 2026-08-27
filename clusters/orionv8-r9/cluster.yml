@@ -85,34 +85,23 @@ availability:
   rto_node_failure: "2m"
 
 backup:
-  enabled: false
-  destination: "smb"
-  full_backup_schedule: "0 2 * * *"
+  enabled: true
+  destination: "s3"
+  full_backup_schedule: "20 3 * * *"
   incremental_backup_schedule: "disabled"
   freshness_sla_hours: 26
   retention_days: 14
   encryption_enabled: true
   immutable_or_offsite_copy: true
-  restore_test_schedule: "0 4 * * 0"
+  restore_test_schedule: "0 15 * * 0"
   scheduler:
-    mode: "manual"
+    mode: "cron"
     host: "o8db1"
     timezone: "UTC"
-  smb:
-    source: "//nas01.example.invalid/backups"
-    mount_point: "/mnt/galera-backup"
-    options:
-      - "vers=3.1.1"
-      - "seal"
-      - "nosuid"
-      - "nodev"
-      - "noexec"
-  # Alternatywa dla `destination: "s3"` — kazdy najemca dostaje WLASNY bucket
-  # i wlasne konto scoped, wiec magazyn moze byc wspolny dla calej floty:
-  # s3:
-  #   endpoint: "10.0.1.51:9000"
-  #   bucket: "example-galera-backups"
-  #   secure: false
+  s3:
+    endpoint: "192.168.1.118:9000"
+    bucket: "orionv8-galera-backups"
+    secure: false
 
 monitoring:
   pmm:

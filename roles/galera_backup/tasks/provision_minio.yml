@@ -408,7 +408,8 @@
             | default([])
             | map(attribute='stdout')
             | list
-            | minio_access_keys_named('galera-backup-prune-' ~ cluster.name)
+            | minio_access_keys_named(('galera-backup-prune-' ~ cluster.name)
+            | minio_service_account_name)
           }}
       no_log: true
 
@@ -486,7 +487,7 @@
           - --policy
           - /tmp/policy-prune.json
           - --name
-          - "galera-backup-prune-{{ cluster.name }}"
+          - "{{ ('galera-backup-prune-' ~ cluster.name) | minio_service_account_name }}"
       when: galera_backup_reuse_existing_prune_key
       changed_when: true
       no_log: true
@@ -510,7 +511,7 @@
           - myminio/
           - --json
           - --name
-          - "galera-backup-prune-{{ cluster.name }}"
+          - "{{ ('galera-backup-prune-' ~ cluster.name) | minio_service_account_name }}"
           - --policy
           - /tmp/policy-prune.json
       register: galera_backup_mc_create_prune_result

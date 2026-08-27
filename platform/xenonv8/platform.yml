@@ -4,7 +4,7 @@ platform:
   environment: "laboratory"
   rocky_linux_major: 9
   infra:
-    services: ["pmm", "maildev"]
+    services: ["pmm", "minio", "maildev"]
 versions:
   policy: "candidate"
   lock_file: "versions/versions.lock.yml"
