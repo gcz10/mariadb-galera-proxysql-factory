@@ -76,6 +76,10 @@ for name in filter(None, paths):
                 if match.group("value_quote")
                 else match.group("unquoted_value")
             ).strip()
+            # Pusta wartosc nie niesie sekretu. Bez tego zarchiwizowane stany
+            # Terraform ("password": "") wywalaja bramke na falszywym alarmie.
+            if not value:
+                continue
             if (
                 jinja_expression.fullmatch(value)
                 or environment_reference.fullmatch(value)
