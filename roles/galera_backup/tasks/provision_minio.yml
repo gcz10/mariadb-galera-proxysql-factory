@@ -8,10 +8,10 @@
 #   3. bucket + owner marker        — bucket zarzadany nalezy DO TEGO klastra;
 #   4. minio_owned_keys.yml         — jeden discovery: list + info wszystkich kont;
 #   5. reconcile_minio_account.yml  — x2: konto zapisu i konto retencji;
-#   6. sprzatanie                   — root.env zyje dopoki main.yml nie wykona
-#                                     odwolan (rotacja atomowa: create + sondy
-#                                     zanim powstanie lista odwolan, odwolanie
-#                                     dopiero PO utrwaleniu secrets.env).
+#   6. sprzatanie                   — workspace provisioningu znika zawsze;
+#                                     main.yml tworzy swieze root.env dopiero
+#                                     po utrwaleniu secrets.env, gdy istnieja
+#                                     konta oczekujace na odwolanie.
 # Rozdzial poswiadczen zapis/kasowanie opisuje docs/runbooks/backup.md; kazdy
 # include dostaje slownik `mc_account`, dzieki czemu przeplyw zycia konta
 # istnieje w jednym egzemplarzu (reconcile_minio_account.yml).
@@ -24,7 +24,7 @@
     - name: Render policy to temporary file
       ansible.builtin.template:
         src: minio-policy.json.j2
-        dest: /run/galera-backup-minio-tmp/policy.json
+        dest: "{{ galera_backup_minio_workspace.path }}/policy.json"
         owner: root
         group: root
         mode: "0600"
@@ -34,7 +34,7 @@
       # zapisu, bo klucz zapisu lezy na kazdym wezle Galery (elekcja donora).
       ansible.builtin.template:
         src: minio-policy-prune.json.j2
-        dest: /run/galera-backup-minio-tmp/policy-prune.json
+        dest: "{{ galera_backup_minio_workspace.path }}/policy-prune.json"
         owner: root
         group: root
         mode: "0600"
@@ -48,7 +48,7 @@
           - --network
           - container:minio
           - --env-file
-          - /run/galera-backup-minio-tmp/root.env
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
           - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
           - mb
           - --ignore-existing
@@ -65,7 +65,7 @@
           - --network
           - container:minio
           - --env-file
-          - /run/galera-backup-minio-tmp/root.env
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
           - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
           - cat
           - "myminio/{{ backup.s3.bucket }}/galera-backup-owner.json"
@@ -93,7 +93,7 @@
           - --network
           - container:minio
           - --env-file
-          - /run/galera-backup-minio-tmp/root.env
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
           - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
           - pipe
           - "myminio/{{ backup.s3.bucket }}/galera-backup-owner.json"
@@ -113,7 +113,7 @@
           - --network
           - container:minio
           - --env-file
-          - /run/galera-backup-minio-tmp/root.env
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
           - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
           - cat
           - "myminio/{{ backup.s3.bucket }}/galera-backup-owner.json"
@@ -139,7 +139,7 @@
       vars:
         mc_account:
           name: "galera-backup-{{ cluster.name }}"
-          policy: /run/galera-backup-minio-tmp/policy.json
+          policy: "{{ galera_backup_minio_workspace.path }}/policy.json"
           tmp: ""
           existing_access_key: "{{ galera_backup_existing_s3_access_key }}"
           existing_secret_key: "{{ galera_backup_existing_s3_secret_key }}"
@@ -153,7 +153,7 @@
       vars:
         mc_account:
           name: "{{ ('galera-backup-prune-' ~ cluster.name) | minio_service_account_name }}"
-          policy: /run/galera-backup-minio-tmp/policy-prune.json
+          policy: "{{ galera_backup_minio_workspace.path }}/policy-prune.json"
           tmp: "-prune"
           existing_access_key: "{{ galera_backup_existing_s3_prune_access_key }}"
           existing_secret_key: "{{ galera_backup_existing_s3_prune_secret_key }}"
@@ -163,13 +163,13 @@
 
   always:
     - name: Remove root credentials and temporary policy
-      # root.env MUSI przetrwac do revoke w main.yml (revoke biegnie dopiero po
-      # zapisaniu nowego secrets.env), wiec katalog sprzatamy tylko wtedy, gdy
-      # nic nie czeka na odwolanie. Pozostalosc jest root-only (0700/0600),
-      # a kolejny przebieg i tak ja usuwa.
+      # Fakty z aktywnymi kluczami i listami odwolan przechodza do main.yml,
+      # lecz root.env i polityki sa prywatne dla tego invocation i nie moga
+      # przetrwac do kolejnej fazy ani rownoleglego klastra.
       ansible.builtin.file:
-        path: /run/galera-backup-minio-tmp
+        path: "{{ galera_backup_minio_workspace.path }}"
         state: absent
+      become: true
       when:
-        - (galera_backup_access_keys_to_revoke | default([]) | length) == 0
-        - (galera_backup_prune_keys_to_revoke | default([]) | length) == 0
+        - galera_backup_minio_workspace is defined
+        - galera_backup_minio_workspace.path is defined

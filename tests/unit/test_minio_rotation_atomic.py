@@ -16,8 +16,8 @@ strzeze niewzruszalnych wlasciwosci tego przeplywu:
   2. swiezy create jest POTWIERDZANY sonda, zanim powstanie lista odwolan;
   3. sonda kandydata (starego klucza z secrets.env) toleruje porazke,
      sonda nowego klucza MUSI zatrzymac play;
-  4. katalog z poswiadczeniami root zyje do momentu odwolan w main.yml;
-  5. w main.yml revoke biegnie dopiero PO zapisaniu secrets.env.
+  4. kazda faza root MinIO ma wlasny unikalny workspace i zawsze go usuwa;
+  5. revoke dostaje swieze root.env dopiero PO zapisaniu secrets.env.
 """
 import unittest
 from pathlib import Path
@@ -43,6 +43,15 @@ FRAGMENT_CONVERGE = "Converge policy on the existing scoped credential"
 FRAGMENT_REUSE_FACT = "Reuse existing scoped credentials"
 FRAGMENT_TMP_CLEANUP = "Remove root credentials"
 FRAGMENT_DIR_REMOVAL = "Usun katalog provisioningu MinIO"
+FRAGMENT_WORKSPACE_ALLOC = "katalog tymczasowy klienta MinIO"
+FRAGMENT_REVOKE_ROOT_ENV = (
+    "Przygotuj swieze root-only srodowisko klienta MinIO do revoke"
+)
+STATIC_WORKSPACE = "/run/galera-backup-minio-tmp"
+DYNAMIC_WORKSPACE = "{{ galera_backup_minio_workspace.path }}"
+DYNAMIC_ROOT_ENV = f"{DYNAMIC_WORKSPACE}/root.env"
+
+
 
 
 def load_tasks(path):
@@ -114,6 +123,42 @@ def reconcile_includes():
     ]
 
 
+class WorkspaceIsolation(unittest.TestCase):
+    """Kazdy invocation posiada prywatny katalog z root.env i politykami."""
+
+    def test_root_env_allocates_unique_workspace_under_run(self):
+        tasks = flatten_tasks(load_tasks(ROOT_ENV))
+        allocation = find_task(tasks, FRAGMENT_WORKSPACE_ALLOC)
+        self.assertIsNotNone(allocation, "brak alokacji workspace MinIO")
+        spec = allocation.get("ansible.builtin.tempfile", {})
+        self.assertEqual(spec.get("state"), "directory")
+        self.assertEqual(spec.get("path"), "/run")
+        self.assertEqual(spec.get("prefix"), "galera-backup-minio-")
+        self.assertEqual(
+            allocation.get("register"), "galera_backup_minio_workspace"
+        )
+        self.assertTrue(allocation.get("become"))
+        self.assertIn("groups['infra'][0]", str(allocation.get("delegate_to", "")))
+
+    def test_all_workspace_paths_use_registered_handle(self):
+        for path in (PROVISION, RECONCILE, OWNED_KEYS, ROOT_ENV, ROLE_MAIN):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn(
+                STATIC_WORKSPACE,
+                text,
+                f"{path.relative_to(REPO)} nadal wspoldzieli statyczny workspace",
+            )
+
+        root_env = find_task(
+            flatten_tasks(load_tasks(ROOT_ENV)),
+            "Zapisz root-only srodowisko klienta MinIO",
+        )
+        self.assertEqual(
+            root_env["ansible.builtin.copy"].get("dest"),
+            DYNAMIC_ROOT_ENV,
+        )
+
+
 class ProvisionNeverRevokes(unittest.TestCase):
     """Zaden plik provisioningu nie usuwa kont — revoke zyje dopiero w main.yml."""
 
@@ -155,7 +200,7 @@ class TwoAccountsOneFlow(unittest.TestCase):
         account = reconcile_includes()[0].get("vars", {}).get("mc_account", {})
         self.assertEqual(account.get("name"), "galera-backup-{{ cluster.name }}")
         self.assertEqual(account.get("tmp"), "")
-        self.assertEqual(account.get("policy"), "/run/galera-backup-minio-tmp/policy.json")
+        self.assertEqual(account.get("policy"), f"{DYNAMIC_WORKSPACE}/policy.json")
         self.assertEqual(account.get("access_fact"), "galera_backup_s3_access_key")
         self.assertEqual(account.get("secret_fact"), "galera_backup_s3_secret_key")
         self.assertEqual(
@@ -169,7 +214,7 @@ class TwoAccountsOneFlow(unittest.TestCase):
         self.assertIn("minio_service_account_name", name)
         self.assertEqual(account.get("tmp"), "-prune")
         self.assertEqual(
-            account.get("policy"), "/run/galera-backup-minio-tmp/policy-prune.json"
+            account.get("policy"), f"{DYNAMIC_WORKSPACE}/policy-prune.json"
         )
         self.assertEqual(
             account.get("access_fact"), "galera_backup_s3_prune_access_key"
@@ -239,14 +284,16 @@ class CreateIsConfirmedBeforeAnyRevoke(unittest.TestCase):
         self.assertIn("--name", argv)
         self.assertIn("{{ mc_account.name }}", argv)
 
-    def test_tmp_dir_survives_while_revocation_pending(self):
+    def test_provision_workspace_is_always_removed(self):
         task = find_task(provision_tasks(), FRAGMENT_TMP_CLEANUP)
-        self.assertIsNotNone(task, "brak sprzatania katalogu tymczasowego")
+        self.assertIsNotNone(task, "brak sprzatania workspace provisioningu")
+        self.assertEqual(
+            task["ansible.builtin.file"].get("path"),
+            DYNAMIC_WORKSPACE,
+        )
         when = str(task.get("when", ""))
-        # root.env musi przezyc do revoke w main.yml — sprzatamy katalog tylko
-        # gdy nic nie czeka na odwolanie.
-        self.assertIn("default([])", when)
-        self.assertIn("== 0", when)
+        self.assertNotIn("access_keys_to_revoke", when)
+        self.assertNotIn("prune_keys_to_revoke", when)
 
 
 class RevokeRunsAfterSecretsDeploy(unittest.TestCase):
@@ -263,13 +310,39 @@ class RevokeRunsAfterSecretsDeploy(unittest.TestCase):
         self.assertLess(i_include, i_deploy)
         self.assertLess(i_deploy, i_revoke)
 
-    def test_revoke_loop_defaults_to_empty(self):
-        task = find_task(main_tasks(), FRAGMENT_REVOKE)
-        self.assertIsNotNone(task)
-        loop = str(task.get("loop", ""))
-        # Na hostach bez zarzadanego MinIO fakt nigdy nie powstaje — petla
-        # bez default([]) wywalalaby play bledem szablonu mimo when=false.
-        self.assertIn("default([])", loop)
+    def test_revoke_allocates_fresh_workspace_after_secrets_deploy(self):
+        tasks = main_tasks()
+        i_deploy = find_index(tasks, FRAGMENT_DEPLOY)
+        i_root_env = find_index(tasks, FRAGMENT_REVOKE_ROOT_ENV)
+        i_revoke = find_index(tasks, FRAGMENT_REVOKE)
+        self.assertIsNotNone(i_root_env, "revoke nie tworzy swiezego root.env")
+        root_env = tasks[i_root_env]
+        self.assertEqual(
+            root_env["ansible.builtin.include_tasks"].get("file"),
+            "minio_root_env.yml",
+        )
+        self.assertLess(i_deploy, i_root_env)
+        self.assertLess(i_root_env, i_revoke)
+
+    def test_revoke_fails_closed_when_workspace_is_missing(self):
+        tasks = [
+            task
+            for task in main_tasks()
+            if "Revoke stale MinIO" in str(task.get("name", ""))
+        ]
+        self.assertEqual(len(tasks), 2)
+        for task in tasks:
+            when = " ".join(task.get("when", []))
+            # Pusta lista odwolan wycina zadanie PRZED templatowaniem argv,
+            # wiec no-op nigdy nie dotyka `.path` niezdefiniowanego workspace.
+            self.assertIn("default([])", str(task.get("loop", "")))
+            self.assertIn("length) > 0", when)
+            # Brak workspace przy NIEPUSTEJ liscie to blad: play ma paść na
+            # niezdefiniowanej zmiennej, a nie po cichu zostawic zywe konta
+            # serwisowe z waznym sekretem do bucketa kopii.
+            self.assertNotIn("galera_backup_minio_workspace is defined", when)
+            self.assertNotIn("galera_backup_minio_workspace.path is defined", when)
+
 
     def test_revoke_delegated_gated_and_silent(self):
         task = find_task(main_tasks(), FRAGMENT_REVOKE)
@@ -284,16 +357,46 @@ class RevokeRunsAfterSecretsDeploy(unittest.TestCase):
         self.assertTrue(task.get("no_log"))
         self.assertEqual(task.get("changed_when"), True)
 
-    def test_provision_dir_removed_after_revoke(self):
+    def test_revoke_workspace_removed_after_revoke(self):
         tasks = main_tasks()
         i_revoke = find_index(tasks, FRAGMENT_REVOKE)
         i_removal = find_index(tasks, FRAGMENT_DIR_REMOVAL)
-        self.assertIsNotNone(i_removal, "brak sprzatania katalogu po revoke")
+        self.assertIsNotNone(i_removal, "brak sprzatania workspace po revoke")
         self.assertIsNotNone(i_revoke)
         self.assertLess(i_revoke, i_removal)
         removal = tasks[i_removal]
         self.assertEqual(removal["ansible.builtin.file"]["state"], "absent")
+        self.assertEqual(
+            removal["ansible.builtin.file"]["path"],
+            DYNAMIC_WORKSPACE,
+        )
         self.assertIn("groups['infra']", str(removal.get("delegate_to", "")))
+        self.assertTrue(removal.get("become"))
+        # Jedyne zadanie kasujace root.env ze wspoldzielonego hosta infra nie
+        # moze zalezec od recznej kopii warunku include'u tworzacego workspace:
+        # dryf miedzy tymi listami zostawia poswiadczenia root na infra.
+        when = " ".join(removal.get("when", []))
+        self.assertNotIn("access_keys_to_revoke", when)
+        self.assertNotIn("prune_keys_to_revoke", when)
+
+    def test_provision_include_pins_infra_delegation(self):
+        include = find_task(main_tasks(), FRAGMENT_INCLUDE)
+        self.assertIsNotNone(include, "brak include provision_minio.yml")
+        spec = include["ansible.builtin.include_tasks"]
+        # Zadania provisioningu — w tym cleanup root.env — nie maja wlasnego
+        # delegate_to i biegna na infra WYLACZNIE dzieki temu apply.
+        self.assertIn(
+            "groups['infra'][0]", str(spec.get("apply", {}).get("delegate_to", ""))
+        )
+
+    def test_every_workspace_cleanup_runs_as_root(self):
+        cleanups = [
+            find_task(provision_tasks(), FRAGMENT_TMP_CLEANUP),
+            find_task(main_tasks(), FRAGMENT_DIR_REMOVAL),
+        ]
+        for cleanup in cleanups:
+            self.assertIsNotNone(cleanup)
+            self.assertTrue(cleanup.get("become"), cleanup.get("name"))
 
 
 class ReusePathUntouched(unittest.TestCase):

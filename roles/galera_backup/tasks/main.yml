@@ -286,13 +286,24 @@
   no_log: true
 
 # Rotacja poswiadczen MinIO jest atomowa wzgledem klastra: provision_minio.yml
-# utworzyl i SONDOWAL nowe poswiadczenie, zadanie powyzej utrwalilo je w
-# secrets.env — dopiero teraz wolno odwolac stare konta. Porazka create,
-# sondy albo zapisu sekretow zatrzymuje play tutaj, a klucz z aktualnego
-# secrets.env nadal dziala. Kolejnosc tych zadan pilnuje
-# tests/unit/test_minio_rotation_atomic.py.
+# utworzyl i SONDOWAL nowe poswiadczenie, opublikowal fakty i usunal swoj
+# prywatny workspace. Zadanie powyzej utrwalilo klucze w secrets.env; jezeli
+# stare konta czekaja na odwolanie, blok nizej tworzy swieze root.env i dopiero
+# wtedy je usuwa. Porazka create, sondy albo zapisu sekretow zatrzymuje play,
+# a klucz z aktualnego secrets.env nadal dziala.
 - name: Dopnij rotacje MinIO po wdrozeniu sekretow
   block:
+    - name: Przygotuj swieze root-only srodowisko klienta MinIO do revoke
+      ansible.builtin.include_tasks:
+        file: minio_root_env.yml
+      when:
+        - galera_backup_managed_minio
+        - inventory_hostname == backup.scheduler.host
+        - >-
+          (galera_backup_access_keys_to_revoke | default([]) | length) > 0
+          or
+          (galera_backup_prune_keys_to_revoke | default([]) | length) > 0
+
     - name: Revoke stale MinIO service accounts owned by this cluster
       ansible.builtin.command:
         argv:
@@ -302,7 +313,7 @@
           - --network
           - container:minio
           - --env-file
-          - /run/galera-backup-minio-tmp/root.env
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
           - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
           - admin
           - accesskey
@@ -317,6 +328,7 @@
       when:
         - galera_backup_managed_minio
         - inventory_hostname == backup.scheduler.host
+        - (galera_backup_access_keys_to_revoke | default([]) | length) > 0
 
     - name: Revoke stale MinIO retention accounts owned by this cluster
       # Osobna petla, bo osobne konto: aktywny klucz retencji jest juz w
@@ -330,7 +342,7 @@
           - --network
           - container:minio
           - --env-file
-          - /run/galera-backup-minio-tmp/root.env
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
           - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
           - admin
           - accesskey
@@ -344,18 +356,22 @@
       when:
         - galera_backup_managed_minio
         - inventory_hostname == backup.scheduler.host
+        - (galera_backup_prune_keys_to_revoke | default([]) | length) > 0
   always:
     - name: Usun katalog provisioningu MinIO po revoke
-      # root.env celowo przezyl do tego miejsca (patrz always w
-      # provision_minio.yml) — teraz katalog tymczasowy znika ostatecznie,
-      # takze gdy samo revoke zwroci blad.
+      # To workspace utworzony bezposrednio przed revoke, nie katalog z fazy
+      # provisioningu. Znika takze wtedy, gdy samo odwolanie zwroci blad.
+      # Bramka to WYLACZNIE istnienie workspace: `state: absent` na juz
+      # usunietej sciezce jest darmowym no-opem, a kopia warunku include'u
+      # mogla przy dryfie zostawic root.env na wspoldzielonym hoscie infra.
       ansible.builtin.file:
-        path: /run/galera-backup-minio-tmp
+        path: "{{ galera_backup_minio_workspace.path }}"
         state: absent
+      become: true
       delegate_to: "{{ groups['infra'][0] }}"
       when:
-        - galera_backup_managed_minio
-        - inventory_hostname == backup.scheduler.host
+        - galera_backup_minio_workspace is defined
+        - galera_backup_minio_workspace.path is defined
 
 - name: Verify durable cron log sink is installed
   ansible.builtin.stat:

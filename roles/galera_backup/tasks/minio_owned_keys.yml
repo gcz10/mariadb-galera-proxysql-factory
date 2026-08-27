@@ -5,7 +5,7 @@
 # (deregister_minio.yml): JEDEN listing + jedna tura `accesskey info` na caly
 # play, niezaleznie od tego, ile filtrów nazw potrzebuje wywolujacy.
 #
-# Wymaga: root.env z minio_root_env.yml (katalog /run/galera-backup-minio-tmp).
+# Wymaga: root.env w `galera_backup_minio_workspace.path` z minio_root_env.yml.
 # Produkuje: galera_backup_owned_keys_jsons — liste surowych JSON-ow
 # `accesskey info` po wszystkich kontach; filtry roli
 # (minio_service_account_keys, minio_access_keys_named) czytaja ja wyzej.
@@ -19,7 +19,7 @@
       - --network
       - container:minio
       - --env-file
-      - /run/galera-backup-minio-tmp/root.env
+      - "{{ galera_backup_minio_workspace.path }}/root.env"
       - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
       - admin
       - accesskey
@@ -50,7 +50,7 @@
       - --network
       - container:minio
       - --env-file
-      - /run/galera-backup-minio-tmp/root.env
+      - "{{ galera_backup_minio_workspace.path }}/root.env"
       - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
       - admin
       - accesskey

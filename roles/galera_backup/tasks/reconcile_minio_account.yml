@@ -5,14 +5,15 @@
 # provision_minio.yml):
 #   name        — pelna nazwa konta (zapis: surowa; retencja: przez
 #                 minio_service_account_name, limit 32 znaki MinIO);
-#   policy      — sciezka polityki w /run/galera-backup-minio-tmp;
+#   policy      — sciezka polityki w prywatnym workspace wywolania;
 #   tmp         — przyrostek plikow env ("" vs "-prune");
 #   existing_*  — poswiadczenia z secrets.env ("" przy pierwszym przebiegu);
 #   access_fact / secret_fact / revoke_fact — nazwy faktow wyjsciowych
 #                 (czytane dalej przez main.yml i secrets.env.j2).
 #
-# Wymaga (wykonane wczesniej w tym samym playu): minio_root_env.yml (root.env)
-# i minio_owned_keys.yml (galera_backup_owned_keys_jsons).
+# Wymaga (wykonane wczesniej w tym samym playu): minio_root_env.yml
+# (galera_backup_minio_workspace + root.env) i minio_owned_keys.yml
+# (galera_backup_owned_keys_jsons).
 #
 # BEZPIECZENSTWO ROTACJI — identyczne dla obu kont:
 #   * kandydat z secrets.env jest sondowany TOLERANCYJNIE (failed_when: false):
@@ -51,7 +52,7 @@
 # od kodowania.
 - name: Render candidate scoped MinIO credentials
   ansible.builtin.copy:
-    dest: "/run/galera-backup-minio-tmp/scoped{{ mc_account.tmp }}.env"
+    dest: "{{ galera_backup_minio_workspace.path }}/scoped{{ mc_account.tmp }}.env"
     owner: root
     group: root
     mode: "0600"
@@ -70,7 +71,7 @@
       - --network
       - container:minio
       - --env-file
-      - "/run/galera-backup-minio-tmp/scoped{{ mc_account.tmp }}.env"
+      - "{{ galera_backup_minio_workspace.path }}/scoped{{ mc_account.tmp }}.env"
       - --entrypoint
       - sh
       - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
@@ -103,7 +104,7 @@
       - --network
       - container:minio
       - --env-file
-      - /run/galera-backup-minio-tmp/root.env
+      - "{{ galera_backup_minio_workspace.path }}/root.env"
       - -v
       - "{{ mc_account.policy }}:/tmp/policy.json:ro,Z"
       - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
@@ -130,7 +131,7 @@
       - --network
       - container:minio
       - --env-file
-      - /run/galera-backup-minio-tmp/root.env
+      - "{{ galera_backup_minio_workspace.path }}/root.env"
       - -v
       - "{{ mc_account.policy }}:/tmp/policy.json:ro,Z"
       - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
@@ -165,7 +166,7 @@
 
 - name: Renderuj nowe poswiadczenia MinIO
   ansible.builtin.copy:
-    dest: "/run/galera-backup-minio-tmp/scoped{{ mc_account.tmp }}-new.env"
+    dest: "{{ galera_backup_minio_workspace.path }}/scoped{{ mc_account.tmp }}-new.env"
     owner: root
     group: root
     mode: "0600"
@@ -189,7 +190,7 @@
       - --network
       - container:minio
       - --env-file
-      - "/run/galera-backup-minio-tmp/scoped{{ mc_account.tmp }}-new.env"
+      - "{{ galera_backup_minio_workspace.path }}/scoped{{ mc_account.tmp }}-new.env"
       - --entrypoint
       - sh
       - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"

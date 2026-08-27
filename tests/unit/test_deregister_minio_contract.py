@@ -16,6 +16,11 @@ PLAYBOOK = REPO / "playbooks" / "cluster_deregister.yml"
 ROLE_TASKS = REPO / "roles" / "galera_backup" / "tasks" / "deregister_minio.yml"
 ROOT_ENV = REPO / "roles" / "galera_backup" / "tasks" / "minio_root_env.yml"
 OWNED_KEYS = REPO / "roles" / "galera_backup" / "tasks" / "minio_owned_keys.yml"
+STATIC_WORKSPACE = "/run/galera-backup-minio-tmp"
+DYNAMIC_WORKSPACE = "{{ galera_backup_minio_workspace.path }}"
+DYNAMIC_ROOT_ENV = f"{DYNAMIC_WORKSPACE}/root.env"
+
+
 
 
 def load_yaml(path):
@@ -158,6 +163,18 @@ class DeregisterMinioRoleTests(unittest.TestCase):
             guard.get("no_log", False),
             "no_log ukrywa fail_msg, choc assert pokazuje tylko nazwy zmiennych",
         )
+        allocation = find_task(root_tasks, "katalog tymczasowy klienta MinIO")
+        self.assertIsNotNone(allocation, "brak unikalnego workspace MinIO")
+        tempfile = allocation.get("ansible.builtin.tempfile", {})
+        self.assertEqual(tempfile.get("state"), "directory")
+        self.assertEqual(tempfile.get("path"), "/run")
+        self.assertEqual(tempfile.get("prefix"), "galera-backup-minio-")
+        self.assertEqual(
+            allocation.get("register"), "galera_backup_minio_workspace"
+        )
+        self.assertTrue(allocation.get("become"))
+        self.assertIn("groups['infra'][0]", str(allocation.get("delegate_to", "")))
+
         env_task = find_task(root_tasks, "Zapisz root-only srodowisko klienta MinIO")
         self.assertIsNotNone(env_task)
         copy = env_task["ansible.builtin.copy"]
@@ -170,6 +187,16 @@ class DeregisterMinioRoleTests(unittest.TestCase):
             if "ansible.builtin.file" in shared_task or "ansible.builtin.copy" in shared_task:
                 self.assertIn("groups['infra'][0]", str(shared_task.get("delegate_to", "")))
                 self.assertTrue(shared_task.get("become"))
+    def test_role_uses_only_invocation_workspace(self):
+        for path in (ROLE_TASKS, ROOT_ENV, OWNED_KEYS):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn(
+                STATIC_WORKSPACE,
+                text,
+                f"{path.relative_to(REPO)} nadal wspoldzieli statyczny workspace",
+            )
+
+
 
     def test_exact_named_service_accounts_are_selected_and_revoked(self):
         select = find_task(self.tasks, "Wybierz konta MinIO tego klastra")
@@ -207,7 +234,7 @@ class DeregisterMinioRoleTests(unittest.TestCase):
             joined = " ".join(str(item) for item in argv)
             self.assertIn("docker run --rm", joined)
             self.assertIn("--network container:minio", joined)
-            self.assertIn("--env-file /run/galera-backup-minio-tmp/root.env", joined)
+            self.assertIn(f"--env-file {DYNAMIC_ROOT_ENV}", joined)
             self.assertIn("{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}", argv)
             self.assertIn("groups['infra'][0]", str(task.get("delegate_to", "")))
             self.assertTrue(task.get("no_log"))
@@ -218,6 +245,10 @@ class DeregisterMinioRoleTests(unittest.TestCase):
         cleanup = find_task(flatten_tasks(blocks[0]["always"]), "Usun tymczasowe poswiadczenia root MinIO")
         self.assertIsNotNone(cleanup)
         self.assertEqual(cleanup["ansible.builtin.file"].get("state"), "absent")
+        self.assertEqual(
+            cleanup["ansible.builtin.file"].get("path"),
+            DYNAMIC_WORKSPACE,
+        )
         self.assertIn("groups['infra'][0]", str(cleanup.get("delegate_to", "")))
 
     def test_bucket_and_backup_objects_are_not_deleted(self):

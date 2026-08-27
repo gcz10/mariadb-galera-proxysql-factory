@@ -1,11 +1,12 @@
 ---
-# minio_root_env.yml — root-only srodowisko klienta `mc` na infra hoscie.
+# minio_root_env.yml — prywatne root-only srodowisko klienta `mc` na infra.
 #
-# Wspolne dla provisioningu (provision_minio.yml) i derejestracji
-# (deregister_minio.yml): asercja poswiadczen root i format root.env MUSZA byc
-# identyczne w obu sciezkach — rojazd oznaczal SignatureDoesNotMatch albo ciche
-# niepowodzenie listingow. Zadanie wymaga MINIO_ROOT_USER/MINIO_ROOT_PASSWORD
-# w srodowisku kontrolera (Makefile guarduje to przed configure).
+# Wspolne dla provisioningu (provision_minio.yml), finalizacji rotacji
+# (main.yml) i derejestracji (deregister_minio.yml): kazde wywolanie dostaje
+# wlasny katalog pod /run. Asercja poswiadczen root i format root.env MUSZA byc
+# identyczne we wszystkich sciezkach — rozjazd oznaczal SignatureDoesNotMatch
+# albo ciche niepowodzenie listingow. Zadanie wymaga
+# MINIO_ROOT_USER/MINIO_ROOT_PASSWORD w srodowisku kontrolera.
 #
 # `mc` czyta userinfo doslownie, wiec znaki / @ : i biale rozjechalby parsowanie
 # URL-a (SignatureDoesNotMatch bez czytelnego komunikatu); percent-encoding NIE
@@ -27,9 +28,28 @@
       moze zostac skonfigurowane ani odebrane.
     quiet: true
 
-- name: Utworz root-only katalog tymczasowy klienta MinIO na infra
+# Katalog jest unikalny na wywolanie, wiec dwa klastry nigdy nie dziela polityk
+# ani root.env. Cena tej izolacji: nie ma juz wspolnej sciezki, ktora kolejny
+# przebieg sprzatnalby po poprzedniku. Kazdy `always` roli usuwa wlasny katalog
+# takze po bledzie; osierocic go moze wylacznie twarde ubicie kontrolera
+# (SIGKILL/Ctrl-C pomijaja `always`), a wtedy zabiera go najblizszy reboot, bo
+# /run to tmpfs. Swiadomie nie ma tu zamiatarki `galera-backup-minio-*`:
+# kasowanie po wieku na wspoldzielonym hoscie grozilo by usunieciem katalogu
+# rownolegle biegnacego klastra, czyli dokladnie tym wyscigiem, ktory ten
+# uklad likwiduje. Sam plik nie poszerza dostepu — kontener minio na tym hoscie
+# i tak trzyma MINIO_ROOT_USER/MINIO_ROOT_PASSWORD w swoim env.
+- name: Utworz unikalny root-only katalog tymczasowy klienta MinIO na infra
+  ansible.builtin.tempfile:
+    state: directory
+    path: /run
+    prefix: galera-backup-minio-
+  register: galera_backup_minio_workspace
+  become: true
+  delegate_to: "{{ groups['infra'][0] }}"
+
+- name: Utwardz uprawnienia katalogu tymczasowego klienta MinIO
   ansible.builtin.file:
-    path: /run/galera-backup-minio-tmp
+    path: "{{ galera_backup_minio_workspace.path }}"
     state: directory
     owner: root
     group: root
@@ -42,7 +62,7 @@
   # pilnuje asercja wyzej). localhost:9000, bo kontener mc dzieli sie siecia
   # z kontenerem minio (`--network container:minio`).
   ansible.builtin.copy:
-    dest: /run/galera-backup-minio-tmp/root.env
+    dest: "{{ galera_backup_minio_workspace.path }}/root.env"
     owner: root
     group: root
     mode: "0600"

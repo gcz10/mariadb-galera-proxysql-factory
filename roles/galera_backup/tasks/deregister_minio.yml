@@ -20,7 +20,7 @@
     name: lock
 
 - name: Odwolaj konto serwisowe MinIO zalozone przez ten klaster
-  # Jeden block/always: poswiadczenia root zapisane w /run na infra MUSZA znikac
+  # Jeden block/always: prywatny workspace utworzony na infra MUSI znikac
   # rowniez wtedy, gdy listing, sonda tozsamosci albo samo revoke zawioda.
   block:
     - name: Przygotuj root-only srodowisko klienta MinIO
@@ -73,7 +73,7 @@
           - --network
           - container:minio
           - --env-file
-          - /run/galera-backup-minio-tmp/root.env
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
           - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
           - admin
           - accesskey
@@ -97,10 +97,12 @@
 
   always:
     - name: Usun tymczasowe poswiadczenia root MinIO
-      # Takze po porazce: root.env (0600, root-only) nie moze przetrwac
-      # w /run na infra hoscie.
+      # Takze po porazce: prywatny root.env nie moze przetrwac w /run.
       ansible.builtin.file:
-        path: /run/galera-backup-minio-tmp
+        path: "{{ galera_backup_minio_workspace.path }}"
         state: absent
       become: true
       delegate_to: "{{ groups['infra'][0] }}"
+      when:
+        - galera_backup_minio_workspace is defined
+        - galera_backup_minio_workspace.path is defined
