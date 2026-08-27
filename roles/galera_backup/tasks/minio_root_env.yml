@@ -1,0 +1,53 @@
+---
+# minio_root_env.yml — root-only srodowisko klienta `mc` na infra hoscie.
+#
+# Wspolne dla provisioningu (provision_minio.yml) i derejestracji
+# (deregister_minio.yml): asercja poswiadczen root i format root.env MUSZA byc
+# identyczne w obu sciezkach — rojazd oznaczal SignatureDoesNotMatch albo ciche
+# niepowodzenie listingow. Zadanie wymaga MINIO_ROOT_USER/MINIO_ROOT_PASSWORD
+# w srodowisku kontrolera (Makefile guarduje to przed configure).
+#
+# `mc` czyta userinfo doslownie, wiec znaki / @ : i biale rozjechalby parsowanie
+# URL-a (SignatureDoesNotMatch bez czytelnego komunikatu); percent-encoding NIE
+# jest rozwiazaniem, bo mc go nie dekoduje. Klasa MUSI byc skladnia Pythona
+# (`is search` wola re.search): POSIX-owe [:space:] nie istnieje w re i dawaloby
+# klase {/@:[space} + literal ']' — asercje, ktora nie lapie ANI JEDNEGO znaku.
+- name: Wymagaj poswiadczen root MinIO
+  # Celowo BEZ `no_log`: ukrywalby fail_msg, a asercja i tak wypisuje wylacznie
+  # nazwy zmiennych srodowiskowych i statyczny komunikat, nigdy ich wartosci.
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.env', 'MINIO_ROOT_USER') | length > 0
+      - lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') | length > 0
+      - lookup('ansible.builtin.env', 'MINIO_ROOT_USER') is not search('[/@:\s]')
+      - lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') is not search('[/@:\s]')
+    fail_msg: >-
+      MINIO_ROOT_USER/MINIO_ROOT_PASSWORD sa wymagane na kontrolerze
+      (niepuste, bez znakow / @ : i bialych) — bez nich zarzadane MinIO nie
+      moze zostac skonfigurowane ani odebrane.
+    quiet: true
+
+- name: Utworz root-only katalog tymczasowy klienta MinIO na infra
+  ansible.builtin.file:
+    path: /run/galera-backup-minio-tmp
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  become: true
+  delegate_to: "{{ groups['infra'][0] }}"
+
+- name: Zapisz root-only srodowisko klienta MinIO
+  # BEZ `urlencode`: mc nie dekoduje percent-encoding (bezpieczenstwo znakow
+  # pilnuje asercja wyzej). localhost:9000, bo kontener mc dzieli sie siecia
+  # z kontenerem minio (`--network container:minio`).
+  ansible.builtin.copy:
+    dest: /run/galera-backup-minio-tmp/root.env
+    owner: root
+    group: root
+    mode: "0600"
+    content: >-
+      MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}:{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}@localhost:9000
+  become: true
+  delegate_to: "{{ groups['infra'][0] }}"
+  no_log: true

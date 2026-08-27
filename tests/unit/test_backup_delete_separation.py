@@ -339,22 +339,31 @@ class TestMinioProvisioning(unittest.TestCase):
         ]
 
     def test_retention_account_is_created_under_its_own_name(self):
-        names = {
-            argv[argv.index("--name") + 1]
-            for argv in self._argv_tasks(self.provision)
-            if "--name" in argv
-        }
-        # Nazwa retencyjna MUSI pochodzi od nazwy klastra i MUSI przechodzic
-        # przez `minio_service_account_name`: MinIO odrzuca nazwy > 32 znakow,
-        # a filtr gwarantuje te sama, deterministyczna nazwe przy derejestracji
-        # (selekcja przez minio_access_keys_named nizej). Surowe
-        # `galera-backup-prune-{{ cluster.name }}` rozjonaloby sie od najemcy
-        # o dluzszej nazwie — zmierzone 2026-08-27.
+        # Nazwy kont przychodza teraz ze slownika `mc_account` dolaczanego do
+        # reconcile_minio_account.yml — provision jest orkiestratorem, nie
+        # wlascicielem argv. Nazwa retencyjna MUSI przechodzic przez
+        # `minio_service_account_name` (MinIO odrzuca nazwy > 32 znakow;
+        # zmierzone 2026-08-27), a konto zapisu zostaje przy surowej nazwie.
+        accounts = [
+            t.get("vars", {}).get("mc_account", {})
+            for t in self.provision
+            if isinstance(t.get("ansible.builtin.include_tasks"), dict)
+            and t["ansible.builtin.include_tasks"].get("file")
+            == "reconcile_minio_account.yml"
+        ]
+        self.assertEqual(len(accounts), 2, "reconcile ma biec dokladnie dwa razy")
+        names = {str(a.get("name", "")) for a in accounts}
+        self.assertIn("galera-backup-{{ cluster.name }}", names)
         self.assertTrue(
             any("minio_service_account_name" in name for name in names),
             f"konto retencji nie uzywa ograniczonej nazwy; znalezione: {names}",
         )
-        self.assertIn("galera-backup-{{ cluster.name }}", names)
+        # Filtr nazw musi byc ten sam przy tworzeniu i przy derejestracji —
+        # rozjazd oznacza niedobrane konta.
+        deregister_text = (ROLE / "tasks" / "deregister_minio.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("minio_service_account_name", deregister_text)
 
     def test_retention_account_gets_the_retention_policy(self):
         policies = set()

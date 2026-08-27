@@ -1,0 +1,216 @@
+---
+# reconcile_minio_account.yml — pojednanie JEDNEGO konta serwisowego MinIO.
+#
+# Include parametryzowany slownikiem `mc_account` (wywolania w
+# provision_minio.yml):
+#   name        — pelna nazwa konta (zapis: surowa; retencja: przez
+#                 minio_service_account_name, limit 32 znaki MinIO);
+#   policy      — sciezka polityki w /run/galera-backup-minio-tmp;
+#   tmp         — przyrostek plikow env ("" vs "-prune");
+#   existing_*  — poswiadczenia z secrets.env ("" przy pierwszym przebiegu);
+#   access_fact / secret_fact / revoke_fact — nazwy faktow wyjsciowych
+#                 (czytane dalej przez main.yml i secrets.env.j2).
+#
+# Wymaga (wykonane wczesniej w tym samym playu): minio_root_env.yml (root.env)
+# i minio_owned_keys.yml (galera_backup_owned_keys_jsons).
+#
+# BEZPIECZENSTWO ROTACJI — identyczne dla obu kont:
+#   * kandydat z secrets.env jest sondowany TOLERANCYJNIE (failed_when: false):
+#     martwy kandydat oznacza create nowego klucza, nie porazke playu;
+#   * swiezy create jest sondowany SUROWO — niepotwierdzone poswiadczenie nie
+#     moze dopuscic do odwolania starego konta;
+#   * lista odwolan powstaje dopiero po create + potwierdzonej sondzie; samo
+#     odwolanie zyje w main.yml PO utrwaleniu secrets.env (rotacja atomowa
+#     wzgledem klastra; kolejnosc pilnuje tests/unit/test_minio_rotation_atomic.py).
+# Konto zyje pod WLASNA nazwa, wiec selekcja drugiego konta (dokladne
+# dopasowanie nazwy) nigdy go nie widzi i nie kasuje.
+
+- name: Select all service accounts owned by this cluster
+  ansible.builtin.set_fact:
+    galera_backup_acct_owned_keys: >-
+      {{ galera_backup_owned_keys_jsons | minio_access_keys_named(mc_account.name) }}
+  no_log: true
+
+- name: Select candidate existing scoped credential
+  ansible.builtin.set_fact:
+    galera_backup_acct_candidate: >-
+      {{
+        (mc_account.existing_access_key | length) > 0
+        and (mc_account.existing_secret_key | length) > 0
+        and mc_account.existing_access_key in galera_backup_acct_owned_keys
+      }}
+  no_log: true
+
+# Poswiadczenie NIE jedzie w URL-u. `mc` bierze userinfo DOSLOWNIE - nie
+# dekoduje percent-encoding (potwierdzone empirycznie i w dokumentacji MinIO,
+# ktorej kanoniczny przyklad MC_HOST_ ma sekret z `+` surowy). Wczesniejszy
+# `| urlencode` zamienial `+` na `%2B`, przez co sonda dostawala
+# SignatureDoesNotMatch, `reuse` bylo zawsze falszem i KAZDY `configure`
+# kasowal poswiadczenie MinIO oraz tworzyl nowe. Sekrety MinIO uzywaja
+# alfabetu base64, wiec moga tez zawierac `/` — w userinfo nielegalny niezaleznie
+# od kodowania.
+- name: Render candidate scoped MinIO credentials
+  ansible.builtin.copy:
+    dest: "/run/galera-backup-minio-tmp/scoped{{ mc_account.tmp }}.env"
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      GALERA_MC_AK={{ mc_account.existing_access_key }}
+      GALERA_MC_SK={{ mc_account.existing_secret_key }}
+  when: galera_backup_acct_candidate
+  no_log: true
+
+- name: Verify candidate scoped credential can access its bucket
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - container:minio
+      - --env-file
+      - "/run/galera-backup-minio-tmp/scoped{{ mc_account.tmp }}.env"
+      - --entrypoint
+      - sh
+      - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+      - -c
+      # Wartosci rozwija powloka W KONTENERZE, wiec sekret nie trafia do argv
+      # procesu na hoscie (widocznego w `ps`).
+      - >-
+        mc alias set scoped http://localhost:9000 "$GALERA_MC_AK" "$GALERA_MC_SK" >/dev/null 2>&1 &&
+        exec mc ls "scoped/{{ backup.s3.bucket }}" --json
+  register: galera_backup_acct_probe
+  changed_when: false
+  failed_when: false
+  when: galera_backup_acct_candidate
+  no_log: true
+
+- name: Decide whether to reuse the existing scoped credential
+  ansible.builtin.set_fact:
+    galera_backup_acct_reuse: >-
+      {{
+        (galera_backup_acct_candidate | bool)
+        and (galera_backup_acct_probe.rc | default(1) | int) == 0
+      }}
+
+- name: Converge policy on the existing scoped credential
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - container:minio
+      - --env-file
+      - /run/galera-backup-minio-tmp/root.env
+      - -v
+      - "{{ mc_account.policy }}:/tmp/policy.json:ro,Z"
+      - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+      - admin
+      - accesskey
+      - edit
+      - myminio
+      - "{{ mc_account.existing_access_key }}"
+      - --policy
+      - /tmp/policy.json
+      - --name
+      - "{{ mc_account.name }}"
+  when: galera_backup_acct_reuse
+  # `mc accesskey edit` zapisuje polityke — mutacja, nawet gdy wynik identyczny.
+  changed_when: true
+  no_log: true
+
+- name: Create new scoped access key pair
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - container:minio
+      - --env-file
+      - /run/galera-backup-minio-tmp/root.env
+      - -v
+      - "{{ mc_account.policy }}:/tmp/policy.json:ro,Z"
+      - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+      - admin
+      - accesskey
+      - create
+      - myminio/
+      - --json
+      - --name
+      - "{{ mc_account.name }}"
+      - --policy
+      - /tmp/policy.json
+  register: galera_backup_acct_create
+  when: not galera_backup_acct_reuse
+  # Tworzy nowa pare kluczy — mutacja stanu MinIO.
+  changed_when: true
+  no_log: true
+
+- name: Reuse existing scoped credentials
+  ansible.builtin.set_fact:
+    "{{ mc_account.access_fact }}": "{{ mc_account.existing_access_key }}"
+    "{{ mc_account.secret_fact }}": "{{ mc_account.existing_secret_key }}"
+  when: galera_backup_acct_reuse
+  no_log: true
+
+- name: Extract generated scoped credentials
+  ansible.builtin.set_fact:
+    "{{ mc_account.access_fact }}": "{{ (galera_backup_acct_create.stdout | from_json).accessKey }}"
+    "{{ mc_account.secret_fact }}": "{{ (galera_backup_acct_create.stdout | from_json).secretKey }}"
+  when: not galera_backup_acct_reuse
+  no_log: true
+
+- name: Renderuj nowe poswiadczenia MinIO
+  ansible.builtin.copy:
+    dest: "/run/galera-backup-minio-tmp/scoped{{ mc_account.tmp }}-new.env"
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      GALERA_MC_AK={{ lookup('vars', mc_account.access_fact) }}
+      GALERA_MC_SK={{ lookup('vars', mc_account.secret_fact) }}
+  when: not galera_backup_acct_reuse
+  no_log: true
+
+- name: Potwierdz dostep nowego klucza MinIO do bucketa
+  # "Potwierdzony create": konto powstalo, ale dopiero ta sonda dowodzi, ze
+  # klucz autentykuje i polityka naprawde dopuszcza bucket. Sonda KONTRASTUJE
+  # z sonda kandydata wyzej: tam failed_when:false jest celowe (kandydat moze
+  # byc martwy i wtedy tworzymy nowy klucz), tutaj porazka MUSI wylaczyc
+  # play — brak failed_when jest cecha, nie przeoczeniem.
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - container:minio
+      - --env-file
+      - "/run/galera-backup-minio-tmp/scoped{{ mc_account.tmp }}-new.env"
+      - --entrypoint
+      - sh
+      - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+      - -c
+      - >-
+        mc alias set scoped http://localhost:9000 "$GALERA_MC_AK" "$GALERA_MC_SK" >/dev/null 2>&1 &&
+        exec mc ls "scoped/{{ backup.s3.bucket }}" --json
+  when: not galera_backup_acct_reuse
+  changed_when: false
+  no_log: true
+
+- name: Select stale MinIO service accounts for removal
+  # AKTYWNY klucz (reused albo swiezo utworzony i sondowany wyzej) nigdy nie
+  # trafia na liste. Lista powstaje dopiero po potwierdzonym create; samo
+  # odwolanie zyje w main.yml PO zapisaniu nowego secrets.env — dopoki
+  # ktorekolwiek z tych krokow nie doszlo do skutku, stare konto zyje.
+  ansible.builtin.set_fact:
+    "{{ mc_account.revoke_fact }}": >-
+      {{
+        galera_backup_acct_owned_keys
+        | reject('equalto', lookup('vars', mc_account.access_fact))
+        | list
+      }}
+  no_log: true

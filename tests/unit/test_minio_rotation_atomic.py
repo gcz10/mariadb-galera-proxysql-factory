@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
 """Rotacja poswiadczen MinIO musi byc atomowa z punktu widzenia klastra.
 
-POWSTAL PO BLISKAJACEJ AWARII (n14/n15, 2026-08-19): dotychczasowy porzadek
-zadan w provision_minio.yml biegł "Revoke stale service accounts" PRZED
-"Create new scoped access key pair", a sciezka bez reuse odwolywala WSZYSTKIE
-istniejace konta. Gdy create padal — albo gdy pozniejszy zapis secrets.env
-padal — stare konto juz nie istnialo, a schedulery i hosty restore trzymaly w
-secrets.env wlasnie odwolany klucz. Cronowy backup i restore drill dostawaly
-SignatureDoesNotMatch az do kolejnego udanego configure: kopia byla
-niedostepona przy zywych, zdrowych komponentach.
+POWSTAL PO REALNEJ AWARII (2026-08-27, kasiopeia v8): probe `configure`
+skonczone nie powodzeniem ukrylo sie za `no_log`, a przyczyne znajdowano
+dopiero po pelnym logu — przeplyw zycia konta byl WTEKLE zduplikowany miedzy
+kontem zapisu a kontem retencji i kazda poprawka wymagalas synchronizacji
+recznej.
 
-Kontrakt atomowosci rotacji pilnowany przez ten plik:
-  1. provision_minio.yml NIGDY nie odwoluje kont serwisowych — tylko tworzy,
-     konwerguje polityke i sonduje. Samo revoke zyje w main.yml.
-  2. Revoke biegnie dopiero PO "Deploy cluster secrets.env": porazka create
-     albo zapisu sekretow zatrzymuje play ZANIM stare konto zniknie.
-  3. Liste odwolan wylicza sie wzgledem AKTYWNEGO klucza
-     (galera_backup_s3_access_key) — wspolnie dla reuse i swiezego klucza,
-     nigdy "wszystko, co istnieje".
-  4. Swiezo utworzone poswiadczenie jest sondowane (mc alias set + ls) zanim
-     jakiekolwiek konto zostanie odwolane — "potwierdzony create".
-  5. Sciezka reuse pozostaje nietknieta: sonda kandydata nadal tlumi blad
-     (failed_when: false), konwergencja polityki i reuse dzialaja po staremu.
+Dzis przeplyw istnieje w jednym egzemplarzu (reconcile_minio_account.yml),
+a provision_minio.yml jedzie go dwa razy ze slownikiem `mc_account`. Ten test
+strzeze niewzruszalnych wlasciwosci tego przeplywu:
+
+  1. provisioning NIGDY nie odwoluje kont serwisowych — tylko tworzy,
+     konwerguje polityke i ustala listy odwolan;
+  2. swiezy create jest POTWIERDZANY sonda, zanim powstanie lista odwolan;
+  3. sonda kandydata (starego klucza z secrets.env) toleruje porazke,
+     sonda nowego klucza MUSI zatrzymac play;
+  4. katalog z poswiadczeniami root zyje do momentu odwolan w main.yml;
+  5. w main.yml revoke biegnie dopiero PO zapisaniu secrets.env.
 """
 import unittest
 from pathlib import Path
@@ -30,6 +26,9 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 PROVISION = REPO / "roles" / "galera_backup" / "tasks" / "provision_minio.yml"
+RECONCILE = REPO / "roles" / "galera_backup" / "tasks" / "reconcile_minio_account.yml"
+OWNED_KEYS = REPO / "roles" / "galera_backup" / "tasks" / "minio_owned_keys.yml"
+ROOT_ENV = REPO / "roles" / "galera_backup" / "tasks" / "minio_root_env.yml"
 ROLE_MAIN = REPO / "roles" / "galera_backup" / "tasks" / "main.yml"
 
 FRAGMENT_INCLUDE = "Provision or converge scoped MinIO credentials"
@@ -45,6 +44,7 @@ FRAGMENT_REUSE_FACT = "Reuse existing scoped credentials"
 FRAGMENT_TMP_CLEANUP = "Remove root credentials"
 FRAGMENT_DIR_REMOVAL = "Usun katalog provisioningu MinIO"
 
+
 def load_tasks(path):
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -55,15 +55,18 @@ def flatten_tasks(tasks):
     for task in tasks or []:
         if not isinstance(task, dict):
             continue
+        flat.append(task)
         for section in ("block", "rescue", "always"):
             flat.extend(flatten_tasks(task.get(section)))
-        if "block" not in task:
-            flat.append(task)
     return flat
 
 
 def provision_tasks():
     return flatten_tasks(load_tasks(PROVISION))
+
+
+def reconcile_tasks():
+    return flatten_tasks(load_tasks(RECONCILE))
 
 
 def main_tasks():
@@ -72,7 +75,7 @@ def main_tasks():
 
 def find_index(tasks, fragment):
     for index, task in enumerate(tasks):
-        if fragment in task.get("name", ""):
+        if fragment in str(task.get("name", "")):
             return index
     return None
 
@@ -92,42 +95,110 @@ def collect_argv(node):
             else:
                 found.extend(collect_argv(value))
     elif isinstance(node, list):
-        for item in node:
-            found.extend(collect_argv(item))
+        for value in node:
+            found.extend(collect_argv(value))
     return found
 
 
-class ProvisionNeverRevokes(unittest.TestCase):
-    """Plik provisioningu nie moze usuwac kont — revoke zyje dopiero w main.yml."""
+def all_role_command_documents():
+    return [load_tasks(path) for path in (PROVISION, RECONCILE, OWNED_KEYS, ROOT_ENV)]
 
-    def test_no_accesskey_remove_in_provision(self):
-        argvs = collect_argv(load_tasks(PROVISION))
-        offenders = [argv for argv in argvs if "remove" in argv]
+
+def reconcile_includes():
+    return [
+        task
+        for task in provision_tasks()
+        if isinstance(task.get("ansible.builtin.include_tasks"), dict)
+        and task["ansible.builtin.include_tasks"].get("file")
+        == "reconcile_minio_account.yml"
+    ]
+
+
+class ProvisionNeverRevokes(unittest.TestCase):
+    """Zaden plik provisioningu nie usuwa kont — revoke zyje dopiero w main.yml."""
+
+    def test_no_accesskey_remove_anywhere_in_provisioning(self):
+        offenders = [
+            argv
+            for document in all_role_command_documents()
+            for argv in collect_argv(document)
+            if "remove" in argv
+        ]
         self.assertEqual(
             offenders,
             [],
-            "provision_minio.yml odwoluje konta serwisowe "
+            "pliki provisioningu odwoluja konta serwisowe "
             f"(argv zawiera 'remove'): {offenders}",
         )
 
     def test_selection_rejects_active_key_not_reuse_branch(self):
-        task = find_task(provision_tasks(), FRAGMENT_SELECT)
+        task = find_task(reconcile_tasks(), FRAGMENT_SELECT)
         self.assertIsNotNone(task, "brak zadania wyboru kont do odwolania")
-        expr = str(
-            task["ansible.builtin.set_fact"]["galera_backup_access_keys_to_revoke"]
-        )
+        facts = task["ansible.builtin.set_fact"]
+        self.assertIn("{{ mc_account.revoke_fact }}", facts)
+        expr = str(facts["{{ mc_account.revoke_fact }}"])
         # Aktywny klucz (reused albo swiezo utworzony) nigdy nie jest na liscie.
-        self.assertIn("reject('equalto', galera_backup_s3_access_key)", expr)
+        self.assertIn("reject('equalto', lookup('vars', mc_account.access_fact))", expr)
         # Jednolity wzorzec — rozgalazienie "przy reuse odwolaj reszte, bez
         # reuse odwolaj wszystko" bylo wlasnie destrukcyjnym blisskiem.
-        self.assertNotIn("galera_backup_reuse_existing_s3_key", expr)
+        self.assertNotIn("galera_backup_acct_reuse", expr)
+
+
+class TwoAccountsOneFlow(unittest.TestCase):
+    """Dwa konta, jeden przeplyw: provision wiozi reconcile dokladnie dwa razy."""
+
+    def test_provision_includes_reconcile_exactly_twice(self):
+        includes = reconcile_includes()
+        self.assertEqual(len(includes), 2, "reconcile ma miec dokladnie dwa wywolania")
+
+    def test_write_account_uses_raw_name_and_write_facts(self):
+        account = reconcile_includes()[0].get("vars", {}).get("mc_account", {})
+        self.assertEqual(account.get("name"), "galera-backup-{{ cluster.name }}")
+        self.assertEqual(account.get("tmp"), "")
+        self.assertEqual(account.get("policy"), "/run/galera-backup-minio-tmp/policy.json")
+        self.assertEqual(account.get("access_fact"), "galera_backup_s3_access_key")
+        self.assertEqual(account.get("secret_fact"), "galera_backup_s3_secret_key")
+        self.assertEqual(
+            account.get("revoke_fact"), "galera_backup_access_keys_to_revoke"
+        )
+
+    def test_retention_account_is_bounded_and_separate(self):
+        account = reconcile_includes()[1].get("vars", {}).get("mc_account", {})
+        name = str(account.get("name", ""))
+        self.assertIn("galera-backup-prune-", name)
+        self.assertIn("minio_service_account_name", name)
+        self.assertEqual(account.get("tmp"), "-prune")
+        self.assertEqual(
+            account.get("policy"), "/run/galera-backup-minio-tmp/policy-prune.json"
+        )
+        self.assertEqual(
+            account.get("access_fact"), "galera_backup_s3_prune_access_key"
+        )
+        self.assertEqual(
+            account.get("revoke_fact"), "galera_backup_prune_keys_to_revoke"
+        )
+
+    def test_discovery_is_shared_and_runs_before_reconciliation(self):
+        discovery = [
+            task
+            for task in provision_tasks()
+            if isinstance(task.get("ansible.builtin.include_tasks"), dict)
+            and task["ansible.builtin.include_tasks"].get("file")
+            == "minio_owned_keys.yml"
+        ]
+        self.assertEqual(len(discovery), 1, "discovery ma byc wspolny, nie kopiowany")
+        tasks = provision_tasks()
+        self.assertLess(
+            find_index(tasks, "Zbuduj obraz stanu kont serwisowych MinIO"),
+            find_index(tasks, "Pojednaj konto zapisu klastra"),
+        )
 
 
 class CreateIsConfirmedBeforeAnyRevoke(unittest.TestCase):
     """Create + sonda nowego klucza musi upelzniac przed lista odwolan."""
 
     def test_create_and_probe_precede_selection(self):
-        tasks = provision_tasks()
+        tasks = reconcile_tasks()
         for fragment in (FRAGMENT_CREATE, FRAGMENT_PROBE_NEW, FRAGMENT_SELECT):
             self.assertIsNotNone(
                 find_index(tasks, fragment), f"brak zadania '{fragment}'"
@@ -136,11 +207,11 @@ class CreateIsConfirmedBeforeAnyRevoke(unittest.TestCase):
         self.assertLess(find_index(tasks, FRAGMENT_PROBE_NEW), find_index(tasks, FRAGMENT_SELECT))
 
     def test_new_credential_probe_must_fail_the_play(self):
-        task = find_task(provision_tasks(), FRAGMENT_PROBE_NEW)
+        task = find_task(reconcile_tasks(), FRAGMENT_PROBE_NEW)
         self.assertIsNotNone(task, "brak sondy nowego poswiadczenia")
-        self.assertEqual(task.get("when"), "not galera_backup_reuse_existing_s3_key")
+        self.assertEqual(task.get("when"), "not galera_backup_acct_reuse")
         # Sonda kandydata celowo tlumila blad (failed_when: false) — sonda
-        # NOWEGO klucza nie moze: niepotwierdzony create nie może dopuscic
+        # NOWEGO klucza nie moze: niepotwierdzony create nie moze dopuscic
         # do revoke starego konta.
         self.assertIsNone(task.get("failed_when"))
         shell = " ".join(task["ansible.builtin.command"]["argv"])
@@ -148,21 +219,25 @@ class CreateIsConfirmedBeforeAnyRevoke(unittest.TestCase):
         self.assertIn('"$GALERA_MC_AK" "$GALERA_MC_SK"', shell)
 
     def test_new_credential_render_gates_on_fresh_create(self):
-        task = find_task(provision_tasks(), FRAGMENT_RENDER_NEW)
+        task = find_task(reconcile_tasks(), FRAGMENT_RENDER_NEW)
         self.assertIsNotNone(task, "brak renderu env nowego poswiadczenia")
-        self.assertEqual(task.get("when"), "not galera_backup_reuse_existing_s3_key")
+        self.assertEqual(task.get("when"), "not galera_backup_acct_reuse")
         spec = task["ansible.builtin.copy"]
         self.assertEqual(spec.get("mode"), "0600")
-        self.assertIn("GALERA_MC_AK={{ galera_backup_s3_access_key }}", spec.get("content", ""))
+        self.assertIn(
+            "GALERA_MC_AK={{ lookup('vars', mc_account.access_fact) }}",
+            spec.get("content", ""),
+        )
         self.assertTrue(task.get("no_log"), "env z sekretem bez no_log")
 
     def test_create_task_still_gated_on_not_reuse(self):
-        task = find_task(provision_tasks(), FRAGMENT_CREATE)
+        task = find_task(reconcile_tasks(), FRAGMENT_CREATE)
         self.assertIsNotNone(task, "brak zadania create")
-        self.assertEqual(task.get("when"), "not galera_backup_reuse_existing_s3_key")
+        self.assertEqual(task.get("when"), "not galera_backup_acct_reuse")
         argv = task["ansible.builtin.command"]["argv"]
         self.assertIn("--policy", argv)
         self.assertIn("--name", argv)
+        self.assertIn("{{ mc_account.name }}", argv)
 
     def test_tmp_dir_survives_while_revocation_pending(self):
         task = find_task(provision_tasks(), FRAGMENT_TMP_CLEANUP)
@@ -225,26 +300,29 @@ class ReusePathUntouched(unittest.TestCase):
     """Sciezka reuse musi zachowac dotychczasowe zachowanie."""
 
     def test_candidate_probe_still_tolerates_failure(self):
-        task = find_task(provision_tasks(), FRAGMENT_PROBE_CANDIDATE)
+        task = find_task(reconcile_tasks(), FRAGMENT_PROBE_CANDIDATE)
         self.assertIsNotNone(task, "brak sondy kandydata")
         self.assertEqual(task.get("failed_when"), False)
 
     def test_converge_policy_unchanged(self):
-        task = find_task(provision_tasks(), FRAGMENT_CONVERGE)
+        task = find_task(reconcile_tasks(), FRAGMENT_CONVERGE)
         self.assertIsNotNone(task, "brak konwergencji polityki")
-        self.assertEqual(task.get("when"), "galera_backup_reuse_existing_s3_key")
+        self.assertEqual(task.get("when"), "galera_backup_acct_reuse")
         argv = task["ansible.builtin.command"]["argv"]
         self.assertIn("edit", argv)
         self.assertIn("--policy", argv)
 
-    def test_reuse_fact_unchanged(self):
-        task = find_task(provision_tasks(), FRAGMENT_REUSE_FACT)
+    def test_reuse_fact_routes_into_caller_owned_names(self):
+        task = find_task(reconcile_tasks(), FRAGMENT_REUSE_FACT)
         self.assertIsNotNone(task, "brak zadania reuse")
-        self.assertEqual(task.get("when"), "galera_backup_reuse_existing_s3_key")
+        self.assertEqual(task.get("when"), "galera_backup_acct_reuse")
         facts = task["ansible.builtin.set_fact"]
+        # Klucze faktow sa dynamiczne (nazwa przekazana przez mc_account), wiec
+        # w YAML widac placeholdery — wartoscia jest poswiadczenie z secrets.env.
+        self.assertIn("{{ mc_account.access_fact }}", facts)
         self.assertEqual(
-            facts["galera_backup_s3_access_key"],
-            "{{ galera_backup_existing_s3_access_key }}",
+            facts["{{ mc_account.access_fact }}"],
+            "{{ mc_account.existing_access_key }}",
         )
 
 

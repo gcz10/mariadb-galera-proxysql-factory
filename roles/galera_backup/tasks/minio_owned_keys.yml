@@ -1,0 +1,77 @@
+---
+# minio_owned_keys.yml — discovery kont serwisowych MinIO.
+#
+# Wspolny dla provisioningu (provision_minio.yml) i derejestracji
+# (deregister_minio.yml): JEDEN listing + jedna tura `accesskey info` na caly
+# play, niezaleznie od tego, ile filtrów nazw potrzebuje wywolujacy.
+#
+# Wymaga: root.env z minio_root_env.yml (katalog /run/galera-backup-minio-tmp).
+# Produkuje: galera_backup_owned_keys_jsons — liste surowych JSON-ow
+# `accesskey info` po wszystkich kontach; filtry roli
+# (minio_service_account_keys, minio_access_keys_named) czytaja ja wyzej.
+
+- name: Wypisz wszystkie konta serwisowe MinIO
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - container:minio
+      - --env-file
+      - /run/galera-backup-minio-tmp/root.env
+      - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+      - admin
+      - accesskey
+      - list
+      - myminio
+      - --all
+      - --json
+  register: galera_backup_owned_keys_list
+  changed_when: false
+  no_log: true
+  become: true
+  delegate_to: "{{ groups['infra'][0] }}"
+
+- name: Wyodrebnij klucze wszystkich kont serwisowych MinIO
+  # Filtr roli jest fail-closed: uszkodzone JSON-y lub zmieniony kontrakt
+  # `mc` koncza sie bledem zamiast cicha pusta lista.
+  ansible.builtin.set_fact:
+    galera_backup_owned_keys: >-
+      {{ galera_backup_owned_keys_list.stdout | minio_service_account_keys }}
+  no_log: true
+
+- name: Odczytaj tozsamosci kont serwisowych MinIO
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - container:minio
+      - --env-file
+      - /run/galera-backup-minio-tmp/root.env
+      - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+      - admin
+      - accesskey
+      - info
+      - myminio
+      - "{{ item }}"
+      - --json
+  loop: "{{ galera_backup_owned_keys }}"
+  register: galera_backup_owned_keys_info
+  changed_when: false
+  no_log: true
+  become: true
+  delegate_to: "{{ groups['infra'][0] }}"
+
+- name: Zbierz tozsamosci kont do pojednania
+  ansible.builtin.set_fact:
+    galera_backup_owned_keys_jsons: >-
+      {{
+        galera_backup_owned_keys_info.results
+        | default([])
+        | map(attribute='stdout')
+        | list
+      }}
+  no_log: true

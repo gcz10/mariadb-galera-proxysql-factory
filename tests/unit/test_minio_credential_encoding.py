@@ -29,12 +29,19 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-PROVISION = REPO / "roles" / "galera_backup" / "tasks" / "provision_minio.yml"
+ROLE_TASKS = REPO / "roles" / "galera_backup" / "tasks"
+PROVISION = ROLE_TASKS / "provision_minio.yml"
+RECONCILE = ROLE_TASKS / "reconcile_minio_account.yml"
+ROOT_ENV = ROLE_TASKS / "minio_root_env.yml"
+OWNED_KEYS = ROLE_TASKS / "minio_owned_keys.yml"
 
 
 class TestNoUrlencodedCredentials(unittest.TestCase):
     def setUp(self):
-        self.text = PROVISION.read_text(encoding="utf-8")
+        self.text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (PROVISION, RECONCILE, ROOT_ENV, OWNED_KEYS)
+        )
 
     def test_no_urlencode_on_any_credential(self):
         """`urlencode` na poswiadczeniu = SignatureDoesNotMatch przy `+` w sekrecie.
@@ -66,18 +73,26 @@ class TestNoUrlencodedCredentials(unittest.TestCase):
 
     def test_secret_is_expanded_inside_container_not_in_argv(self):
         """Rozwiniecie w powloce kontenera trzyma sekret poza `ps` na hoscie."""
-        self.assertIn("GALERA_MC_SK={{ galera_backup_existing_s3_secret_key }}", self.text)
+        self.assertIn("GALERA_MC_SK={{ mc_account.existing_secret_key }}", self.text)
         self.assertNotIn("mc alias set scoped http://localhost:9000 {{", self.text)
+
+    def test_root_env_lives_only_in_the_shared_file(self):
+        """MC_HOST roota ma jedno zrodlo prawdy — minio_root_env.yml."""
+        root_text = ROOT_ENV.read_text(encoding="utf-8")
+        provision_text = PROVISION.read_text(encoding="utf-8")
+        self.assertIn("MC_HOST_myminio=", root_text)
+        self.assertNotIn("MC_HOST_myminio=", provision_text)
 
 
 class TestRootCredentialGuard(unittest.TestCase):
     def setUp(self):
-        self.text = PROVISION.read_text(encoding="utf-8")
+        self.text = ROOT_ENV.read_text(encoding="utf-8")
 
     def test_root_credentials_are_asserted_url_safe(self):
-        """Zamiast cichego bledu podpisu - czytelna asercja przy provisioningu."""
-        self.assertIn("Require URL-safe MinIO root credentials", self.text)
-        block = self.text[self.text.index("Require URL-safe MinIO root credentials") :][:900]
+        """Zamiast cichego bledu podpisu — czytelna asercja; wspolna dla
+        provisioningu i derejestracji przez minio_root_env.yml."""
+        self.assertIn("Wymagaj poswiadczen root MinIO", self.text)
+        block = self.text[self.text.index("Wymagaj poswiadczen root MinIO") :][:900]
         for var in ("MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"):
             self.assertIn(var, block)
         self.assertRegex(block, r"is not search\(")
@@ -91,7 +106,7 @@ class TestRootCredentialGuard(unittest.TestCase):
         `@`, ani `:`, ani spacji. Test swiecil na zielono, a asercja w roli byla
         dekoracja. Tlumaczenie wzorca w tescie = pranie testu.
         """
-        block = self.text[self.text.index("Require URL-safe MinIO root credentials") :][:1200]
+        block = self.text[self.text.index("Wymagaj poswiadczen root MinIO") :][:1200]
         m = re.search(r"is not search\('([^']+)'\)", block)
         self.assertIsNotNone(m, "nie znaleziono wzorca w asercji")
         pattern = m.group(1)

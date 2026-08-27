@@ -785,16 +785,27 @@ class CutoverContractTests(unittest.TestCase):
         role_main = (
             WORKSPACE_ROOT / "roles" / "galera_backup" / "tasks" / "main.yml"
         ).read_text()
-        provision = (
-            WORKSPACE_ROOT / "roles" / "galera_backup" / "tasks" / "provision_minio.yml"
-        ).read_text()
+        tasks_dir = WORKSPACE_ROOT / "roles" / "galera_backup" / "tasks"
+        provision = "\n".join(
+            (tasks_dir / name).read_text()
+            for name in (
+                "provision_minio.yml",
+                "reconcile_minio_account.yml",
+                "minio_owned_keys.yml",
+                "minio_root_env.yml",
+            )
+        )
 
         self.assertIn("galera_backup_shared_secrets", backup_playbook)
         self.assertIn("galera_backup_resolved_shared_secrets", role_main)
         self.assertIn("galera_backup_existing_s3_access_key", provision)
-        self.assertIn("accesskey\n          - edit", provision)
+        self.assertIn("accesskey", provision)
+        # Konwergencja polityki (`mc admin accesskey edit`) zyje w reconcile.
+        self.assertIn("- edit", provision)
         self.assertIn("--env-file", provision)
-        self.assertNotIn('- "MC_HOST_myminio=', provision)
+        # Root-only MC_HOST istnieje w jednym miejscu (minio_root_env.yml),
+        # a poswiadczenia klastra nigdy nieetrafiaja do URL-a.
+        self.assertEqual(provision.count("MC_HOST_myminio="), 1)
 
     def test_restore_role_does_not_install_scheduler_cron_package(self):
         role_main = (

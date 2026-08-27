@@ -1,42 +1,25 @@
 ---
+# provision_minio.yml — pojednanie kont serwisowych MinIO dla klastra.
+#
+# Przebieg (kolejnosc i wlasciwosci bezpieczenstwa pilnuje
+# tests/unit/test_minio_rotation_atomic.py):
+#   1. minio_root_env.yml           — root-only srodowisko klienta `mc`;
+#   2. polityki                     — zapis i retencja jako pliki 0600;
+#   3. bucket + owner marker        — bucket zarzadany nalezy DO TEGO klastra;
+#   4. minio_owned_keys.yml         — jeden discovery: list + info wszystkich kont;
+#   5. reconcile_minio_account.yml  — x2: konto zapisu i konto retencji;
+#   6. sprzatanie                   — root.env zyje dopoki main.yml nie wykona
+#                                     odwolan (rotacja atomowa: create + sondy
+#                                     zanim powstanie lista odwolan, odwolanie
+#                                     dopiero PO utrwaleniu secrets.env).
+# Rozdzial poswiadczen zapis/kasowanie opisuje docs/runbooks/backup.md; kazdy
+# include dostaje slownik `mc_account`, dzieki czemu przeplyw zycia konta
+# istnieje w jednym egzemplarzu (reconcile_minio_account.yml).
 - name: Provision scoped MinIO credentials on infra host
   block:
-    - name: Create root-only MinIO provisioning directory
-      ansible.builtin.file:
-        path: /run/galera-backup-minio-tmp
-        state: directory
-        owner: root
-        group: root
-        mode: "0700"
-
-    - name: Require URL-safe MinIO root credentials
-      # `mc` czyta userinfo doslownie, wiec te znaki rozjechalyby parsowanie URL-a
-      # i dalyby SignatureDoesNotMatch bez zadnego czytelnego komunikatu.
-      # Percent-encoding NIE jest rozwiazaniem - mc go nie dekoduje.
-      #
-      # Klasa MUSI byc skladnia Pythona (`is search` woła re.search): POSIX-owe
-      # `[:space:]` nie istnieje w `re` i dawaloby klase {/@:[space} + literal ']',
-      # czyli asercje, ktora nie lapie ANI JEDNEGO z tych znakow.
-      ansible.builtin.assert:
-        that:
-          - lookup('ansible.builtin.env', 'MINIO_ROOT_USER') is not search('[/@:\s]')
-          - lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') is not search('[/@:\s]')
-        fail_msg: >-
-          MINIO_ROOT_USER/MINIO_ROOT_PASSWORD zawieraja znak nielegalny w userinfo
-          URL-a mc (/, @, : lub bialy znak). Zmien poswiadczenia root MinIO.
-        quiet: true
-
-    - name: Render root-only MinIO client environment
-      ansible.builtin.copy:
-        dest: /run/galera-backup-minio-tmp/root.env
-        owner: root
-        group: root
-        mode: "0600"
-        # BEZ `urlencode`: mc nie dekoduje percent-encoding (dokumentacja MinIO
-        # podaje sekret z `+` surowy). Bezpieczenstwo znakow pilnuje asercja wyzej.
-        content: >-
-          MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}:{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}@localhost:9000
-      no_log: true
+    - name: Przygotuj root-only srodowisko klienta MinIO
+      ansible.builtin.include_tasks:
+        file: minio_root_env.yml
 
     - name: Render policy to temporary file
       ansible.builtin.template:
@@ -146,439 +129,37 @@
         fail_msg: Managed S3 bucket owner marker verification failed
         quiet: true
 
-    - name: List existing MinIO service accounts
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - /run/galera-backup-minio-tmp/root.env
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - admin
-          - accesskey
-          - list
-          - myminio
-          - --all
-          - --json
-      register: galera_backup_mc_accesskey_list
-      changed_when: false
-      no_log: true
+    - name: Zbuduj obraz stanu kont serwisowych MinIO
+      ansible.builtin.include_tasks:
+        file: minio_owned_keys.yml
 
-    - name: Extract existing MinIO service-account keys
-      ansible.builtin.set_fact:
-        galera_backup_all_access_keys: >-
-          {{ galera_backup_mc_accesskey_list.stdout | minio_service_account_keys }}
-      no_log: true
+    - name: Pojednaj konto zapisu klastra (bez prawa kasowania)
+      ansible.builtin.include_tasks:
+        file: reconcile_minio_account.yml
+      vars:
+        mc_account:
+          name: "galera-backup-{{ cluster.name }}"
+          policy: /run/galera-backup-minio-tmp/policy.json
+          tmp: ""
+          existing_access_key: "{{ galera_backup_existing_s3_access_key }}"
+          existing_secret_key: "{{ galera_backup_existing_s3_secret_key }}"
+          access_fact: galera_backup_s3_access_key
+          secret_fact: galera_backup_s3_secret_key
+          revoke_fact: galera_backup_access_keys_to_revoke
 
-    - name: Read existing MinIO service-account identities
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - /run/galera-backup-minio-tmp/root.env
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - admin
-          - accesskey
-          - info
-          - myminio
-          - "{{ item }}"
-          - --json
-      loop: "{{ galera_backup_all_access_keys }}"
-      register: galera_backup_mc_accesskey_info
-      changed_when: false
-      no_log: true
-
-    - name: Select all service accounts owned by this cluster
-      ansible.builtin.set_fact:
-        galera_backup_existing_access_keys: >-
-          {{
-            galera_backup_mc_accesskey_info.results
-            | default([])
-            | map(attribute='stdout')
-            | list
-            | minio_access_keys_named('galera-backup-' ~ cluster.name)
-          }}
-      no_log: true
-
-    - name: Select candidate existing scoped credential
-      ansible.builtin.set_fact:
-        galera_backup_existing_key_candidate: >-
-          {{
-            (galera_backup_existing_s3_access_key | length) > 0
-            and (galera_backup_existing_s3_secret_key | length) > 0
-            and galera_backup_existing_s3_access_key in galera_backup_existing_access_keys
-          }}
-      no_log: true
-
-    # Poswiadczenie NIE jedzie w URL-u. `mc` bierze userinfo DOSLOWNIE - nie
-    # dekoduje percent-encoding (potwierdzone empirycznie i w dokumentacji MinIO,
-    # ktorej kanoniczny przyklad MC_HOST_ ma sekret z `+` surowy). Wczesniejszy
-    # `| urlencode` zamienial `+` na `%2B`, przez co sonda dostawala
-    # SignatureDoesNotMatch, `reuse` bylo zawsze falszem i KAZDY `configure`
-    # kasowal poswiadczenie MinIO oraz tworzyl nowe, przepisujac secrets.env na
-    # wszystkich hostach backupu (a zadanie konwergencji polityki nigdy nie biegalo).
-    # Sam URL tez nie wystarczy: sekrety MinIO uzywaja alfabetu base64, wiec moga
-    # zawierac `/`, ktore w userinfo jest nielegalne niezaleznie od kodowania.
-    - name: Render candidate scoped MinIO credentials
-      ansible.builtin.copy:
-        dest: /run/galera-backup-minio-tmp/scoped.env
-        owner: root
-        group: root
-        mode: "0600"
-        content: |
-          GALERA_MC_AK={{ galera_backup_existing_s3_access_key }}
-          GALERA_MC_SK={{ galera_backup_existing_s3_secret_key }}
-      when: galera_backup_existing_key_candidate
-      no_log: true
-
-    - name: Verify candidate scoped credential can access its bucket
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - /run/galera-backup-minio-tmp/scoped.env
-          - --entrypoint
-          - sh
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - -c
-          # Wartosci rozwija powloka W KONTENERZE, wiec sekret nie trafia do argv
-          # procesu na hoscie (widocznego w `ps`).
-          - >-
-            mc alias set scoped http://localhost:9000 "$GALERA_MC_AK" "$GALERA_MC_SK" >/dev/null 2>&1 &&
-            exec mc ls "scoped/{{ backup.s3.bucket }}" --json
-      register: galera_backup_existing_key_probe
-      changed_when: false
-      failed_when: false
-      when: galera_backup_existing_key_candidate
-      no_log: true
-
-    - name: Decide whether to reuse the existing scoped credential
-      ansible.builtin.set_fact:
-        galera_backup_reuse_existing_s3_key: >-
-          {{
-            (galera_backup_existing_key_candidate | bool)
-            and (galera_backup_existing_key_probe.rc | default(1) | int) == 0
-          }}
-
-
-    - name: Converge policy on the existing scoped credential
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - /run/galera-backup-minio-tmp/root.env
-          - -v
-          - /run/galera-backup-minio-tmp/policy.json:/tmp/policy.json:ro,Z
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - admin
-          - accesskey
-          - edit
-          - myminio
-          - "{{ galera_backup_existing_s3_access_key }}"
-          - --policy
-          - /tmp/policy.json
-          - --name
-          - "galera-backup-{{ cluster.name }}"
-      when: galera_backup_reuse_existing_s3_key
-      # `mc accesskey edit` zapisuje polityke — mutacja, nawet gdy wynik identyczny.
-      changed_when: true
-      no_log: true
-
-
-    - name: Create new scoped access key pair
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - /run/galera-backup-minio-tmp/root.env
-          - -v
-          - /run/galera-backup-minio-tmp/policy.json:/tmp/policy.json:ro,Z
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - admin
-          - accesskey
-          - create
-          - myminio/
-          - --json
-          - --name
-          - "galera-backup-{{ cluster.name }}"
-          - --policy
-          - /tmp/policy.json
-      register: galera_backup_mc_create_result
-      when: not galera_backup_reuse_existing_s3_key
-      # Tworzy nowa pare kluczy — mutacja stanu MinIO.
-      changed_when: true
-      no_log: true
-
-    - name: Reuse existing scoped credentials
-      ansible.builtin.set_fact:
-        galera_backup_s3_access_key: "{{ galera_backup_existing_s3_access_key }}"
-        galera_backup_s3_secret_key: "{{ galera_backup_existing_s3_secret_key }}"
-      when: galera_backup_reuse_existing_s3_key
-      no_log: true
-
-    - name: Extract generated scoped credentials
-      ansible.builtin.set_fact:
-        galera_backup_s3_access_key: "{{ (galera_backup_mc_create_result.stdout | from_json).accessKey }}"
-        galera_backup_s3_secret_key: "{{ (galera_backup_mc_create_result.stdout | from_json).secretKey }}"
-      when: not galera_backup_reuse_existing_s3_key
-      no_log: true
-
-    - name: Renderuj nowe poswiadczenia MinIO
-      ansible.builtin.copy:
-        dest: /run/galera-backup-minio-tmp/scoped-new.env
-        owner: root
-        group: root
-        mode: "0600"
-        content: |
-          GALERA_MC_AK={{ galera_backup_s3_access_key }}
-          GALERA_MC_SK={{ galera_backup_s3_secret_key }}
-      when: not galera_backup_reuse_existing_s3_key
-      no_log: true
-
-    - name: Potwierdz dostep nowego klucza MinIO do bucketa
-      # "Potwierdzony create": konto powstalo, ale dopiero ta sonda dowodzi, ze
-      # klucz autentykuje i polityka naprawde dopuszcza bucket. Sonda KONTRASTUJE
-      # z sondą kandydata wyzej: tam failed_when:false jest celowe (kandydat moze
-      # byc martwy i wtedy tworzymy nowy klucz), tutaj porazka MUSI wylaczyc
-      # play — niepotwierdzone poswiadczenie nie moze dopuscic do odwolania
-      # starego konta w main.yml.
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - /run/galera-backup-minio-tmp/scoped-new.env
-          - --entrypoint
-          - sh
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - -c
-          - >-
-            mc alias set scoped http://localhost:9000 "$GALERA_MC_AK" "$GALERA_MC_SK" >/dev/null 2>&1 &&
-            exec mc ls "scoped/{{ backup.s3.bucket }}" --json
-      when: not galera_backup_reuse_existing_s3_key
-      changed_when: false
-      no_log: true
-
-    - name: Select stale MinIO service accounts for removal
-      # AKTYWNY klucz (reused albo swiezo utworzony i sondowany wyzej) nigdy nie
-      # trafia na liste. Lista powstaje dopiero po potwierdzonym create; samo
-      # odwolanie zyje w main.yml PO zapisaniu nowego secrets.env — dopoki
-      # ktorekolwiek z tych krokow nie doszlo do skutku, stare konto zyje.
-      ansible.builtin.set_fact:
-        galera_backup_access_keys_to_revoke: >-
-          {{
-            galera_backup_existing_access_keys
-            | reject('equalto', galera_backup_s3_access_key)
-            | list
-          }}
-      no_log: true
-
-    # === Konto retencji (jedyne z prawem delete) ===
-    # Ta sama kolejnosc bezpieczenstwa co przy koncie zapisu: create + sonda
-    # PRZED zbudowaniem listy odwolan, a samo odwolanie dopiero w main.yml po
-    # utrwaleniu secrets.env. Konto zyje pod WLASNA nazwa, wiec selekcja konta
-    # zapisu (dokladne dopasowanie nazwy) nigdy go nie widzi i nie kasuje.
-    - name: Select all retention accounts owned by this cluster
-      ansible.builtin.set_fact:
-        galera_backup_existing_prune_access_keys: >-
-          {{
-            galera_backup_mc_accesskey_info.results
-            | default([])
-            | map(attribute='stdout')
-            | list
-            | minio_access_keys_named(('galera-backup-prune-' ~ cluster.name)
-            | minio_service_account_name)
-          }}
-      no_log: true
-
-    - name: Select candidate existing retention credential
-      ansible.builtin.set_fact:
-        galera_backup_existing_prune_key_candidate: >-
-          {{
-            (galera_backup_existing_s3_prune_access_key | length) > 0
-            and (galera_backup_existing_s3_prune_secret_key | length) > 0
-            and galera_backup_existing_s3_prune_access_key in galera_backup_existing_prune_access_keys
-          }}
-      no_log: true
-
-    - name: Render candidate retention credentials
-      ansible.builtin.copy:
-        dest: /run/galera-backup-minio-tmp/scoped-prune.env
-        owner: root
-        group: root
-        mode: "0600"
-        content: |
-          GALERA_MC_AK={{ galera_backup_existing_s3_prune_access_key }}
-          GALERA_MC_SK={{ galera_backup_existing_s3_prune_secret_key }}
-      when: galera_backup_existing_prune_key_candidate
-      no_log: true
-
-    - name: Verify candidate retention credential can access its bucket
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - /run/galera-backup-minio-tmp/scoped-prune.env
-          - --entrypoint
-          - sh
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - -c
-          - >-
-            mc alias set scoped http://localhost:9000 "$GALERA_MC_AK" "$GALERA_MC_SK" >/dev/null 2>&1 &&
-            exec mc ls "scoped/{{ backup.s3.bucket }}" --json
-      register: galera_backup_existing_prune_key_probe
-      changed_when: false
-      failed_when: false
-      when: galera_backup_existing_prune_key_candidate
-      no_log: true
-
-    - name: Decide whether to reuse the existing retention credential
-      ansible.builtin.set_fact:
-        galera_backup_reuse_existing_prune_key: >-
-          {{
-            (galera_backup_existing_prune_key_candidate | bool)
-            and (galera_backup_existing_prune_key_probe.rc | default(1) | int) == 0
-          }}
-
-    - name: Converge policy on the existing retention credential
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - /run/galera-backup-minio-tmp/root.env
-          - -v
-          - /run/galera-backup-minio-tmp/policy-prune.json:/tmp/policy-prune.json:ro,Z
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - admin
-          - accesskey
-          - edit
-          - myminio
-          - "{{ galera_backup_existing_s3_prune_access_key }}"
-          - --policy
-          - /tmp/policy-prune.json
-          - --name
-          - "{{ ('galera-backup-prune-' ~ cluster.name) | minio_service_account_name }}"
-      when: galera_backup_reuse_existing_prune_key
-      changed_when: true
-      no_log: true
-
-    - name: Create new retention access key pair
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - /run/galera-backup-minio-tmp/root.env
-          - -v
-          - /run/galera-backup-minio-tmp/policy-prune.json:/tmp/policy-prune.json:ro,Z
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - admin
-          - accesskey
-          - create
-          - myminio/
-          - --json
-          - --name
-          - "{{ ('galera-backup-prune-' ~ cluster.name) | minio_service_account_name }}"
-          - --policy
-          - /tmp/policy-prune.json
-      register: galera_backup_mc_create_prune_result
-      when: not galera_backup_reuse_existing_prune_key
-      changed_when: true
-      no_log: true
-
-    - name: Reuse existing retention credentials
-      ansible.builtin.set_fact:
-        galera_backup_s3_prune_access_key: "{{ galera_backup_existing_s3_prune_access_key }}"
-        galera_backup_s3_prune_secret_key: "{{ galera_backup_existing_s3_prune_secret_key }}"
-      when: galera_backup_reuse_existing_prune_key
-      no_log: true
-
-    - name: Extract generated retention credentials
-      ansible.builtin.set_fact:
-        galera_backup_s3_prune_access_key: "{{ (galera_backup_mc_create_prune_result.stdout | from_json).accessKey }}"
-        galera_backup_s3_prune_secret_key: "{{ (galera_backup_mc_create_prune_result.stdout | from_json).secretKey }}"
-      when: not galera_backup_reuse_existing_prune_key
-      no_log: true
-
-    - name: Renderuj nowe poswiadczenia retencji MinIO
-      ansible.builtin.copy:
-        dest: /run/galera-backup-minio-tmp/scoped-prune-new.env
-        owner: root
-        group: root
-        mode: "0600"
-        content: |
-          GALERA_MC_AK={{ galera_backup_s3_prune_access_key }}
-          GALERA_MC_SK={{ galera_backup_s3_prune_secret_key }}
-      when: not galera_backup_reuse_existing_prune_key
-      no_log: true
-
-    - name: Potwierdz dostep nowego klucza retencji MinIO do bucketa
-      # Jak przy koncie zapisu: dopiero ta sonda dowodzi, ze klucz autentykuje
-      # i polityka dopuszcza bucket. Bez niej lista odwolan moglaby skasowac
-      # dzialajace konto na rzecz martwego.
-      ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - /run/galera-backup-minio-tmp/scoped-prune-new.env
-          - --entrypoint
-          - sh
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - -c
-          - >-
-            mc alias set scoped http://localhost:9000 "$GALERA_MC_AK" "$GALERA_MC_SK" >/dev/null 2>&1 &&
-            exec mc ls "scoped/{{ backup.s3.bucket }}" --json
-      register: galera_backup_prune_key_probe
-      when: not galera_backup_reuse_existing_prune_key
-      changed_when: false
-      no_log: true
-
-    - name: Select stale MinIO retention accounts for removal
-      ansible.builtin.set_fact:
-        galera_backup_prune_keys_to_revoke: >-
-          {{
-            galera_backup_existing_prune_access_keys
-            | reject('equalto', galera_backup_s3_prune_access_key)
-            | list
-          }}
-      no_log: true
+    - name: Pojednaj konto retencji (jedyne z prawem kasowania)
+      ansible.builtin.include_tasks:
+        file: reconcile_minio_account.yml
+      vars:
+        mc_account:
+          name: "{{ ('galera-backup-prune-' ~ cluster.name) | minio_service_account_name }}"
+          policy: /run/galera-backup-minio-tmp/policy-prune.json
+          tmp: "-prune"
+          existing_access_key: "{{ galera_backup_existing_s3_prune_access_key }}"
+          existing_secret_key: "{{ galera_backup_existing_s3_prune_secret_key }}"
+          access_fact: galera_backup_s3_prune_access_key
+          secret_fact: galera_backup_s3_prune_secret_key
+          revoke_fact: galera_backup_prune_keys_to_revoke
 
   always:
     - name: Remove root credentials and temporary policy

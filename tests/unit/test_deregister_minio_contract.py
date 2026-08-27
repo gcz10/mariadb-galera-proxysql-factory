@@ -14,6 +14,8 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 PLAYBOOK = REPO / "playbooks" / "cluster_deregister.yml"
 ROLE_TASKS = REPO / "roles" / "galera_backup" / "tasks" / "deregister_minio.yml"
+ROOT_ENV = REPO / "roles" / "galera_backup" / "tasks" / "minio_root_env.yml"
+OWNED_KEYS = REPO / "roles" / "galera_backup" / "tasks" / "minio_owned_keys.yml"
 
 
 def load_yaml(path):
@@ -139,8 +141,10 @@ class DeregisterMinioRoleTests(unittest.TestCase):
         cls.tasks = flatten_tasks(cls.document)
 
     def test_root_credentials_are_required_with_visible_diagnostic(self):
-        guard = find_task(self.tasks, "Wymagaj poswiadczen root MinIO")
-        self.assertIsNotNone(guard)
+        # Srodowisko root jest wspolne z provisioningu (minio_root_env.yml),
+        # wiec asercja istnieje w jednym egzemplarzu.
+        root_tasks = flatten_tasks(load_yaml(ROOT_ENV))
+        guard = find_task(root_tasks, "Wymagaj poswiadczen root MinIO")
         checks = guard["ansible.builtin.assert"]["that"]
         for variable in ("MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"):
             self.assertTrue(
@@ -154,12 +158,18 @@ class DeregisterMinioRoleTests(unittest.TestCase):
             guard.get("no_log", False),
             "no_log ukrywa fail_msg, choc assert pokazuje tylko nazwy zmiennych",
         )
-        env_task = find_task(self.tasks, "Zapisz root-only srodowisko klienta MinIO")
+        env_task = find_task(root_tasks, "Zapisz root-only srodowisko klienta MinIO")
         self.assertIsNotNone(env_task)
         copy = env_task["ansible.builtin.copy"]
         self.assertEqual(copy.get("mode"), "0600")
         self.assertIn("MC_HOST_myminio=", copy.get("content", ""))
         self.assertTrue(env_task.get("no_log"))
+        # Derejestracja musi dzialac z localhosta — shared file sam dowozi
+        # become i delegacje na infra.
+        for shared_task in root_tasks:
+            if "ansible.builtin.file" in shared_task or "ansible.builtin.copy" in shared_task:
+                self.assertIn("groups['infra'][0]", str(shared_task.get("delegate_to", "")))
+                self.assertTrue(shared_task.get("become"))
 
     def test_exact_named_service_accounts_are_selected_and_revoked(self):
         select = find_task(self.tasks, "Wybierz konta MinIO tego klastra")
@@ -183,8 +193,13 @@ class DeregisterMinioRoleTests(unittest.TestCase):
         self.assertEqual(revoke.get("changed_when"), True)
 
     def test_mc_commands_use_pinned_image_env_file_and_infra_host(self):
+        # Discovery kont zyje teraz w minio_owned_keys.yml — kontrakt `mc`
+        # sprawdzamy na unii derejestracji i wspolnego discovery.
         command_tasks = [
-            task for task in self.tasks if "ansible.builtin.command" in task
+            task
+            for document in (self.tasks, flatten_tasks(load_yaml(OWNED_KEYS)))
+            for task in document
+            if "ansible.builtin.command" in task
         ]
         self.assertGreaterEqual(len(command_tasks), 3)
         for task in command_tasks:
