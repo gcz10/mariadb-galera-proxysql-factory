@@ -113,7 +113,15 @@ Runner stoi na wszystkich węzłach Galery, więc poświadczenie zapisu leży na
 | Konto | Gdzie leży | Uprawnienia |
 |---|---|---|
 | `galera-backup-<cluster>` | każdy węzeł Galery + host restore | `GetObject`, `PutObject`, `AbortMultipartUpload`, `ListMultipartUploadParts` na `galera-<cluster>-*`; **bez `Delete*`** |
-| `galera-backup-prune-<cluster>` | tylko `backup.scheduler.host` | `ListBucket`, `GetObject`, `DeleteObject` na `galera-<cluster>-*`; **bez `PutObject`** |
+| `galera-backup-prune-<cluster>` (skracane do 32 znaków — patrz niżej) | tylko `backup.scheduler.host` | `ListBucket`, `GetObject`, `DeleteObject` na `galera-<cluster>-*`; **bez `PutObject`** |
+
+Nazwy kont retencyjnych dłuższe niż 32 znaki (limit akceptowany przez MinIO)
+są skracane deterministycznie: pierwsze 19 znaków pełnej nazwy (dla tego
+prefiksu: `galera-backup-prune`, bez końcowego łącznika), potem `-` i
+12-znakowy skrót sha256 pełnej nazwy. Dokładną nazwę dla swojego klastra
+obliczy filtr `minio_service_account_name`
+(`roles/galera_backup/filter_plugins/minio_access_keys.py`); ta sama funkcja
+nadaje ją przy provision i odnajduje przy derejestracji.
 
 Retencja (`run_retention`) biegnie na koordynatorze — także wtedy, gdy backup wykonał inny węzeł. Węzeł bez poświadczenia retencji nie emituje zdarzeń retencji; to normalny stan, nie awaria. Zdarzenie `retention.success` w `events.jsonl` na koordynatorze niesie liczbę usuniętych kopii.
 
@@ -127,7 +135,7 @@ Jeżeli host z `backup.s3.endpoint` jest pierwszym hostem grupy `infra`, `cluste
 
 1. używa `MINIO_ROOT_USER` i `MINIO_ROOT_PASSWORD` tylko w tymczasowym pliku `0600` na hoście infra;
 2. tworzy bucket i marker właściciela przy użyciu root credentials;
-3. tworzy konto usługowe `galera-backup-<cluster>` (zapis, bez delete) oraz `galera-backup-prune-<cluster>` (retencja, z delete) — obydwa z polityką ograniczoną do jednego bucketu i prefiksu klastra;
+3. tworzy konto usługowe `galera-backup-<cluster>` (zapis, bez delete) oraz konto retencji `galera-backup-prune-<cluster>` (ewentualnie skrócone do 32 znaków, patrz wyżej) — obydwa z polityką ograniczoną do jednego bucketu i prefiksu klastra;
 4. zapisuje parę zapisu na wszystkich węzłach Galery i hoście restore, a parę retencji wyłącznie na `backup.scheduler.host`;
 5. usuwa tymczasowe dane root.
 
@@ -135,7 +143,7 @@ Ponowne configure zachowuje działającą parę kluczy i zbiega politykę — ni
 
 Rotacja zarządzanego MinIO:
 
-1. w oknie serwisowym usuń konto usługowe `galera-backup-<cluster>` (i/lub `galera-backup-prune-<cluster>`) w konsoli administracyjnej MinIO;
+1. w oknie serwisowym usuń konto usługowe `galera-backup-<cluster>` (i/lub konto retencji — pełna lub skrócona nazwa `galera-backup-prune-…`) w konsoli administracyjnej MinIO;
 2. załaduj root credentials poza repozytorium;
 3. uruchom `make cluster-backup-configure CLUSTER=<name>`;
 4. uruchom ręczny backup i potwierdzany restore.

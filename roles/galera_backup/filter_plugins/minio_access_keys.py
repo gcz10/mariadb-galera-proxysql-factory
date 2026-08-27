@@ -11,7 +11,7 @@ from typing import Any
 def minio_service_account_name(candidate: str, max_len: int = 32) -> str:
     """Return `candidate` bounded to `max_len` characters, deterministically.
 
-    MinIO odrzuca nazwy kont serwisowe dluzsze niz 32 znaki ("name must not
+    MinIO odrzuca nazwy kont serwisowych dluzsze niz 32 znaki ("name must not
     be longer than 32 characters" — zmierzone 2026-08-27: najemca o
     15-znakowej nazwie daje 35-znakowego kandydata). Uzycie w playbooku jest
     potokowe: `('galera-backup-prune-' ~ cluster.name) |
