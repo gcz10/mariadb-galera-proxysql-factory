@@ -39,6 +39,11 @@ class LockManager:
             ) from exc
 
     def release(self) -> None:
+        # Plik blokady CELOWO zostaje na dysku. `flock` chroni inode, nie
+        # sciezke, wiec unlink pozwalal dwom przebiegom trzymac wylacznosc
+        # jednoczesnie: jeden na starym inode, drugi na pliku utworzonym pod
+        # ta sama nazwa juz po skasowaniu. Pusty plik 0600 nic nie kosztuje,
+        # a w /run/lock znika i tak przy reboocie.
         if self._fd is not None:
             try:
                 fcntl.flock(self._fd, fcntl.LOCK_UN)
@@ -46,11 +51,6 @@ class LockManager:
             except OSError:
                 pass
             self._fd = None
-            if self.lock_path.exists():
-                try:
-                    self.lock_path.unlink()
-                except OSError:
-                    pass
 
 def resolve_lock_path(cluster_name: str, cluster_dir: Path) -> Path:
     runtime_lock_dir = Path("/run/lock")

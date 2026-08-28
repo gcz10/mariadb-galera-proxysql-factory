@@ -159,6 +159,35 @@ class GaleraBackupCoreTests(unittest.TestCase):
             lock2.acquire()
             lock2.release()
 
+    def test_release_keeps_the_lock_file_so_flock_stays_authoritative(self):
+        # `flock` chroni INODE, nie sciezke. Kasowanie pliku w release()
+        # rozrywalo to powiazanie: przebieg B, ktory zdazyl otworzyc stary
+        # inode, i przebieg C, ktory po unlinku tworzyl nowy plik pod ta sama
+        # nazwa, dostawaly OBA blokade wylaczna i biegly rownolegle na jednym
+        # klastrze. Stabilny inode jest jedyna wlasnoscia, ktora to wyklucza.
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "test.lock"
+
+            first = pipeline.LockManager(lock_path)
+            first.acquire()
+            inode = lock_path.stat().st_ino
+            first.release()
+
+            self.assertTrue(
+                lock_path.exists(),
+                "release skasowal plik blokady — nazwa moze wskazac nowy inode",
+            )
+
+            second = pipeline.LockManager(lock_path)
+            second.acquire()
+            self.assertEqual(
+                lock_path.stat().st_ino,
+                inode,
+                "kolejny przebieg dostal inny inode pod ta sama sciezka",
+            )
+            second.release()
+            self.assertEqual(lock_path.stat().st_ino, inode)
+
     def test_atomic_json_write_and_state_preservation(self):
         with tempfile.TemporaryDirectory() as td:
             state_file = Path(td) / "state.json"
