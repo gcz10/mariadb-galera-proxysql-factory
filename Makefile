@@ -579,9 +579,11 @@ verify-zero-hardcode:  ## F14 — statyczny guard: brak hardkodowanych danych kl
 	python3 tests/validation/probe-zero-hardcode.py
 
 verify-no-conditional-env:  ## Statyczny guard: play-level environment bez warunkowej konfiguracji backupu
+	python3 tests/validation/probe-no-conditional-env.py --selftest
 	python3 tests/validation/probe-no-conditional-env.py
 
 verify-proxysql-tenancy:  ## Statyczny guard: klastry na wspólnym ProxySQL mają rozłączne hostgroupy i app_user
+	python3 tests/validation/probe-proxysql-tenancy.py --self-test
 	python3 tests/validation/probe-proxysql-tenancy.py
 
 # Katalog w roles/ bez tasks/main.yml jest dla Ansible poprawna, PUSTA rola:
