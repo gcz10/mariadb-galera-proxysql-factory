@@ -14,7 +14,8 @@
     "storage",
     "availability",
     "backup",
-    "monitoring"
+    "monitoring",
+    "mariadb_tuning"
   ],
   "additionalProperties": false,
   "properties": {
@@ -614,8 +615,11 @@
     },
     "mariadb_tuning": {
       "type": "object",
+      "required": [
+        "gcache_size"
+      ],
       "additionalProperties": false,
-      "description": "Opcjonalne. gcache.size ustal z calc-gcache.py (ISC-68); pominięcie => 512M.",
+      "description": "Wymagane. gcache_size to statyczna deklaracja operatora — playbook nie ma fallbacku. calc-gcache.py (ISC-68) jedynie podpowiada dobrana wielkosc z write rate x okno IST.",
       "properties": {
         "innodb_buffer_pool_size": {
           "type": "string"
@@ -653,7 +657,8 @@
         },
         "gcache_size": {
           "type": "string",
-          "pattern": "^[0-9]+[MG]$"
+          "pattern": "^[0-9]+[MG]$",
+          "description": "Statyczna wartosc gcache.size (np. '512M'). Dobor: calc-gcache.py; okresowa weryfikacja doboru: make lab-gcache-verify."
         },
         "performance_schema": {
           "type": "string",

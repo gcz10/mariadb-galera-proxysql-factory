@@ -70,6 +70,7 @@ def canonical_cluster() -> dict:
                 "credentials_revision": 1,
             }
         },
+        "mariadb_tuning": {"gcache_size": "512M"},
     }
 
 
@@ -175,7 +176,22 @@ class ClusterSchemaContractTests(unittest.TestCase):
             with self.subTest(field=name):
                 self.assert_invalid(legacy_cluster(), fragment)
 
+    def test_gcache_size_is_required_and_hard_read(self):
+        # S1: gcache_size to statyczna deklaracja operatora — playbook czyta
+        # mariadb_tuning.gcache_size bez fallbacku. Brak bloku albo brak pola
+        # = odmowa na `cluster-validate`, nie cicha wartosc w srodku bootstrapa.
+        schema = json.loads(SCHEMA_PATH.read_text())
+        self.assertIn("mariadb_tuning", schema["required"])
+        self.assertIn("gcache_size", schema["properties"]["mariadb_tuning"]["required"])
+
+        cluster = canonical_cluster()
+        del cluster["mariadb_tuning"]
+        self.assert_invalid(cluster, "mariadb_tuning")
+        cluster = canonical_cluster()
+        cluster["mariadb_tuning"] = {}
+        self.assert_invalid(cluster, "gcache_size")
     def test_rto_node_failure_is_required(self):
+
         # Jedyny zywotny parametr availability: chaos-failover.py robi twarde
         # CLUSTER["availability"]["rto_node_failure"] (ISC-27). Bez sekcji
         # sonda odmawia startu — pole zostaje wymagane.
@@ -188,16 +204,16 @@ class ClusterSchemaContractTests(unittest.TestCase):
         # wsrep_log_conflicts — dopoki ich nie bylo w schema, byly to pola
         # ukryte (additionalProperties:false je odrzucalo).
         cluster = canonical_cluster()
-        cluster["mariadb_tuning"] = {"wsrep_slave_threads": 8, "wsrep_log_conflicts": "ON"}
+        cluster["mariadb_tuning"].update({"wsrep_slave_threads": 8, "wsrep_log_conflicts": "ON"})
         self.assert_valid(cluster)
 
     def test_shadow_tuning_params_reject_garbage(self):
         cluster = canonical_cluster()
-        cluster["mariadb_tuning"] = {"wsrep_log_conflicts": "MAYBE"}
+        cluster["mariadb_tuning"].update({"wsrep_log_conflicts": "MAYBE"})
         self.assert_invalid(cluster, "wsrep_log_conflicts")
 
         cluster = canonical_cluster()
-        cluster["mariadb_tuning"] = {"wsrep_slave_threads": 0}
+        cluster["mariadb_tuning"].update({"wsrep_slave_threads": 0})
         self.assert_invalid(cluster, "wsrep_slave_threads")
 
     def test_tls_full_without_certificate_source(self):

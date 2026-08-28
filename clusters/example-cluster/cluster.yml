@@ -76,9 +76,10 @@ mariadb_tuning:
   innodb_flush_log_at_trx_commit: 0
   gcache_size: "512M"                # ISC-68: policz swoja wartosc:
                                      #   tests/validation/calc-gcache.py --write-rate <B/s> --window 30
-                                     # Default ma ZAPAS celowo. Do 2026-08-25 stalo tu 128M, czyli
-                                     # dokladnie podloga formuly: klaster zbudowany wg README padal
-                                     # na ostatniej bramce, gdy zmierzony ruch przekroczyl ~74 kB/s.
+                                     # To DEKLARACJA statyczna — playbook nie ma
+                                     # fallbacku. Historia: do 2026-08-25 istnial
+                                     # default 128M (podloga formuly) i klaster wg
+                                     # README padal przy ruchu ~74 kB/s.
 
 availability:
   rto_node_failure: "2m"

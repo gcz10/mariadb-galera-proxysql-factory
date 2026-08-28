@@ -13,7 +13,7 @@
     galera_nodes_csv: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | join(',') }}"
     sst_user: "sst_user"
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') | default('', true) }}"
-    gcache_size: "{{ (mariadb_tuning | default({})).gcache_size | default('512M') }}"
+    gcache_size: "{{ mariadb_tuning.gcache_size }}"
     mariadb_config_dir: /etc/my.cnf.d
   pre_tasks:
     - name: "Wymagaj SST_PASSWORD przed konfiguracja"
@@ -26,6 +26,17 @@
         fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env)."
         quiet: true
       no_log: true
+    - name: "Wymagaj gcache_size (statyczna deklaracja operatora)"
+      ansible.builtin.assert:
+        that:
+          - (mariadb_tuning | default({})).gcache_size is defined
+        fail_msg: >-
+          Ustaw mariadb_tuning.gcache_size w cluster.yml (np. "512M").
+          Playbook nie ma fallbacku — dobranie rozmiaru za operatora bylo
+          przyczyna padnietych klastrow (ISC-68). Sugerowana wartosc z
+          wlasnego pomiaru: tests/validation/calc-gcache.py --write-rate <B/s>
+          --window 30; okresowa kontrola doboru: make lab-gcache-verify.
+        quiet: true
 
   tasks:
     - name: "Utwórz katalogi MariaDB"
