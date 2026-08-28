@@ -98,7 +98,7 @@ galera-rebuild:  ## Przebuduj TYLKO wezly Galera+restore (zachowuje PMM i ProxyS
 	@test -n "$(GALERA_VMS)" || { echo "ERROR: nie wyznaczono wezlow z clusters/$(CLUSTER)/inventory.yml (grupy galera/restore)" >&2; exit 1; }
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje $(GALERA_VMS) w $(CLUSTER))"; exit 1)
 	@cd $(TF_DIR) && terraform init -input=false >/dev/null
-	terraform/pve-teardown.sh $(TF_DIR) $(GALERA_VMS)
+	CONFIRM_DESTROY=$(TF_DIR) terraform/pve-teardown.sh $(TF_DIR) $(GALERA_VMS)
 	cd $(TF_DIR) && terraform apply -auto-approve -parallelism=1
 
 infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM=yes)
@@ -107,7 +107,7 @@ infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM
 	$(pve_auth_guard)
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje WSZYSTKIE VM klastra $(CLUSTER))"; exit 1)
 	@cd $(TF_DIR) && terraform init -input=false >/dev/null
-	terraform/pve-teardown.sh $(TF_DIR)
+	CONFIRM_DESTROY=$(TF_DIR) terraform/pve-teardown.sh $(TF_DIR)
 
 
 cluster-deregister:  ## Usuń obiekty PMM/Grafana/ProxySQL i konto MinIO klastra; zachowaj bucket (CONFIRM=yes)
