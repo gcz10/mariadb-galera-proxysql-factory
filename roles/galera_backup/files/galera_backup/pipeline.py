@@ -768,7 +768,17 @@ def run_backup(
         # klastrowi backupy az do recznej zmiany cluster.yml.
         donor = elect_backup_donor(cfg, secrets, runner)
         me = (cfg.node_system_address or "").strip()
-        if me and donor != me:
+        if not me:
+            # Fail-closed. Warunek `if me and donor != me` znaczyl przy pustej
+            # tozsamosci "nigdy nie pomijaj", wiec kazdy wezel cronowy uznawal
+            # sie za donora i backup ruszal rownolegle na calym klastrze —
+            # blokady sa lokalne dla hosta i nie koordynuja wezlow.
+            raise BackupError(
+                "E_CONFIG",
+                "node_system_address is empty: this node cannot tell whether it "
+                "was elected backup donor",
+            )
+        if donor != me:
             event_mgr.emit("skipped.not_elected", {"donor": donor, "node": me})
             print(
                 f"galera-backup: {curr_host} nie jest donorem w tym przebiegu "

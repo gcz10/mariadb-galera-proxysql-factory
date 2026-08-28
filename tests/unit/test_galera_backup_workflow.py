@@ -28,8 +28,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
 
         # Symetrycznie do straznika writera: elekcja donora odpytuje ProxySQL,
         # a te testy sprawdzaja kroki PO wyborze donora. Zwracany adres jest
-        # obojetny — fixture nie ustawia `node_system_address`, wiec runner nie
-        # wchodzi w galaz pomijania.
+        # tozsamoscia, ktora fixture'y wpisuja w `node_system_address`, wiec
+        # runner uznaje sie za wybranego i wchodzi w wlasciwa sciezke backupu.
         self.donor_election = patch.object(
             pipeline, "elect_backup_donor", return_value="192.168.1.51"
         )
@@ -92,6 +92,53 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             self.assertIn("skipped.not_elected", events)
             self.assertIn("192.168.1.51", events)
 
+    def test_node_without_its_own_address_refuses_to_run(self):
+        """Pusta tozsamosc znaczyla "nigdy nie pomijaj": warunek brzmial
+        `if me and donor != me`, wiec przy braku `node_system_address` KAZDY
+        wezel cronowy uznawal sie za donora i backup ruszal rownolegle na
+        calym klastrze. Blokady sa lokalne dla hosta, wiec nic tego nie
+        zatrzymywalo. Brak tozsamosci musi konczyc przebieg bledem."""
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            cfg_path = td_path / "config.json"
+            env_path = td_path / "secrets.env"
+
+            cfg_data = {
+                "format_version": 1,
+                "cluster_name": "claude-r10b",
+                "metric_cluster_label": "r10b-galera",
+                "local_role": "scheduler",
+                "scheduler_system_hostname": "different-host",
+                "node_system_address": "",
+                "galera_nodes_expected": 3,
+                "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
+                "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
+                "mariadb_version": "11.4.12",
+                "retention_days": 14,
+                "flow_control_threshold_ns": 1000000000,
+                "backend": {"type": "s3", "endpoint": "192.168.1.47:9000", "bucket": "r10b-galera-backups", "secure": False},
+                "paths": {
+                    "install_root": str(td_path),
+                    "cluster_dir": str(td_path / "clusters" / "claude-r10b"),
+                    "staging_root": str(td_path / "staging"),
+                    "datadir": str(td_path / "datadir"),
+                    "socket": str(td_path / "mysql.sock"),
+                    "metric_file": str(td_path / "metrics.prom"),
+                },
+            }
+            cfg_path.write_text(json.dumps(cfg_data))
+            env_path.write_text('GALERA_BACKUP_ENCRYPTION_KEY="enc_key_999"\nGALERA_BACKUP_S3_ACCESS_KEY="s3_access_888"\nGALERA_BACKUP_S3_SECRET_KEY="s3_secret_777"\nGALERA_BACKUP_PROXYSQL_STATS_USER="admin"\nGALERA_BACKUP_PROXYSQL_STATS_PASSWORD="proxysql_pass_999"\n')
+            os.chmod(env_path, 0o600)
+
+            with patch("socket.gethostname", return_value="current-host"):
+                with patch.object(pipeline, "get_storage_backend") as backend:
+                    with self.assertRaises(pipeline.BackupError) as ctx:
+                        pipeline.run_backup(
+                            config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b"
+                        )
+            self.assertEqual(ctx.exception.code, "E_CONFIG")
+            backend.assert_not_called()
+
     def test_run_backup_galera_unhealthy_fails(self):
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -104,6 +151,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "metric_cluster_label": "r10b-galera",
                 "local_role": "scheduler",
                 "scheduler_system_hostname": "gnode4",
+                "node_system_address": "192.168.1.51",
                 "galera_nodes_expected": 3,
                 "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
                 "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
@@ -167,6 +215,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "metric_cluster_label": "r10b-galera",
                 "local_role": "scheduler",
                 "scheduler_system_hostname": "gnode4",
+                "node_system_address": "192.168.1.51",
                 "galera_nodes_expected": 3,
                 "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
                 "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
@@ -254,6 +303,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 "metric_cluster_label": "r10b-galera",
                 "local_role": "scheduler",
                 "scheduler_system_hostname": "gnode4",
+                "node_system_address": "192.168.1.51",
                 "galera_nodes_expected": 3,
                 "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
                 "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
@@ -376,6 +426,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                         "metric_cluster_label": "r10b-galera",
                         "local_role": "scheduler",
                         "scheduler_system_hostname": "gnode4",
+                        "node_system_address": "192.168.1.51",
                         "galera_nodes_expected": 3,
                         "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
                         "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
@@ -488,6 +539,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                         "metric_cluster_label": "r10b-galera",
                         "local_role": "scheduler",
                         "scheduler_system_hostname": "gnode4",
+                        "node_system_address": "192.168.1.51",
                         "galera_nodes_expected": 3,
                         "proxysql": {"admin_host": "192.168.1.44", "admin_port": 6032, "writer_hostgroup": 10, "backup_hostgroup": 20},
                         "galera_nodes": ["192.168.1.51", "192.168.1.52", "192.168.1.53"],
