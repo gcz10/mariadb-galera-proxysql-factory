@@ -88,11 +88,14 @@ TF_DIR ?= terraform/$(CLUSTER)
 # WYGRYWA ze zmienna srodowiskowa, wiec `GALERA_VMS=... make galera-rebuild`
 # zostalby po cichu zignorowany — a to cel, ktory kasuje maszyny.
 GALERA_VMS ?= $(shell python3 -c "import yaml,sys; c=yaml.safe_load(open('clusters/$(CLUSTER)/inventory.yml'))['all']['children']; print(' '.join(h for g in ('galera','restore') for h in (c.get(g) or {}).get('hosts', {})))" 2>/dev/null)
+# Root terraform musi ISTNIEĆ, zanim ktokolwiek zobaczy prompt CONFIRM:
+# najemca BYO-hosts nie ma roota i cele infra-* padaly na surowym `cd`
+# dopiero po wpisaniu potwierdzenia (cassiopeiav8-r9, audyt 2026-08-28).
+tf_dir_guard = @test -d "$(TF_DIR)" || { echo "ERROR: brak $(TF_DIR) — ten klaster nie ma roota terraform (maszyny z innego źródła: pomin cele infra-*)" >&2; exit 1; }
 # Provider bpg/proxmox uwierzytelnia sie ALBO tokenem API (PROXMOX_VE_API_TOKEN),
 # ALBO haslem (PROXMOX_VE_PASSWORD). Bramka zadajaca wylacznie hasla odbijala
 # operatora uzywajacego tokena — wystarczy dowolne z dwoch.
 pve_auth_guard = @test -n "$$PROXMOX_VE_API_TOKEN" -o -n "$$PROXMOX_VE_PASSWORD" || { echo "ERROR: ustaw PROXMOX_VE_API_TOKEN albo PROXMOX_VE_PASSWORD" >&2; exit 1; }
-
 
 galera-rebuild:  ## Przebuduj TYLKO wezly Galera+restore (zachowuje PMM i ProxySQL); CONFIRM=yes
 	$(cluster_guard)
@@ -101,6 +104,7 @@ galera-rebuild:  ## Przebuduj TYLKO wezly Galera+restore (zachowuje PMM i ProxyS
 	@# Pusta lista to nieczytelny inwentarz albo klaster bez grup galera/restore.
 	@# Bez tej bramki `pve-teardown.sh` dostaje zero argumentow i cel „udaje sukces".
 	@test -n "$(GALERA_VMS)" || { echo "ERROR: nie wyznaczono wezlow z clusters/$(CLUSTER)/inventory.yml (grupy galera/restore)" >&2; exit 1; }
+	$(tf_dir_guard)
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje $(GALERA_VMS) w $(CLUSTER))"; exit 1)
 	@cd $(TF_DIR) && terraform init -input=false >/dev/null
 	CONFIRM_DESTROY=$(TF_DIR) terraform/pve-teardown.sh $(TF_DIR) $(GALERA_VMS)
@@ -108,6 +112,7 @@ galera-rebuild:  ## Przebuduj TYLKO wezly Galera+restore (zachowuje PMM i ProxyS
 
 infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM=yes)
 	$(cluster_guard)
+	$(tf_dir_guard)
 	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
 	$(pve_auth_guard)
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje WSZYSTKIE VM klastra $(CLUSTER))"; exit 1)
@@ -126,6 +131,7 @@ cluster-deregister-verify:  ## Zweryfikuj brak sierot w PMM, Grafanie, ProxySQL 
 	$(TARGET_ENV) python3 tests/lab/probe-orphans.py
 infra-provision:  ## Utwórz VM klastra (parallelism=1 — równoległość wywala locki ZFS na PVE)
 	$(cluster_guard)
+	$(tf_dir_guard)
 	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
 	$(pve_auth_guard)
 	cd $(TF_DIR) && terraform init -input=false >/dev/null && terraform apply -auto-approve -parallelism=1
