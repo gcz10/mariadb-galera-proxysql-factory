@@ -1,0 +1,111 @@
+---
+cluster:
+  name: "cassiopeiav9-r9"
+  environment: "laboratory"
+  profile: "laboratory"
+
+platform:
+  rocky_linux_major: 9
+
+versions:
+  policy: "candidate"
+  lock_file: "versions/versions.lock.yml"
+
+galera:
+  cluster_name: "cassiopeiav9_galera"
+  nodes_expected: 3
+
+proxysql:
+  nodes_expected: 2
+  # ROZLACZNOSC NAJEMCOW na wspoldzielonej parze ProxySQL. Baza rezerwuje
+  # CZTERY hostgroupy: base (writer), +10 (backup writer), +20 (reader),
+  # +30 (offline). Sasiednie bazy sa wiec kolizja, mimo ze wygladaja inaczej:
+  # przy 890 i 900 wezly drugiego najemcy laduja w puli, na ktora pierwszy
+  # przelacza sie przy failoverze writera. Kolejnemu klastrowi daj base+40.
+  hostgroup_base: 570
+  # Wpis w `mysql_users` jest GLOBALNY dla instancji ProxySQL: dwaj najemcy
+  # z ta sama nazwa uzytkownika to jeden wpis i ruch obu trafi do jednego
+  # klastra. Nazwa musi byc unikalna w obrebie wspolnego endpointu.
+  app_user: "app_user_cv9"
+  frontend_tls:
+    # WYLACZNIE ca_reference: cert i klucz frontendu naleza do warstwy wspolnej,
+    # ktora serwuje cala flote jednym certem. Wskaz CA tej warstwy.
+    ca_reference: "pki/xenonv9/ca.pem"
+  endpoint:
+    type: "keepalived_vip"
+    # Musi byc DOKLADNIE ten VIP, ktory wystawia warstwa wspolna
+    # (platform/xenonv9/platform.yml). Najemca go nie tworzy — tylko mu ufa.
+    address: "192.168.1.149"
+    port: 6033
+
+tls:
+  # DOMYSLNIE `full`, bo domyslna wartosc to decyzja podjeta za operatora.
+  mode: "full"                        # disabled | full
+  ca_reference: "pki/c9/ca.pem"                   # CA (pem)
+  certificate_reference: "pki/c9/server-cert.pem"          # cert serwera z SAN=wszystkie IP/hostname węzłów + VIP
+  private_key_reference: "pki/c9/server-key.pem"          # klucz prywatny serwera
+  require_secure_transport: false    # true => wymusza TLS na WSZYSTKICH poł. TCP (klienci muszą mieć TLS)
+
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.137/32"]
+
+
+storage:
+  data_directory: "/var/lib/mysql"
+  expected_database_size_gb: "unknown"
+
+workload:
+  peak_qps: "unknown"
+  peak_connections: "unknown"
+  read_write_ratio: "unknown"
+  largest_transaction_mb: "unknown"
+  largest_table_gb: "unknown"
+  expected_write_latency_ms: "unknown"
+
+mariadb_tuning:
+  innodb_buffer_pool_size: "256M"    # produkcja: ~70% RAM węzła (np. "24G")
+  innodb_log_file_size: "128M"       # produkcja: ~25% buffer pool (np. "2G")
+  max_connections: 50                # produkcja: peak_connections + zapas
+  # TYLKO lab: jawny opt-out; pominięcie => 1. Production wymaga 1 albo risk acceptance.
+  innodb_flush_log_at_trx_commit: 0
+  gcache_size: "512M"                # ISC-68: policz swoja wartosc:
+                                     #   tests/validation/calc-gcache.py --write-rate <B/s> --window 30
+
+availability:
+  rto_node_failure: "2m"
+
+backup:
+  enabled: true
+  destination: "s3"
+  full_backup_schedule: "50 3 * * *"
+  incremental_backup_schedule: "disabled"
+  freshness_sla_hours: 26
+  retention_days: 14
+  encryption_enabled: true
+  immutable_or_offsite_copy: true
+  restore_test_schedule: "0 16 * * 0"
+  scheduler:
+    mode: "cron"
+    host: "c9db1"
+    timezone: "UTC"
+  s3:
+    endpoint: "192.168.1.137:9000"
+    bucket: "cassiopeiav9-galera-backups"
+    secure: false
+
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.137"
+    agent_id: "pmm-server"
+    cluster_name: "cassiopeiav9-r9"
+    validate_certs: false
+    credentials_revision: 1
+  alerts:
+    email: "ops@claude.local"
+    folder_uid: ""                   # PUSTE = wyprowadz `isa-alerts-<cluster_name>`.
+                                     # Nie wpisuj tu wspolnej wartosci: tytul folderu jest
+                                     # per najemca, ale `uid` musi byc unikalny w CALEJ Grafanie.
+    datasource_uid: ""
