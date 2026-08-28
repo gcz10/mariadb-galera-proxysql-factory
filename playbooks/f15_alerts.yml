@@ -46,7 +46,7 @@
     # BRAK metryk => `or vector(...)` daje wartość awaryjną => 1 (wykrywa utratę monitoringu).
     # noDataState=Alerting zostaje jako ostatnia linia obrony (padnięta datasource).
     # audit#14: UID-y/folder/contact point namespacowane cluster_name.
-    # restore-drill-stale i backup-metrics-frozen mierzą ŚWIEŻOŚĆ metryk, nie ich brak:
+    # restore-drill-stale i metrics-frozen mierzą ŚWIEŻOŚĆ metryk, nie ich brak:
     # `or vector(0)` NIE widzi .prom, które node_exporter podaje bez zmian (zamrożony
     # plik textfile po padniętym runnerze/kolektorze), więc mtime/last_success
     # porównujemy z time() jawnie — to jedyny sygnał tego trybu awarii.
@@ -176,27 +176,32 @@
         summary: "Last successful backup older than {{ backup_freshness_sla_hours }} hours (or freshness metric missing)"
         severity: "critical"
         noDataState: "Alerting"
-      # Swiezosc drillu ma DWIE zrodla prawdy, bo sa dwie sciezki uruchomienia:
+      # Swiezosc drillu ma DWA zrodla prawdy, bo sa dwie sciezki uruchomienia:
       #   * `isa_restore_test_last_success_unixtime` — publikuje f11_freshness na
       #     galera[0] (sciezka Ansible: `make cluster-restore-drill`),
       #   * `galera_restore_last_success_unixtime` — publikuje SAM runner na hoscie
       #     restore (sciezka cron: /etc/cron.d/galera-restore-<cluster>).
-      # Regula bierze `max` z obu. Wczesniej czytala wylacznie pierwsza, wiec
-      # mierzyla "kiedy ostatnio puszczono Ansible", a nie "kiedy udal sie drill".
+      # Jedyny selector po `__name__` buduje zbior OBU metryk, dopiero `max`
+      # wybiera najnowsza. `max(metric) or vector(0)` osobno dla kazdego zrodla
+      # usuwa nazwe metryki i zawsze daje ten sam pusty label set; zewnetrzne
+      # `or` zachowuje wtedy LHS i ignoruje RHS niezaleznie od jego wartosci.
       - uid: "isa-{{ cluster_label }}-restore-drill-stale"
         requires_backup: true
         title: "Restore drill stale (no successful drill in 8 days)"
-        expr: "(time() - max((max(isa_restore_test_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0)) or (max(galera_restore_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0)))) > bool (8 * 24 * 3600)"
+        expr: "(time() - (max({__name__=~\"isa_restore_test_last_success_unixtime|galera_restore_last_success_unixtime\",cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool (8 * 24 * 3600)"
         summary: "Last successful restore drill older than 8 days (schedule: {{ backup.restore_test_schedule }}) or drill metric missing"
         severity: "critical"
         noDataState: "Alerting"
-      - uid: "isa-{{ cluster_label }}-backup-metrics-frozen"
+      - uid: "isa-{{ cluster_label }}-metrics-frozen"
         requires_backup: true
         title: "Backup metrics file frozen (node_exporter serves stale .prom)"
-        # PromQL kotwiczy `=~` z OBU stron, a etykieta `file` niesie pelna sciezke
-        # (/var/lib/node_exporter/textfile_collector/...), wiec bez wiodacego `.*`
-        # regex nie trafia w nic i regula alarmuje bez przerwy (zweryfikowane na PMM).
-        expr: "(time() - (max(node_textfile_mtime_seconds{file=~\".*galera_backup-.*[.]prom\"}) or vector(0))) > bool ({{ backup_freshness_sla_hours }} * 3600)"
+        # Etykieta `file` niesie pelna sciezke, ale katalog zalezy od trybu:
+        # samodzielny node_exporter czyta /var/lib/node_exporter, a node_exporter
+        # z pmm-agenta raportuje /usr/local/percona/pmm/collectors. PromQL kotwiczy
+        # regex z obu stron, wiec `.*` dopuszcza oba katalogi, a DOKLADNY basename
+        # i etykieta klastra nie pozwalaja swiezemu tenantowi maskowac zamrozonego.
+        # Basename jest identycznie normalizowany jak `metric_file` w config.json.j2.
+        expr: "(time() - (max(node_textfile_mtime_seconds{cluster=\"{{ cluster_label }}\",file=~\".*/galera_backup-{{ cluster.name | regex_replace('[^A-Za-z0-9_-]', '_') }}[.]prom\"}) or vector(0))) > bool ({{ backup_freshness_sla_hours }} * 3600)"
         summary: "galera_backup textfile mtime older than {{ backup_freshness_sla_hours }} hours — runner stopped rewriting metrics"
         severity: "critical"
         noDataState: "Alerting"

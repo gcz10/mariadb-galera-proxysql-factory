@@ -16,6 +16,7 @@ Testy pilnuja czterech wlasnosci, bez ktorych most jest teatrem:
   3. publikacja emituje dokladnie te nazwe metryki, ktorej szuka regula ISC-47,
   4. brak znacznika daje uczciwe 0, a nie awarie backupu.
 """
+import re
 import sys
 import tempfile
 import unittest
@@ -146,6 +147,58 @@ class TestPublishedMetricMatchesAlert(unittest.TestCase):
             rules[0]["expr"],
             "regula ISC-47 nie czyta w expr metryki publikowanej przez most — "
             "most bylby teatrem",
+        )
+
+    def test_restore_sources_are_aggregated_before_missing_metric_fallback(self):
+        rules = _alert_rules(
+            REPO / "playbooks" / "f15_alerts.yml",
+            "isa-{{ cluster_label }}-restore-drill-stale",
+        )
+        self.assertEqual(len(rules), 1)
+        expr = rules[0]["expr"]
+        selector = (
+            '{__name__=~"isa_restore_test_last_success_unixtime'
+            '|galera_restore_last_success_unixtime",'
+            'cluster="{{ cluster_label }}"}'
+        )
+        self.assertIn(
+            selector,
+            expr,
+            "dwa zrodla swiezosci nie sa jednym zbiorem przed max()",
+        )
+        self.assertEqual(
+            expr.count("or vector(0)"),
+            1,
+            "fallback przed scaleniem zrodel usuwa RHS przy zgodnym label set",
+        )
+
+    def test_backup_metrics_mtime_is_scoped_to_this_tenant_file(self):
+        rules = _alert_rules(
+            REPO / "playbooks" / "f15_alerts.yml",
+            "isa-{{ cluster_label }}-metrics-frozen",
+        )
+        self.assertEqual(len(rules), 1)
+        expr = rules[0]["expr"]
+        config_template = (
+            REPO / "roles" / "galera_backup" / "templates" / "config.json.j2"
+        ).read_text(encoding="utf-8")
+        metric_file_match = re.search(
+            r'"metric_file":\s*"([^"]+)"',
+            config_template,
+        )
+        self.assertIsNotNone(metric_file_match)
+        metric_basename = Path(metric_file_match.group(1)).name
+        expected_file = (
+            'file=~".*/'
+            f"{metric_basename.removesuffix('.prom')}[.]prom"
+            '"'
+        )
+        self.assertIn('cluster="{{ cluster_label }}"', expr)
+        self.assertIn(expected_file, expr)
+        self.assertNotIn(
+            "galera_backup-.*",
+            expr,
+            "szeroki regex pozwala swiezemu tenantowi maskowac zamrozonego",
         )
 
     def test_publish_writes_expected_series(self):

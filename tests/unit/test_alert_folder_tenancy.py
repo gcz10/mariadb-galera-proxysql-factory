@@ -30,6 +30,24 @@ def _cluster_files():
     for path in sorted(CLUSTERS.glob("*/cluster.yml")):
         yield path, yaml.safe_load(path.read_text(encoding="utf-8"))
 
+def _rule_uid_templates():
+    uids = []
+
+    def _walk(node):
+        if isinstance(node, dict):
+            if isinstance(node.get("uid"), str):
+                uids.append(node["uid"])
+            for value in node.values():
+                _walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                _walk(value)
+
+    _walk(yaml.safe_load(F15.read_text(encoding="utf-8")))
+    return uids
+
+
+
 
 class AlertFolderTenancyTests(unittest.TestCase):
     def test_template_does_not_ship_a_shared_folder_uid(self):
@@ -67,6 +85,24 @@ class AlertFolderTenancyTests(unittest.TestCase):
         """Tytul i uid musza byc rozlaczne TA SAMA os — inaczej wracamy do 412."""
         text = F15.read_text(encoding="utf-8")
         self.assertIn('f15_folder_title: "ISA Alerts ({{ cluster_label }})"', text)
+
+    def test_every_rendered_rule_uid_fits_grafana_limit(self):
+        """Grafana odrzuca provisioning UID dluzszego niz 40 znakow."""
+        templates = _rule_uid_templates()
+        self.assertTrue(templates)
+        for path, cfg in _cluster_files():
+            label = ((cfg or {}).get("monitoring", {}).get("pmm", {}) or {}).get(
+                "cluster_name", ""
+            )
+            if not label:
+                continue
+            for template in templates:
+                uid = template.replace("{{ cluster_label }}", label)
+                self.assertLessEqual(
+                    len(uid),
+                    40,
+                    f"{path}: Grafana odrzuci UID {uid!r} ({len(uid)} znakow)",
+                )
 
 
 if __name__ == "__main__":
