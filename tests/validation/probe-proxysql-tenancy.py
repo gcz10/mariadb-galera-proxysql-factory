@@ -168,13 +168,81 @@ def check_platform_ownership(clusters, platforms, violations):
             )
 
 
+SHARED_GROUPS = ("proxysql", "app", "infra")
+# Para szablonowa (example-cluster / platform/example) jest wyjety: inwentarz
+# platformy szablonu jest celowo niepelny (brak grupy `app` — W2 z audytu), a
+# swiezy deployment i tak przepisuje oba pliki. Regula pilnuje zywych najemcow.
+TEMPLATE_TENANTS = {"example-cluster"}
+
+
+
+def _group_hosts(inventory_path, groups):
+    """hostname -> ansible_host dla grup warstwy wspoldzielonej w tym inwentarzu."""
+    data = yaml.safe_load(inventory_path.read_text(encoding="utf-8")) or {}
+    children = (data.get("all") or {}).get("children") or {}
+    hosts = {}
+    for group in groups:
+        for name, fields in ((children.get(group) or {}).get("hosts") or {}).items():
+            hosts[name] = str((fields or {}).get("ansible_host", ""))
+    return hosts
+
+
+def check_shared_inventory_copies(clusters, platforms, root, violations):
+    """Kopia grup warstwy wspoldzielonej w inwentarzu najemcy MUSI byc tozsama
+    z originalu platformy.
+
+    Kazdy inwentarz najemcy nosi rececznie kopiowane grupy proxysql/app/infra
+    (jeden inventory na przebieg klastrowy — decyzja architektoniczna). Zaden
+    wczesniejszy walidator nie porownywal kopii z originalu: zmiana adresu
+    wezla w platformie bez aktualizacji najemcow = f7 konfiguruje inna
+    instancje ProxySQL niz ta pod VIP-em, po cichu.
+    """
+    platforms_by_endpoint = defaultdict(list)
+    for platform in platforms:
+        if platform["endpoint"]:
+            platforms_by_endpoint[platform["endpoint"]].append(platform)
+
+    for cluster in clusters:
+        if cluster["name"] in TEMPLATE_TENANTS:
+            continue
+        inventory = root / "clusters" / cluster["name"] / "inventory.yml"
+        if not inventory.is_file():
+            continue
+        defs = platforms_by_endpoint.get(cluster["endpoint"] or "", [])
+        if len(defs) != 1:
+            continue  # sprzeznosc dostawcy pilnuje check_platform_ownership
+        platform = defs[0]
+        platform_inventory = root / "platform" / platform["name"] / "inventory.yml"
+        if not platform_inventory.is_file():
+            continue
+        original = _group_hosts(platform_inventory, SHARED_GROUPS)
+        copy = _group_hosts(inventory, SHARED_GROUPS)
+        for host in sorted(set(original) | set(copy)):
+            if original.get(host) != copy.get(host):
+                violations.append(
+                    f"{inventory.relative_to(root).as_posix()}: kopia grupy "
+                    f"platformowej — {host} ma {copy.get(host, 'BRAK')}, "
+                    f"platforma ({platform_inventory.relative_to(root).as_posix()}) "
+                    f"mowi {original.get(host, 'BRAK')} — najemca konfigurowalby "
+                    f"w ProxySQL hosta, ktorego warstwa nie wystawia"
+                )
+        tenant_ca = cluster["frontend_tls"].get("ca_reference")
+        platform_ca = platform["frontend_tls"].get("ca_reference")
+        if tenant_ca and platform_ca and tenant_ca != platform_ca:
+            violations.append(
+                f"{cluster['path']}: proxysql.frontend_tls.ca_reference "
+                f"{tenant_ca!r} rozni sie od CA wdrazanej przez te platforme "
+                f"({platform_ca!r}) — klient weryfikuje cert, ktorego nikt tu "
+                f"nie podpisan"
+            )
+
+
 def check_tenant_disjointness(clusters, root, violations):
     """Rozlacznosc najemcow na wspolnym endpoincie (kontrola sprzed wyodrebnienia platformy)."""
     by_endpoint = defaultdict(list)
     for cluster in clusters:
         if cluster["endpoint"]:
             by_endpoint[cluster["endpoint"]].append(cluster)
-
     for endpoint, tenants in sorted(by_endpoint.items()):
         if len(tenants) < 2:
             continue
@@ -258,6 +326,7 @@ def check(root):
     clusters, platforms, errors = load_definitions(root)
     violations = list(errors)
     check_platform_ownership(clusters, platforms, violations)
+    check_shared_inventory_copies(clusters, platforms, root, violations)
     by_endpoint = check_tenant_disjointness(clusters, root, violations)
     return violations, by_endpoint
 
@@ -334,6 +403,26 @@ def self_test(root):
                 injected and any("certificate_reference" in v for v in violations),
             )
         )
+
+        fresh_clusters(work)
+        drifted = work / "clusters" / "orionv8-r9" / "inventory.yml"
+        if not drifted.is_file():
+            drifted = next((work / "clusters").glob("*/inventory.yml"), None)
+        injected = False
+        if drifted is not None:
+            before = drifted.read_text(encoding="utf-8")
+            after = before.replace("192.168.1.119", "192.168.1.199", 1)
+            if after != before:
+                drifted.write_text(after, encoding="utf-8")
+                injected = True
+        violations, _ = check(work)
+        results.append(
+            (
+                "dryf adresu kopii grupy platformowej zapala FAIL",
+                injected and any("kopia grupy" in v for v in violations),
+            )
+        )
+        fresh_clusters(work)
 
         fresh_clusters(work)
         if (work / "platform").is_dir():

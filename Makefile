@@ -15,7 +15,7 @@
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
-        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code \
+        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code verify-inventory-tf \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify fleet-state \
         platform-validate platform-trust-hosts platform-deploy platform-firewall platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
 
@@ -429,6 +429,10 @@ cluster-validate:  ## Waliduj konfigurację klastra (schema + invariants invento
 	$(cluster_guard)
 	python3 tests/validation/validate-cluster-schema.py clusters/$(CLUSTER)/cluster.yml clusters/schema/cluster.schema.json
 	python3 tests/validation/validate-inventory.py clusters/$(CLUSTER)/inventory.yml clusters/$(CLUSTER)/cluster.yml --require-known-hosts
+	@# Inwentarz i terraform nie moga sie rozejsc: galera-rebuild bierze liste
+	@# wezlow z inwentarza, a infra-teardown sprzata wylacznie to, co widzi
+	@# `terraform output`. Rozjezd = blad po CONFIRM albo wieczna sierota ZFS.
+	python3 tests/validation/probe-inventory-tf-consistency.py
 	ansible-playbook playbooks/f2_preflight.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
 cluster-deploy:  ## F2+F3 — instaluj pakiety + konfiguruj (idempotentny converge)
@@ -591,6 +595,10 @@ verify-no-conditional-env:  ## Statyczny guard: play-level environment bez warun
 verify-proxysql-tenancy:  ## Statyczny guard: klastry na wspólnym ProxySQL mają rozłączne hostgroupy i app_user
 	python3 tests/validation/probe-proxysql-tenancy.py --self-test
 	python3 tests/validation/probe-proxysql-tenancy.py
+
+verify-inventory-tf:  ## Statyczny guard: hosty z grup TF istnieja w mapie `vms` wlasciwego roota
+	python3 tests/validation/probe-inventory-tf-consistency.py --self-test
+	python3 tests/validation/probe-inventory-tf-consistency.py
 
 # Katalog w roles/ bez tasks/main.yml jest dla Ansible poprawna, PUSTA rola:
 # `roles: mariadb_install` konczy sie rc=0 i zerem zadan. Ta sonda nie pozwala
