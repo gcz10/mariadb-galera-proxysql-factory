@@ -110,7 +110,7 @@
           - -N
           - -B
           - -e
-          - "SHOW STATUS WHERE Variable_name IN ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size')"
+          - "SHOW STATUS WHERE Variable_name IN ('wsrep_local_state','wsrep_cluster_status','wsrep_ready','wsrep_cluster_size','wsrep_cluster_state_uuid')"
       delegate_to: "{{ f13_survivors | first }}"
       become: true
       register: f13_health_before
@@ -123,7 +123,14 @@
           - f13_health_before.stdout is search('wsrep_cluster_status\tPrimary')
           - f13_health_before.stdout is search('wsrep_ready\tON')
           - f13_health_before.stdout is search('wsrep_cluster_size\t' ~ (groups['galera'] | length | string))
-        fail_msg: "ODRZUCONE: przed remove-node wszystkie zadeklarowane węzły muszą być w zdrowym Primary Component."
+          - f13_plan.cluster_state_uuid | length > 0
+          - f13_health_before.stdout is search('wsrep_cluster_state_uuid\t' ~ f13_plan.cluster_state_uuid)
+        fail_msg: >-
+          ODRZUCONE: przed remove-node klaster musi być w zdrowym Primary Component
+          ORAZ w tym samym komponencie, dla którego liczono plan (state UUID z planu:
+          {{ f13_plan.cluster_state_uuid | default('BRAK W PLANIE') }}). Rozjazd = klaster
+          przebudował komponent od momentu planu (restart PC/Bootstrap) — wygeneruj plan
+          ponownie: make cluster-remove-node-plan CLUSTER={{ cluster.name }} NODE={{ node }}.
 
 
 # === Play 1: drain + usuń węzeł z ProxySQL hostgroups ===
