@@ -14,7 +14,7 @@
     galera_nodes_csv: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | join(',') }}"
     sst_user: "sst_user"
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
-    gcache_size: "{{ (mariadb_tuning | default({})).gcache_size | default('128M') }}"
+    gcache_size: "{{ (mariadb_tuning | default({})).gcache_size | default('512M') }}"
     mariadb_config_dir: /etc/my.cnf.d
 
   pre_tasks:
