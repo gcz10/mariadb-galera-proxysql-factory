@@ -7,8 +7,6 @@ all:
     ansible_python_interpreter: /usr/bin/python3
   children:
     galera:
-      vars:
-        galera_role: "galera"
       hosts:
         o8db1:
           ansible_host: "192.168.1.123"
@@ -23,15 +21,11 @@ all:
           galera_node_address: "192.168.1.125"
           galera_node_idx: 3
     restore:
-      vars:
-        restore_role: "restore"
       hosts:
         o8r1:
           ansible_host: "192.168.1.129"
           restore_node_address: "192.168.1.129"
     proxysql:
-      vars:
-        proxysql_role: "proxysql"
       hosts:
         x8p1:
           ansible_host: "192.168.1.119"
@@ -42,15 +36,11 @@ all:
           proxysql_node_address: "192.168.1.120"
           proxysql_node_idx: 2
     app:
-      vars:
-        app_role: "app"
       hosts:
         x8app:
           ansible_host: "192.168.1.121"
           app_node_address: "192.168.1.121"
     infra:
-      vars:
-        infra_role: "infra"
       hosts:
         x8mon:
           ansible_host: "192.168.1.118"

@@ -30,8 +30,6 @@ all:
     # WYMAGANA. Wezly bazy. Liczba musi zgadzac sie z `galera.nodes_expected`
     # w cluster.yml; nieparzysta, bo kworum.
     galera:
-      vars:
-        galera_role: "galera"
       hosts:
         gnode1:
           ansible_host: "10.0.0.11"
@@ -49,8 +47,6 @@ all:
     # WYMAGANA. Para ProxySQL. Nalezy do warstwy wspolnej (`platform/<name>/`),
     # a najemca deklaruje ja po to, zeby wiedziec, gdzie rejestrowac hostgroupy.
     proxysql:
-      vars:
-        proxysql_role: "proxysql"
       hosts:
         pnode1:
           ansible_host: "10.0.1.21"
@@ -64,8 +60,6 @@ all:
     # WYMAGANA, gdy `backup.enabled: true`. Host cwiczen odtworzeniowych —
     # `cluster-restore-drill` kasuje na nim datadir, wiec MUSI byc poza klastrem.
     restore:
-      vars:
-        restore_role: "restore"
       hosts:
         rnode1:
           ansible_host: "10.0.1.31"
@@ -75,8 +69,6 @@ all:
     # klaster oczami aplikacji: po sieci, przez VIP. Bez niego `lab-app-verify`
     # i `lab-app-bench` nie maja skad mierzyc.
     app:
-      vars:
-        app_role: "app"
       hosts:
         anode1:
           ansible_host: "10.0.1.41"
@@ -85,8 +77,6 @@ all:
     # WYMAGANA, gdy warstwa wspolna sama hostuje PMM/MinIO. Przy zewnetrznym
     # PMM albo zewnetrznym S3 zostaw grupe pusta i wskaz endpointy w cluster.yml.
     infra:
-      vars:
-        infra_role: "infra"
       hosts:
         inode1:
           ansible_host: "10.0.1.51"

@@ -29,15 +29,14 @@
     - name: "Blokuj zasiew poza laboratorium"
       ansible.builtin.assert:
         that:
-          - cluster.profile == 'laboratory'
-          - cluster.environment != 'production'
+          - cluster.environment == 'laboratory'
         fail_msg: >-
           lab_seed_smoke.yml tworzy baze {{ seed_database }} i jest przeznaczony
           WYLACZNIE dla klastrow laboratoryjnych. Konfiguracja klastra:
-          profile={{ cluster.profile }}, environment={{ cluster.environment }}.
+          environment={{ cluster.environment }}.
           Na klastrze z danymi drill restore weryfikuje dane produkcyjne i nie
           potrzebuje zasiewu.
-        success_msg: "Profil laboratoryjny — zasiew danych smoke dozwolony."
+        success_msg: "Srodowisko laboratoryjne — zasiew danych smoke dozwolony."
 
   tasks:
     # ISC-2: powtorzony przebieg MUSI raportowac changed=0, wiec kazdy krok
