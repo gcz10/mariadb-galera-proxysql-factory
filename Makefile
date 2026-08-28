@@ -306,12 +306,12 @@ platform-adopt:  ## Przejmij rejestracje PMM zrobione przez bylego ownera (CONFI
 #   expand   -> na kazdym najemcy powstaje bezczynne konto i loguje sie na kazdym backendzie
 #   switch   -> pojedyncza zmiana pary w ProxySQL + bramka na logu monitora
 #   contract -> dopiero teraz znika konto, ktorego ProxySQL juz nie uzywa
-TENANTS ?= $(filter-out example-cluster,$(notdir $(patsubst %/,%,$(dir $(wildcard clusters/*/inventory.yml)))))
+TENANTS ?= $(filter-out example-cluster,$(notdir $(patsubst %/,%,$(dir $(wildcard clusters/*/cluster.yml)))))
 
 platform-monitor-rotate:  ## Rotuj globalne haslo monitora ProxySQL w calej flocie (expand->switch->contract; CONFIRM=yes)
 	@: "$${PROXYSQL_MONITOR_PASSWORD_NEXT:?Ustaw PROXYSQL_MONITOR_PASSWORD_NEXT poza repozytorium}"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (zmienia poswiadczenie monitora calej floty)"; exit 1)
-	@test -n "$(TENANTS)" || (echo "ERROR: brak najemcow w clusters/*/inventory.yml"; exit 1)
+	@test -n "$(TENANTS)" || (echo "ERROR: brak najemcow w clusters/*/cluster.yml"; exit 1)
 	@echo "== faza 1/3 expand: $(TENANTS) =="
 	@for c in $(TENANTS); do \
 		echo "-- expand $$c"; \
