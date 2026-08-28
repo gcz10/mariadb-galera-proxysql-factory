@@ -59,7 +59,6 @@ monitoring:
     # Wskaz wlasny PMM. Gdy warstwa hostuje go sama, to adres hosta z grupy
     # `infra`; przy zewnetrznym PMM — jego URL, a grupa `infra` moze byc pusta.
     server_url: "https://10.0.1.51"
-    agent_id: "pmm-server"
     # Namespace PMM tej warstwy. Trzymanie jej w przestrzeni nazw najemcy
     # oznacza, ze deregistracja najemcy zabiera monitoring calej pary ProxySQL.
     cluster_name: "example"

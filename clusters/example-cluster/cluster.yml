@@ -6,7 +6,6 @@
 cluster:
   name: "example-cluster"
   environment: "laboratory"
-  profile: "laboratory"
 
 platform:
   rocky_linux_major: 9
@@ -67,17 +66,8 @@ network:
 storage:
   data_directory: "/var/lib/mysql"
   expected_database_size_gb: "unknown"
-
-workload:
-  peak_qps: "unknown"
-  peak_connections: "unknown"
-  read_write_ratio: "unknown"
-  largest_transaction_mb: "unknown"
-  largest_table_gb: "unknown"
-  expected_write_latency_ms: "unknown"
-
 # Tuning MariaDB (opcjonalne). Pominięcie => bezpieczne minimalne wartości lab (server.cnf.j2 default).
-# PRODUKCJA: dostosuj do RAM/IOPS węzła (patrz storage/workload powyżej).
+# PRODUKCJA: dostosuj do RAM/IOPS węzła (patrz storage powyżej).
 mariadb_tuning:
   innodb_buffer_pool_size: "256M"    # produkcja: ~70% RAM węzła (np. "24G")
   innodb_log_file_size: "128M"       # produkcja: ~25% buffer pool (np. "2G")
@@ -86,9 +76,10 @@ mariadb_tuning:
   innodb_flush_log_at_trx_commit: 0
   gcache_size: "512M"                # ISC-68: policz swoja wartosc:
                                      #   tests/validation/calc-gcache.py --write-rate <B/s> --window 30
-                                     # Default ma ZAPAS celowo. Do 2026-08-25 stalo tu 128M, czyli
-                                     # dokladnie podloga formuly: klaster zbudowany wg README padal
-                                     # na ostatniej bramce, gdy zmierzony ruch przekroczyl ~74 kB/s.
+                                     # To DEKLARACJA statyczna — playbook nie ma
+                                     # fallbacku. Historia: do 2026-08-25 istnial
+                                     # default 128M (podloga formuly) i klaster wg
+                                     # README padal przy ruchu ~74 kB/s.
 
 availability:
   rto_node_failure: "2m"
@@ -97,11 +88,9 @@ backup:
   enabled: true
   destination: "smb"
   full_backup_schedule: "0 2 * * *"
-  incremental_backup_schedule: "disabled"
   freshness_sla_hours: 26
   retention_days: 14
   encryption_enabled: true
-  immutable_or_offsite_copy: true
   restore_test_schedule: "0 4 * * 0"
   scheduler:
     mode: "manual"
@@ -126,7 +115,6 @@ backup:
 monitoring:
   pmm:
     server_url: "https://pmm.example.invalid"
-    agent_id: "pmm-server"
     cluster_name: "example-cluster"
     validate_certs: true
     credentials_revision: 1

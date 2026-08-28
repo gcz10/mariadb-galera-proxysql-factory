@@ -201,7 +201,6 @@ AUTH_ARGS=()
 if [ -n "${PROXMOX_VE_API_TOKEN:-}" ]; then
   AUTH_HEADER_FILE=$(mktemp)
   chmod 600 "$AUTH_HEADER_FILE"
-  trap 'rm -f "$AUTH_HEADER_FILE"' EXIT
   printf 'Authorization: PVEAPIToken=%s\n' "$PROXMOX_VE_API_TOKEN" > "$AUTH_HEADER_FILE"
   AUTH_ARGS=(-H @"$AUTH_HEADER_FILE")
 else

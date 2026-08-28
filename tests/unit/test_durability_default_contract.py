@@ -39,7 +39,6 @@ class ProductionDurabilityValidatorTests(unittest.TestCase):
     def setUp(self):
         self.base = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
         self.base["cluster"]["environment"] = "production"
-        self.base["cluster"]["profile"] = "production"
         self.base["versions"]["policy"] = "locked"
         # Ten test izoluje polityke trwalosci, wiec baza musi byc poprawnym
         # NIE-szablonowym klastrem — inaczej bramka placeholderow zaslania
@@ -96,7 +95,6 @@ class ProductionDurabilityValidatorTests(unittest.TestCase):
     def test_laboratory_explicit_zero_remains_valid(self):
         cluster = copy.deepcopy(self.base)
         cluster["cluster"]["environment"] = "laboratory"
-        cluster["cluster"]["profile"] = "laboratory"
         cluster["versions"]["policy"] = "candidate"
         cluster["mariadb_tuning"]["innodb_flush_log_at_trx_commit"] = 0
         cluster["mariadb_tuning"].pop("durability_risk_accepted", None)

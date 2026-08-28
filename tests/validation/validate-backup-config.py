@@ -164,11 +164,6 @@ def validate_pair(cluster_path: Path, inventory_path: Path) -> list[str]:
     if backup_enabled:
         errors.extend(validate_cron(backup.get("full_backup_schedule", "")))
 
-    # Incremental schedule check
-    incr_expr = backup.get("incremental_backup_schedule", "")
-    if incr_expr != "disabled":
-        errors.append(f"incremental_backup_schedule must be 'disabled', got '{incr_expr}'")
-
     # Encryption check
     if backup.get("encryption_enabled") is not True:
         errors.append("encryption_enabled must be true")

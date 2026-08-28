@@ -19,8 +19,6 @@ all:
     # `proxysql.nodes_expected`. VIP przejmuje ten z wyzszym priorytetem VRRP,
     # a `proxysql_node_idx: 1` wyznacza wezel pierwszy.
     proxysql:
-      vars:
-        proxysql_role: "proxysql"
       hosts:
         pnode1:
           ansible_host: "10.0.1.21"
@@ -35,8 +33,6 @@ all:
     # pocztowy alertow. Zostaw pusta, gdy uzywasz uslug zewnetrznych — wtedy
     # wskaz je adresami w `platform.yml` i w `cluster.yml` najemcow.
     infra:
-      vars:
-        infra_role: "infra"
       hosts:
         inode1:
           ansible_host: "10.0.1.51"

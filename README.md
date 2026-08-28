@@ -138,9 +138,9 @@ zmierzyć TLS endpointu i kończy się `UNDETERMINED`.
   `pmm.server_url`, `pmm.cluster_name`, `pmm.validate_certs`,
   `agent_groups`, `credentials_revision` i rzeczywisty adres alertów.
 - `mariadb_tuning.gcache_size` — bufor, z którego wracający węzeł dostaje IST
-  zamiast pełnego SST. Domyślne `512M` ma zapas, ale własną wartość policz:
-  `tests/validation/calc-gcache.py --write-rate <B/s> --window 30`, gdzie write
-  rate bierzesz z `f0_discovery` albo z `probe-gcache.py` na żywym klastrze.
+  zamiast pełnego SST. **Wymagane statycznie** w `cluster.yml` — playbook nie ma
+  fallbacku. Sugerowaną wartość policz `tests/validation/calc-gcache.py
+  --write-rate <B/s> --window 30`; pomiar zrob `make lab-gcache-verify`.
   Za mała wartość nie psuje działania — kosztuje pełny SST przy każdym powrocie
   węzła i jest odrzucana przez bramkę po budowie;
 
@@ -172,8 +172,8 @@ export MINIO_ROOT_PASSWORD='<minio-s3-secret>'
 # WARSTWA WSPOLNA — musi istniec ZANIM powstanie pierwszy klaster. Najemca
 # zaklada dzialajaca pare ProxySQL i wdrozony `admin-check.cnf`; bez nich
 # zatrzymuje sie na jawnej bramce, nie na przypadkowym bledzie SQL.
-make platform-trust-hosts
-make platform-build
+make platform-trust-hosts PLATFORM=<nazwa>
+make platform-build PLATFORM=<nazwa>
 
 # Pełne `cluster-validate` wymaga SSH do węzłów: po dwóch statycznych
 # walidatorach uruchamia read-only preflight systemu i wersji Rocky Linux.

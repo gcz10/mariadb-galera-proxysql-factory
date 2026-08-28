@@ -1,10 +1,10 @@
 ---
 # F1 finding: community.mysql deprecated -> ansible.mysql (2026-07-22, ansible.mysql 5.1.0).
-# Nie modyfikuje usług produkcyjnych. Narzędzia benchmarkowe (fio) instaluje
-# wyłącznie na hostach jawnie oznaczonych w inventory grupą [discovery_bench]
-# i tylko po zmiennej allow_bench: true.
+# Nie modyfikuje usług produkcyjnych.
 #
-# Satisfies: ISC-66 (raport discovery), ISC-67 (read-only), ISC-68 (gcache calc)
+# Satisfies: ISC-66 (raport discovery), ISC-67 (read-only)
+# (ISC-68 realizuje tests/validation/calc-gcache.py — tutaj nie ma pomiaru
+#  write rate: snapshot licznika bez delty/interwału go nie daje.)
 # Status: PRZYGOTOWANY — nie uruchomiony (BLK-1, BLK-2: brak testowych hostów)
 
 - name: F0 Discovery — zbierz fakty
@@ -12,9 +12,6 @@
   become: true
   gather_facts: true
   vars:
-    allow_bench: false
-    bench_path: /var/tmp/f0-fio
-    bench_size: 1G
     ist_window_minutes: 30
 
   tasks:
@@ -126,7 +123,7 @@
       ignore_errors: true
       register: missing_pk
 
-    - name: Write rate (jeśli istnieje MariaDB) — wsrep received/committed
+    - name: wsrep received (jeśli istnieje MariaDB) — okno IST w raporcie
       ansible.mysql.mysql_query:
         query: SHOW GLOBAL STATUS LIKE 'wsrep_received'
         login_unix_socket: /var/lib/mysql/mysql.sock
@@ -134,125 +131,12 @@
       become_user: mysql
       ignore_errors: true
       register: wsrep_received
-    - name: Write rate — wsrep committed (jeśli istnieje MariaDB)
-      ansible.mysql.mysql_query:
-        query: SHOW GLOBAL STATUS LIKE 'wsrep_committed'
-        login_unix_socket: /var/lib/mysql/mysql.sock
-      become: true
-      become_user: mysql
-      ignore_errors: true
-      register: wsrep_committed
-
-    - name: Write rate — bytes received (jeśli istnieje MariaDB)
-      ansible.mysql.mysql_query:
-        query: SHOW GLOBAL STATUS LIKE 'wsrep_received_bytes'
-        login_unix_socket: /var/lib/mysql/mysql.sock
-      become: true
-      become_user: mysql
-      ignore_errors: true
-      register: wsrep_received_bytes
-
-    - name: Secret backend — sprawdź dostępność Ansible Vault
-      ansible.builtin.shell: |
-        set -o pipefail
-        which ansible-vault 2>/dev/null && echo "ansible-vault: available" || echo "ansible-vault: not-found"
-        if [ -f "{{ playbook_dir }}/../clusters/{{ cluster_name | default('example-cluster') }}/secrets.yml" ]; then
-          head -1 "{{ playbook_dir }}/../clusters/{{ cluster_name | default('example-cluster') }}/secrets.yml" | grep -q 'ANSIBLE_VAULT' && echo "secrets.yml: vault-encrypted" || echo "secrets.yml: plaintext-WARNING"
-        else
-          echo "secrets.yml: not-present"
-        fi
-      args:
-        executable: /bin/bash
-      changed_when: false
-      register: secret_backend_probe
-
-    - name: Backup target — sprawdź czy SMB mount osiągalny
-      ansible.builtin.shell: |
-        set -o pipefail
-        # Sprawdź czy istnieje zamontowany zasób SMB/CIFS
-        if findmnt -t cifs 2>/dev/null | grep -q .; then
-          echo "smb-mount: found"
-          findmnt -t cifs -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null
-        else
-          echo "smb-mount: not-mounted"
-        fi
-        # Sprawdź S3 endpoint (jeśli skonfigurowany)
-        if command -v aws &>/dev/null; then
-          echo "s3-cli: available"
-        else
-          echo "s3-cli: not-installed"
-        fi
-      args:
-        executable: /bin/bash
-      changed_when: false
-      register: backup_target_probe
-
-    - name: GPG fingerprint — repozytoria MariaDB/ProxySQL
-      ansible.builtin.shell: |
-        set -o pipefail
-        for repo in /etc/yum.repos.d/mariadb.repo /etc/yum.repos.d/proxysql.repo; do
-          if [ -f "$repo" ]; then
-            echo "=== $repo ==="
-            grep -E 'gpgkey|gpgcheck|baseurl' "$repo" || true
-          fi
-        done
-        # Lista zaimportowanych kluczy GPG
-        rpm -qa gpg-pubkey 2>/dev/null | while read -r key; do
-          rpm -qi "$key" 2>/dev/null | grep -E '^(Summary|Version|Packager)' || true
-        done | head -30 || true
-        # `|| true` na koncu: head zamyka potok, wiec przy wielu kluczach while
-        # dostaje SIGPIPE i z pipefail zwracalby 141 — falszywa awaria sondy.
-      args:
-        executable: /bin/bash
-      changed_when: false
-      register: gpg_fingerprint_probe
-
-    - name: Reprezentatywny workload — największe tabele i transakcje
-      ansible.mysql.mysql_query:
-        query: |
-          SELECT TABLE_SCHEMA, TABLE_NAME,
-                 ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) AS size_mb
-          FROM information_schema.TABLES
-          WHERE TABLE_SCHEMA NOT IN ('mysql','sys','performance_schema','information_schema')
-          ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC
-          LIMIT 10
-        login_unix_socket: /var/lib/mysql/mysql.sock
-      become: true
-      become_user: mysql
-      ignore_errors: true
-      register: largest_tables
-
-    - name: Reprezentatywny workload — InnoDB history list (aktywne transakcje)
-      ansible.mysql.mysql_query:
-        query: SHOW ENGINE INNODB STATUS
-        login_unix_socket: /var/lib/mysql/mysql.sock
-      become: true
-      become_user: mysql
-      ignore_errors: true
-      register: innodb_status
 
     - name: NUMA topology
       ansible.builtin.command: numactl --hardware
       changed_when: false
       ignore_errors: true
       register: numa_hw
-
-    - name: Bench fio — TYLKO na hostach [discovery_bench] z allow_bench
-      when: "'discovery_bench' in group_names"
-      block:
-        - name: Instaluj fio na bench hostach
-          ansible.builtin.dnf:
-            name: fio
-            state: present
-          when: allow_bench | bool
-
-        - name: Uruchom fio (randwrite fsync latency)
-          ansible.builtin.command: >
-            fio --name=f0-bench --directory={{ bench_path }} --size={{ bench_size }}
-            --rw=randwrite --fsync=1 --time_based --runtime=30 --numjobs=1
-            --output-format=json --output={{ bench_path }}/f0-fio.json
-          changed_when: false
-          when: allow_bench | bool
 
     - name: Zapisz fakty hosta do pliku raportu
       ansible.builtin.copy:

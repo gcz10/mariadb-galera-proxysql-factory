@@ -89,10 +89,6 @@ class AlertRuleContractTests(unittest.TestCase):
         )
         return matches[0]
 
-    def test_orphan_rules_are_pruned(self):
-        """Bez tego kroku kazda przemianowana regula zostaje w Grafanie na zawsze."""
-        self._prune_task()
-
     def test_prune_is_scoped_to_own_managed_rules(self):
         """Najmocniejsza asercja pliku: najemca nie moze skasowac cudzych regul.
 

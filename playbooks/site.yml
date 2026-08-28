@@ -14,7 +14,7 @@
     galera_nodes_csv: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | join(',') }}"
     sst_user: "sst_user"
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
-    gcache_size: "{{ (mariadb_tuning | default({})).gcache_size | default('128M') }}"
+    gcache_size: "{{ mariadb_tuning.gcache_size }}"
     mariadb_config_dir: /etc/my.cnf.d
 
   pre_tasks:
@@ -23,6 +23,17 @@
         that:
           - sst_password | length > 0
         fail_msg: "Ustaw SST_PASSWORD poza repozytorium (env). Puste hasło = konto SST bez hasła."
+    - name: "Wymagaj gcache_size (statyczna deklaracja operatora)"
+      ansible.builtin.assert:
+        that:
+          - (mariadb_tuning | default({})).gcache_size is defined
+        fail_msg: >-
+          Ustaw mariadb_tuning.gcache_size w cluster.yml (np. "512M").
+          Playbook nie ma fallbacku — dobranie rozmiaru za operatora bylo
+          przyczyna padnietych klastrow (ISC-68). Sugerowana wartosc z
+          wlasnego pomiaru: tests/validation/calc-gcache.py --write-rate <B/s>
+          --window 30; okresowa kontrola doboru: make lab-gcache-verify.
+        quiet: true
     - name: "Utworz katalogi"
       ansible.builtin.file:
         path: "{{ item.path }}"
@@ -97,7 +108,6 @@
 
     - name: "Dystrybuuj certyfikaty TLS (gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
-      register: tls_deploy_result
       when: (tls | default({})).mode | default('disabled') == 'full'
 
     # Rotacja certu NIE wymaga restartu. Dokumentacja Galery ma na to osobna
@@ -118,7 +128,6 @@
       ansible.builtin.command: mariadb-install-db --user=mysql --datadir=/var/lib/mysql
       args:
         creates: /var/lib/mysql/mysql
-      register: init_result
 
     - name: "Włącz mariadb.service na starcie (start przez bootstrap/join, NIE converge)"
       ansible.builtin.systemd:

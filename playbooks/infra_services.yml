@@ -234,7 +234,6 @@
         daemon_reload: true
         enabled: true
         state: started
-      register: infra_docker_start
 
     - name: "Restart Docker jesli sysctl ip_forward sie zmienil"
       # Wypycha handler DOPIERO TUTAJ: w tym miejscu play robi to samo, co dawne
@@ -261,7 +260,6 @@
         owner: root
         group: root
         mode: "0600"
-      register: infra_compose_config
       no_log: true
 
     - name: "Uruchom usługi infra"

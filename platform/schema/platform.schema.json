@@ -236,7 +236,6 @@
           "type": "object",
           "required": [
             "server_url",
-            "agent_id",
             "cluster_name",
             "validate_certs",
             "credentials_revision",
@@ -247,10 +246,6 @@
             "server_url": {
               "type": "string",
               "pattern": "^https://"
-            },
-            "agent_id": {
-              "type": "string",
-              "minLength": 1
             },
             "cluster_name": {
               "type": "string",

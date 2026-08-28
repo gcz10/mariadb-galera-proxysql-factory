@@ -7,24 +7,12 @@ Verifies:
    - OFFLINE_SOFT drain -> wait ConnUsed=0 -> DELETE FROM mysql_servers.
 """
 
-import re
 import unittest
 import yaml
 
 
 class BootstrapClassificationTests(unittest.TestCase):
     """Tests regex classification in bootstrap.yml (ISC-65)."""
-
-    def test_anchored_regex_behavior(self):
-        pattern = r"(?m)^wsrep_cluster_status\tPrimary$"
-
-        primary_output = "wsrep_cluster_status\tPrimary\n"
-        non_primary_output = "wsrep_cluster_status\tnon-Primary\n"
-        arbitrary_output = "some_other_var\tPrimary\n"
-
-        self.assertIsNotNone(re.search(pattern, primary_output))
-        self.assertIsNone(re.search(pattern, non_primary_output))
-        self.assertIsNone(re.search(pattern, arbitrary_output))
 
     def test_bootstrap_uses_anchored_regex_from_shared_classifier(self):
         with open("playbooks/bootstrap.yml", encoding="utf-8") as f:

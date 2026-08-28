@@ -2,7 +2,6 @@
 cluster:
   name: "orionv9-r9"
   environment: "laboratory"
-  profile: "laboratory"
 
 platform:
   rocky_linux_major: 9
@@ -56,15 +55,6 @@ network:
 storage:
   data_directory: "/var/lib/mysql"
   expected_database_size_gb: "unknown"
-
-workload:
-  peak_qps: "unknown"
-  peak_connections: "unknown"
-  read_write_ratio: "unknown"
-  largest_transaction_mb: "unknown"
-  largest_table_gb: "unknown"
-  expected_write_latency_ms: "unknown"
-
 mariadb_tuning:
   innodb_buffer_pool_size: "256M"    # produkcja: ~70% RAM węzła (np. "24G")
   innodb_log_file_size: "128M"       # produkcja: ~25% buffer pool (np. "2G")
@@ -81,11 +71,9 @@ backup:
   enabled: true
   destination: "s3"
   full_backup_schedule: "20 3 * * *"
-  incremental_backup_schedule: "disabled"
   freshness_sla_hours: 26
   retention_days: 14
   encryption_enabled: true
-  immutable_or_offsite_copy: true
   restore_test_schedule: "0 15 * * 0"
   scheduler:
     mode: "cron"
@@ -99,7 +87,6 @@ backup:
 monitoring:
   pmm:
     server_url: "https://192.168.1.137"
-    agent_id: "pmm-server"
     cluster_name: "orionv9-r9"
     validate_certs: false
     credentials_revision: 1

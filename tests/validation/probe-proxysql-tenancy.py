@@ -285,14 +285,12 @@ def self_test(root):
         return True
 
     def inject_material(work):
-        target = work / "clusters" / "newclaude17-r9" / "cluster.yml"
-        if not target.exists():
-            candidates = [
-                path
-                for path in sorted((work / "clusters").glob("*/cluster.yml"))
-                if "  frontend_tls:\n" in path.read_text(encoding="utf-8")
-            ]
-            target = candidates[0] if candidates else None
+        candidates = [
+            path
+            for path in sorted((work / "clusters").glob("*/cluster.yml"))
+            if "  frontend_tls:\n" in path.read_text(encoding="utf-8")
+        ]
+        target = candidates[0] if candidates else None
         if target is None:
             return False
         text = target.read_text(encoding="utf-8")
@@ -311,6 +309,9 @@ def self_test(root):
         shutil.copytree(root / "clusters", work / "clusters")
         if (root / "platform").is_dir():
             shutil.copytree(root / "platform", work / "platform")
+        # check() czyta playbooks/f7_proxysql.yml przy endpoincie z >1 najemca
+        # full-TLS — bez tej kopii czysta kopia dalaby dwa falszywe naruszenia.
+        shutil.copytree(root / "playbooks", work / "playbooks")
 
         violations, _ = check(work)
         results.append(("czysta kopia definicji przechodzi", not violations))

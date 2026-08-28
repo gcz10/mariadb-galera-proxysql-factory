@@ -26,7 +26,6 @@ network:
 monitoring:
   pmm:
     server_url: "https://192.168.1.118"
-    agent_id: "pmm-server"
     cluster_name: "xenonv8"
     validate_certs: false
     credentials_revision: 1

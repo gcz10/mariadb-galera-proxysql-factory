@@ -162,7 +162,6 @@
         permanent: true
         offline: true
       loop: "{{ firewall_legacy_zones }}"
-      register: firewall_legacy_cleanup
 
     - name: "Włącz firewalld"
       ansible.builtin.systemd_service:
@@ -177,7 +176,6 @@
         owner: root
         group: root
         mode: "0640"
-      register: firewall_public_zone
 
     - name: "Przeładuj kompletną politykę firewalld (usuń także dryf runtime)"
       ansible.builtin.command:

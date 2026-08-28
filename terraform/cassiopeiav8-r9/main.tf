@@ -19,10 +19,10 @@ locals {
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   gateway    = "192.168.1.1"
   vms = {
-    x9mon = { id = 9912, ip = 137, role = "infra", cpu = 2, ram = 5120, disk = 40 }
-    x9p1  = { id = 9913, ip = 138, role = "proxysql", cpu = 2, ram = 3072, disk = 40 }
-    x9p2  = { id = 9914, ip = 139, role = "proxysql", cpu = 2, ram = 3072, disk = 40 }
-    x9app = { id = 9915, ip = 140, role = "app", cpu = 1, ram = 3072, disk = 40 }
+    c8db1 = { id = 9907, ip = 126, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    c8db2 = { id = 9908, ip = 127, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    c8db3 = { id = 9909, ip = 128, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    c8r1  = { id = 9911, ip = 136, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
 
@@ -38,14 +38,15 @@ module "vms" {
   gateway    = local.gateway
   vms        = local.vms
 
-  tags               = ["rocky9", "platform", "xenonv9"]
-  description_prefix = "xenonv9 platforma Rocky 9"
+  tags               = ["rocky9", "galera", "cassiopeiav8"]
+  description_prefix = "cassiopeiav8-r9 Rocky 9"
   description_dash   = "-"
   disk_file_format   = "raw"
   disk_aio           = "io_uring"
 
   purge_on_destroy                     = true
   delete_unreferenced_disks_on_destroy = true
+  started                              = false
 }
 
 output "vms" {

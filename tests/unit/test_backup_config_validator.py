@@ -55,7 +55,6 @@ class BackupConfigValidatorTests(unittest.TestCase):
             "cluster": {
                 "name": name,
                 "environment": env,
-                "profile": env,
                 "automation_release": "1.0",
             },
             "platform": {"virtualization": "proxmox", "rocky_linux_major": 10},
@@ -87,11 +86,9 @@ class BackupConfigValidatorTests(unittest.TestCase):
                 "enabled": True,
                 "destination": "s3",
                 "full_backup_schedule": "0 2 * * *",
-                "incremental_backup_schedule": "disabled",
                 "freshness_sla_hours": 26,
                 "retention_days": 14,
                 "encryption_enabled": True,
-                "immutable_or_offsite_copy": True,
                 "restore_test_schedule": "0 4 * * 0",
                 "scheduler": {
                     "mode": "cron",
@@ -108,7 +105,6 @@ class BackupConfigValidatorTests(unittest.TestCase):
             "monitoring": {
                 "pmm": {
                     "server_url": "https://192.168.1.47",
-                    "agent_id": "pmm-server",
                     "cluster_name": pmm_name,
                     "validate_certs": False,
                     "credentials_revision": 1,
@@ -167,12 +163,6 @@ class BackupConfigValidatorTests(unittest.TestCase):
         res = self.validate()
         self.assertNotEqual(res.returncode, 0)
 
-    def test_rejects_non_disabled_incremental_schedule(self):
-        c = self.valid_s3_cluster()
-        c["backup"]["incremental_backup_schedule"] = "0 3 * * *"
-        self.create_cluster_pair("c1", c, self.valid_inventory())
-        res = self.validate()
-        self.assertNotEqual(res.returncode, 0)
 
     def test_rejects_encryption_disabled(self):
         c = self.valid_s3_cluster()
@@ -278,7 +268,6 @@ class BackupConfigValidatorTests(unittest.TestCase):
 
     def test_rejects_unsecure_s3_in_production(self):
         c = self.valid_s3_cluster(env="production", secure=False)
-        c["cluster"]["profile"] = "production"
         c["versions"]["policy"] = "locked"
         self.create_cluster_pair("c1", c, self.valid_inventory())
         res = self.validate()

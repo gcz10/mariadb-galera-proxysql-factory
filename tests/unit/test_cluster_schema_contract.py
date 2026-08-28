@@ -26,7 +26,6 @@ def canonical_cluster() -> dict:
         "cluster": {
             "name": "contract-cluster",
             "environment": "laboratory",
-            "profile": "laboratory",
         },
         "platform": {"rocky_linux_major": 9},
         "versions": {"policy": "locked", "lock_file": "versions/versions.lock.yml"},
@@ -51,11 +50,9 @@ def canonical_cluster() -> dict:
             "enabled": True,
             "destination": "s3",
             "full_backup_schedule": "0 2 * * *",
-            "incremental_backup_schedule": "disabled",
             "freshness_sla_hours": 26,
             "retention_days": 14,
             "encryption_enabled": True,
-            "immutable_or_offsite_copy": True,
             "restore_test_schedule": "0 4 * * 0",
             "scheduler": {"mode": "cron", "host": "gnode1", "timezone": "UTC"},
             "s3": {
@@ -68,12 +65,12 @@ def canonical_cluster() -> dict:
         "monitoring": {
             "pmm": {
                 "server_url": "https://127.0.0.1:8443",
-                "agent_id": "pmm-server",
                 "cluster_name": "contract-galera",
                 "validate_certs": False,
                 "credentials_revision": 1,
             }
         },
+        "mariadb_tuning": {"gcache_size": "512M"},
     }
 
 
@@ -96,6 +93,11 @@ GHOST_FIELDS = [
     ("proxysql.max_writers", "max_writers"),
     ("proxysql.read_write_split_enabled", "read_write_split_enabled"),
     ("tls.certificate_source", "certificate_source"),
+    ("cluster.profile", "profile"),
+    ("backup.incremental_backup_schedule", "incremental_backup_schedule"),
+    ("backup.immutable_or_offsite_copy", "immutable_or_offsite_copy"),
+    ("monitoring.pmm.agent_id", "agent_id"),
+    ("workload", "workload"),
 ]
 
 
@@ -124,6 +126,18 @@ def legacy_cluster() -> dict:
     )
     cluster["proxysql"].update({"max_writers": 1, "read_write_split_enabled": False})
     cluster["tls"]["certificate_source"] = "file"
+    cluster["cluster"]["profile"] = "laboratory"
+    cluster["backup"]["incremental_backup_schedule"] = "disabled"
+    cluster["backup"]["immutable_or_offsite_copy"] = True
+    cluster["monitoring"]["pmm"]["agent_id"] = "pmm-server"
+    cluster["workload"] = {
+        "peak_qps": "unknown",
+        "peak_connections": "unknown",
+        "read_write_ratio": "unknown",
+        "largest_transaction_mb": "unknown",
+        "largest_table_gb": "unknown",
+        "expected_write_latency_ms": "unknown",
+    }
     return cluster
 
 
@@ -162,7 +176,22 @@ class ClusterSchemaContractTests(unittest.TestCase):
             with self.subTest(field=name):
                 self.assert_invalid(legacy_cluster(), fragment)
 
+    def test_gcache_size_is_required_and_hard_read(self):
+        # S1: gcache_size to statyczna deklaracja operatora — playbook czyta
+        # mariadb_tuning.gcache_size bez fallbacku. Brak bloku albo brak pola
+        # = odmowa na `cluster-validate`, nie cicha wartosc w srodku bootstrapa.
+        schema = json.loads(SCHEMA_PATH.read_text())
+        self.assertIn("mariadb_tuning", schema["required"])
+        self.assertIn("gcache_size", schema["properties"]["mariadb_tuning"]["required"])
+
+        cluster = canonical_cluster()
+        del cluster["mariadb_tuning"]
+        self.assert_invalid(cluster, "mariadb_tuning")
+        cluster = canonical_cluster()
+        cluster["mariadb_tuning"] = {}
+        self.assert_invalid(cluster, "gcache_size")
     def test_rto_node_failure_is_required(self):
+
         # Jedyny zywotny parametr availability: chaos-failover.py robi twarde
         # CLUSTER["availability"]["rto_node_failure"] (ISC-27). Bez sekcji
         # sonda odmawia startu — pole zostaje wymagane.
@@ -175,16 +204,16 @@ class ClusterSchemaContractTests(unittest.TestCase):
         # wsrep_log_conflicts — dopoki ich nie bylo w schema, byly to pola
         # ukryte (additionalProperties:false je odrzucalo).
         cluster = canonical_cluster()
-        cluster["mariadb_tuning"] = {"wsrep_slave_threads": 8, "wsrep_log_conflicts": "ON"}
+        cluster["mariadb_tuning"].update({"wsrep_slave_threads": 8, "wsrep_log_conflicts": "ON"})
         self.assert_valid(cluster)
 
     def test_shadow_tuning_params_reject_garbage(self):
         cluster = canonical_cluster()
-        cluster["mariadb_tuning"] = {"wsrep_log_conflicts": "MAYBE"}
+        cluster["mariadb_tuning"].update({"wsrep_log_conflicts": "MAYBE"})
         self.assert_invalid(cluster, "wsrep_log_conflicts")
 
         cluster = canonical_cluster()
-        cluster["mariadb_tuning"] = {"wsrep_slave_threads": 0}
+        cluster["mariadb_tuning"].update({"wsrep_slave_threads": 0})
         self.assert_invalid(cluster, "wsrep_slave_threads")
 
     def test_tls_full_without_certificate_source(self):
