@@ -26,7 +26,6 @@ def canonical_cluster() -> dict:
         "cluster": {
             "name": "contract-cluster",
             "environment": "laboratory",
-            "profile": "laboratory",
         },
         "platform": {"rocky_linux_major": 9},
         "versions": {"policy": "locked", "lock_file": "versions/versions.lock.yml"},
@@ -51,11 +50,9 @@ def canonical_cluster() -> dict:
             "enabled": True,
             "destination": "s3",
             "full_backup_schedule": "0 2 * * *",
-            "incremental_backup_schedule": "disabled",
             "freshness_sla_hours": 26,
             "retention_days": 14,
             "encryption_enabled": True,
-            "immutable_or_offsite_copy": True,
             "restore_test_schedule": "0 4 * * 0",
             "scheduler": {"mode": "cron", "host": "gnode1", "timezone": "UTC"},
             "s3": {
@@ -68,7 +65,6 @@ def canonical_cluster() -> dict:
         "monitoring": {
             "pmm": {
                 "server_url": "https://127.0.0.1:8443",
-                "agent_id": "pmm-server",
                 "cluster_name": "contract-galera",
                 "validate_certs": False,
                 "credentials_revision": 1,
@@ -96,6 +92,11 @@ GHOST_FIELDS = [
     ("proxysql.max_writers", "max_writers"),
     ("proxysql.read_write_split_enabled", "read_write_split_enabled"),
     ("tls.certificate_source", "certificate_source"),
+    ("cluster.profile", "profile"),
+    ("backup.incremental_backup_schedule", "incremental_backup_schedule"),
+    ("backup.immutable_or_offsite_copy", "immutable_or_offsite_copy"),
+    ("monitoring.pmm.agent_id", "agent_id"),
+    ("workload", "workload"),
 ]
 
 
@@ -124,6 +125,18 @@ def legacy_cluster() -> dict:
     )
     cluster["proxysql"].update({"max_writers": 1, "read_write_split_enabled": False})
     cluster["tls"]["certificate_source"] = "file"
+    cluster["cluster"]["profile"] = "laboratory"
+    cluster["backup"]["incremental_backup_schedule"] = "disabled"
+    cluster["backup"]["immutable_or_offsite_copy"] = True
+    cluster["monitoring"]["pmm"]["agent_id"] = "pmm-server"
+    cluster["workload"] = {
+        "peak_qps": "unknown",
+        "peak_connections": "unknown",
+        "read_write_ratio": "unknown",
+        "largest_transaction_mb": "unknown",
+        "largest_table_gb": "unknown",
+        "expected_write_latency_ms": "unknown",
+    }
     return cluster
 
 
