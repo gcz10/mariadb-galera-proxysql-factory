@@ -87,8 +87,6 @@ class SecretLengthPolicyTests(unittest.TestCase):
             uses = "isa_min_secret_length" in text or "isa_vrrp_auth_length" in text
             if not uses or path == POLICY:
                 continue
-            if path.parts[-3:-1] == ("roles", "tasks"):
-                continue  # rola dostaje zmienna od playbooka, ma wlasna domyslke
             if "vars/secret_policy.yml" not in text and "roles/" not in str(path):
                 missing.append(str(path.relative_to(REPO)))
         self.assertEqual(missing, [], f"uzywaja polityki, ale jej nie ladują: {missing}")

@@ -148,7 +148,6 @@
           - mariadb-server
       args:
         chdir: /var/cache/isa-selinux/active
-      register: mariadb_galera_policy_extract
       changed_when: false
       failed_when: false
       when:
