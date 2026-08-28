@@ -14,10 +14,29 @@ sys.path.insert(0, str(REPO / "roles" / "galera_backup" / "files"))
 from galera_backup import pipeline  # noqa: E402
 
 
+class FakeResponse(io.BytesIO):
+    """Kontrakt minio: get_object zwraca HTTPResponse z close() i
+    release_conn(); fake je liczy, żeby testy mogły wykazać wyciek
+    (odpowiedź pobrana, ale niezamknięta)."""
+
+    def __init__(self, data: bytes):
+        super().__init__(data)
+        self.closed_count = 0
+        self.released_count = 0
+
+    def close(self):
+        self.closed_count += 1
+        super().close()
+
+    def release_conn(self):
+        self.released_count += 1
+
+
 class FakeMinioClient:
     def __init__(self, bucket_exists=True):
         self._bucket_exists = bucket_exists
         self.objects: dict[str, bytes] = {}
+        self.responses: list[FakeResponse] = []
 
     def bucket_exists(self, bucket_name: str) -> bool:
         return self._bucket_exists
@@ -37,7 +56,9 @@ class FakeMinioClient:
         if object_name not in self.objects:
             raise Exception("NoSuchKey")
         data = self.objects[object_name]
-        return io.BytesIO(data)
+        response = FakeResponse(data)
+        self.responses.append(response)
+        return response
 
     def fget_object(self, bucket_name: str, object_name: str, file_path: str):
         if object_name not in self.objects:
@@ -420,6 +441,40 @@ class GaleraBackupS3Tests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "matching service account has no accessKey"):
             select_keys(info_outputs, "galera-backup-claude-r10b")
+
+
+class S3ResponseCloseContractTests(unittest.TestCase):
+    """Każde get_object MUSI zostać zamknięte i zwolnione do puli.
+
+    Falsyfikacja: usuń `finally` w S3Backend._get_json — test łapie wyciek.
+    """
+
+    def test_every_fetch_closes_and_releases(self):
+        client = FakeMinioClient()
+        client.objects["galera-backup-owner.json"] = json.dumps(
+            {"format_version": 1, "cluster_name": "claude-r10b"}
+        ).encode()
+        backend = pipeline.S3Backend(
+            endpoint="192.168.1.47:9000",
+            bucket="r10b-galera-backups",
+            secure=False,
+            access_key="access",
+            secret_key="secret",
+            cluster_name="claude-r10b",
+            client=client,
+        )
+        backend.preflight()
+        self.assertTrue(client.responses, "preflight nie pobrał żadnego obiektu")
+        for response in client.responses:
+            self.assertEqual(
+                response.closed_count, 1,
+                "odpowiedź niezamknięta — połączenie wycieka z puli",
+            )
+            self.assertEqual(
+                response.released_count, 1,
+                "połączenie niewydane do puli (brak release_conn)",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

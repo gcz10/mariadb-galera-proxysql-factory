@@ -56,6 +56,23 @@ class S3Backend:
                 raise BackupError("E_STORAGE_AUTH", f"Failed to initialize MinIO client: {exc}")
         return self._client
 
+    def _get_json(self, key: str) -> dict:
+        """Odczytaj obiekt JSON, ZAWSZE zamykając odpowiedź.
+
+        get_object zwraca strumień HTTP; dokumentacja SDK (7.x) wymaga po
+        odczycie `close()` + `release_conn()` — inaczej każde czytanie
+        metadanych (preflight, fetch_latest, prune, znacznik drillu) wycieka
+        jednym połączeniem z puli urllib3. Wyjątki SDK propagują bez zmian:
+        wołający mapują własne kody błędów (E_OWNER_CONFLICT, E_STORAGE,
+        brak znacznika drillu = None).
+        """
+        resp = self.client.get_object(self.bucket, key)
+        try:
+            return json.loads(resp.read().decode("utf-8"))
+        finally:
+            resp.close()
+            resp.release_conn()
+
     def preflight(self) -> None:
         try:
             if not self.client.bucket_exists(self.bucket):
@@ -75,8 +92,7 @@ class S3Backend:
 
         if owner_objs:
             try:
-                resp = self.client.get_object(self.bucket, owner_key)
-                data = json.loads(resp.read().decode("utf-8"))
+                data = self._get_json(owner_key)
                 if data.get("cluster_name") != self.cluster_name or data.get("format_version") != 1:
                     raise BackupError(
                         "E_OWNER_CONFLICT",
@@ -314,8 +330,7 @@ class S3Backend:
             if "backup.tar.enc" in files and "backup.sha256" in files and "metadata.json" in files:
                 meta_key = f"{b_prefix}/metadata.json"
                 try:
-                    resp = self.client.get_object(self.bucket, meta_key)
-                    meta = json.loads(resp.read().decode("utf-8"))
+                    meta = self._get_json(meta_key)
                     if meta.get("cluster_name") == self.cluster_name and meta.get("format_version") == 1:
                         candidates.append((metadata_unixtime(meta, meta_key), b_prefix, meta))
                 except BackupError:
@@ -370,8 +385,7 @@ class S3Backend:
             if not meta_objs:
                 continue
             try:
-                resp = self.client.get_object(self.bucket, meta_key)
-                meta = json.loads(resp.read().decode("utf-8"))
+                meta = self._get_json(meta_key)
             except Exception as exc:
                 raise BackupError("E_STORAGE", f"Malformed metadata in '{meta_key}' during retention: {exc}")
 
@@ -415,8 +429,7 @@ class S3Backend:
     def read_drill_marker(self) -> Optional[dict[str, Any]]:
         key = self._drill_marker_key()
         try:
-            resp = self.client.get_object(self.bucket, key)
-            return json.loads(resp.read().decode("utf-8"))
+            return self._get_json(key)
         except Exception as exc:
             # Brak znacznika to normalny stan (klaster bez ani jednego drillu),
             # a nie blad backupu. Rozrozniamy go po nazwie wyjatku SDK, zeby
