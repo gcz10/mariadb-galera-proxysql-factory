@@ -22,6 +22,7 @@ locals {
     o8db1 = { id = 9904, ip = 123, role = "galera", cpu = 2, ram = 3072, disk = 40 }
     o8db2 = { id = 9905, ip = 124, role = "galera", cpu = 2, ram = 3072, disk = 40 }
     o8db3 = { id = 9906, ip = 125, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    o8r1  = { id = 9910, ip = 129, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
 
@@ -45,6 +46,7 @@ module "vms" {
 
   purge_on_destroy                     = true
   delete_unreferenced_disks_on_destroy = true
+  started = false
 }
 
 output "vms" {
