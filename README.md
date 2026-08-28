@@ -139,8 +139,8 @@ zmierzyć TLS endpointu i kończy się `UNDETERMINED`.
   `agent_groups`, `credentials_revision` i rzeczywisty adres alertów.
 - `mariadb_tuning.gcache_size` — bufor, z którego wracający węzeł dostaje IST
   zamiast pełnego SST. Domyślne `512M` ma zapas, ale własną wartość policz:
-  `tests/validation/calc-gcache.py --write-rate <B/s> --window 30`, gdzie write
-  rate bierzesz z `f0_discovery` albo z `probe-gcache.py` na żywym klastrze.
+  `tests/validation/calc-gcache.py --write-rate <B/s> --window 30`; pomiar
+  zrob np. `make lab-gcache-verify CLUSTER=<nazwa>` (sonda `probe-gcache.py`).
   Za mała wartość nie psuje działania — kosztuje pełny SST przy każdym powrocie
   węzła i jest odrzucana przez bramkę po budowie;
 

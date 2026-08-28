@@ -62,6 +62,6 @@
   },
   "gcache": {
     "ist_window_minutes": {{ ist_window_minutes | to_json }},
-    "note": "gcache.size = measured_write_rate_bytes_per_sec * ist_window_minutes * 60; filled after write-rate measurement"
+    "note": "gcache.size policz z wlasnego pomiaru: tests/validation/calc-gcache.py --write-rate <B/s> --window 30 (sonda: make lab-gcache-verify); ten raport nie mierzy write rate"
   }
 }

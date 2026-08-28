@@ -92,9 +92,3 @@ all:
           ansible_host: "10.0.1.51"
           infra_node_address: "10.0.1.51"
 
-    # OPCJONALNA. F0 instaluje `fio` i mierzy dysk WYLACZNIE na hostach z tej
-    # grupy — nigdy na maszynie, ktorej cyklu zycia nie znamy.
-    discovery_bench:
-      hosts: {}
-      vars:
-        allow_bench: true
