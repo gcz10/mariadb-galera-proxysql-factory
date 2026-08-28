@@ -46,13 +46,9 @@ module "vms" {
 
   purge_on_destroy                     = true
   delete_unreferenced_disks_on_destroy = true
-  started = false
+  started                              = false
 }
 
 output "vms" {
   value = module.vms.vms
-}
-
-output "shared_vip" {
-  value = "192.168.1.122 (platform/xenonv8)"
 }

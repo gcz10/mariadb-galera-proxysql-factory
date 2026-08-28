@@ -51,7 +51,3 @@ module "vms" {
 output "vms" {
   value = module.vms.vms
 }
-
-output "shared_vip" {
-  value = "192.168.1.149 (platform/xenonv9)"
-}

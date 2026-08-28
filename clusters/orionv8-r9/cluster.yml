@@ -33,7 +33,7 @@ proxysql:
   endpoint:
     type: "keepalived_vip"
     # Musi byc DOKLADNIE ten VIP, ktory wystawia warstwa wspolna
-    # (platform/example/platform.yml). Najemca go nie tworzy — tylko mu ufa.
+    # (platform/xenonv8/platform.yml). Najemca go nie tworzy — tylko mu ufa.
     address: "192.168.1.122"
     port: 6033
 

@@ -473,9 +473,10 @@ lab-proxysql-verify:  ## Zweryfikuj routing ProxySQL (ISC-18/19/20/21/22/23)
 	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-proxysql.py
 
-# `cluster-endpoint` USUNIETY 2026-08-21. VIP .139 (dawniej .133) nalezy do warstwy wspolnej,
+# `cluster-endpoint` USUNIETY 2026-08-21. VIP warstwy wspolnej (.122 xenonv8,
+# .149 xenonv9 — platform/<nazwa>/platform.yml) nalezy do warstwy wspolnej,
 # a ten cel pozwalal dowolnemu najemcy odpalic Keepalived na cudzej parze —
-# na newclaude17-r9 wyjdzie to jako `changed=0`, ale bramki nie bylo zadnej.
+# na zywej parze wyjdzie to jako `changed=0`, ale bramki nie bylo zadnej.
 # Zastapiony przez `make platform-endpoint`; f8_keepalived.yml odrzuca teraz
 # definicje klastra asercja fail-closed.
 
@@ -514,7 +515,7 @@ cluster-tls-rotate:  ## Rotuj certyfikaty TLS Galery bez przestoju (FLUSH SSL, s
 	$(cluster_guard)
 	ansible-playbook playbooks/tls_rotate.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
 
-# Host aplikacyjny: nalezy do warstwy wspolnej (terraform/shared/), wiec przezywa
+# Host aplikacyjny: nalezy do warstwy wspolnej, wiec przezywa
 # przebudowy klastrow. `cluster-app-host` instaluje na nim klienta w wersji z
 # lockfile'a JEGO platformy i rozprowadza CA testowanego klastra.
 cluster-app-host:  ## Przygotuj host aplikacyjny (klient + CA klastra) dla grupy `app`
