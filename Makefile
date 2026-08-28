@@ -43,6 +43,11 @@ PLATFORM_OPTS = -i $(PLATFORM_DIR)/inventory.yml -e @$(PLATFORM_DIR)/platform.ym
 # do wykonania operacji niszczacej na cudzym klastrze.
 cluster_guard = @case "$(origin CLUSTER)" in file|default|undefined) echo "ERROR: ten cel dziala na konkretnym klastrze — podaj CLUSTER=... (domyślny example-cluster niedozwolony)" >&2; exit 1;; esac
 
+# Warstwa wspolna wymaga jawnego PLATFORM= z tych samych powodow co CLUSTER=
+# wyzej: szablon example ma adresy 10.0.x, wiec cel bez argumentu konczy sie
+# bledem albo czasem SSH, zamiast po cichu operowac na fikcyjnej infrastrukturze.
+platform_guard = @case "$(origin PLATFORM)" in file|default|undefined) echo "ERROR: ten cel dziala na konkretnej warstwie wspolnej — podaj PLATFORM=... (domyslny szablon example niedozwolony)" >&2; exit 1;; esac
+
 # Monitoring jest DEKLARACJA klastra, tak samo jak backup. Klaster moze go nie
 # miec: bywa deweloperski albo obserwowany cudzym systemem. Bez tego przelacznika
 # `cluster-build` zawsze zadal PMM i rejestrowal wezly w serwerze, ktorego moglo
@@ -226,10 +231,12 @@ EXISTING_DATA ?=
 # ---------------------------------------------------------------------------
 
 platform-validate:  ## Waliduj definicje warstwy wspolnej (schema + invarianty inwentarza + preflight)
+	$(platform_guard)
 	python3 tests/validation/validate-platform.py $(PLATFORM_DIR)/platform.yml platform/schema/platform.schema.json $(PLATFORM_DIR)/inventory.yml
 	ansible-playbook playbooks/platform_preflight.yml $(PLATFORM_OPTS)
 
 platform-trust-hosts:  ## Re-skanuj klucze hostow warstwy wspolnej do known_hosts
+	$(platform_guard)
 	@ok=0; total=0; \
 	for ip in $$(grep -oE 'ansible_host:[[:space:]]+"?[0-9.]+"?' $(PLATFORM_DIR)/inventory.yml | grep -oE '[0-9.]+' | sort -u); do \
 		total=$$((total+1)); good=0; \
@@ -246,21 +253,25 @@ platform-trust-hosts:  ## Re-skanuj klucze hostow warstwy wspolnej do known_host
 	test $$ok -eq $$total
 
 platform-deploy:  ## Instaluj pakiety warstwy wspolnej (ProxySQL wg lockfile EL10)
+	$(platform_guard)
 	ansible-playbook playbooks/platform_install.yml $(PLATFORM_OPTS)
 
 # Polityka hosta fcp1/fcp2/fcinfra/fcapp nalezy do warstwy wspolnej. Najemca
 # deklaruje te hosty w swoim inventory, ale ich firewalla nie dotyka — patrz
 # bramka wlasciciela w playbooks/firewall.yml.
 platform-firewall:  ## Polityka firewalld hostow warstwy wspolnej (proxysql, infra, app)
+	$(platform_guard)
 	ansible-playbook playbooks/firewall.yml $(PLATFORM_OPTS) -e firewall_target_hosts=proxysql:infra:app
 
 platform-infra:  ## Uslugi warstwy wspolnej zadeklarowane w platform.infra.services
 	@# Sekrety asertuje playbook, bo tylko on wie, KTORE uslugi platforma
 	@# deklaruje. Twardy wymog MINIO_* w recepcie blokowal warstwe bez MinIO —
 	@# konfiguracje calkowicie legalna, bo magazyn kopii moze stac gdziekolwiek.
+	$(platform_guard)
 	ansible-playbook playbooks/infra_services.yml $(PLATFORM_OPTS)
 
 platform-proxysql:  ## Konfiguruj sama pare ProxySQL (frontend TLS, ustawienia globalne)
+	$(platform_guard)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
 	@# Konto read-only dla straznika writera w backupie najemcy: rejestruje je
 	@# platforma, wiec sekret jest wymagany tutaj, a nie na celach klastra.
@@ -269,6 +280,7 @@ platform-proxysql:  ## Konfiguruj sama pare ProxySQL (frontend TLS, ustawienia g
 
 platform-endpoint:  ## Redundantny endpoint ProxySQL (Keepalived VIP) — WYLACZNIE tutaj
 	@: "$${KEEPALIVED_AUTH_PASS:?Ustaw KEEPALIVED_AUTH_PASS poza repozytorium}"
+	$(platform_guard)
 	ansible-playbook playbooks/f8_keepalived.yml $(PLATFORM_OPTS)
 
 # `monitoring.agent_groups` w platform.yml bylo POLEM-WIDMEM: deklarowalo
@@ -284,16 +296,19 @@ platform-monitoring:  ## Zarejestruj wezly i eksportery warstwy wspolnej w PMM
 	@# one widza, czy platforma deklaruje `pmm` w infra.services. Twardy wymog
 	@# w recepcie blokowal warstwe z monitoringiem prowadzonym osobno.
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
+	$(platform_guard)
 	ansible-playbook playbooks/f11_pmm_agent.yml $(PLATFORM_OPTS)
 	ansible-playbook playbooks/f11_proxysql_metrics.yml $(PLATFORM_OPTS)
 
 platform-alerts:  ## Reguly alertowe warstwy wspolnej (namespace isa-shared-*)
 	@# f15_alerts.yml sam wymaga PMM_ADMIN_PASSWORD i adresu alertow.
+	$(platform_guard)
 	ansible-playbook playbooks/f15_alerts.yml $(PLATFORM_OPTS)
 
 # Migracja istniejacej floty: usuwa z PMM wezly zarejestrowane pod adresami
 # warstwy przez bylego ownera. Swiezy deployment tego nie potrzebuje.
 platform-adopt:  ## Przejmij rejestracje PMM zrobione przez bylego ownera (CONFIRM=yes)
+	$(platform_guard)
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (usuwa wezly z PMM Inventory)"; exit 1)
 	ansible-playbook playbooks/platform_adopt.yml $(PLATFORM_OPTS) -e confirm=yes
@@ -309,6 +324,7 @@ platform-adopt:  ## Przejmij rejestracje PMM zrobione przez bylego ownera (CONFI
 TENANTS ?= $(filter-out example-cluster,$(notdir $(patsubst %/,%,$(dir $(wildcard clusters/*/cluster.yml)))))
 
 platform-monitor-rotate:  ## Rotuj globalne haslo monitora ProxySQL w calej flocie (expand->switch->contract; CONFIRM=yes)
+	$(platform_guard)
 	@: "$${PROXYSQL_MONITOR_PASSWORD_NEXT:?Ustaw PROXYSQL_MONITOR_PASSWORD_NEXT poza repozytorium}"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (zmienia poswiadczenie monitora calej floty)"; exit 1)
 	@test -n "$(TENANTS)" || (echo "ERROR: brak najemcow w clusters/*/cluster.yml"; exit 1)
@@ -333,6 +349,7 @@ platform-monitor-rotate:  ## Rotuj globalne haslo monitora ProxySQL w calej floc
 	@echo "       inaczej kolejny 'make platform-proxysql' cofnie pare do poprzedniej."
 
 platform-verify:  ## Sondy warstwy wspolnej: para ProxySQL, VIP, TLS endpointu, rejestracja w PMM
+	$(platform_guard)
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	CLUSTER=$(PLATFORM) CLUSTER_CONFIG=$(PLATFORM_DIR)/platform.yml CLUSTER_INVENTORY=$(PLATFORM_DIR)/inventory.yml \
 	  PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-platform.py
@@ -346,15 +363,16 @@ fleet-state:  ## Co naprawde zyje: maszyny w puli, definicje w repo, wspolne end
 	python3 tests/lab/fleet-state.py
 
 platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→firewall→infra→proxysql→endpoint→monitoring→alerts→sonda
-	$(MAKE) platform-validate
-	$(MAKE) platform-deploy
-	$(MAKE) platform-firewall
-	$(MAKE) platform-infra
-	$(MAKE) platform-proxysql
-	$(MAKE) platform-endpoint
-	$(MAKE) platform-monitoring
-	$(MAKE) platform-alerts
-	$(MAKE) platform-verify
+	$(platform_guard)
+	$(MAKE) platform-validate PLATFORM=$(PLATFORM)
+	$(MAKE) platform-deploy PLATFORM=$(PLATFORM)
+	$(MAKE) platform-firewall PLATFORM=$(PLATFORM)
+	$(MAKE) platform-infra PLATFORM=$(PLATFORM)
+	$(MAKE) platform-proxysql PLATFORM=$(PLATFORM)
+	$(MAKE) platform-endpoint PLATFORM=$(PLATFORM)
+	$(MAKE) platform-monitoring PLATFORM=$(PLATFORM)
+	$(MAKE) platform-alerts PLATFORM=$(PLATFORM)
+	$(MAKE) platform-verify PLATFORM=$(PLATFORM)
 
 cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap→join→proxysql→monitoring→harden→warunkowe→bramka (CLUSTER+CONFIRM=yes)
 	$(cluster_guard)

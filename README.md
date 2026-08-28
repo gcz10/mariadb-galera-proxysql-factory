@@ -172,8 +172,8 @@ export MINIO_ROOT_PASSWORD='<minio-s3-secret>'
 # WARSTWA WSPOLNA — musi istniec ZANIM powstanie pierwszy klaster. Najemca
 # zaklada dzialajaca pare ProxySQL i wdrozony `admin-check.cnf`; bez nich
 # zatrzymuje sie na jawnej bramce, nie na przypadkowym bledzie SQL.
-make platform-trust-hosts
-make platform-build
+make platform-trust-hosts PLATFORM=<nazwa>
+make platform-build PLATFORM=<nazwa>
 
 # Pełne `cluster-validate` wymaga SSH do węzłów: po dwóch statycznych
 # walidatorach uruchamia read-only preflight systemu i wersji Rocky Linux.
