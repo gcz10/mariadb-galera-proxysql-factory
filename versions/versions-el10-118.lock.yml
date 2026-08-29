@@ -1,0 +1,132 @@
+---
+# versions-el10-118.lock.yml — lockfile klastra orionv10-r10 na serii MariaDB 11.8.
+# Powstaje z versions-el10.lock.yml przez zmianę WYŁĄCZNIE bloku mariadb (11.4.12 → 11.8.9);
+# wszystkie pozostałe bloki są identyczne z el10 (warstwa wspólna i piny platformowe bez zmian).
+#
+# Powód istnienia: aplikacja najemcy wymaga dokładnie serii 11.8
+# (decyzja: docs/records/2026-08-29-mariadb-118-upgrade-orion.md).
+# Świadoma regresja okna wsparcia: EOL 11.8 = 2028-06 vs 11.4 = 2029-05 —
+# strażnik ISC-55 w f12_upgrade_plan.yml wymaga -e f12_allow_eol_regression=true.
+# Cassiopeiav10-r10 zostaje na versions-el10.lock.yml (11.4): miks serii MIĘDZY
+# klastrami jest wspierany (versions.lock_file per klaster), w obrębie jednego — nie.
+#
+# Weryfikacja 2026-08-29 (dnf probe na o10db1, enablerepo=mariadb-server/11.8/rhel10):
+# MariaDB-server/client/backup 11.8.9-1.el10 oraz galera-4 26.4.27-1.el10.
+# To samo wydanie galery co klaster 11.4 → wsrep API 26 → warunek rolling upgrade spełniony.
+# Repozytorium serii /11.8/ zwraca 302 (CDN); dnf rozwiązuje 11.8.9 poprawnie.
+
+rocky_linux:
+  major: 10
+  allowed_minors:
+    - "10.2"                       # zweryfikowane: download.rockylinux.org/pub/rocky/{10.0,10.1,10.2}
+  major_eol: "2035-05-31"
+
+mariadb:
+  version: "11.8.9"
+  series: "11.8"
+  type: "LTS"
+  eol: "2028-06"
+  rpm_release: "1.el10"            # zweryfikowane w dnf probe: MariaDB-server-11.8.9-1.el10
+  repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
+  repo_setup_args: "--mariadb-server-version=mariadb-11.8.9"
+  # Skrypt repo_setup jest OS-agnostyczny — ta sama suma co w el10/el9 (v2026-06-30, 44184B).
+  repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"
+  galera_provider: "galera-4"
+  galera_provider_version: "26.4.27"
+  galera_provider_rpm_release: "1.el10"
+  galera_provider_wsrep_api: 26
+  mariadb_backup_package: "MariaDB-backup"
+  server_package: "MariaDB-server"
+  client_package: "MariaDB-client"
+  # PUŁAPKA (jw. w el10): realny baseurl to dlm.mariadb.com; wersjonowany katalog serii
+  # chroni rebuild przed dryfem aliasu. Zweryfikowany dnf probe 2026-08-29.
+  verified_baseurl: "https://dlm.mariadb.com/repo/mariadb-server/11.8/yum/rhel/10/x86_64"
+  source: "https://mariadb.org/mariadb-server-12-3-11-8-11-4-and-10-11-q3-2026-maintenance-releases-and-goodbye-10-6/"
+  galera_provider_source: "https://github.com/codership/galera/releases/tag/release_26.4.27"
+
+proxysql:
+  version: "3.0.10"
+  series: "3.0"
+  tier: "Stable"
+  released: "2026-07-31"
+  rpm_release: "1"
+  repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+  rpm_sha256:
+    x86_64: "61493587a4770c7218a54701c4945f00e38e8d292d9a9ff7ec8844ce54e7c9c5"  # proxysql-3.0.10-1-centos10.x86_64.rpm, 41291948B
+  cves_patched:
+    - "CVE-2026-48772"
+    - "CVE-2026-48773"
+    - "GHSA-fvch-fpgq-pwfx"
+  source: "https://github.com/sysown/proxysql/releases/tag/v3.0.10"
+
+pmm:
+  version: "3.9.1"
+  released: "2026-08-19"
+  image: "percona/pmm-server:3.9.1"
+  image_digest: "sha256:003f9c25f84256e53dccbd71975e3aaf98ca06e891bda86a35c262ef21ca58c1"
+  deployment: "docker-volume"
+  support_eol: "not-published-per-point-release"
+  source: "https://github.com/percona/pmm/releases/tag/v3.9.1"
+
+docker:
+  engine_version: "3:29.6.2-1.el10"
+  cli_version: "1:29.6.2-1.el10"
+  containerd_version: "2.2.6-1.el10"
+  buildx_version: "0.35.0-1.el10"
+  compose_version: "5.3.1-1.el10"
+  repo_baseurl: "https://download.docker.com/linux/centos/$releasever/$basearch/stable"
+  repo_gpgkey: "https://download.docker.com/linux/centos/gpg"
+backup_tools:
+  python_pip_package: "python3-pip"
+  encryption_package: "openssl"
+  archive_package: "tar"
+  cron_package: "cronie"
+  cifs_userspace_package: "cifs-utils"
+
+minio:
+  image: "minio/minio:RELEASE.2025-09-07T16-13-09Z"
+  image_digest: "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+  sdk_version: "7.2.7"
+  mc_image: "minio/mc:RELEASE.2025-08-13T08-35-41Z"
+  mc_image_digest: "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
+
+maildev:
+  image: "maildev/maildev:2.2.1"
+
+node_exporter:
+  version: "1.12.1"
+  released: "2026-07-14"
+  source: "https://github.com/prometheus/node_exporter/releases/tag/v1.12.1"
+  linux_sha256:
+    amd64: "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
+    arm64: "ad35b605f9954b9f1ffddf5ba054bdc5a98d790b9eae5291e1eeb83f1ecbd0e7"
+
+ansible:
+  core_version: "2.21.3"
+  core_released: "2026-08-10"
+  collections:
+    - name: "ansible.mysql"
+      version: "5.1.0"
+      note: "successor of deprecated community.mysql; FQCN ansible.mysql.*"
+    - name: "community.general"
+      version: "10.3.0"
+    - name: "ansible.posix"
+      version: "1.5.4"
+
+repositories:
+  - name: "mariadb-official"
+    url: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
+    integrity_control: "sha256-pinned-repo-setup"
+  - name: "proxysql-official"
+    url: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/10/"
+    gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+    integrity_control: "sha256-pinned-rpm"   # proxysql.rpm_sha256
+
+pmm_client:
+  version: "3.9.1"
+  rpm_release: "1.el10"
+  package: "pmm-client-3.9.1-1.el10"
+  repo_component: "pmm3-client"
+  release_rpm: "https://repo.percona.com/yum/percona-release-latest.noarch.rpm"
+  metrics_mode: "push"
+  source: "https://docs.percona.com/percona-monitoring-and-management/3/install-pmm/install-pmm-client/package_manager.html"
