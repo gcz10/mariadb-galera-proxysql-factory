@@ -23,6 +23,12 @@ CLUSTER ?= example-cluster
 ANSIBLE_OPTS ?=
 TARGET_ENV = CLUSTER=$(CLUSTER) CLUSTER_CONFIG=clusters/$(CLUSTER)/cluster.yml CLUSTER_INVENTORY=clusters/$(CLUSTER)/inventory.yml
 
+# Wspolny ogon uruchomienia playbooka klastrowego: 30 recept powtarzalo te dwie
+# sciezki recznie (audyt T3-R1), kazda zmiana konwencji = 30 edycji. Bez
+# ANSIBLE_OPTS w srodku — dodatkowe `-e` recepty wstawiaja sie naturalnie
+# miedzy to a $(ANSIBLE_OPTS).
+CLUSTER_RUN = -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml
+
 # Warstwa wspolna (para ProxySQL + VIP + host monitoringu + host aplikacyjny) jest
 # jednostka NIEZALEZNA od klastrow. Wczesniej jej wlascicielem byl klaster Galera
 # przez `proxysql.role: owner`, wiec skasowanie tego klastra osierocalo cala warstwe.
@@ -124,7 +130,7 @@ cluster-deregister:  ## Usuń obiekty PMM/Grafana/ProxySQL i konto MinIO klastra
 	$(cluster_guard)
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (usuwa obiekty klastra $(CLUSTER) i konto MinIO; bucket zostaje)"; exit 1)
-	ansible-playbook playbooks/cluster_deregister.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/cluster_deregister.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 cluster-deregister-verify:  ## Zweryfikuj brak sierot w PMM, Grafanie, ProxySQL i kontach MinIO
 	$(cluster_guard)
@@ -423,7 +429,7 @@ cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap
 
 cluster-discover:  ## F0 Discovery — zbierz fakty z hostów (read-only)
 	$(cluster_guard)
-	ansible-playbook playbooks/f0_discovery.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f0_discovery.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 cluster-validate:  ## Waliduj konfigurację klastra (schema + invariants inventory + preflight)
 	$(cluster_guard)
@@ -433,18 +439,18 @@ cluster-validate:  ## Waliduj konfigurację klastra (schema + invariants invento
 	@# wezlow z inwentarza, a infra-teardown sprzata wylacznie to, co widzi
 	@# `terraform output`. Rozjezd = blad po CONFIRM albo wieczna sierota ZFS.
 	python3 tests/validation/probe-inventory-tf-consistency.py
-	ansible-playbook playbooks/f2_preflight.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f2_preflight.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 cluster-deploy:  ## F2+F3 — instaluj pakiety + konfiguruj (idempotentny converge)
 	$(cluster_guard)
 	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/f2_install.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
-	ansible-playbook playbooks/site.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
-	ansible-playbook playbooks/firewall.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e firewall_target_hosts=galera:restore $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f2_install.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
+	ansible-playbook playbooks/site.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
+	ansible-playbook playbooks/firewall.yml $(CLUSTER_RUN) -e firewall_target_hosts=galera:restore $(ANSIBLE_OPTS)
 
 cluster-firewall:  ## Wymuś minimalną politykę firewalld według roli hosta
 	$(cluster_guard)
-	ansible-playbook playbooks/firewall.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e firewall_target_hosts=galera:restore $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/firewall.yml $(CLUSTER_RUN) -e firewall_target_hosts=galera:restore $(ANSIBLE_OPTS)
 cluster-firewall-verify:  ## Zweryfikuj dokładną politykę firewalld i Docker ingress
 	$(cluster_guard)
 	CLUSTER_CONFIG=clusters/$(CLUSTER)/cluster.yml CLUSTER_INVENTORY=clusters/$(CLUSTER)/inventory.yml \
@@ -456,7 +462,7 @@ cluster-bootstrap:  ## F4 — initial bootstrap (JEDEN węzeł, wymaga CONFIRM=y
 	$(cluster_guard)
 	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (bootstrap tworzy nowy Primary Component)"; exit 1)
-	ansible-playbook playbooks/bootstrap.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e confirm=yes $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/bootstrap.yml $(CLUSTER_RUN) -e confirm=yes $(ANSIBLE_OPTS)
 
 cluster-health:  ## Weryfikuj cluster status (wsrep)
 	$(cluster_guard)
@@ -466,7 +472,7 @@ cluster-health:  ## Weryfikuj cluster status (wsrep)
 cluster-join:  ## F5 — dołącz węzły Galera do Primary Component (SST mariabackup)
 	$(cluster_guard)
 	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/f5_join.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f5_join.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 lab-galera-verify:  ## Zweryfikuj zdrowie klastra Galera (ISC-7/8/9/10/14/16)
 	$(cluster_guard)
@@ -477,7 +483,7 @@ cluster-proxysql:  ## F7 — skonfiguruj ProxySQL (mysql_galera_hostgroups)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
 	@: "$${PROXYSQL_MONITOR_PASSWORD:?Ustaw PROXYSQL_MONITOR_PASSWORD poza repozytorium}"
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/f7_proxysql.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f7_proxysql.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 lab-proxysql-verify:  ## Zweryfikuj routing ProxySQL (ISC-18/19/20/21/22/23)
 	$(cluster_guard)
@@ -523,14 +529,14 @@ lab-failover-hard-test:  ## F9 — failover przy TWARDEJ utracie maszyny (sysrq,
 # Zmiana SCIEZEK do certow to inna operacja — idzie przez server.cnf i cluster-deploy.
 cluster-tls-rotate:  ## Rotuj certyfikaty TLS Galery bez przestoju (FLUSH SSL, serial:1)
 	$(cluster_guard)
-	ansible-playbook playbooks/tls_rotate.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/tls_rotate.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 # Host aplikacyjny: nalezy do warstwy wspolnej, wiec przezywa
 # przebudowy klastrow. `cluster-app-host` instaluje na nim klienta w wersji z
 # lockfile'a JEGO platformy i rozprowadza CA testowanego klastra.
 cluster-app-host:  ## Przygotuj host aplikacyjny (klient + CA klastra) dla grupy `app`
 	$(cluster_guard)
-	ansible-playbook playbooks/app_host.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/app_host.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 # Jedyna sonda patrzaca na klaster OCZAMI APLIKACJI: po sieci, przez VIP, klientem
 # z lockfile'a. Pozostale patrza z hosta kontrolnego albo z samych wezlow, przez co
@@ -632,24 +638,24 @@ cluster-backup-configure:  ## F10 — skonfiguruj runner, minio identity i cron 
 	$(cluster_guard)
 	@if [ "$(backup_enabled)" != "true" ]; then $(backup_skip_note); exit 0; fi; \
 	set -e; \
-	ansible-playbook playbooks/f10_backup.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e galera_backup_action=configure $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f10_backup.yml $(CLUSTER_RUN) -e galera_backup_action=configure $(ANSIBLE_OPTS)
 
 cluster-backup:  ## F10 — backup → destination storage via galera-backup runner (gdy backup.enabled)
 	$(cluster_guard)
 	@if [ "$(backup_enabled)" != "true" ]; then $(backup_skip_note); exit 0; fi; \
 	set -e; \
-	ansible-playbook playbooks/f10_backup.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e galera_backup_action=run $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f10_backup.yml $(CLUSTER_RUN) -e galera_backup_action=run $(ANSIBLE_OPTS)
 
 lab-seed-smoke:  ## LAB — zasiej minimalne dane user-space, bez których drill restore pada
 	$(cluster_guard)
-	ansible-playbook playbooks/lab_seed_smoke.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/lab_seed_smoke.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 cluster-restore-drill:  ## F10 — restore drill na czysty host + integralność (CONFIRM=yes, gdy backup.enabled)
 	$(cluster_guard)
 	@if [ "$(backup_enabled)" != "true" ]; then $(backup_skip_note); exit 0; fi; \
 	test "$(CONFIRM)" = "yes" || { echo "Wymaga CONFIRM=yes (drill kasuje datadir hosta grupy restore)" >&2; exit 1; }; \
 	set -e; \
-	ansible-playbook playbooks/f10_restore.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e restore_confirm=yes $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f10_restore.yml $(CLUSTER_RUN) -e restore_confirm=yes $(ANSIBLE_OPTS)
 
 lab-backup-verify:  ## F10 — zweryfikuj backup w S3 (ISC-32/33/34/35)
 	$(cluster_guard)
@@ -666,7 +672,7 @@ lab-backup-impact:  ## F10 — backup pod obciążeniem nie degraduje writera (I
 
 cluster-harden:  ## F6 — hardening MariaDB: usuń anon/test, root localhost-only, least privilege
 	$(cluster_guard)
-	ansible-playbook playbooks/f6_hardening.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f6_hardening.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 lab-hardening-verify:  ## Zweryfikuj hardening MariaDB (ISC-40/41/42)
 	$(cluster_guard)
@@ -683,16 +689,16 @@ cluster-monitoring:  ## F11 — zarejestruj hosty i usługi w natywnym PMM Inven
 	set -e; \
 	: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"; \
 	: "$${PMM_MONITOR_PASSWORD:?Ustaw PMM_MONITOR_PASSWORD poza repozytorium}"; \
-	ansible-playbook playbooks/f11_node_exporter.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS); \
-	ansible-playbook playbooks/f11_pmm_agent.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS); \
-	ansible-playbook playbooks/f11_pmm_client.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS); \
-	ansible-playbook playbooks/f11_freshness.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS); \
-	ansible-playbook playbooks/f11_log_lifecycle.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f11_node_exporter.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS); \
+	ansible-playbook playbooks/f11_pmm_agent.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS); \
+	ansible-playbook playbooks/f11_pmm_client.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS); \
+	ansible-playbook playbooks/f11_freshness.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS); \
+	ansible-playbook playbooks/f11_log_lifecycle.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 cluster-monitoring-refresh:  ## F11 — odśwież metryki świeżości (po backup/restore)
 	$(cluster_guard)
 	@if [ "$(monitoring_enabled)" != "true" ]; then $(monitoring_skip_note); exit 0; fi; \
-	ansible-playbook playbooks/f11_freshness.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f11_freshness.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 lab-monitoring-verify:  ## Zweryfikuj natywne PMM Inventory i metryki laboratorium
 	$(cluster_guard)
@@ -703,7 +709,7 @@ lab-monitoring-verify:  ## Zweryfikuj natywne PMM Inventory i metryki laboratori
 cluster-rolling-restart:  ## F12 — rolling restart Galera serial:1 + brama zdrowia (ISC-50/51)
 	$(cluster_guard)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/f12_rolling_restart.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f12_rolling_restart.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 lab-rolling-restart-verify:  ## F12 — zweryfikuj rolling restart (ISC-50/51)
 	$(cluster_guard)
@@ -736,7 +742,7 @@ cluster-recover:  ## Cold recovery Galera: serialny stop + bezpieczny bootstrap 
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (cold recovery zatrzymuje caly klaster)"; exit 1)
 	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
 	@rm -f "$(RECOVER_STATE_FILE)" "$(RECOVER_NODE_FILE)" "$(RECOVER_NODE_FILE).tmp"
-	ansible-playbook playbooks/cluster_recover.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e confirm=yes -e recover_state_file="$(RECOVER_STATE_FILE)" -e recover_run_id="$(RECOVER_RUN_ID)" $(if $(BOOTSTRAP_NODE),-e recover_bootstrap_node=$(BOOTSTRAP_NODE)) $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/cluster_recover.yml $(CLUSTER_RUN) -e confirm=yes -e recover_state_file="$(RECOVER_STATE_FILE)" -e recover_run_id="$(RECOVER_RUN_ID)" $(if $(BOOTSTRAP_NODE),-e recover_bootstrap_node=$(BOOTSTRAP_NODE)) $(ANSIBLE_OPTS)
 	@python3 tests/validation/verify-recovery-state.py "$(RECOVER_STATE_FILE)" "$(RECOVER_RUN_ID)" "clusters/$(CLUSTER)/inventory.yml" > "$(RECOVER_NODE_FILE).tmp"
 	@mv "$(RECOVER_NODE_FILE).tmp" "$(RECOVER_NODE_FILE)"
 	@echo "Bootstrap po recovery: $$(cat "$(RECOVER_NODE_FILE)") (kanoniczny playbooks/bootstrap.yml)"
@@ -746,7 +752,7 @@ cluster-recover:  ## Cold recovery Galera: serialny stop + bezpieczny bootstrap 
 
 cluster-upgrade-plan:  ## F12 — wygeneruj read-only plan major upgrade (ISC-53/54/56)
 	$(cluster_guard)
-	ansible-playbook playbooks/f12_upgrade_plan.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f12_upgrade_plan.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 lab-upgrade-plan-verify:  ## F12 — zweryfikuj plan major upgrade (ISC-53/54/56)
 	$(cluster_guard)
@@ -755,7 +761,7 @@ lab-upgrade-plan-verify:  ## F12 — zweryfikuj plan major upgrade (ISC-53/54/56
 cluster-patch:  ## F12 — rolling patch z canary + brama zdrowia (ISC-52/55/57)
 	$(cluster_guard)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/f12_patch.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f12_patch.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 lab-patch-verify:  ## F12 — zweryfikuj wzorzec canary patch (ISC-52/55/57)
 	$(cluster_guard)
@@ -764,7 +770,7 @@ lab-patch-verify:  ## F12 — zweryfikuj wzorzec canary patch (ISC-52/55/57)
 cluster-drift:  ## F13 — read-only raport dryfu konfiguracji (ISC-21)
 	$(cluster_guard)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
-	ansible-playbook playbooks/f13_drift.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f13_drift.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 lab-drift-verify:  ## F13 — zweryfikuj drift detection (ISC-21)
 	$(cluster_guard)
@@ -774,7 +780,7 @@ cluster-remove-node-plan:  ## F13 — read-only plan usunięcia węzła Galera (
 	$(cluster_guard)
 	@: "$${PROXYSQL_ADMIN_PASSWORD:?Ustaw PROXYSQL_ADMIN_PASSWORD poza repozytorium}"
 	@test -n "$(NODE)" || (echo "Ustaw NODE=<nazwa_wezla> (np. make cluster-remove-node-plan NODE=grg2)"; exit 1)
-	ansible-playbook playbooks/f13_remove_node_plan.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e node=$(NODE) $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f13_remove_node_plan.yml $(CLUSTER_RUN) -e node=$(NODE) $(ANSIBLE_OPTS)
 
 cluster-remove-node:  ## F13 — usuń węzeł Galera (confirm-gated, wymaga NODE=<nazwa_wezla> CONFIRM=yes)
 	$(cluster_guard)
@@ -782,13 +788,13 @@ cluster-remove-node:  ## F13 — usuń węzeł Galera (confirm-gated, wymaga NOD
 	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (destrukcyjne)"; exit 1)
 	@test -n "$(NODE)" || (echo "Ustaw NODE=<nazwa_wezla>"; exit 1)
-	ansible-playbook playbooks/f13_remove_node.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml -e node=$(NODE) -e confirm=yes $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f13_remove_node.yml $(CLUSTER_RUN) -e node=$(NODE) -e confirm=yes $(ANSIBLE_OPTS)
 
 cluster-alerts:  ## F15 — reguly alertowe ISC-47 (gdy monitoring.enabled)
 	$(cluster_guard)
 	@if [ "$(monitoring_enabled)" != "true" ]; then $(monitoring_skip_note); exit 0; fi; \
 	: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"; \
-	ansible-playbook playbooks/f15_alerts.yml -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/cluster.yml $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f15_alerts.yml $(CLUSTER_RUN) \$(ANSIBLE_OPTS)
 
 lab-gcache-verify:  ## F0/ISC-68 — zmierz write rate + weryfikuj gcache.size (IST window)
 	$(cluster_guard)
