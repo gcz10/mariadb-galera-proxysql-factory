@@ -73,3 +73,6 @@ Operacje ProxySQL przez zdeponowaną tożsamość `/etc/proxysql/admin-check.cnf
   MariaDB-backup/client 11.8.9 — warunek odtwarzalności nowego formatu.
 - Otwarte (env-gated): `lab-app-verify` wymaga `APP_DB_PASSWORD` (poza
   sesją); zalecane odpalenie z powłoki operatora.
+
+Runbook uogólniający tę procedurę dla przyszłych upgrade'ów:
+`docs/runbooks/upgrade-mariadb-major.md`.

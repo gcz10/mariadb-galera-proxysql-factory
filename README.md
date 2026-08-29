@@ -265,6 +265,15 @@ make lab-backup-impact CLUSTER=<nazwa>                  # ISC-39, lab-only
 # Backend, scheduler, sekrety, rotacja i diagnostyka:
 # docs/runbooks/backup.md
 
+# F12 — patch w serii (canary+bramy), rolling restart, plan major upgrade, drift:
+make cluster-patch CLUSTER=<nazwa>                       # ISC-52/55/57; bez -e f12_patch_packages robi DRY-RUN
+make cluster-rolling-restart CLUSTER=<nazwa>             # ISC-50/51
+make cluster-upgrade-plan CLUSTER=<nazwa> -e f12_target=<seria>  # ISC-53/54/56 (read-only; regresja EOL: + f12_allow_eol_regression)
+make cluster-drift CLUSTER=<nazwa>                       # ISC-21
+#
+# Ręczny major upgrade krok po kroku (wykonany: 11.4.12 → 11.8.9, orionv10-r10):
+# docs/runbooks/upgrade-mariadb-major.md
+
 # F15 — reguły alertów (ISC-47); adres e-mail z monitoring.alerts.email w cluster.yml
 make cluster-alerts CLUSTER=<nazwa>
 
