@@ -1,0 +1,10 @@
+---
+# Grafana alert-rule UIDs are globally scoped and capped at 40 characters.
+# Preserve the readable legacy prefix when every rule fits; long cluster labels
+# use a deterministic SHA-256 prefix that remains unique and deregisterable.
+f15_uid_prefix: >-
+  {{
+    ('isa-' ~ cluster_label)
+    if (('isa-' ~ cluster_label ~ '-restore-drill-stale') | length <= 40)
+    else ('isa-' ~ (cluster_label | hash('sha256'))[:12])
+  }}

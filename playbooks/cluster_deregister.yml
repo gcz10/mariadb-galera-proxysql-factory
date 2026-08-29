@@ -88,6 +88,8 @@
   connection: local
   become: false
   gather_facts: false
+  vars_files:
+    - vars/alert_identity.yml
   vars:
     # `become: false` to slowo kluczowe play'a, a `ansible_become`
     # z inwentarza jest ZMIENNA i wygrywa z nim w precedencji.
@@ -96,15 +98,11 @@
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     cluster_label: "{{ (monitoring | default({})).get('pmm', {}).get('cluster_name', cluster.name) }}"
     f15_folder_uid: "{{ (monitoring | default({})).get('alerts', {}).get('folder_uid', 'isa-alerts-' ~ cluster_label) }}"
-    # Jeden wzorzec, jedno miejsce. Derejestracja NAJEMCY kasuje wylacznie reguly
-    # wlasnego namespace'u `^isa-<cluster_label>-`: reguly `isa-shared-*` naleza
-    # do warstwy wspolnej, ktora zyje dluzej niz kazdy klaster, wiec jej koniec
-    # zycia obsluguje wylacznie platforma. To ta sama klasa bledu co konto MinIO
-    # w deregister_minio.yml: sprzatanie zasobu wspoldzielonego przez najemce
-    # osierocalo by go dla calej floty. `cluster_label` zawiera myslniki
-    # (np. n11-galera), co w tym regexpie jest nieszkodliwe.
+    # Najemca kasuje wyłącznie własny prefiks UID. Dla krótkich nazw pozostaje
+    # czytelne `isa-<cluster_label>-`; długie nazwy używają deterministycznego
+    # skrótu z vars/alert_identity.yml, aby mieścić się w limicie Grafany.
     f15_dereg_pattern: >-
-      {{ '^isa-' ~ cluster_label ~ '-' }}
+      {{ '^' ~ f15_uid_prefix ~ '-' }}
     f15_contact_uid: "email-isa-{{ cluster_label }}"
     f15_contact_name: "ISA Email Alerts ({{ cluster_label }})"
 

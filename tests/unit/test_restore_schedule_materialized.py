@@ -122,7 +122,7 @@ class TestRestoreScheduleMaterialized(unittest.TestCase):
     def test_alert_metric_is_refreshed_by_the_drill(self):
         """Alert ISC-47 nie moze mierzyc 'kiedy ostatnio puszczono Ansible'."""
         rules = _alert_rules(
-            ALERTS, "isa-{{ cluster_label }}-restore-drill-stale"
+            ALERTS, "{{ f15_uid_prefix }}-restore-drill-stale"
         )
         self.assertEqual(
             len(rules),

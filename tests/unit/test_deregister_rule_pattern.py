@@ -17,16 +17,16 @@ Ten test czyta wzorzec Z PLAYBOOKA, a nie z kopii w tescie: kopia rozjechalaby
 sie z oryginalem przy pierwszej zmianie i test dalej swiecilby na zielono.
 """
 
+import hashlib
 import os
 import re
 import unittest
 
 import yaml
 
-PLAYBOOK = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "playbooks", "cluster_deregister.yml",
-)
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PLAYBOOK = os.path.join(REPO, "playbooks", "cluster_deregister.yml")
+ALERT_IDENTITY = os.path.join(REPO, "playbooks", "vars", "alert_identity.yml")
 
 
 def render_pattern(cluster_label: str) -> str:
@@ -46,7 +46,17 @@ def render_pattern(cluster_label: str) -> str:
 
     from jinja2 import Template
 
-    return Template(raw).render(cluster_label=cluster_label)
+    with open(ALERT_IDENTITY, encoding="utf-8") as handle:
+        identity = yaml.safe_load(handle)
+    uid_template = Template(identity["f15_uid_prefix"])
+    uid_template.environment.filters["hash"] = (
+        lambda value, algorithm: hashlib.new(algorithm, value.encode()).hexdigest()
+    )
+    uid_prefix = uid_template.render(cluster_label=cluster_label).strip()
+    return Template(raw).render(
+        cluster_label=cluster_label,
+        f15_uid_prefix=uid_prefix,
+    )
 
 
 class TestDeregisterRulePattern(unittest.TestCase):
@@ -86,6 +96,13 @@ class TestDeregisterRulePattern(unittest.TestCase):
                     f"{label}: derejestracja najemcy kasuje reguly warstwy wspolnej",
                 )
                 self.assertTrue(pat.search(f"isa-{label}-node-loss"))
+
+    def test_long_label_uses_the_same_hashed_prefix_as_alert_provisioning(self):
+        label = "cassiopeiav10-r10"
+        prefix = "isa-" + hashlib.sha256(label.encode()).hexdigest()[:12]
+        pattern = re.compile(render_pattern(label))
+        self.assertTrue(pattern.search(f"{prefix}-restore-drill-stale"))
+        self.assertFalse(pattern.search(f"isa-{label}-restore-drill-stale"))
 
     def test_pattern_is_anchored(self):
         """Bez kotwicy `^` wzorzec lapalby UID-y z etykieta w srodku."""
