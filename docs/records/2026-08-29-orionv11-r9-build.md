@@ -56,11 +56,21 @@ czysto (czysty seed; backup 11.8 zostaje w S3 jako archiwum — restore
 
 ## Defekt z chaos-testów: /run/mariadb po twardym reboocie (2026-08-29)
 
-Test `lab-failover-hard-test` (sysrq — twarda utrata maszyny writera) odsłonił
-latentny defekt całej floty: `/run` jest tmpfs, a `/run/mariadb` tworzył
-wyłącznie playbook converge — po twardym reboocie katalog znikał i **mysqld
-nie podnosił się** (`Can't create/write pidfile`, Errcode: 2). Klaster
-kontynuował na 2 węzłach (failover aplikacyjny PASS), ale węzeł nie wracał.
+**Zasięg (skorygowany po analizie pakietów):** defekt dotyczy wyłącznie węzłów
+na pakiecie **MariaDB 11.8** — jego `usr/lib/tmpfiles.d/mariadb.conf` ma wpis
+`d /run/mariadb` WYŁĄCZONY (komentarz upstream: Galera-envfile nie powinien
+żyć w /run/mariadb), podczas gdy pakiet **11.4** (EL10, cassiopeia) ma go
+AKTYWNEGO — tam twardy reboot jest bezpieczny bez naszej ingerencji
+(zweryfikowano `cat` na c10db1 vs o11db1, 2026-08-29). Dlatego fix tmpfiles
+jest obowiązującym elementem ŚCIEŻKI UPGRADE 11.4→11.8, a na klastrach 11.4
+pozostaje nieszkodliwym defense-in-depth (/etc nadpisuje /usr/lib tą samą
+wartością).
+
+**Potwierdzenie empiryczne (chaos-suite na cassiopeiav10-r10, 2026-08-29):**
+sysrq-crash writera `c10db3` (11.4.12, EL10) → VM reboot → **mariadb wstał SAM
+(`active`, Synced)** — bez naszej ingerencji, dzięki aktywnemu tmpfiles
+z pakietu 11.4. Pełna seria na cassiopeii: failover soft/hard, degradacja
+kworum, split-brain — wszystkie PASS.
 
 **Fix:** `site.yml` + `f5_join.yml` wdrażają `/etc/tmpfiles.d/mariadb.conf`
 (`d /run/mariadb 0755 mysql mysql -`) — bootowy `systemd-tmpfiles-setup`
