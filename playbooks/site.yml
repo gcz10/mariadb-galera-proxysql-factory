@@ -113,10 +113,10 @@
     # Rotacja certu NIE wymaga restartu. Dokumentacja Galery ma na to osobna
     # strone (galera-security/reloading-tls-certificates-without-downtime.md):
     # podmien pliki atomowo pod tymi samymi sciezkami i wykonaj `FLUSH SSL`,
-    # ktore przeladowuje kontekst TLS serwera ORAZ providera wsrep. "Not dynamic"
-    # z dokumentacji dotyczy WARTOSCI zmiennych (ssl_cert=...), nie zawartosci
-    # plikow — a te zmieniaja sie razem z server.cnf, wiec przypadek zmiany
-    # sciezek i tak lapie restart po `config_result.changed`.
+    # ktore przeladowuje kontekst TLS serwera, a przy aktywnym WSREP takze
+    # providera. "Nie dynamiczne" sa w dokumentacji SCIEZKI plikow
+    # (ssl_cert/ssl_key/ssl_ca) — ich zmiana idzie przez server.cnf i restart,
+    # wiec przypadek zmiany sciezek i tak lapie restart po `config_result.changed`.
     #
     # Wczesniej rotacja PEM restartowala kazdy wezel Galery: kilkanascie sekund
     # niedostepnosci wezla za operacje, ktora dokumentacja opisuje jako

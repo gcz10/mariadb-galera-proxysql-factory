@@ -63,7 +63,6 @@
     - name: "Ustaw hostname zgodny z inventory"
       ansible.builtin.hostname:
         name: "{{ inventory_hostname }}"
-      when: ansible_service_mgr == 'systemd'
 
     - name: "MariaDB repo — pobierz mariadb_repo_setup (weryfikacja sha256)"
       ansible.builtin.get_url:
