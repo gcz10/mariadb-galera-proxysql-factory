@@ -75,8 +75,18 @@ for name, v in data.items():
         print(v["vmid"])
 ' 2>/dev/null
 )
+if [ "${#VMIDS[@]}" -eq 0 ] && [ -f "$TF_DIR/.teardown-vmids" ]; then
+  # Ponowny przebieg po destroy: stan terraform jest juz pusty, ale plik zna
+  # VMID-y z pierwszego podejscia — sprzatanie sierot moze sie odwrocic.
+  while IFS= read -r line; do
+    [ -n "$line" ] && VMIDS+=("$line")
+  done < "$TF_DIR/.teardown-vmids"
+  [ "${#VMIDS[@]}" -gt 0 ] && echo "WZNOWIONO: VMID z poprzedniego przebiegu: ${VMIDS[*]}" >&2
+fi
 if [ "${#VMIDS[@]}" -eq 0 ]; then
   echo "UWAGA: nie odczytano VMID z terraform output — sprzatanie sierot pominiete." >&2
+else
+  printf '%s\n' "${VMIDS[@]}" > "$TF_DIR/.teardown-vmids"
 fi
 
 # --- Zabezpieczenie 2: potwierdzenie musi POWTORZYC cel ---
@@ -236,13 +246,17 @@ if [ "$CONTENT_CODE" != "200" ]; then
 fi
 
 if ! VOLS_RAW=$(VMIDS_CSV="$(printf '%s,' "${VMIDS[@]}")" python3 -c '
-import json, os, sys
+import json, os, re, sys
 want = [v for v in os.environ["VMIDS_CSV"].split(",") if v]
 with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle).get("data") or []
 for item in data:
     volid = item.get("volid", "")
-    if any("vm-%s-" % vmid in volid for vmid in want):
+    disk = volid.split(":")[-1]
+    match = re.match(r"vm-(\d+)-", disk)
+    # Pelny segment zamiast substringa: "vm-992-" nie moze dopasowac
+    # wolumenow sasiada "vm-9920-..." (3-cyfrowe VMID-y wroca).
+    if match and match.group(1) in want:
         print(volid)
 ' "$CONTENT_FILE"); then
   echo "BLAD: odpowiedz PVE API nie jest poprawnym JSON-em — nie wiadomo, czy zostaly sieroty." >&2
@@ -260,9 +274,11 @@ failed=0
 # "${VOLS[@]}" z pusta tablica + set -u wywala sie na bash 3.2 (macOS)
 if [ "${#VOLS[@]}" -gt 0 ]; then
   for vol in "${VOLS[@]}"; do
+    # `|| echo 000`: timeout curla (rc 28) pod set -e ubijalby skrypt w polowie
+    # petli — 000 wpada do licznika failed i raport zostaje kompletny.
     code=$(curl -sk --max-time 60 -o /dev/null -w '%{http_code}' -X DELETE \
       "${AUTH_ARGS[@]}" \
-      "${PVE_API}/api2/json/nodes/${PVE_NODE}/storage/${PVE_STORAGE}/content/${vol}")
+      "${PVE_API}/api2/json/nodes/${PVE_NODE}/storage/${PVE_STORAGE}/content/${vol}" || echo 000)
     if [ "$code" = "200" ]; then
       echo "  usunieto sierote: $vol"
       removed=$((removed + 1))
@@ -279,4 +295,5 @@ if [ "$failed" -gt 0 ]; then
   echo "BLAD: nie usunieto $failed wolumenow — sprzataj recznie przed kolejnym apply." >&2
   exit 1
 fi
+rm -f "$TF_DIR/.teardown-vmids"
 echo "=== teardown zakonczony (usunietych sierot: $removed) ==="
