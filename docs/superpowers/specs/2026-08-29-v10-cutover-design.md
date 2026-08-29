@@ -1,7 +1,7 @@
 # Projekt: cutover v9 → v10
 
-**Data:** 2026-08-29  
-**Status:** zatwierdzony przez operatora  
+**Data:** 2026-08-29
+**Status:** zatwierdzony przez operatora
 **Zakres:** laboratorium PVE, pełna flota
 
 ## Cel
