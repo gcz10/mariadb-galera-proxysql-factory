@@ -38,6 +38,9 @@
   gather_facts: true
   serial: 1
   max_fail_percentage: 0
+  vars_files:
+    - vars/secret_policy.yml
+    - vars/infra_ingress.yml
   vars:
     # Sklad uslug jest DEKLARACJA platformy. Domyslnie pelny zestaw, bo tak
     # dzialaly wszystkie istniejace platformy — ale monitoring, magazyn kopii i
