@@ -134,7 +134,7 @@ class TestPublishedMetricMatchesAlert(unittest.TestCase):
     def test_metric_name_is_the_one_the_alert_reads(self):
         rules = _alert_rules(
             REPO / "playbooks" / "f15_alerts.yml",
-            "isa-{{ cluster_label }}-restore-drill-stale",
+            "{{ f15_uid_prefix }}-restore-drill-stale",
         )
         self.assertEqual(
             len(rules),
@@ -152,7 +152,7 @@ class TestPublishedMetricMatchesAlert(unittest.TestCase):
     def test_restore_sources_are_aggregated_before_missing_metric_fallback(self):
         rules = _alert_rules(
             REPO / "playbooks" / "f15_alerts.yml",
-            "isa-{{ cluster_label }}-restore-drill-stale",
+            "{{ f15_uid_prefix }}-restore-drill-stale"
         )
         self.assertEqual(len(rules), 1)
         expr = rules[0]["expr"]
@@ -175,7 +175,7 @@ class TestPublishedMetricMatchesAlert(unittest.TestCase):
     def test_backup_metrics_mtime_is_scoped_to_this_tenant_file(self):
         rules = _alert_rules(
             REPO / "playbooks" / "f15_alerts.yml",
-            "isa-{{ cluster_label }}-metrics-frozen",
+            "{{ f15_uid_prefix }}-metrics-frozen",
         )
         self.assertEqual(len(rules), 1)
         expr = rules[0]["expr"]

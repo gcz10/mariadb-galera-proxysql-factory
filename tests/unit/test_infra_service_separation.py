@@ -84,6 +84,14 @@ class InfraServiceSeparationTests(unittest.TestCase):
         self.assertIn("'minio' not in infra_services or minio_root_user", text)
         self.assertIn("'pmm' not in infra_services or pmm_admin_password", text)
 
+    def test_service_play_loads_shared_ingress_matrix(self):
+        """Drugi play infra musi ladowac vars_files we wlasnym zakresie."""
+        plays = yaml.safe_load(PLAYBOOK.read_text(encoding="utf-8"))
+        service_play = next(
+            play for play in plays if play["name"] == "Infra — uslugi warstwy wspolnej zadeklarowane przez platforme"
+        )
+        self.assertIn("vars/infra_ingress.yml", service_play.get("vars_files", []))
+
     def test_schema_constrains_the_service_names(self):
         schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
         services = schema["properties"]["platform"]["properties"]["infra"]["properties"]["services"]

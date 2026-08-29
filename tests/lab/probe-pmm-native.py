@@ -11,6 +11,7 @@ import time
 import yaml
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from alert_identity import alert_uid_prefixes
 
 PMM_USER = os.environ.get("PMM_ADMIN_USER", "admin")
 PMM_PASSWORD = os.environ.get("PMM_ADMIN_PASSWORD")
@@ -243,8 +244,9 @@ def main():
     # ze kazda kolejna regula jest uwzgledniona automatycznie.
     #
     # ZALOZENIE: liczymy wylacznie reguly SCOPE'OWANE klastrem, czyli takie, ktorych
-    # uid zawiera `{{ cluster_label }}`. Regula floty (uid bez tej zmiennej) zostanie
-    # tu celowo pominieta — tak samo jak legacy UID-y z listy sprzatajacej f15.
+    # uid zawiera `{{ cluster_label }}` albo `{{ f15_uid_prefix }}`. Regula floty
+    # (uid bez tych zmiennych) zostanie tu celowo pominieta — tak samo jak legacy
+    # UID-y z listy sprzatajacej f15.
     alerts_playbook = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "playbooks", "f15_alerts.yml",
@@ -258,14 +260,19 @@ def main():
     rule_blocks = re.split(r'^\s*-\s*uid:\s*', alerts_source, flags=re.M)[1:]
     rule_suffixes, shared_suffixes, tls_suffixes, backup_suffixes = [], [], [], []
     for block in rule_blocks:
-        m = re.match(r'"isa-(\{\{\s*cluster_label\s*\}\}|shared)-([a-z0-9-]+)"', block)
+        m = re.match(
+            r'"(?P<scope>isa-(?:\{\{\s*cluster_label\s*\}\}|shared)|'
+            r'\{\{\s*f15_uid_prefix\s*\}\})-(?P<suffix>[a-z0-9-]+)"',
+            block,
+        )
         if not m:
             continue
         # Marker musi pochodzic z TEGO wpisu, a nie z nastepnego — tniemy blok
         # na pierwszym `- uid:`, wiec `body` konczy sie przed kolejna regula.
         body = block
-        suffix = m.group(2)
-        if m.group(1) == "shared":
+        scope = m.group("scope")
+        suffix = m.group("suffix")
+        if scope == "isa-shared":
             shared_suffixes.append(suffix)
         elif re.search(r'^\s+requires_tls:\s*true', body, re.M):
             tls_suffixes.append(suffix)
@@ -276,7 +283,10 @@ def main():
     if not rule_suffixes:
         raise SystemExit(f"FAIL: nie odczytano zadnej reguly z {alerts_playbook}")
     tls_full = (CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled") == "full")
-    expected_alert_rules = {f"isa-{_cl}-{suffix}" for suffix in rule_suffixes}
+    tenant_uid_prefix, _ = alert_uid_prefixes(_cl)
+    expected_alert_rules = {
+        f"{tenant_uid_prefix}-{suffix}" for suffix in rule_suffixes
+    }
     # Reguly `isa-shared-*` opisuja wspolna pare ProxySQL i naleza do warstwy
     # wspolnej (`make platform-alerts`). Do 2026-08-21 wdrazal je klaster
     # z `proxysql.role: owner`, a ta sonda domyslnie zakladala ownera. Po
@@ -284,11 +294,15 @@ def main():
     # KAZDEGO najemcy — czyli swiecic na czerwono na poprawnej konfiguracji.
     if tls_full:
         # Bez TLS metryka wygasania ma wartosc 0 i regula nie ma sensu.
-        expected_alert_rules |= {f"isa-{_cl}-{suffix}" for suffix in tls_suffixes}
+        expected_alert_rules |= {
+            f"{tenant_uid_prefix}-{suffix}" for suffix in tls_suffixes
+        }
     if BACKUP_ENABLED:
         # Symetrycznie do TLS: bez backupu te reguly nie maja czego mierzyc i
         # paliłyby sie wiecznie, wiec f15 ich nie tworzy.
-        expected_alert_rules |= {f"isa-{_cl}-{suffix}" for suffix in backup_suffixes}
+        expected_alert_rules |= {
+            f"{tenant_uid_prefix}-{suffix}" for suffix in backup_suffixes
+        }
     managed_alert_rules = [
         rule
         for rule in alert_rules
@@ -355,7 +369,7 @@ def main():
             (
                 rule
                 for rule in managed_alert_rules
-                if rule.get("uid") == f"isa-{_cl}-backup-failed"
+                if rule.get("uid") == f"{tenant_uid_prefix}-backup-failed"
             ),
             {},
         )

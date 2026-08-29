@@ -16,6 +16,7 @@ Te testy pilnuja obu polowek naprawy: szablon nie moze narzucac wspolnego uid,
 a playbook musi traktowac pusta wartosc jak jej brak.
 """
 
+import sys
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,10 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 CLUSTERS = REPO / "clusters"
 F15 = REPO / "playbooks" / "f15_alerts.yml"
+LAB = REPO / "tests" / "lab"
+if str(LAB) not in sys.path:
+    sys.path.insert(0, str(LAB))
+from alert_identity import alert_uid_prefixes  # noqa: E402
 
 
 def _cluster_files():
@@ -45,6 +50,9 @@ def _rule_uid_templates():
 
     _walk(yaml.safe_load(F15.read_text(encoding="utf-8")))
     return uids
+
+def _effective_uid_prefix(cluster_label):
+    return alert_uid_prefixes(cluster_label)[0]
 
 
 
@@ -97,7 +105,10 @@ class AlertFolderTenancyTests(unittest.TestCase):
             if not label:
                 continue
             for template in templates:
-                uid = template.replace("{{ cluster_label }}", label)
+                uid = (
+                    template.replace("{{ cluster_label }}", label)
+                    .replace("{{ f15_uid_prefix }}", _effective_uid_prefix(label))
+                )
                 self.assertLessEqual(
                     len(uid),
                     40,

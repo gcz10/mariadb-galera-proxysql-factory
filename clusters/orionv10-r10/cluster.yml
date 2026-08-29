@@ -1,0 +1,81 @@
+---
+cluster:
+  name: "orionv10-r10"
+  environment: "laboratory"
+
+platform:
+  rocky_linux_major: 10
+
+versions:
+  policy: "locked"
+  lock_file: "versions/versions-el10.lock.yml"
+
+galera:
+  cluster_name: "orionv10_galera"
+  nodes_expected: 3
+
+proxysql:
+  nodes_expected: 2
+  hostgroup_base: 610
+  app_user: "app_user_ov10"
+  frontend_tls:
+    ca_reference: "pki/xenonv10/ca.pem"
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.172"
+    port: 6033
+
+tls:
+  mode: "full"
+  ca_reference: "pki/o10/ca.pem"
+  certificate_reference: "pki/o10/server-cert.pem"
+  private_key_reference: "pki/o10/server-key.pem"
+  require_secure_transport: false
+
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.160/32"]
+
+storage:
+  data_directory: "/var/lib/mysql"
+  expected_database_size_gb: "unknown"
+
+mariadb_tuning:
+  innodb_buffer_pool_size: "256M"
+  innodb_log_file_size: "128M"
+  max_connections: 50
+  innodb_flush_log_at_trx_commit: 0
+  gcache_size: "512M"
+
+availability:
+  rto_node_failure: "2m"
+
+backup:
+  enabled: true
+  destination: "s3"
+  full_backup_schedule: "20 3 * * *"
+  freshness_sla_hours: 26
+  retention_days: 14
+  encryption_enabled: true
+  restore_test_schedule: "0 15 * * 0"
+  scheduler:
+    mode: "cron"
+    host: "o10db1"
+    timezone: "UTC"
+  s3:
+    endpoint: "192.168.1.160:9000"
+    bucket: "orionv10-galera-backups"
+    secure: false
+
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.160"
+    cluster_name: "orionv10-r10"
+    validate_certs: false
+    credentials_revision: 1
+  alerts:
+    email: "ops@claude.local"
+    folder_uid: ""
+    datasource_uid: ""

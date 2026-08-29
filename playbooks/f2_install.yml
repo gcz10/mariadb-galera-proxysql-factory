@@ -34,7 +34,6 @@
     - name: "Ustaw hostname zgodny z inventory (korelacja logow)"
       ansible.builtin.hostname:
         name: "{{ inventory_hostname }}"
-      when: ansible_service_mgr == 'systemd'
 
     # === Galera nodes: MariaDB repo + pakiety ===
     - name: "MariaDB repo - pobierz mariadb_repo_setup (audit#6: weryfikacja sha256)"
@@ -201,7 +200,6 @@
         mode: "0755"
       when:
         - "'galera' in group_names"
-        - ansible_facts['service_mgr'] == 'systemd'
 
     - name: "SST bywa dłuższy niż domyślny TimeoutStartSec — drop-in zapobiega zabiciu mariadbd przez systemd"
       ansible.builtin.copy:
@@ -218,7 +216,6 @@
         mode: "0644"
       when:
         - "'galera' in group_names"
-        - ansible_facts['service_mgr'] == 'systemd'
 
     - name: "Włącz mariadb.service na starcie (produkcja: boot persistence; start przez bootstrap/join)"
       ansible.builtin.systemd:
@@ -227,7 +224,6 @@
         daemon_reload: true
       when:
         - "'galera' in group_names"
-        - ansible_facts['service_mgr'] == 'systemd'
     # === Tuning jądra OS (sysctl) dla baz danych i load balancerów ===
     - name: "Wdróż konfigurację sysctl dla baz danych i ProxySQL"
       ansible.builtin.copy:
@@ -241,13 +237,11 @@
         owner: root
         group: root
         mode: "0644"
-      when: ansible_facts['service_mgr'] == 'systemd'
       register: db_sysctl_conf
 
     - name: "Zastosuj parametry sysctl"
       ansible.builtin.command: sysctl --system
       when:
-        - ansible_facts['service_mgr'] == 'systemd'
         - db_sysctl_conf.changed
       changed_when: true
 
@@ -276,7 +270,6 @@
         owner: root
         group: root
         mode: "0644"
-      when: ansible_facts['service_mgr'] == 'systemd'
       register: thp_service_unit
 
     - name: "THP — włącz i uruchom disable-thp.service"
@@ -285,7 +278,6 @@
         enabled: true
         state: started
         daemon_reload: "{{ thp_service_unit.changed }}"
-      when: ansible_facts['service_mgr'] == 'systemd'
     # === Wspolne: time sync ===
     - name: Instaluj i wlacz chrony
       ansible.builtin.dnf:
@@ -297,7 +289,6 @@
         name: chronyd
         state: started
         enabled: true
-      when: ansible_facts['service_mgr'] == 'systemd'
 
     # Agent gościa ma sens wylacznie pod KVM/QEMU (hypervisor widzi wtedy adresy
     # i potrafi zamknac maszyne czysto). Na blaszaku, w LXC albo pod innym
@@ -317,7 +308,6 @@
         state: started
         enabled: true
       when:
-        - ansible_facts['service_mgr'] == 'systemd'
         - ansible_facts['virtualization_role'] | default('') == 'guest'
         - ansible_facts['virtualization_type'] | default('') in ['kvm', 'qemu', 'RHEV']
       failed_when: false

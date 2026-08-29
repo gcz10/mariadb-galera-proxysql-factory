@@ -19,14 +19,17 @@ sie z oryginalem przy pierwszej zmianie i test dalej swiecilby na zielono.
 
 import os
 import re
+import sys
 import unittest
 
 import yaml
 
-PLAYBOOK = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "playbooks", "cluster_deregister.yml",
-)
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PLAYBOOK = os.path.join(REPO, "playbooks", "cluster_deregister.yml")
+LAB = os.path.join(REPO, "tests", "lab")
+if LAB not in sys.path:
+    sys.path.insert(0, LAB)
+from alert_identity import alert_uid_prefixes  # noqa: E402
 
 
 def render_pattern(cluster_label: str) -> str:
@@ -46,7 +49,12 @@ def render_pattern(cluster_label: str) -> str:
 
     from jinja2 import Template
 
-    return Template(raw).render(cluster_label=cluster_label)
+    uid_prefix, legacy_prefix = alert_uid_prefixes(cluster_label)
+    return Template(raw).render(
+        cluster_label=cluster_label,
+        f15_uid_prefix=uid_prefix,
+        f15_uid_prefix_legacy=legacy_prefix,
+    )
 
 
 class TestDeregisterRulePattern(unittest.TestCase):
@@ -86,6 +94,13 @@ class TestDeregisterRulePattern(unittest.TestCase):
                     f"{label}: derejestracja najemcy kasuje reguly warstwy wspolnej",
                 )
                 self.assertTrue(pat.search(f"isa-{label}-node-loss"))
+
+    def test_long_label_uses_the_same_hashed_prefix_as_alert_provisioning(self):
+        label = "cassiopeiav10-r10"
+        prefix, legacy = alert_uid_prefixes(label)
+        pattern = re.compile(render_pattern(label))
+        self.assertTrue(pattern.search(f"{prefix}-restore-drill-stale"))
+        self.assertTrue(pattern.search(f"{legacy}-restore-drill-stale"))
 
     def test_pattern_is_anchored(self):
         """Bez kotwicy `^` wzorzec lapalby UID-y z etykieta w srodku."""

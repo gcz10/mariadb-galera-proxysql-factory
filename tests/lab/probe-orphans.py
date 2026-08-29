@@ -27,6 +27,7 @@ except ImportError:
     sys.exit(2)
 
 from _probe_common import ProbeContext, finish, require_hosts, run_ansible
+from alert_identity import alert_uid_prefixes
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -315,6 +316,11 @@ def main() -> int:
             undetermined,
             pmm_unavailable,
         )
+        owned_alert_prefixes = {
+            prefix
+            for label in (pmm_cluster_name, cluster_name)
+            for prefix in alert_uid_prefixes(label)
+        }
         if isinstance(alert_rules, list):
             for rule in alert_rules:
                 if not isinstance(rule, dict):
@@ -325,8 +331,9 @@ def main() -> int:
                 if not isinstance(uid, str) or not isinstance(title, str):
                     undetermined.append("Grafana Alert Rules: uid/title nie sa tekstami")
                     continue
-                if uid.startswith(f"isa-{pmm_cluster_name}-") or uid.startswith(
-                    f"isa-{cluster_name}-"
+                if any(
+                    uid.startswith(f"{prefix}-")
+                    for prefix in owned_alert_prefixes
                 ):
                     failures.append(f"Grafana Alert Rule: uid={uid} title={title}")
         elif alert_path not in pmm_unavailable:

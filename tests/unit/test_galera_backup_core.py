@@ -887,7 +887,7 @@ class CutoverContractTests(unittest.TestCase):
             WORKSPACE_ROOT / "playbooks" / "f15_alerts.yml"
         ).read_text()
         failure_rule = alerts_playbook.split(
-            '- uid: "isa-{{ cluster_label }}-backup-failed"', 1
+            '- uid: "{{ f15_uid_prefix }}-backup-failed"', 1
         )[1].split("\n      - uid:", 1)[0]
         self.assertIn('pending_for: "0s"', failure_rule)
         self.assertIn('for: "{{ item.pending_for | default(\'2m\') }}"', alerts_playbook)

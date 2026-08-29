@@ -10,6 +10,7 @@
   hosts: infra
   vars_files:
     - vars/secret_policy.yml
+    - vars/infra_ingress.yml
   become: false
   gather_facts: false
   any_errors_fatal: true
@@ -37,6 +38,9 @@
   gather_facts: true
   serial: 1
   max_fail_percentage: 0
+  vars_files:
+    - vars/secret_policy.yml
+    - vars/infra_ingress.yml
   vars:
     # Sklad uslug jest DEKLARACJA platformy. Domyslnie pelny zestaw, bo tak
     # dzialaly wszystkie istniejace platformy — ale monitoring, magazyn kopii i
@@ -51,21 +55,13 @@
     infra_pmm_data_volume: isa-pmm-data
     infra_pmm_desired_image: "{{ lock.pmm.image }}@{{ lock.pmm.image_digest }}"
     infra_pmm_backup_volume: "isa-pmm-data-backup-{{ ansible_date_time.epoch }}-{{ lock.pmm.version }}"
+    # Porty z JEDNEGO zrodla (vars/infra_ingress.yml, T3-R4); zbiór identyczny
+    # z wczesniejszym doslownym zapisem.
     infra_firewall_rules: >-
       {{
-        (
-          network.administration_cidrs
-          | product(['80', '443', '9001', '8025'])
-          | list
-        )
-        +
-        (
-          network.database_cluster_cidrs
-          | product(['443', '9000'])
-          | list
-        )
-        +
-        (network.monitoring_cidrs | product(['443']) | list)
+        (network.administration_cidrs | product(infra_ingress_tcp.administration) | list)
+        + (network.database_cluster_cidrs | product(infra_ingress_tcp.database_cluster) | list)
+        + (network.monitoring_cidrs | product(infra_ingress_tcp.monitoring) | list)
       }}
     infra_published_ports: >-
       {{ (['pmm'] | intersect(infra_services) | ternary([80, 443], []))

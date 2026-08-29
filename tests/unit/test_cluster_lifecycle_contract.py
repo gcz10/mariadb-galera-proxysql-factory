@@ -766,5 +766,25 @@ class MakefileDryRunGraphTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("-e recover_bootstrap_node=dry-node-2", proc.stdout)
 
+    def test_empty_ansible_opts_keep_monitoring_commands_separate(self):
+        proc = self.run_make("cluster-monitoring", "ANSIBLE_OPTS=")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn(r"\;", proc.stdout)
+        self.assertNotIn(r"\$(ANSIBLE_OPTS)", proc.stdout)
+        self.assertEqual(
+            proc.stdout.count("ansible-playbook playbooks/f11_"),
+            5,
+        )
+
+    def test_nonempty_ansible_opts_are_not_escaped(self):
+        proc = self.run_make("cluster-drift", "ANSIBLE_OPTS=-e x=1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(
+            "playbooks/f13_drift.yml -i clusters/dry-run-probe/inventory.yml "
+            "-e @clusters/dry-run-probe/cluster.yml -e x=1",
+            proc.stdout,
+        )
+        self.assertNotIn(r"\-e", proc.stdout)
+
 if __name__ == "__main__":
     unittest.main()

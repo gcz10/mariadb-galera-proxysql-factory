@@ -11,13 +11,13 @@ terraform {
 provider "proxmox" {}
 
 locals {
-  source_img = "local:import/Rocky-9.8-GenericCloud.qcow2"
+  source_img = "local:import/Rocky-10.2-GenericCloud.qcow2"
   ssh_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEi2JptnezdY/Nyec+JtsKltgffUiJICpRkUS4LHB/1m ansible-lab"
   vms = {
-    x9mon = { id = 9912, ip = 137, role = "infra", cpu = 2, ram = 5120, disk = 40 }
-    x9p1  = { id = 9913, ip = 138, role = "proxysql", cpu = 2, ram = 3072, disk = 40 }
-    x9p2  = { id = 9914, ip = 139, role = "proxysql", cpu = 2, ram = 3072, disk = 40 }
-    x9app = { id = 9915, ip = 140, role = "app", cpu = 1, ram = 3072, disk = 40 }
+    c10db1 = { id = 10008, ip = 168, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    c10db2 = { id = 10009, ip = 169, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    c10db3 = { id = 10010, ip = 170, role = "galera", cpu = 2, ram = 3072, disk = 40 }
+    c10r1  = { id = 10011, ip = 171, role = "restore", cpu = 1, ram = 2560, disk = 40 }
   }
 }
 
@@ -28,11 +28,14 @@ module "vms" {
   ssh_pubkey = local.ssh_pubkey
   vms        = local.vms
 
-  tags               = ["rocky9", "platform", "xenonv9"]
-  description_prefix = "xenonv9 platforma Rocky 9"
+  tags               = ["rocky10", "galera", "cassiopeiav10-r10"]
+  description_prefix = "cassiopeiav10-r10 Rocky 10"
   description_dash   = "-"
   disk_file_format   = "raw"
   disk_aio           = "io_uring"
+  os_type            = "l26"
+  init_interface     = "scsi1"
+  user_data_file_id  = "local:snippets/r10-cloud-init.yaml"
 
   purge_on_destroy                     = true
   delete_unreferenced_disks_on_destroy = true

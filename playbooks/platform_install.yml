@@ -34,7 +34,6 @@
     - name: "Ustaw hostname zgodny z inventory (korelacja logow)"
       ansible.builtin.hostname:
         name: "{{ inventory_hostname }}"
-      when: ansible_service_mgr == 'systemd'
 
     # === ProxySQL: RPM z realna weryfikacja podpisu wydawcy (audit#6) ===
     # Wczesniej stalo tu `disable_gpg_check: true` z komentarzem, ze klucz jest
@@ -96,7 +95,6 @@
         owner: root
         group: root
         mode: "0755"
-      when: ansible_facts['service_mgr'] == 'systemd'
 
     - name: "ProxySQL - drop-in LimitNOFILE"
       ansible.builtin.copy:
@@ -110,14 +108,12 @@
         owner: root
         group: root
         mode: "0644"
-      when: ansible_facts['service_mgr'] == 'systemd'
       register: proxysql_limits_conf
 
     - name: "ProxySQL - daemon-reload po zmianie limitow systemd"
       ansible.builtin.systemd:
         daemon_reload: true
       when:
-        - ansible_facts['service_mgr'] == 'systemd'
         - proxysql_limits_conf.changed
 
     # === Tuning OS wezlow warstwy wspolnej ===
@@ -138,13 +134,11 @@
         owner: root
         group: root
         mode: "0644"
-      when: ansible_facts['service_mgr'] == 'systemd'
       register: platform_sysctl_conf
 
     - name: "Zastosuj parametry sysctl"
       ansible.builtin.command: sysctl --system
       when:
-        - ansible_facts['service_mgr'] == 'systemd'
         - platform_sysctl_conf.changed
       changed_when: true
 
@@ -173,7 +167,6 @@
         owner: root
         group: root
         mode: "0644"
-      when: ansible_facts['service_mgr'] == 'systemd'
       register: thp_service_unit
 
     - name: "THP - wlacz i uruchom disable-thp.service"
@@ -182,7 +175,6 @@
         enabled: true
         state: started
         daemon_reload: "{{ thp_service_unit.changed }}"
-      when: ansible_facts['service_mgr'] == 'systemd'
 
     # === Wspolne: time sync ===
     - name: Instaluj i wlacz chrony
@@ -195,7 +187,6 @@
         name: chronyd
         state: started
         enabled: true
-      when: ansible_facts['service_mgr'] == 'systemd'
 
     # Jak w f2_install: agent gościa jest sensowny wylacznie pod KVM/QEMU.
     - name: "Zainstaluj qemu-guest-agent (tylko gosc KVM/QEMU)"
@@ -212,7 +203,6 @@
         state: started
         enabled: true
       when:
-        - ansible_facts['service_mgr'] == 'systemd'
         - ansible_facts['virtualization_role'] | default('') == 'guest'
         - ansible_facts['virtualization_type'] | default('') in ['kvm', 'qemu', 'RHEV']
       failed_when: false
