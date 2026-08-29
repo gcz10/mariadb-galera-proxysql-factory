@@ -45,6 +45,18 @@
         - { path: /run/mariadb, owner: mysql, group: mysql, mode: "0755" }
         - { path: /var/log/mariadb, owner: mysql, group: mysql, mode: "0755" }
         - { path: "{{ mariadb_config_dir }}", owner: root, group: root, mode: "0755" }
+    - name: "Trwały /run/mariadb po reboocie (tmpfiles.d — /run jest tmpfs)"
+      ansible.builtin.copy:
+        content: |
+          # Odkryte chaosem sysrq 2026-08-29 (orionv11-r9): /run/mariadb powstawal
+          # tylko przy converge — po twardym reboocie maszyny znikal, mysqld nie
+          # mogl zapisac pidfile i nie podnosil sie po reboocie (Errcode: 2).
+          d /run/mariadb 0755 mysql mysql -
+        dest: /etc/tmpfiles.d/mariadb.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: "Zastosuj tmpfiles (natychmiastowe utworzenie /run/mariadb)"
 
     - name: "Utworz plik logu MariaDB z poprawnymi uprawnieniami"
       ansible.builtin.file:
@@ -201,6 +213,9 @@
       no_log: true
 
   handlers:
+    - name: "Zastosuj tmpfiles (natychmiastowe utworzenie /run/mariadb)"
+      ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/mariadb.conf
+      changed_when: true
     - name: "Restart MariaDB (systemd, on config change)"
       ansible.builtin.systemd:
         name: mariadb

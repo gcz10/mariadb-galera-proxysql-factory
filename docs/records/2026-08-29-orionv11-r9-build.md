@@ -53,3 +53,29 @@ czysto (czysty seed; backup 11.8 zostaje w S3 jako archiwum — restore
 
 `orionv10-r10` (11.8.9) — zdjęty; ADR upgrade w
 `docs/records/2026-08-29-mariadb-118-upgrade-orion.md` (historia).
+
+## Defekt z chaos-testów: /run/mariadb po twardym reboocie (2026-08-29)
+
+Test `lab-failover-hard-test` (sysrq — twarda utrata maszyny writera) odsłonił
+latentny defekt całej floty: `/run` jest tmpfs, a `/run/mariadb` tworzył
+wyłącznie playbook converge — po twardym reboocie katalog znikał i **mysqld
+nie podnosił się** (`Can't create/write pidfile`, Errcode: 2). Klaster
+kontynuował na 2 węzłach (failover aplikacyjny PASS), ale węzeł nie wracał.
+
+**Fix:** `site.yml` + `f5_join.yml` wdrażają `/etc/tmpfiles.d/mariadb.conf`
+(`d /run/mariadb 0755 mysql mysql -`) — bootowy `systemd-tmpfiles-setup`
+odtwarza katalog przed startem mariadb. Wdrożone converge'em na orionv11
+i cassiopeia. Dowód: sysrq-reboot `o11db3` po fixie → mariadb wstał sam,
+`Synced` w pierwszej próbie.
+
+## Testy awaryjności i wydajności (orionv11-r9, 2026-08-29)
+
+| Test | Wynik |
+|---|---|
+| Failover soft (SIGKILL writera) | PASS — gap 6,5 s (RTO 120 s), 0 utraconych transakcji |
+| Failover hard (sysrq, utrata maszyny) | PASS — 0 utraconych transakcji (470 obecnych) |
+| Utrata kworum (P2, SIGKILL 2 węzłów) | PASS — kontrakt `degraded`, artefakt quorum-evidence |
+| Split-brain (partycja sieci, ISC-30) | PASS — majority zapisywalny, minority odmawia zapisów, heal do 3 |
+| Backup pod obciążeniem (ISC-39) | PASS — flow control 0 ns, max stall 0,09 s / 2977 commitów |
+| Wydajność z x10app | direct do 20,6k q/s; przez VIP ProxySQL 10-13,6k q/s (narzut hopu 19-27%) |
+| gcache sizing | write-rate 83 500 B/s → wymagane 144M, wdrożone 512M |
