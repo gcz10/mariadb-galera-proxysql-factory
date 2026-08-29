@@ -81,6 +81,11 @@ reserved:
       newclaude11-r9. Nie bylo go na zadnej wczesniejszej liscie — dowod, ze
       sama pamiec operatora nie wystarcza i skan musi byc powtarzany.
 
+  - address: "192.168.1.156"
+    reason: >-
+      Host spoza zarzadzanej floty odpowiadal na aktywny skan ping
+      2026-08-29 przed budowa v10; nie wystepuje w inventory PVE.
+
 # Bloki adresow. Zapis CIDR; kazdy adres w bloku jest zabroniony.
 reserved_ranges:
   - cidr: "192.168.1.180/30"

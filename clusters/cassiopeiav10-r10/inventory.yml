@@ -1,0 +1,47 @@
+---
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: secrets/ssh_key
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+    ansible_python_interpreter: /usr/bin/python3
+  children:
+    galera:
+      hosts:
+        c10db1:
+          ansible_host: "192.168.1.168"
+          galera_node_address: "192.168.1.168"
+          galera_node_idx: 1
+        c10db2:
+          ansible_host: "192.168.1.169"
+          galera_node_address: "192.168.1.169"
+          galera_node_idx: 2
+        c10db3:
+          ansible_host: "192.168.1.170"
+          galera_node_address: "192.168.1.170"
+          galera_node_idx: 3
+    restore:
+      hosts:
+        c10r1:
+          ansible_host: "192.168.1.171"
+          restore_node_address: "192.168.1.171"
+    proxysql:
+      hosts:
+        x10p1:
+          ansible_host: "192.168.1.161"
+          proxysql_node_address: "192.168.1.161"
+          proxysql_node_idx: 1
+        x10p2:
+          ansible_host: "192.168.1.162"
+          proxysql_node_address: "192.168.1.162"
+          proxysql_node_idx: 2
+    app:
+      hosts:
+        x10app:
+          ansible_host: "192.168.1.163"
+          app_node_address: "192.168.1.163"
+    infra:
+      hosts:
+        x10mon:
+          ansible_host: "192.168.1.160"
+          infra_node_address: "192.168.1.160"
