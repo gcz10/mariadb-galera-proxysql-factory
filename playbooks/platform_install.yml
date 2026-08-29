@@ -108,13 +108,7 @@
         owner: root
         group: root
         mode: "0644"
-      register: proxysql_limits_conf
-
-    - name: "ProxySQL - daemon-reload po zmianie limitow systemd"
-      ansible.builtin.systemd:
-        daemon_reload: true
-      when:
-        - proxysql_limits_conf.changed
+      notify: "ProxySQL - daemon-reload po zmianie limitow systemd"
 
     # === Tuning OS wezlow warstwy wspolnej ===
     # Sysctl/THP/chrony/qemu-guest-agent dostarczal tym hostom f2_install
@@ -134,13 +128,7 @@
         owner: root
         group: root
         mode: "0644"
-      register: platform_sysctl_conf
-
-    - name: "Zastosuj parametry sysctl"
-      ansible.builtin.command: sysctl --system
-      when:
-        - platform_sysctl_conf.changed
-      changed_when: true
+      notify: "Zastosuj parametry sysctl"
 
     # === Transparent Huge Pages (THP) — wylaczenie dla silnika pamieci ProxySQL ===
     # Silnik pamieci ProxySQL ma rzadki dostep do pamieci. THP alokuje 2MB ciagle
@@ -208,4 +196,10 @@
       failed_when: false
       changed_when: false
 
-  handlers: []
+  handlers:
+    - name: "ProxySQL - daemon-reload po zmianie limitow systemd"
+      ansible.builtin.systemd:
+        daemon_reload: true
+    - name: "Zastosuj parametry sysctl"
+      ansible.builtin.command: sysctl --system
+      changed_when: true

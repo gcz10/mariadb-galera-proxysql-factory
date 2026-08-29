@@ -237,13 +237,7 @@
         owner: root
         group: root
         mode: "0644"
-      register: db_sysctl_conf
-
-    - name: "Zastosuj parametry sysctl"
-      ansible.builtin.command: sysctl --system
-      when:
-        - db_sysctl_conf.changed
-      changed_when: true
+      notify: "Zastosuj parametry sysctl"
 
     # === Transparent Huge Pages (THP) — wyłączenie dla baz danych ===
     # B-drzewa InnoDB oraz silnik pamięci ProxySQL mają rzadki dostęp do pamięci.
@@ -327,4 +321,7 @@
         fail_msg: "Zainstalowana MariaDB {{ f2_installed_mariadb.stdout }} != lockfile {{ lock.mariadb.version | default('?') }}. Deployment zatrzymany (ISC-3)."
       when: "'galera' in group_names"
 
-  handlers: []
+  handlers:
+    - name: "Zastosuj parametry sysctl"
+      ansible.builtin.command: sysctl --system
+      changed_when: true

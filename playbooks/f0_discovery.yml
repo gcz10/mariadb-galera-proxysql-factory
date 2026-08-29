@@ -123,7 +123,7 @@
       ignore_errors: true
       register: missing_pk
 
-    - name: wsrep received (jeśli istnieje MariaDB) — okno IST w raporcie
+    - name: Wsrep received (jeśli istnieje MariaDB) — okno IST w raporcie
       ansible.mysql.mysql_query:
         query: SHOW GLOBAL STATUS LIKE 'wsrep_received'
         login_unix_socket: /var/lib/mysql/mysql.sock
