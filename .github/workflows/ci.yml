@@ -182,21 +182,16 @@ jobs:
           python3 -m pip install -q pyflakes==3.4.0
           python3 -m pyflakes tests roles/galera_backup/filter_plugins roles/galera_backup/files/galera_backup
 
-      - name: Static guards (mass restart, double bootstrap, zero hardcode, role contract, conditional env, proxysql tenancy, inventory<->TF, secret leak, no state latest)
+      # Jedno zrodlo prawdy: recepta bramki zyje w Makefile (selftest + sonda),
+      # CI tylko ja wywoluje. Nowa sonda = nowy target, bez edycji tego pliku.
+      - name: Static guards (make verify-* — mass restart, double bootstrap, zero hardcode, role contract, conditional env, proxysql tenancy, inventory<->TF, secret leak, no state latest)
         run: |
           set -e
-          python3 tests/validation/probe-no-mass-restart.py
-          python3 tests/validation/probe-no-double-bootstrap.py
-          python3 tests/validation/probe-zero-hardcode.py
-          python3 tests/validation/probe-role-contract.py
-          python3 tests/validation/probe-no-conditional-env.py --selftest
-          python3 tests/validation/probe-no-conditional-env.py
-          python3 tests/validation/probe-proxysql-tenancy.py --self-test
-          python3 tests/validation/probe-proxysql-tenancy.py
-          python3 tests/validation/probe-inventory-tf-consistency.py --self-test
-          python3 tests/validation/probe-inventory-tf-consistency.py
-          bash tests/validation/probe-no-secrets-leak.sh
-          bash tests/validation/probe-no-state-latest.sh
+          for t in verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode \
+                   verify-role-contract verify-no-conditional-env verify-proxysql-tenancy \
+                   verify-inventory-tf verify-no-secrets-leak verify-no-state-latest; do
+            echo "== make $t"; make "$t"
+          done
 
       - name: bash -n (all shell scripts)
         run: |
