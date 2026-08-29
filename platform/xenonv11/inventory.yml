@@ -1,0 +1,23 @@
+---
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: secrets/ssh_key
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+    ansible_python_interpreter: /usr/bin/python3
+  children:
+    proxysql:
+      hosts:
+        x11p1:
+          ansible_host: "192.168.1.161"
+          proxysql_node_address: "192.168.1.161"
+          proxysql_node_idx: 1
+        x11p2:
+          ansible_host: "192.168.1.162"
+          proxysql_node_address: "192.168.1.162"
+          proxysql_node_idx: 2
+    app:
+      hosts:
+        x11app:
+          ansible_host: "192.168.1.163"
+          app_node_address: "192.168.1.163"
