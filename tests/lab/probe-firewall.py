@@ -23,6 +23,9 @@ with open(INVENTORY_PATH, encoding="utf-8") as inventory_file:
 
 GROUPS = INVENTORY["all"]["children"]
 NETWORK = CONFIG["network"]
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+with open(os.path.join(REPO_ROOT, "playbooks", "vars", "infra_ingress.yml"), encoding="utf-8") as ingress_file:
+    INGRESS = yaml.safe_load(ingress_file)["infra_ingress_tcp"]
 
 # Wlascicielem polityki hosta jest ta warstwa, ktora go tworzy. Definicja
 # najemcy deklaruje wspolne hosty warstwy (grupy proxysql/infra/app), zeby sie
@@ -121,16 +124,17 @@ def expected_rules(host: str) -> set[str]:
 
     if host in hosts("infra"):
         for cidr in NETWORK["administration_cidrs"]:
-            rules.update(
-                {
-                    port_rule(cidr, 80),
-                    port_rule(cidr, 443),
-                    port_rule(cidr, 9001),
-                    port_rule(cidr, 8025),
-                }
-            )
-        rules.update(port_rule(cidr, 443) for cidr in NETWORK["monitoring_cidrs"])
-        rules.update(port_rule(cidr, 9000) for cidr in NETWORK["database_cluster_cidrs"])
+            rules.update(port_rule(cidr, port) for port in INGRESS["administration"])
+        rules.update(
+            port_rule(cidr, port)
+            for cidr in NETWORK["monitoring_cidrs"]
+            for port in INGRESS["monitoring"]
+        )
+        rules.update(
+            port_rule(cidr, port)
+            for cidr in NETWORK["database_cluster_cidrs"]
+            for port in INGRESS["database_cluster"]
+        )
 
     return rules
 

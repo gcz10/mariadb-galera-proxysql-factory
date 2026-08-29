@@ -1,0 +1,15 @@
+---
+# JEDYNE zrodlo prawdy polityki ingress TCP warstwy infra (T3-R4).
+# Grupa sieci -> porty TCP. Konsumuja:
+#   * playbooks/firewall.yml      (firewall_infra_tcp_rules -> public.xml najemcy),
+#   * playbooks/infra_services.yml (lancuch DOCKER-USER hostow warstwy),
+#   * tests/lab/probe-firewall.py  (oczekiwania sondy = ten sam plik).
+# Zmiana portu = edycja TEGO pliku; dryf miedzy warstwami staje sie niemozliwy.
+#
+# Porty ROLEWE (3306/4567/4568 dla galery, 6032/6033 dla ProxySQL, 6070/9100
+# eksportera, VRRP proto 112) to NIE czesc wspoldzielonej macierzy — zostaja
+# we wlasnych zmiennych playbookow/sondy per rola.
+infra_ingress_tcp:
+  administration: ['80', '443', '9001', '8025']
+  database_cluster: ['443', '9000']
+  monitoring: ['443']

@@ -18,6 +18,8 @@
   gather_facts: true
   serial: 1
   max_fail_percentage: 0
+  vars_files:
+    - vars/infra_ingress.yml
   vars:
     firewall_shared_groups:
       - proxysql
@@ -47,21 +49,13 @@
         + (network.administration_cidrs | product(['6032']) | list)
         + (network.monitoring_cidrs | product(['6070', '9100']) | list)
       }}
+    # Porty z JEDNEGO zrodla (vars/infra_ingress.yml, T3-R4); zbiór identyczny
+    # z wczesniejszym doslownym zapisem.
     firewall_infra_tcp_rules: >-
       {{
-        (network.administration_cidrs | product(['80', '9001', '8025']) | list)
-        +
-        (
-          (
-            network.administration_cidrs
-            + network.database_cluster_cidrs
-            + network.monitoring_cidrs
-          )
-          | unique
-          | product(['443'])
-          | list
-        )
-        + (network.database_cluster_cidrs | product(['9000']) | list)
+        (network.administration_cidrs | product(infra_ingress_tcp.administration) | list)
+        + (network.database_cluster_cidrs | product(infra_ingress_tcp.database_cluster) | list)
+        + (network.monitoring_cidrs | product(infra_ingress_tcp.monitoring) | list)
       }}
 
   pre_tasks:
