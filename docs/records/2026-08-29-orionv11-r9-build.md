@@ -72,6 +72,13 @@ sysrq-crash writera `c10db3` (11.4.12, EL10) → VM reboot → **mariadb wstał 
 z pakietu 11.4. Pełna seria na cassiopeii: failover soft/hard, degradacja
 kworum, split-brain — wszystkie PASS.
 
+**Test izolowany (zmienna `/etc` fixa usunięta i zweryfikowana):**
+`c10db1` (EL10, 11.4.12, plik tmpfiles należy do pakietu
+`MariaDB-server-11.4.12-1.el10`; unit bez `RuntimeDirectory`) po sysrq
+wstał sam — `active`, Synced, pidfile utworzony przez tmpfiles pakietu.
+Wniosek: ochrona reboot-safe pochodzi z pakietu 11.4, nie z OS; 11.8 ją
+usuwa, więc fix tmpfiles jest częścią ścieżki upgrade, nie całej floty.
+
 **Fix:** `site.yml` + `f5_join.yml` wdrażają `/etc/tmpfiles.d/mariadb.conf`
 (`d /run/mariadb 0755 mysql mysql -`) — bootowy `systemd-tmpfiles-setup`
 odtwarza katalog przed startem mariadb. Wdrożone converge'em na orionv11
