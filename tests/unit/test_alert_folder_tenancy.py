@@ -16,17 +16,19 @@ Te testy pilnuja obu polowek naprawy: szablon nie moze narzucac wspolnego uid,
 a playbook musi traktowac pusta wartosc jak jej brak.
 """
 
-import hashlib
+import sys
 import unittest
 from pathlib import Path
 
 import yaml
-from jinja2 import Template
 
 REPO = Path(__file__).resolve().parents[2]
 CLUSTERS = REPO / "clusters"
 F15 = REPO / "playbooks" / "f15_alerts.yml"
-ALERT_IDENTITY = REPO / "playbooks" / "vars" / "alert_identity.yml"
+LAB = REPO / "tests" / "lab"
+if str(LAB) not in sys.path:
+    sys.path.insert(0, str(LAB))
+from alert_identity import alert_uid_prefixes  # noqa: E402
 
 
 def _cluster_files():
@@ -50,12 +52,7 @@ def _rule_uid_templates():
     return uids
 
 def _effective_uid_prefix(cluster_label):
-    config = yaml.safe_load(ALERT_IDENTITY.read_text(encoding="utf-8"))
-    template = Template(config["f15_uid_prefix"])
-    template.environment.filters["hash"] = (
-        lambda value, algorithm: hashlib.new(algorithm, value.encode()).hexdigest()
-    )
-    return template.render(cluster_label=cluster_label).strip()
+    return alert_uid_prefixes(cluster_label)[0]
 
 
 

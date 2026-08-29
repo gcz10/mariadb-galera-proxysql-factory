@@ -17,16 +17,19 @@ Ten test czyta wzorzec Z PLAYBOOKA, a nie z kopii w tescie: kopia rozjechalaby
 sie z oryginalem przy pierwszej zmianie i test dalej swiecilby na zielono.
 """
 
-import hashlib
 import os
 import re
+import sys
 import unittest
 
 import yaml
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PLAYBOOK = os.path.join(REPO, "playbooks", "cluster_deregister.yml")
-ALERT_IDENTITY = os.path.join(REPO, "playbooks", "vars", "alert_identity.yml")
+LAB = os.path.join(REPO, "tests", "lab")
+if LAB not in sys.path:
+    sys.path.insert(0, LAB)
+from alert_identity import alert_uid_prefixes  # noqa: E402
 
 
 def render_pattern(cluster_label: str) -> str:
@@ -46,16 +49,11 @@ def render_pattern(cluster_label: str) -> str:
 
     from jinja2 import Template
 
-    with open(ALERT_IDENTITY, encoding="utf-8") as handle:
-        identity = yaml.safe_load(handle)
-    uid_template = Template(identity["f15_uid_prefix"])
-    uid_template.environment.filters["hash"] = (
-        lambda value, algorithm: hashlib.new(algorithm, value.encode()).hexdigest()
-    )
-    uid_prefix = uid_template.render(cluster_label=cluster_label).strip()
+    uid_prefix, legacy_prefix = alert_uid_prefixes(cluster_label)
     return Template(raw).render(
         cluster_label=cluster_label,
         f15_uid_prefix=uid_prefix,
+        f15_uid_prefix_legacy=legacy_prefix,
     )
 
 
@@ -99,10 +97,10 @@ class TestDeregisterRulePattern(unittest.TestCase):
 
     def test_long_label_uses_the_same_hashed_prefix_as_alert_provisioning(self):
         label = "cassiopeiav10-r10"
-        prefix = "isa-" + hashlib.sha256(label.encode()).hexdigest()[:12]
+        prefix, legacy = alert_uid_prefixes(label)
         pattern = re.compile(render_pattern(label))
         self.assertTrue(pattern.search(f"{prefix}-restore-drill-stale"))
-        self.assertFalse(pattern.search(f"isa-{label}-restore-drill-stale"))
+        self.assertTrue(pattern.search(f"{legacy}-restore-drill-stale"))
 
     def test_pattern_is_anchored(self):
         """Bez kotwicy `^` wzorzec lapalby UID-y z etykieta w srodku."""

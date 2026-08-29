@@ -766,5 +766,15 @@ class MakefileDryRunGraphTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("-e recover_bootstrap_node=dry-node-2", proc.stdout)
 
+    def test_empty_ansible_opts_keep_monitoring_commands_separate(self):
+        proc = self.run_make("cluster-monitoring", "ANSIBLE_OPTS=")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn(r"\;", proc.stdout)
+        self.assertNotIn(r"\$(ANSIBLE_OPTS)", proc.stdout)
+        self.assertEqual(
+            proc.stdout.count("ansible-playbook playbooks/f11_"),
+            5,
+        )
+
 if __name__ == "__main__":
     unittest.main()

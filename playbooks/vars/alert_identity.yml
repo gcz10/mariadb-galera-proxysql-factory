@@ -8,3 +8,7 @@ f15_uid_prefix: >-
     if (('isa-' ~ cluster_label ~ '-restore-drill-stale') | length <= 40)
     else ('isa-' ~ (cluster_label | hash('sha256'))[:12])
   }}
+
+# The previous readable prefix remains deregisterable after a hash migration.
+f15_uid_prefix_legacy: >-
+  {{ 'isa-' ~ cluster_label }}

@@ -98,11 +98,12 @@
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     cluster_label: "{{ (monitoring | default({})).get('pmm', {}).get('cluster_name', cluster.name) }}"
     f15_folder_uid: "{{ (monitoring | default({})).get('alerts', {}).get('folder_uid', 'isa-alerts-' ~ cluster_label) }}"
-    # Najemca kasuje wyłącznie własny prefiks UID. Dla krótkich nazw pozostaje
+    # Najemca kasuje wyłącznie własne prefiksy UID. Dla krótkich nazw pozostaje
     # czytelne `isa-<cluster_label>-`; długie nazwy używają deterministycznego
-    # skrótu z vars/alert_identity.yml, aby mieścić się w limicie Grafany.
+    # skrótu z vars/alert_identity.yml. Stary prefiks pozostaje sprzątany po
+    # migracji, aby nie zostawić osieroconych reguł.
     f15_dereg_pattern: >-
-      {{ '^' ~ f15_uid_prefix ~ '-' }}
+      {{ '^(' ~ f15_uid_prefix ~ '|' ~ f15_uid_prefix_legacy ~ ')-' }}
     f15_contact_uid: "email-isa-{{ cluster_label }}"
     f15_contact_name: "ISA Email Alerts ({{ cluster_label }})"
 

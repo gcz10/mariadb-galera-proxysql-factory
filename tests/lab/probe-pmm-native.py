@@ -2,7 +2,6 @@
 """Verify that the lab cluster is registered in PMM's native inventory."""
 
 import base64
-import hashlib
 import json
 import os
 import re
@@ -12,6 +11,7 @@ import time
 import yaml
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from alert_identity import alert_uid_prefixes
 
 PMM_USER = os.environ.get("PMM_ADMIN_USER", "admin")
 PMM_PASSWORD = os.environ.get("PMM_ADMIN_PASSWORD")
@@ -283,12 +283,7 @@ def main():
     if not rule_suffixes:
         raise SystemExit(f"FAIL: nie odczytano zadnej reguly z {alerts_playbook}")
     tls_full = (CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled") == "full")
-    readable_uid_prefix = f"isa-{_cl}"
-    tenant_uid_prefix = (
-        readable_uid_prefix
-        if len(f"{readable_uid_prefix}-restore-drill-stale") <= 40
-        else f"isa-{hashlib.sha256(_cl.encode()).hexdigest()[:12]}"
-    )
+    tenant_uid_prefix, _ = alert_uid_prefixes(_cl)
     expected_alert_rules = {
         f"{tenant_uid_prefix}-{suffix}" for suffix in rule_suffixes
     }
