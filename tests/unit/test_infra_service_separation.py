@@ -83,6 +83,7 @@ class InfraServiceSeparationTests(unittest.TestCase):
         text = PLAYBOOK.read_text(encoding="utf-8")
         self.assertIn("'minio' not in infra_services or minio_root_user", text)
         self.assertIn("'pmm' not in infra_services or pmm_admin_password", text)
+
     def test_service_play_loads_shared_ingress_matrix(self):
         """Drugi play infra musi ladowac vars_files we wlasnym zakresie."""
         plays = yaml.safe_load(PLAYBOOK.read_text(encoding="utf-8"))
