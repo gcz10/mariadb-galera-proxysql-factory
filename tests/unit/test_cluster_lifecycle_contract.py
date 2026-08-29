@@ -776,5 +776,15 @@ class MakefileDryRunGraphTests(unittest.TestCase):
             5,
         )
 
+    def test_nonempty_ansible_opts_are_not_escaped(self):
+        proc = self.run_make("cluster-drift", "ANSIBLE_OPTS=-e x=1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(
+            "playbooks/f13_drift.yml -i clusters/dry-run-probe/inventory.yml "
+            "-e @clusters/dry-run-probe/cluster.yml -e x=1",
+            proc.stdout,
+        )
+        self.assertNotIn(r"\-e", proc.stdout)
+
 if __name__ == "__main__":
     unittest.main()
