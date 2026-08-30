@@ -160,32 +160,41 @@ class ClusterBuildContractTests(unittest.TestCase):
         )
 
     def test_conditional_steps_between_core_and_gate(self):
-        """Kroki warunkowe leza miedzy ostatnim krokiem rdzenia a brama.
+        """Kroki warunkowe leza miedzy ostatnim krokiem rdzenia a bramka.
 
-        Kotwica jest wyliczana z `CORE_BUILD_STEPS`, nie wpisana na sztywno:
-        poprzednia wersja pinowala `cluster-endpoint` i przy wyniesieniu VIP-a
-        do warstwy wspolnej test pekal na nazwie kroku zamiast na kolejnosci,
-        ktorej faktycznie broni.
+        Od F4 polityka krokow warunkowych (mapa celow, pomijanie BUILD_SKIP,
+        kolejnosc backup: configure->backup->drill->refresh) zyje w
+        tests/validation/gate-build.sh, a Makefile wolja ja miedzy
+        `cluster-harden` a `lab-post-build-gate`. Ten test broni z lacego
+        orkiestracji; test_backup_step_materializes_gate_evidence_in_order
+        broni porzadku WEWNATRZ skryptu polityki.
         """
-        invoked = sub_make_targets(self.lines)
-        self.assertIn(BUILD_GATE, invoked)
+        script = (REPO / "tests" / "validation" / "gate-build.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("gate-build.sh steps", self.joined)
         last_core = CORE_BUILD_STEPS[-1]
         for step in CONDITIONAL_BUILD_STEPS + BACKUP_BUILD_STEPS:
-            self.assertIn(step, invoked, f"krok warunkowy {step} musi byc w grafie builda")
-            self.assertLess(
-                invoked.index(last_core),
-                invoked.index(step),
-                f"{step} musi isc PO {last_core}",
-            )
-            self.assertLess(
-                invoked.index(step),
-                invoked.index(BUILD_GATE),
-                f"{step} musi isc PRZED {BUILD_GATE}",
-            )
+            self.assertIn(step, script, f"krok warunkowy {step} musi byc w grafie builda")
+
+        invoked = sub_make_targets(self.lines)
+        self.assertIn(BUILD_GATE, invoked)
+        self.assertLess(
+            invoked.index(last_core),
+            self.joined.index("gate-build.sh steps"),
+            f"skrypt polityki musi isc PO {last_core}",
+        )
+        self.assertLess(
+            self.joined.index("gate-build.sh steps"),
+            self.joined.index(f"$(MAKE) {BUILD_GATE}"),
+            f"skrypt polityki musi isc PRZED {BUILD_GATE}",
+        )
 
     def test_backup_step_materializes_gate_evidence_in_order(self):
-        invoked = sub_make_targets(self.lines)
-        positions = [invoked.index(step) for step in BACKUP_BUILD_STEPS]
+        script = (REPO / "tests" / "validation" / "gate-build.sh").read_text(
+            encoding="utf-8"
+        )
+        positions = [script.index(step) for step in BACKUP_BUILD_STEPS]
         self.assertEqual(
             positions,
             sorted(positions),
@@ -202,7 +211,14 @@ class ClusterBuildContractTests(unittest.TestCase):
             self.joined,
             "kroki warunkowe (seed/backup/alerts/app-host) musza dac sie pominac bez edycji Makefile",
         )
-        self.assertIn("filter-out", self.joined, "pomijanie krokow przez filtr listy krokow")
+        script = (REPO / "tests" / "validation" / "gate-build.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'case " $build_skip " in',
+            script,
+            "pomijanie krokow przez porownanie BUILD_SKIP",
+        )
 
     def test_cluster_and_confirm_guards(self):
         self.assertIn(
@@ -733,14 +749,18 @@ class MakefileDryRunGraphTests(unittest.TestCase):
     def test_cluster_build_graph_dry_run(self):
         proc = self.run_make("cluster-build")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        expected = (
-            CORE_BUILD_STEPS
-            + CONDITIONAL_BUILD_STEPS
-            + BACKUP_BUILD_STEPS
-            + [BUILD_GATE]
-        )
-        for step in expected:
+        for step in CORE_BUILD_STEPS + [BUILD_GATE]:
             self.assertIn(step, proc.stdout, f"make -n cluster-build pokazuje krok {step}")
+        self.assertIn(
+            "gate-build.sh preflight",
+            proc.stdout,
+            "polityka sprzezenia seed->backup odpalana przed buildem",
+        )
+        self.assertIn(
+            "gate-build.sh steps",
+            proc.stdout,
+            "kroki warunkowe wolywane ze skryptu polityki",
+        )
 
     def test_cluster_build_skip_dry_run(self):
         proc = self.run_make(
@@ -749,9 +769,9 @@ class MakefileDryRunGraphTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn(
-            "for step in alerts",
+            'gate-build.sh steps "seed backup app-host"',
             proc.stdout,
-            "BUILD_SKIP wyklucza kroki z listy warunkowej",
+            "BUILD_SKIP musi dotrzec do skryptu polityki krokow warunkowych",
         )
 
     def test_cluster_recover_graph_dry_run(self):

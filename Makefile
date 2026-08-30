@@ -224,7 +224,7 @@ help:  ## Pokaż dostępne komendy
 #
 # Kroki warunkowe (seed/backup/alerts/app-host) da sie pominac bez edycji
 # Makefile: BUILD_SKIP="alerts app-host" make cluster-build CLUSTER=... CONFIRM=yes
-# Zaleznosc seed->backup jest EGZEKWOWANA w recepcie cluster-build, nie doradzana:
+# Zaleznosc seed->backup egzekwuje tests/validation/gate-build.sh (preflight),
 # na pustym klastrze pominiecie seed bez pominiecia backupu daje restore drill,
 # ktory nie ma czego przywrocic, wiec bramka konczy sie zielono na pustych danych.
 # Legalne warianty: BUILD_SKIP="seed backup", albo BUILD_SKIP=seed z jawnym
@@ -388,24 +388,9 @@ platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→
 
 cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap→join→proxysql→monitoring→harden→warunkowe→bramka (CLUSTER+CONFIRM=yes)
 	$(cluster_guard)
-	@# Sprzezenie seed->backup bylo dotad WYLACZNIE komentarzem, wiec nie istnialo.
-	@# Pominiecie seed bez pominiecia backupu daje restore drill bez czego przywracac:
-	@# bramka konczy sie zielono na pustych danych. Jedyne legalne wyjscie to jawna
-	@# deklaracja, ze klaster ma juz dane uzytkownika.
-	@# Na klastrze z `backup.enabled: false` drillu nie ma w ogole, wiec zadanie
-	@# EXISTING_DATA bylo pytaniem o dane dla przebiegu, ktory nie nastapi.
-	@if [ "$(backup_enabled)" = "true" ]; then \
-		case " $(BUILD_SKIP) " in \
-			*" seed "*) \
-				case " $(BUILD_SKIP) " in \
-					*" backup "*) ;; \
-					*) test "$(EXISTING_DATA)" = "yes" || { \
-						echo "ERROR: BUILD_SKIP pomija seed, ale nie backup — restore drill nie mialby czego przywrocic." >&2; \
-						echo "       Pomin tez backup (BUILD_SKIP=\"seed backup\") albo zadeklaruj EXISTING_DATA=yes." >&2; \
-						exit 1; } ;; \
-				esac ;; \
-		esac; \
-	fi
+	@# Sprzezenie seed->backup i mapa krokow warunkowych zyja w
+	@# tests/validation/gate-build.sh — Makefile zostaje orkiestracja.
+	@tests/validation/gate-build.sh preflight "$(backup_enabled)" "$(BUILD_SKIP)" "$(EXISTING_DATA)"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (bootstrap tworzy nowy Primary Component)"; exit 1)
 	$(MAKE) cluster-validate
 	$(MAKE) cluster-deploy
@@ -414,17 +399,7 @@ cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap
 	$(MAKE) cluster-proxysql
 	$(MAKE) cluster-monitoring
 	$(MAKE) cluster-harden
-	@for step in $(filter-out $(BUILD_SKIP),seed backup alerts app-host); do \
-		case $$step in \
-			seed) $(MAKE) lab-seed-smoke || exit 1 ;; \
-			backup) $(MAKE) cluster-backup-configure || exit 1; \
-				$(MAKE) cluster-backup || exit 1; \
-				$(MAKE) cluster-restore-drill CONFIRM=yes || exit 1; \
-				$(MAKE) cluster-monitoring-refresh || exit 1 ;; \
-			alerts) $(MAKE) cluster-alerts || exit 1 ;; \
-			app-host) $(MAKE) cluster-app-host || exit 1 ;; \
-		esac; \
-	done
+	@tests/validation/gate-build.sh steps "$(BUILD_SKIP)"
 	$(MAKE) lab-post-build-gate
 
 cluster-discover:  ## F0 Discovery — zbierz fakty z hostów (read-only)
