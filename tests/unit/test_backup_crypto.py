@@ -31,13 +31,14 @@ class GcmRoundTripTests(unittest.TestCase):
             tar = td_path / "backup.tar"
             payload = td_path / "backup.tar.enc"
             tar.write_bytes(PLAINTEXT)
+            runner = CommandRunner(secret_values=[KEY_MATERIAL])
 
             crypto.encrypt_payload(tar, payload, KEY_MATERIAL)
             blob = payload.read_bytes()
             self.assertTrue(blob.startswith(crypto.MAGIC), "payload v2 musi miec naglowek GB2G")
 
             out = td_path / "restored.tar"
-            fmt = crypto.decrypt_payload(payload, out, KEY_MATERIAL, None)
+            fmt = crypto.decrypt_payload(payload, out, KEY_MATERIAL, runner)
             self.assertEqual(fmt, "v2")
             self.assertEqual(out.read_bytes(), PLAINTEXT)
 
@@ -48,6 +49,7 @@ class GcmRoundTripTests(unittest.TestCase):
             payload = td_path / "backup.tar.enc"
             out = td_path / "restored.tar"
             tar.write_bytes(PLAINTEXT)
+            runner = CommandRunner(secret_values=[KEY_MATERIAL])
             crypto.encrypt_payload(tar, payload, KEY_MATERIAL)
 
             blob = bytearray(payload.read_bytes())
@@ -55,7 +57,7 @@ class GcmRoundTripTests(unittest.TestCase):
             payload.write_bytes(bytes(blob))
 
             with self.assertRaises(BackupError) as ctx:
-                crypto.decrypt_payload(payload, out, KEY_MATERIAL, None)
+                crypto.decrypt_payload(payload, out, KEY_MATERIAL, runner)
             self.assertEqual(ctx.exception.code, "E_INTEGRITY")
             self.assertFalse(out.exists(), "odszyfrowany tar nie moze powstac z przeklamaniem")
 
@@ -85,7 +87,18 @@ class GcmRoundTripTests(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("openssl"), "openssl niedostepny")
-@unittest.skipUnless(crypto.openssl_supports_pbkdf2(), "openssl bez -pbkdf2 (legacy nie testowalny)")
+def openssl_supports_pbkdf2() -> bool:
+    """Sondowanie srodowiska testowego: lokalny openssl umie -pbkdf2."""
+    probe = subprocess.run(
+        ["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "1", "-e",
+         "-in", "/dev/null", "-out", "/dev/null", "-pass", "pass:x"],
+        capture_output=True,
+    )
+    return probe.returncode == 0
+
+
+@unittest.skipUnless(shutil.which("openssl"), "openssl niedostepny")
+@unittest.skipUnless(openssl_supports_pbkdf2(), "openssl bez -pbkdf2 (legacy nie testowalny)")
 class LegacyCbcDecryptTests(unittest.TestCase):
     def test_legacy_v1_payload_roundtrip_through_openssl(self):
         with tempfile.TemporaryDirectory() as td:

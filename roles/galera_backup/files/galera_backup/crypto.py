@@ -22,7 +22,6 @@ sciezka decrypt utrzymana celowo, patrz `decrypt_payload`.
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 
 from cryptography.exceptions import InvalidTag
@@ -39,7 +38,11 @@ NONCE_LEN = 12
 KEY_LEN = 32
 PBKDF2_ITERATIONS = 200_000
 
-# Wartosci pisane do metadata.json — jednorodne z format_version w backup.py.
+# Wartosci pisane do metadata.json. FORMAT_VERSION jest jedynym zrodlem
+# prawdy dla tej dyrektywy — backup.py ja pisze, restore.py akceptuje zbior
+# {LEGACY_FORMAT_VERSION, FORMAT_VERSION}.
+FORMAT_VERSION = 2
+LEGACY_FORMAT_VERSION = 1
 ENCRYPTION_METHOD_V2 = "aes-256-gcm-pbkdf2-sha256"
 ENCRYPTION_METHOD_V1 = "aes-256-cbc-pbkdf2-iter200k-sha256"
 
@@ -69,7 +72,7 @@ def decrypt_payload(
     payload_path: Path,
     tar_out: Path,
     key_material: str,
-    runner: CommandRunner = None,
+    runner: CommandRunner,
 ) -> str:
     """Odszyfruj payload do tar_out. Zwraca uzywany format ("v2" | "v1").
 
@@ -111,11 +114,3 @@ def decrypt_payload(
     return "v1"
 
 
-def openssl_supports_pbkdf2() -> bool:
-    """Falsyfikowalny warunek testow legacy: lokalny openssl umie -pbkdf2."""
-    probe = subprocess.run(
-        ["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "1", "-e",
-         "-in", os.devnull, "-out", os.devnull, "-pass", "pass:x"],
-        capture_output=True,
-    )
-    return probe.returncode == 0

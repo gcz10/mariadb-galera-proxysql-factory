@@ -19,7 +19,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Optional
-from .crypto import decrypt_payload
+from .crypto import FORMAT_VERSION, LEGACY_FORMAT_VERSION, decrypt_payload
 
 from .common import (
     MetricsManager,
@@ -136,7 +136,7 @@ def run_restore(
 
         # 1. Check metadata
         meta = json.loads(art_set.metadata_path.read_text(encoding="utf-8"))
-        if meta.get("format_version") not in (1, 2) or meta.get("cluster_name") != cluster_name:
+        if meta.get("format_version") not in (LEGACY_FORMAT_VERSION, FORMAT_VERSION) or meta.get("cluster_name") != cluster_name:
             raise BackupError("E_INTEGRITY", "Metadata format or cluster mismatch in fetched backup")
 
         b_ver = meta.get("mariadb_version", "")

@@ -2,8 +2,9 @@
 
 PODSZCIEP MONOLITU (F1). Dawny monolit (1498 linii) mieszka teraz w:
 
-* `common.py`  — narzedzia wspolne: wsrep, backendy, metryki, redactor, sinki,
-* `backup.py`  — elekcja donora, writer guard, zrzut, publikacja, retencja,
+* `common.py`  — narzedzia wspolne: backendy, metryki, redactor, sinki,
+* `backup.py`  — kwery Galera (wsrep), elekcja donora, writer guard, zrzut,
+                publikacja, retencja,
 * `restore.py` — weryfikacja integralnosci, decrypt, copy-back, drill marker.
 
 `galera-backup` pozostaje cienkim wrapperem wolajacym `main()` z tego modulu.

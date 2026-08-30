@@ -30,7 +30,7 @@ from .common import (
     publish_drill_freshness,
     set_module_redactor,
 )
-from .crypto import ENCRYPTION_METHOD_V2, encrypt_payload
+from .crypto import ENCRYPTION_METHOD_V2, FORMAT_VERSION, encrypt_payload
 from .config import RunConfig, load_run_config, load_secrets
 from .errors import BackupError, combine_failures
 from .fsutil import file_sha256_and_size, remove_sensitive_work_dir
@@ -627,7 +627,7 @@ def run_backup(
 
         created_iso = datetime.now(timezone.utc).isoformat()
         meta = {
-            "format_version": 2,
+            "format_version": FORMAT_VERSION,
             "cluster_name": cluster_name,
             "backup_name": backup_name,
             "source_host": curr_host,
