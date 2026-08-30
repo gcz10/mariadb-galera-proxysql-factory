@@ -30,6 +30,20 @@ ich też za Ciebie — pełny cykl dla maszyn z innego źródła opisuje
 sprząta po sobie zawsze: `make cluster-deregister` usuwa najemcę z ProxySQL
 i PMM niezależnie od pochodzenia maszyn.
 
+## Zależności deweloperskie
+
+Fabryka wystarcza z SSH i systemd, ale **testy i bramki statyczne** (529 testów
+jednostkowych, walidatory, `pyflakes`, `ansible-lint`) potrzebują pakietów
+Pythona z przypiętymi wersjami:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
+Te same piny instaluje CI (`.github/workflows/ci.yml`), więc świeży klon +
+`python3 -m unittest discover tests/unit` przechodzi tam, gdzie przechodzi
+w CI — bez zgadywania, czego brakuje.
+
 ### Własne hosty, krok po kroku
 
 Kolejność poniżej odtwarza budowę, którą przeszedł ten repozytorium na świeżych

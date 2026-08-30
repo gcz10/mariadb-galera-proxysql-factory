@@ -1,0 +1,20 @@
+# Zależności deweloperskie i CI: testy jednostkowe (`tests/unit`) oraz bramki
+# statyczne (walidatory, pyflakes, ansible-lint). Maszyny NAJEMCY tego nie
+# potrzebują — ich kontrakt to SSH + systemd + sudo (sekcja "Czego wymagają
+# maszyny" w README).
+#
+# Sztuczny klon: python3 -m pip install -r requirements-dev.txt
+#
+# Piny ==: powtarzalność niezależnie od upstreamu, tak jak lockfile'e
+# (versions/*.lock.yml, .terraform.lock.hcl). Podbijając wersje:
+#   * aktualność sprawdź na pypi.org/pypi/<pakiet>/json,
+#   * ansible-core trzymaj zgodny z versions/compatibility-report.md
+#     (wymaga Pythona >= 3.12),
+#   * ansible-lint ma twardy require na ansible-core (requires_dist na PyPI:
+#     ansible-core!=2.17.*,>=2.16.19) — parę podnoś razem.
+ansible-core==2.21.3
+ansible-lint==26.8.0
+jsonschema==4.26.0
+minio==7.2.20
+pyflakes==3.4.0
+pyyaml==6.0.3

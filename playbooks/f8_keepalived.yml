@@ -11,7 +11,8 @@
 # Satisfies: ISC-24 (VIP działa gdy oba ProxySQL zdrowe),
 # ISC-25 (awaria aktywnego ProxySQL < RTO węzła — klient wznawia przez VIP),
 # ISC-26 (VIP nie kieruje ruchu do niesprawnej instancji).
-# VRRP unicast — stabilne w sieciach bez multicast (Docker/OrbStack).
+# VRRP unicast — peerzy wskazani explicite (unicast_peer), wiec dziala niezaleznie
+# od obslugi multicast przez most Proxmox.
 
 - name: "F8 — Keepalived VIP dla endpointu ProxySQL"
   hosts: proxysql

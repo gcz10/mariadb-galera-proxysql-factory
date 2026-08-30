@@ -26,15 +26,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python deps
-        # minio: importowane przez tests/lab/probe-backup.py, ktore laduje
-        # test jednostkowy test_probe_backup.py. Bez tego job pada na
-        # ModuleNotFoundError, a cala bramka jakosci przestaje blokowac merge.
-        # Piny ==: CI ma byc powtarzalny niezaleznie od upstreamu, tak jak
-        # lockfile'e (versions/*.lock.yml, .terraform.lock.hcl). Podbijajac
-        # wersje: aktualna sprawdz na pypi.org/pypi/<pakiet>/json;
-        # ansible-core trzymaj zgodny z baseline w
-        # versions/compatibility-report.md (wymaga Pythona >=3.12).
-        run: pip install ansible-core==2.21.3 jsonschema==4.26.0 pyyaml==6.0.3 minio==7.2.20
+        # Jedno zrodlo pinow: requirements-dev.txt. Te same wersje instaluje
+        # lokalnie kazdy klonujacy (README: "Zaleznosci deweloperskie").
+        run: pip install -r requirements-dev.txt
 
       - name: Install Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
@@ -225,11 +219,9 @@ jobs:
           # ansible-core 2.21.x wymaga Pythona >=3.12 (requires_python, PyPI).
           python-version: '3.12'
       # ansible-lint ma twardy require na ansible-core (requires_dist na
-      # PyPI: ansible-core!=2.17.*,>=2.16.19), wiec para jest przypinana
-      # razem. Podbicie: sprawdz requires_dist na
-      # pypi.org/pypi/ansible-lint/json i utrzymaj ansible-core zgodny
-      # z versions/compatibility-report.md.
-      - run: pip install ansible-lint==26.8.0 ansible-core==2.21.3
+      # PyPI), wiec para jest przypinana razem w requirements-dev.txt —
+      # zgodna z baseline w versions/compatibility-report.md.
+      - run: pip install -r requirements-dev.txt
       - run: ansible-galaxy collection install -r requirements.yml
       - run: ansible-lint playbooks roles
         env:
