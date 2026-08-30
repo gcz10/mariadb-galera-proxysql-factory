@@ -328,6 +328,7 @@ class BackupLockfileTests(unittest.TestCase):
         keys_to_test = [
             ("backup_tools", "python_pip_package"),
             ("backup_tools", "encryption_package"),
+            ("backup_tools", "crypto_package"),
             ("backup_tools", "archive_package"),
             ("backup_tools", "cron_package"),
             ("backup_tools", "cifs_userspace_package"),

@@ -32,7 +32,7 @@ from .storage.filesystem import FilesystemBackend, SMBBackend
 from .storage.s3 import S3Backend
 from .state import EventManager, StateManager
 from .runner import CommandRunner, SecretRedactor
-from .config import RunConfig, load_secrets  # noqa: F401  (load_secrets dla zgodnosci importow)
+from .config import RunConfig
 
 
 # Redactor instalowany raz na przebieg (backup albo restore) po zaladowaniu

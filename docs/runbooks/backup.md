@@ -5,7 +5,13 @@
 
 ## Kontrakt
 
-`galera-backup` wykonuje pełny fizyczny backup przez `mariadb-backup`, szyfruje go `openssl aes-256-cbc` z PBKDF2, publikuje checksumę i metadata, a następnie usuwa lokalny staging. Obsługiwane backendy:
+`galera-backup` wykonuje pełny fizyczny backup przez `mariadb-backup`, szyfruje go
+AES-256-GCM przez `python3-cryptography` (format_version 2 — AEAD, integralność
+pilnuje tag GCM, nie tylko sha256; `openssl enc` nie wspiera szyfrów AEAD).
+Klucz bez zmian: `GALERA_BACKUP_ENCRYPTION_KEY`. Kopie sprzed migracji
+(format_version 1, `openssl aes-256-cbc` + PBKDF2) nadal się odtwarzają — dispatch
+po nagłówku pliku. Publikuje checksumę i metadata, a następnie usuwa lokalny
+staging. Obsługiwane backendy:
 
 - `s3` — bucket S3/MinIO;
 - `smb` — udział montowany tylko na czas operacji; sukces jest zapisywany dopiero po poprawnym unmount;

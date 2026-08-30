@@ -40,8 +40,8 @@ REQUIRED = {
     ],
     "minio": ["image", "image_digest", "sdk_version", "mc_image", "mc_image_digest"],
     "backup_tools": [
-        "python_pip_package", "encryption_package", "archive_package",
-        "cron_package", "cifs_userspace_package",
+        "python_pip_package", "encryption_package", "crypto_package",
+        "archive_package", "cron_package", "cifs_userspace_package",
     ],
     "pmm": ["version", "image", "image_digest"],
     "maildev": ["image"],

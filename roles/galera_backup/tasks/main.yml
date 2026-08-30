@@ -5,7 +5,10 @@
   ansible.builtin.package:
     name:
       - "{{ lock.backup_tools.python_pip_package }}"
+      # openssl: decrypt kopii format_version 1 (sprzed AES-GCM)
       - "{{ lock.backup_tools.encryption_package }}"
+      # python3-cryptography: szyfrowanie/decrypt AES-GCM (format_version 2)
+      - "{{ lock.backup_tools.crypto_package }}"
       - "{{ lock.backup_tools.archive_package }}"
     state: present
 

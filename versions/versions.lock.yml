@@ -84,7 +84,8 @@ docker:
 
 backup_tools:
   python_pip_package: "python3-pip"
-  encryption_package: "openssl"
+  encryption_package: "openssl"   # legacy decrypt format_version 1
+  crypto_package: "python3-cryptography"  # AES-GCM format_version 2
   archive_package: "tar"
   cron_package: "cronie"
   cifs_userspace_package: "cifs-utils"

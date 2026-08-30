@@ -78,10 +78,30 @@ from .textutil import (
 )
 
 
-# Te trzy nazwy nie sa uzywane WEWNATRZ tego modulu, ale sa czescia jego
-# powierzchni publicznej: siegaja po nie testy jednostkowe oraz
-# tests/live/probe-galera-backup-backends.py.
-__all__ = ["PublishedArtifact", "quote_sql_identifier", "validate_smb_options"]
+# Fasada re-eksportuje cala powierzchnie uzywana BEZPOSREDNIO (atrybutowo)
+# przez testy jednostkowe oraz tests/live/probe-galera-backup-backends.py.
+# Pelna lista w __all__ jest tez kontraktem dla pyflakes (re-eksporty nie sa
+# wtedy "imported but unused").
+__all__ = [
+    "ArtifactSet", "BackupError", "CommandRunner", "EventManager",
+    "FilesystemBackend", "LockManager", "MetricsManager", "PublishedArtifact",
+    "RunConfig", "S3Backend", "SMBBackend", "SecretRedactor", "EventManager",
+    "StateManager", "assert_scheduler_is_not_writer", "atomic_write",
+    "build_drill_marker", "clear_datadir", "combine_failures",
+    "drill_marker_unixtime", "elect_backup_donor", "escape_metric_label",
+    "file_sha256_and_size", "get_module_redactor", "get_storage_backend",
+    "has_retention_credential", "is_mariadb_version_compatible",
+    "is_safe_tar_member", "load_run_config", "load_secrets", "main",
+    "perform_physical_backup", "publish_drill_freshness", "query_galera_vars",
+    "quote_sql_identifier", "redactable_secret_values",
+    "remove_sensitive_work_dir", "resolve_lock_path",
+    "restore_default_context", "run_backup", "run_restore", "run_retention",
+    "sensitive_secret_values", "selinux_is_enabled",
+    "set_wsrep_desync", "shutil", "stop_standalone_server", "subprocess",
+    "sanitize_cluster_name", "validate_smb_options", "verify_restored_database",
+    "wait_until_synced", "_finalize_success_cleanup",
+    "_flow_control_paused_ns", "_record_pre_lock_failure",
+]
 
 
 def main() -> int:

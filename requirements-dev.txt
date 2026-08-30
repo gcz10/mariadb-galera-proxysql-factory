@@ -14,6 +14,7 @@
 #     ansible-core!=2.17.*,>=2.16.19) — parę podnoś razem.
 ansible-core==2.21.3
 ansible-lint==26.8.0
+cryptography==50.0.1
 jsonschema==4.26.0
 minio==7.2.20
 pyflakes==3.4.0

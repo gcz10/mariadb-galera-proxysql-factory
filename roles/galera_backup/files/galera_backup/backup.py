@@ -30,6 +30,7 @@ from .common import (
     publish_drill_freshness,
     set_module_redactor,
 )
+from .crypto import ENCRYPTION_METHOD_V2, encrypt_payload
 from .config import RunConfig, load_run_config, load_secrets
 from .errors import BackupError, combine_failures
 from .fsutil import file_sha256_and_size, remove_sensitive_work_dir
@@ -612,17 +613,9 @@ def run_backup(
                 hasher.update(chunk)
         plaintext_sha = hasher.hexdigest()
 
-        # Encrypt with OpenSSL
-        cmd_enc = [
-            "openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
-            "-md", "sha256", "-salt",
-            "-in", str(tar_file),
-            "-out", str(payload_file),
-            "-pass", "env:GALERA_BACKUP_ENCRYPTION_KEY",
-        ]
-        code, out, err = runner.run(cmd_enc, env={"GALERA_BACKUP_ENCRYPTION_KEY": secrets["GALERA_BACKUP_ENCRYPTION_KEY"]})
-        if code != 0:
-            raise BackupError("E_STORAGE", f"OpenSSL encryption failed: {err or out}")
+        # Encrypt in-process: AES-256-GCM (AEAD — integralnosc priorytetem
+        # wrogiem magazynu; openssl enc nie umie AEAD). Klucz bez zmian.
+        encrypt_payload(tar_file, payload_file, secrets["GALERA_BACKUP_ENCRYPTION_KEY"])
 
         # Remove unencrypted tar
         if tar_file.exists():
@@ -634,7 +627,7 @@ def run_backup(
 
         created_iso = datetime.now(timezone.utc).isoformat()
         meta = {
-            "format_version": 1,
+            "format_version": 2,
             "cluster_name": cluster_name,
             "backup_name": backup_name,
             "source_host": curr_host,
@@ -650,7 +643,7 @@ def run_backup(
             "encrypted_sha256": enc_sha,
             "size_bytes": enc_size,
             "encrypted_size_bytes": enc_size,
-            "encryption_method": "aes-256-cbc-pbkdf2-iter200k-sha256",
+            "encryption_method": ENCRYPTION_METHOD_V2,
             "backend": b_type,
             "backend_type": b_type,
         }

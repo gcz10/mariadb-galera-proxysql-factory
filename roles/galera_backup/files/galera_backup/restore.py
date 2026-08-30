@@ -19,6 +19,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Optional
+from .crypto import decrypt_payload
 
 from .common import (
     MetricsManager,
@@ -167,18 +168,15 @@ def run_restore(
                 f"Encrypted payload SHA-256 mismatch: expected {expected_enc_sha}, got {enc_sha}",
             )
 
-        # 3. Decrypt payload
+        # 3. Decrypt payload — dispatch po MAGIC: v2 (GCM, uwierzytelnione)
+        # albo legacy v1 (CBC przez openssl, kopie sprzed migracji).
         tar_path = work_dir / "backup.tar"
-        cmd_dec = [
-            "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
-            "-md", "sha256",
-            "-in", str(art_set.payload_path),
-            "-out", str(tar_path),
-            "-pass", "env:GALERA_BACKUP_ENCRYPTION_KEY",
-        ]
-        code, out, err = runner.run(cmd_dec, env={"GALERA_BACKUP_ENCRYPTION_KEY": secrets["GALERA_BACKUP_ENCRYPTION_KEY"]})
-        if code != 0:
-            raise BackupError("E_INTEGRITY", f"Decryption failed: {err or out}")
+        decrypt_payload(
+            art_set.payload_path,
+            tar_path,
+            secrets["GALERA_BACKUP_ENCRYPTION_KEY"],
+            runner,
+        )
 
         # 4. Check plaintext SHA-256 without loading the tar archive into RAM.
         plain_sha, _ = file_sha256_and_size(tar_path)

@@ -298,7 +298,7 @@ def main():
             failures,
             undetermined,
             f"backup verified — {latest} off-cluster in s3://{bucket}, encrypted "
-            f"({meta.get('encryption', 'aes-256-cbc')}), sha256 OK, metadata "
+            f"({meta.get('encryption_method', 'aes-256-gcm-pbkdf2-sha256')}), sha256 OK, metadata "
             f"{meta.get('mariadb_version', 'unknown')} "
             f"seqno={meta.get('wsrep_seqno', 'unknown')} "
             f"cluster={meta.get('cluster_name', 'unknown')}",
