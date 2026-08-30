@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "roles" / "galera_backup" / "files"))
 
-from galera_backup import pipeline  # noqa: E402
+from galera_backup import pipeline, restore  # noqa: E402
 
 
 class GaleraBackupRestoreTests(unittest.TestCase):
@@ -165,7 +165,7 @@ class GaleraBackupRestoreTests(unittest.TestCase):
                 "Backend belongs to another cluster",
             )
             with patch("socket.gethostname", return_value="rnode1"):
-                with patch.object(pipeline, "get_storage_backend", return_value=backend):
+                with patch.object(restore, "get_storage_backend", return_value=backend):
                     with self.assertRaises(pipeline.BackupError):
                         pipeline.run_restore(
                             config_path=cfg_path,
@@ -184,7 +184,7 @@ class GaleraBackupRestoreTests(unittest.TestCase):
                 "SMB cleanup failed: unmount failed",
             )
             with patch("socket.gethostname", return_value="rnode1"):
-                with patch.object(pipeline, "get_storage_backend", return_value=backend):
+                with patch.object(restore, "get_storage_backend", return_value=backend):
                     with self.assertRaises(pipeline.BackupError) as cleanup_ctx:
                         pipeline.run_restore(
                             config_path=cfg_path,

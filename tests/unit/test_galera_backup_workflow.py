@@ -9,12 +9,12 @@ from unittest.mock import MagicMock, patch
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "roles" / "galera_backup" / "files"))
 
-from galera_backup import pipeline  # noqa: E402
+from galera_backup import backup, common, pipeline  # noqa: E402
 
 
 class GaleraBackupWorkflowTests(unittest.TestCase):
     def setUp(self):
-        self.writer_guard = patch.object(pipeline, "assert_scheduler_is_not_writer")
+        self.writer_guard = patch.object(backup, "assert_scheduler_is_not_writer")
         self.writer_guard.start()
 
         def _stop_writer_guard():
@@ -30,9 +30,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
         # a te testy sprawdzaja kroki PO wyborze donora. Zwracany adres jest
         # tozsamoscia, ktora fixture'y wpisuja w `node_system_address`, wiec
         # runner uznaje sie za wybranego i wchodzi w wlasciwa sciezke backupu.
-        self.donor_election = patch.object(
-            pipeline, "elect_backup_donor", return_value="192.168.1.51"
-        )
+        self.donor_election = patch.object(backup, "elect_backup_donor", return_value="192.168.1.51")
         self.donor_election.start()
         self.addCleanup(self.donor_election.stop)
         self.addCleanup(_stop_writer_guard)
@@ -76,8 +74,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
 
             # Donor to .51, a ten wezel to .52 — ma sie wycofac, nie pracowac.
             with patch("socket.gethostname", return_value="current-host"):
-                with patch.object(pipeline, "get_storage_backend") as backend:
-                    with patch.object(pipeline, "run_retention") as retention:
+                with patch.object(backup, "get_storage_backend") as backend:
+                    with patch.object(backup, "run_retention") as retention:
                         pipeline.run_backup(
                             config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b"
                         )
@@ -131,7 +129,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             os.chmod(env_path, 0o600)
 
             with patch("socket.gethostname", return_value="current-host"):
-                with patch.object(pipeline, "get_storage_backend") as backend:
+                with patch.object(backup, "get_storage_backend") as backend:
                     with self.assertRaises(pipeline.BackupError) as ctx:
                         pipeline.run_backup(
                             config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b"
@@ -174,8 +172,8 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
 
             with patch("socket.gethostname", return_value="gnode4"):
                 fake_backend = MagicMock()
-                with patch.object(pipeline, "get_storage_backend", return_value=fake_backend):
-                    with patch.object(pipeline, "query_galera_vars", return_value={"wsrep_local_state_comment": "Donor/Desynced"}):
+                with patch.object(backup, "get_storage_backend", return_value=fake_backend):
+                    with patch.object(backup, "query_galera_vars", return_value={"wsrep_local_state_comment": "Donor/Desynced"}):
                         with self.assertRaises(pipeline.BackupError) as ctx:
                             pipeline.run_backup(config_path=cfg_path, secrets_path=env_path, cluster_name="claude-r10b")
                         self.assertEqual(ctx.exception.code, "E_GALERA")
@@ -263,11 +261,11 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             ]
 
             with patch("socket.gethostname", return_value="gnode4"):
-                with patch.object(pipeline, "query_galera_vars", side_effect=galera_vars_seq):
+                with patch.object(backup, "query_galera_vars", side_effect=galera_vars_seq):
                     # Mock backend
                     fake_backend = MagicMock()
-                    with patch.object(pipeline, "get_storage_backend", return_value=fake_backend):
-                        with patch.object(pipeline, "perform_physical_backup") as mock_backup:
+                    with patch.object(backup, "get_storage_backend", return_value=fake_backend):
+                        with patch.object(backup, "perform_physical_backup") as mock_backup:
                             mock_backup.return_value = ("uuid-123", "456")
                             def fake_exec(cmd, env=None, cwd=None, timeout=None):
                                 # If openssl output file is in cmd, create dummy file
@@ -359,9 +357,9 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             # assert_scheduler_is_not_writer runs and its argv reaches _exec.
             self.writer_guard.stop()
             with patch("socket.gethostname", return_value="gnode4"):
-                with patch.object(pipeline, "query_galera_vars", return_value=galera_vars):
-                    with patch.object(pipeline, "get_storage_backend", return_value=fake_backend):
-                        with patch.object(pipeline, "perform_physical_backup", return_value=("uuid-1", "100")):
+                with patch.object(backup, "query_galera_vars", return_value=galera_vars):
+                    with patch.object(backup, "get_storage_backend", return_value=fake_backend):
+                        with patch.object(backup, "perform_physical_backup", return_value=("uuid-1", "100")):
                             with patch.object(pipeline.CommandRunner, "_exec", side_effect=fake_exec) as mock_exec:
                                 # Mock tar file creation
                                 with patch("subprocess.Popen") as mock_popen:
@@ -489,9 +487,9 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 return (0, "", "")
 
             with patch("socket.gethostname", return_value="gnode4"):
-                with patch.object(pipeline, "query_galera_vars", return_value=galera_vars):
-                    with patch.object(pipeline, "get_storage_backend", return_value=fake_backend):
-                        with patch.object(pipeline, "perform_physical_backup", return_value=("uuid-1", "100")):
+                with patch.object(backup, "query_galera_vars", return_value=galera_vars):
+                    with patch.object(backup, "get_storage_backend", return_value=fake_backend):
+                        with patch.object(backup, "perform_physical_backup", return_value=("uuid-1", "100")):
                             with patch.object(pipeline.CommandRunner, "_exec", side_effect=fake_exec):
                                 with patch("subprocess.Popen") as mock_popen:
                                     mock_proc = MagicMock()
@@ -591,9 +589,9 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                 return (0, "", "")
 
             with patch("socket.gethostname", return_value="gnode4"):
-                with patch.object(pipeline, "query_galera_vars", return_value=galera_vars):
-                    with patch.object(pipeline, "get_storage_backend", return_value=fake_backend):
-                        with patch.object(pipeline, "perform_physical_backup", return_value=("uuid-1", "100")):
+                with patch.object(backup, "query_galera_vars", return_value=galera_vars):
+                    with patch.object(backup, "get_storage_backend", return_value=fake_backend):
+                        with patch.object(backup, "perform_physical_backup", return_value=("uuid-1", "100")):
                             with patch.object(pipeline.CommandRunner, "_exec", side_effect=fake_exec):
                                 with patch("subprocess.Popen") as mock_popen:
                                     mock_proc = MagicMock()
@@ -622,11 +620,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
         backend = MagicMock()
         backend.close.side_effect = pipeline.BackupError("E_STORAGE", "SMB unmount failed")
 
-        with patch.object(
-            pipeline,
-            "remove_sensitive_work_dir",
-            side_effect=pipeline.BackupError("E_STORAGE", "workdir removal denied"),
-        ):
+        with patch.object(common, "remove_sensitive_work_dir", side_effect=pipeline.BackupError("E_STORAGE", "workdir removal denied"),):
             pipeline._finalize_success_cleanup(
                 event_mgr, backend, Path("/tmp/work"), "E_STORAGE"
             )

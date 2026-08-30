@@ -34,7 +34,7 @@ from jinja2 import Template
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "roles" / "galera_backup" / "files"))
 
-from galera_backup import pipeline  # noqa: E402
+from galera_backup import backup, common, pipeline  # noqa: E402
 from galera_backup.secrets import (  # noqa: E402
     REDACT_ONLY_SECRET_KEYS,
     SENSITIVE_SECRET_KEYS,
@@ -196,7 +196,7 @@ COORDINATOR_SECRETS = dict(
 
 class TestBackendFactorySeparatesPurposes(unittest.TestCase):
     def test_retention_backend_uses_the_retention_credential(self):
-        with patch.object(pipeline, "S3Backend") as fake_cls:
+        with patch.object(common, "S3Backend") as fake_cls:
             pipeline.get_storage_backend(
                 s3_config(), COORDINATOR_SECRETS, None, purpose="retention"
             )
@@ -205,14 +205,14 @@ class TestBackendFactorySeparatesPurposes(unittest.TestCase):
         self.assertEqual(kwargs["secret_key"], "prune-sk")
 
     def test_write_backend_never_receives_the_retention_credential(self):
-        with patch.object(pipeline, "S3Backend") as fake_cls:
+        with patch.object(common, "S3Backend") as fake_cls:
             pipeline.get_storage_backend(s3_config(), COORDINATOR_SECRETS, None)
         kwargs = fake_cls.call_args.kwargs
         self.assertEqual(kwargs["access_key"], "write-ak")
         self.assertEqual(kwargs["secret_key"], "write-sk")
 
     def test_retention_backend_fails_closed_without_its_credential(self):
-        with patch.object(pipeline, "S3Backend") as fake_cls:
+        with patch.object(common, "S3Backend") as fake_cls:
             with self.assertRaises(pipeline.BackupError) as ctx:
                 pipeline.get_storage_backend(
                     s3_config(), WRITE_SECRETS, None, purpose="retention"
@@ -232,7 +232,7 @@ class TestRetentionExecution(unittest.TestCase):
 
     def test_node_without_retention_credential_does_not_prune(self):
         write_backend = MagicMock()
-        with patch.object(pipeline, "get_storage_backend") as factory:
+        with patch.object(backup, "get_storage_backend") as factory:
             pipeline.run_retention(
                 s3_config(), WRITE_SECRETS, None, self.events, "s3", write_backend
             )
@@ -244,9 +244,7 @@ class TestRetentionExecution(unittest.TestCase):
         write_backend = MagicMock()
         prune_backend = MagicMock()
         prune_backend.prune.return_value = 2
-        with patch.object(
-            pipeline, "get_storage_backend", return_value=prune_backend
-        ) as factory:
+        with patch.object(backup, "get_storage_backend", return_value=prune_backend) as factory:
             pipeline.run_retention(
                 s3_config(), COORDINATOR_SECRETS, None, self.events, "s3", write_backend
             )
@@ -260,7 +258,7 @@ class TestRetentionExecution(unittest.TestCase):
     def test_prune_failure_is_reported_and_never_raises(self):
         prune_backend = MagicMock()
         prune_backend.prune.side_effect = pipeline.BackupError("E_STORAGE", "denied")
-        with patch.object(pipeline, "get_storage_backend", return_value=prune_backend):
+        with patch.object(backup, "get_storage_backend", return_value=prune_backend):
             pipeline.run_retention(
                 s3_config(), COORDINATOR_SECRETS, None, self.events, "s3", MagicMock()
             )
@@ -272,7 +270,7 @@ class TestRetentionExecution(unittest.TestCase):
         backend.prune.return_value = 0
         cfg = s3_config()
         cfg.backend = {"type": "filesystem", "mount_point": "/srv/backups"}
-        with patch.object(pipeline, "get_storage_backend") as factory:
+        with patch.object(backup, "get_storage_backend") as factory:
             pipeline.run_retention(cfg, WRITE_SECRETS, None, self.events, "filesystem", backend)
         factory.assert_not_called()
         backend.prune.assert_called_once()

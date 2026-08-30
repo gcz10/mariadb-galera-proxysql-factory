@@ -12,7 +12,7 @@ import jinja2
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(WORKSPACE_ROOT / "roles" / "galera_backup" / "files"))
 
-from galera_backup import pipeline  # noqa: E402
+from galera_backup import common, pipeline  # noqa: E402
 
 
 class GaleraBackupCoreTests(unittest.TestCase):
@@ -293,12 +293,12 @@ class GaleraBackupCoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             metric_path = Path(td) / "backup.prom"
             manager = pipeline.MetricsManager(metric_path, "pmm-cluster", "logical", "s3")
-            with patch.object(pipeline, "restore_default_context") as restore_context:
+            with patch.object(common, "restore_default_context") as restore_context:
                 manager.update(last_run_success=1)
             restore_context.assert_called_once_with(metric_path)
 
     def test_metrics_context_restore_failure_is_not_silenced(self):
-        with patch.object(pipeline, "selinux_is_enabled", return_value=True):
+        with patch.object(common, "selinux_is_enabled", return_value=True):
             with patch.object(pipeline.shutil, "which", return_value="/sbin/restorecon"):
                 with patch.object(
                     pipeline.subprocess,
@@ -311,7 +311,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
         self.assertIn("permission denied", ctx.exception.public_message)
 
     def test_metrics_context_restore_is_skipped_when_selinux_is_disabled(self):
-        with patch.object(pipeline, "selinux_is_enabled", return_value=False):
+        with patch.object(common, "selinux_is_enabled", return_value=False):
             with patch.object(pipeline.subprocess, "run") as run:
                 pipeline.restore_default_context(Path("/tmp/backup.prom"))
         run.assert_not_called()
@@ -618,7 +618,7 @@ class GaleraBackupCoreTests(unittest.TestCase):
             env_path.write_text('GALERA_BACKUP_S3_ACCESS_KEY="a"\nGALERA_BACKUP_S3_SECRET_KEY="s"\n')
             os.chmod(env_path, 0o600)
 
-            with patch.object(pipeline, "StateManager") as mock_state:
+            with patch.object(common, "StateManager") as mock_state:
                 mock_state.return_value.update_failure.side_effect = ValueError(
                     "state sink exploded"
                 )

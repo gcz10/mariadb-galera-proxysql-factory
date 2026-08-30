@@ -23,7 +23,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SECRETS_TEMPLATE = REPO / "roles" / "galera_backup" / "templates" / "secrets.env.j2"
-PIPELINE = REPO / "roles" / "galera_backup" / "files" / "galera_backup" / "pipeline.py"
+# Od F1 straznik writera (`assert_scheduler_is_not_writer`) mieszka w
+# backup.py, nie w fasadzie pipeline.py.
+PIPELINE = REPO / "roles" / "galera_backup" / "files" / "galera_backup" / "backup.py"
 CONFIG = REPO / "roles" / "galera_backup" / "files" / "galera_backup" / "config.py"
 PLATFORM_PROXYSQL = REPO / "playbooks" / "platform_proxysql.yml"
 BACKUP_PLAY = REPO / "playbooks" / "f10_backup.yml"
