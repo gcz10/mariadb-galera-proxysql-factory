@@ -12,6 +12,19 @@ Dostępu SSH, systemd, Rocky Linux 9 albo 10 i konta z sudo. **Nic ponadto.**
 Skąd pochodzą — Proxmox, libvirt/KVM, blaszak, chmura, maszyny dostarczone przez
 klienta — jest bez znaczenia dla fabryki.
 
+## Środowisko developerskie (testy i walidatory)
+
+Maszyny docelowe niczego z poniższego nie potrzebują — to zależności **kontrolera**
+uruchamiającego testy jednostkowe i walidatory statyczne:
+
+```
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements-dev.txt
+python3 -m unittest discover -s tests/unit     # pełny suite (529 testów)
+```
+
+Szczegóły i wskazówki do testów lab/live: komentarz w `requirements-dev.txt`.
+
 `make infra-provision` (Terraform + Proxmox VE) tworzy maszyny w tym konkretnym
 laboratorium i jest **opcjonalny**: żaden cel wołany przez `cluster-build` ani
 `platform-build` go nie uruchamia i żaden nie czyta stanu Terraforma. Cała wiedza
