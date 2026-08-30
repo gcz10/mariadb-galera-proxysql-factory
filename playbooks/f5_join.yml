@@ -57,10 +57,9 @@
     - name: "Trwały /run/mariadb po reboocie (tmpfiles.d — /run jest tmpfs)"
       ansible.builtin.copy:
         content: |
-          # Po twardym reboocie /run/mariadb znika (mkdir przy joinie jest ulotny),
-          # a bez niego mysqld nie zapisze pidfile i nie wystartuje — zmierzone
-          # chaosem sysrq 2026-08-29 (orionv11-r9). Bootowy systemd-tmpfiles-setup
-          # odtwarza katalog przed startem mariadb.
+          # Odkryte chaosem sysrq 2026-08-29 (orionv11-r9): /run/mariadb powstawal
+          # tylko przy converge — po twardym reboocie maszyny znikal, mysqld nie
+          # mogl zapisac pidfile i nie podnosil sie po reboocie (Errcode: 2).
           d /run/mariadb 0755 mysql mysql -
         dest: /etc/tmpfiles.d/mariadb.conf
         owner: root

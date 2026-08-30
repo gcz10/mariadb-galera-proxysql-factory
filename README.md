@@ -106,9 +106,11 @@ budowy.
 - `monitoring.alerts.email` — adres, który naprawdę odbiera pocztę.
 
 **`platform/<nazwa>/inventory.yml`:** grupy `proxysql` (dwa węzły z
-`proxysql_node_idx` i `proxysql_node_address`), `infra` (host PMM) oraz `app`
-— host aplikacyjny jest WYMAGANY, bo bez niego sonda warstwy nie ma skąd
-zmierzyć TLS endpointu i kończy się `UNDETERMINED`.
+`proxysql_node_idx` i `proxysql_node_address`) oraz `app` — host aplikacyjny
+jest WYMAGANY, bo bez niego sonda warstwy nie ma skąd zmierzyć TLS endpointu i
+kończy się `UNDETERMINED`. Grupę `infra` dodaj tylko wtedy, gdy
+`platform.infra.services` zawiera usługi zarządzane przez tę platformę; przy
+pustej liście host usług może być zewnętrzny i zachowany poza tym inventory.
 
 **`inventory.yml`:**
 

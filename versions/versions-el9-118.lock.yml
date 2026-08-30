@@ -1,17 +1,20 @@
 ---
-# versions-el9-118.lock.yml — lockfile klastra orionv11-r9 na serii MariaDB 11.8.
+# versions-el9-118.lock.yml — zatwierdzony lockfile klastrów EL9 na MariaDB 11.8.
+# Używany przez `orionv12-r9` i `cassiopeiav11-r9`; pozostałe bloki są
+# platformowymi pinami EL9 współdzielonymi z `versions.lock.yml`.
+#
 # Powstaje z versions.lock.yml przez zmianę WYŁĄCZNIE bloku mariadb (11.4.12 → 11.8.9);
 # pozostałe bloki identyczne (piny platformowe EL9 bez zmian).
 #
-# Powód istnienia: aplikacja najemcy orion wymaga dokładnie serii 11.8
-# (decyzja: docs/records/2026-08-29-mariadb-118-upgrade-orionv11.md; pierwotny ADR:
-# docs/records/2026-08-29-mariadb-118-upgrade-orion.md).
+# Powód istnienia: klastry wymagają dokładnie serii 11.8. Per-cluster `lock_file`
+# pozwala mieszać serie między klastrami bez mieszania ich w jednym klastrze.
+# Linia decyzyjna: docs/records/2026-08-29-mariadb-118-upgrade-orionv11.md
+# (pierwotny ADR: docs/records/2026-08-29-mariadb-118-upgrade-orion.md) oraz
+# docs/records/2026-08-29-mariadb-118-upgrade-cassiopeia.md.
 # Świadoma regresja okna wsparcia: EOL 11.8 = 2028-06 vs 11.4 = 2029-05 —
 # strażnik ISC-55 wymaga -e f12_allow_eol_regression=true.
-# Cassiopeiav10-r10 zostaje na versions-el10.lock.yml (11.4) — miks serii między
-# klastrami wspierany (per-cluster lock_file), w obrębie jednego klastra nie.
 #
-# Weryfikacja 2026-08-29 (dnf probe na o11db1, enablerepo=mariadb-server/11.8/rhel9):
+# Weryfikacja 2026-08-29 (dnf probe na o12db1, enablerepo=mariadb-server/11.8/rhel9):
 # MariaDB-server/client/backup 11.8.9-1.el9 oraz galera-4 26.4.27-1.el9
 # (to samo wydanie galery co klaster 11.4 → wsrep API 26 → rolling zgodny).
 

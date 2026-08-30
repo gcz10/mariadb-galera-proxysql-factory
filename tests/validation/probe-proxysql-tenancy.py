@@ -106,6 +106,7 @@ def load_definitions(root):
                     "path": path.relative_to(root).as_posix(),
                     "endpoint": (proxysql.get("endpoint") or {}).get("address"),
                     "frontend_tls": proxysql.get("frontend_tls") or {},
+                    "infra_services": ((cfg.get("platform") or {}).get("infra") or {}).get("services") or [],
                 }
             )
     return clusters, platforms, errors
@@ -168,7 +169,6 @@ def check_platform_ownership(clusters, platforms, violations):
             )
 
 
-SHARED_GROUPS = ("proxysql", "app", "infra")
 # Para szablonowa (example-cluster / platform/example) jest wyjety: inwentarz
 # platformy szablonu jest celowo niepelny (brak grupy `app` — W2 z audytu), a
 # swiezy deployment i tak przepisuje oba pliki. Regula pilnuje zywych najemcow.
@@ -189,11 +189,15 @@ def _group_hosts(inventory_path, groups):
 
 def check_shared_inventory_copies(clusters, platforms, root, violations):
     """Kopia grup warstwy wspoldzielonej w inwentarzu najemcy MUSI byc tozsama
-    z originalu platformy.
+    z oryginalem platformy dla hostow zarzadzanych przez te platforme.
 
-    Kazdy inwentarz najemcy nosi rececznie kopiowane grupy proxysql/app/infra
-    (jeden inventory na przebieg klastrowy — decyzja architektoniczna). Zaden
-    wczesniejszy walidator nie porownywal kopii z originalu: zmiana adresu
+    `proxysql` i `app` zawsze naleza do platformy. `infra` moze byc swiadomie
+    poza platforma, gdy `platform.infra.services: []` oznacza zewnetrzny,
+    zachowany host MinIO/PMM; tenant nadal potrzebuje wtedy grupy `infra`, aby
+    galera_backup mogl delegowac provisioning do tego hosta.
+
+    Kazdy inwentarz najemcy nosi recznie kopiowane grupy platformowe (jeden
+    inventory na przebieg klastrowy — decyzja architektoniczna). Zmiana adresu
     wezla w platformie bez aktualizacji najemcow = f7 konfiguruje inna
     instancje ProxySQL niz ta pod VIP-em, po cichu.
     """
@@ -210,13 +214,20 @@ def check_shared_inventory_copies(clusters, platforms, root, violations):
             continue
         defs = platforms_by_endpoint.get(cluster["endpoint"] or "", [])
         if len(defs) != 1:
-            continue  # sprzeznosc dostawcy pilnuje check_platform_ownership
+            continue  # sprzecznosc dostawcy pilnuje check_platform_ownership
         platform = defs[0]
         platform_inventory = root / "platform" / platform["name"] / "inventory.yml"
         if not platform_inventory.is_file():
             continue
-        original = _group_hosts(platform_inventory, SHARED_GROUPS)
-        copy = _group_hosts(inventory, SHARED_GROUPS)
+        # infra jest zarzadzana przez platforme WTEDY I TYLKO WTEDY, gdy deklaruje
+        # uslugi w platform.infra.services. Zachowany zewnetrzny host (services: [])
+        # celowo nie ma grupy w inwentarzu platformy; porownywanie go walidatorem
+        # zamienialoby legalna zaleznosc najemcy na falszywy dryf.
+        managed_groups = ("proxysql", "app")
+        if platform["infra_services"]:
+            managed_groups += ("infra",)
+        original = _group_hosts(platform_inventory, managed_groups)
+        copy = _group_hosts(inventory, managed_groups)
         for host in sorted(set(original) | set(copy)):
             if original.get(host) != copy.get(host):
                 violations.append(
@@ -233,7 +244,7 @@ def check_shared_inventory_copies(clusters, platforms, root, violations):
                 f"{cluster['path']}: proxysql.frontend_tls.ca_reference "
                 f"{tenant_ca!r} rozni sie od CA wdrazanej przez te platforme "
                 f"({platform_ca!r}) — klient weryfikuje cert, ktorego nikt tu "
-                f"nie podpisan"
+                f"nie podpisal"
             )
 
 
@@ -372,6 +383,32 @@ def self_test(root):
         )
         return True
 
+    def inject_infra_drift(work):
+        """Podmienia adres kopii grupy infra najemcy platformy zarzadzajacej
+        infra (niepuste platform.infra.services). Zwraca False, gdy repo nie
+        ma pary platforma-zarzadzajaca/najemca — falsyfikacja wtedy nie rusza."""
+        for pfile in sorted((work / "platform").glob("*/platform.yml")):
+            pdef = yaml.safe_load(pfile.read_text(encoding="utf-8")) or {}
+            services = ((pdef.get("platform") or {}).get("infra") or {}).get("services") or []
+            if not services:
+                continue
+            pinv = pfile.parent / "inventory.yml"
+            if not pinv.is_file():
+                continue
+            hosts = _group_hosts(pinv, ("infra",))
+            if not hosts:
+                continue
+            addr = str(next(iter(hosts.values())))
+            for inv in sorted((work / "clusters").glob("*/inventory.yml")):
+                if inv.parent.name in TEMPLATE_TENANTS:
+                    continue
+                text = inv.read_text(encoding="utf-8")
+                if "infra:" not in text or addr not in text:
+                    continue
+                inv.write_text(text.replace(addr, "203.0.113.9", 1), encoding="utf-8")
+                return True
+        return False
+
     results = []
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
@@ -419,6 +456,17 @@ def self_test(root):
         results.append(
             (
                 "dryf adresu kopii grupy platformowej zapala FAIL",
+                injected and any("kopia grupy" in v for v in violations),
+            )
+        )
+        fresh_clusters(work)
+
+        fresh_clusters(work)
+        injected = inject_infra_drift(work)
+        violations, _ = check(work)
+        results.append(
+            (
+                "dryf kopii infra u zarzadzajacej platformy zapala FAIL",
                 injected and any("kopia grupy" in v for v in violations),
             )
         )

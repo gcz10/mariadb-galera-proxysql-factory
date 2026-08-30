@@ -40,3 +40,8 @@ all:
         x11app:
           ansible_host: "192.168.1.163"
           app_node_address: "192.168.1.163"
+    infra:
+      hosts:
+        x10mon:
+          ansible_host: "192.168.1.160"
+          infra_node_address: "192.168.1.160"
