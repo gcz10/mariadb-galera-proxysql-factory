@@ -24,6 +24,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SECRETS_TEMPLATE = REPO / "roles" / "galera_backup" / "templates" / "secrets.env.j2"
 PIPELINE = REPO / "roles" / "galera_backup" / "files" / "galera_backup" / "pipeline.py"
+GUARDS = REPO / "roles" / "galera_backup" / "files" / "galera_backup" / "guards.py"
 CONFIG = REPO / "roles" / "galera_backup" / "files" / "galera_backup" / "config.py"
 PLATFORM_PROXYSQL = REPO / "playbooks" / "platform_proxysql.yml"
 BACKUP_PLAY = REPO / "playbooks" / "f10_backup.yml"
@@ -63,7 +64,9 @@ class WriterGuardUsesStatisticsSchemaTests(unittest.TestCase):
     """Schemat konfiguracyjny jest niedostepny dla konta stats — zmierzone."""
 
     def setUp(self):
-        self.body = PIPELINE.read_text(encoding="utf-8")
+        # Straznik writera mieszka teraz w guards.py (wydzielony z pipeline.py,
+        # pipeline jest facade z re-eksportem). Cialo jest 1:1 identyczne.
+        self.body = GUARDS.read_text(encoding="utf-8")
         guard = re.search(
             r"def assert_scheduler_is_not_writer\(.*?\n(?=\ndef |\nclass )",
             self.body,

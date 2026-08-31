@@ -1,0 +1,22 @@
+# Zaleznosci srodowiska developerskiego — uruchamianie testow jednostkowych
+# i walidatorow statycznych poza maszyna docelowa (hosty produkcyjne nie
+# potrzebuja niczego z tej listy; patrz README: "Czego wymagaja maszyny").
+#
+# Instalacja:
+#   python3 -m venv .venv && . .venv/bin/activate
+#   pip install -r requirements-dev.txt
+#
+# Uruchomienie pelnego suite'u jednostkowego:
+#   python3 -m unittest discover -s tests/unit
+#
+# Statyczne walidatory (przyklad):
+#   python3 tests/validation/validate-cluster-schema.py \
+#       clusters/example-cluster/cluster.yml clusters/schema/cluster.schema.json
+#
+# Testy lab/ i live/ wymagaja zywej infrastruktury (patrz tests/lab/README).
+
+ansible-core        # ansible-inventory dla probe'ow inventory i preflight
+jinja2              # render szablonow w testach kontraktowych
+jsonschema          # validate-cluster-schema / validate-platform / config validators
+minio               # tests/lab/probe-backup.py oraz testy sciezek S3
+pyyaml              # parsowanie cluster.yml / platform.yml w walidatorach
