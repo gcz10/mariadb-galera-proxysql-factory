@@ -20,6 +20,7 @@ import time
 import signal
 import shutil
 import hashlib
+import hmac
 import tarfile
 import tempfile
 import argparse
@@ -42,6 +43,7 @@ from .fsutil import (
     file_sha256_and_size,
     remove_sensitive_work_dir,
 )
+from .crypto import compute_etm_tag, verify_etm, ETM_PBKDF2_ITERATIONS
 from .storage.artifacts import (
     ArtifactSet,
     PublishedArtifact,
@@ -342,6 +344,14 @@ def run_backup(
 
         checksum_file.write_text(f"{enc_sha}  backup.tar.enc\n", encoding="utf-8")
 
+        # Encrypt-then-MAC (F2): keyed HMAC-SHA256 over the whole ciphertext,
+        # derived from a per-backup salt so the MAC key never equals the CBC
+        # key. Written into metadata so restore can verify before decrypting.
+        etm_salt = os.urandom(16)
+        etm_tag = compute_etm_tag(
+            secrets["GALERA_BACKUP_ENCRYPTION_KEY"], etm_salt, payload_file
+        )
+
         created_iso = datetime.now(timezone.utc).isoformat()
         meta = {
             "format_version": 1,
@@ -360,7 +370,9 @@ def run_backup(
             "encrypted_sha256": enc_sha,
             "size_bytes": enc_size,
             "encrypted_size_bytes": enc_size,
-            "encryption_method": "aes-256-cbc-pbkdf2-iter200k-sha256",
+            "encryption_method": "aes-256-cbc-pbkdf2-iter200k-sha256+etm-hmac-sha256",
+            "hmac_sha256": etm_tag,
+            "hmac_salt": etm_salt.hex(),
             "backend": b_type,
             "backend_type": b_type,
         }
@@ -633,6 +645,28 @@ def run_restore(
                 "E_INTEGRITY",
                 f"Encrypted payload SHA-256 mismatch: expected {expected_enc_sha}, got {enc_sha}",
             )
+
+        # 2b. Verify Encrypt-then-MAC (F2) BEFORE decryption — fail closed.
+        # The unkeyed SHA-256 above can be recomputed by anyone with write
+        # access to the backup alongside a forged metadata.json; the HMAC
+        # cannot, so it is the authoritative tamper check. Backups created
+        # before ETM exists carry no hmac_sha256 field and take the legacy
+        # path unchanged (format_version stays 1; presence discriminates).
+        etm_tag = meta.get("hmac_sha256")
+        etm_salt_hex = meta.get("hmac_salt")
+        if etm_tag is not None or etm_salt_hex is not None:
+            try:
+                verify_etm(
+                    secrets["GALERA_BACKUP_ENCRYPTION_KEY"],
+                    str(etm_salt_hex),
+                    str(etm_tag),
+                    art_set.payload_path,
+                )
+            except ValueError as exc:
+                raise BackupError(
+                    "E_INTEGRITY",
+                    f"Encrypted payload HMAC-SHA256 verification failed: {exc}",
+                ) from exc
 
         # 3. Decrypt payload
         tar_path = work_dir / "backup.tar"
