@@ -1,6 +1,7 @@
 # Keepalived — redundantny endpoint ProxySQL (VIP).
 # Generowany z repo (F8). Nie wpisuj danych klastra na stałe.
-# VRRP unicast (stabilne w sieciach bez multicast, np. Docker/OrbStack).
+# VRRP unicast (nie zalezy od multicast, ktory w sieciach wirtualizowanych
+# i chmurowych bywa filtrowany lub niedostepny).
 # MASTER = proxysql_node_idx 1; pozostałe = BACKUP z niższym priorytetem.
 
 global_defs {
