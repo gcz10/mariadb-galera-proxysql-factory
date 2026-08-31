@@ -96,3 +96,10 @@ reserved_ranges:
       konkurowaly w ARP z wlasnie tworzona maszyna. Caly blok jest zabroniony,
       nie tylko .181 — sasiedztwo tego adresu nie ma dla nas zadnej wartosci,
       a pomylka o jeden kosztuje przerwany provisioning.
+
+  - address: "192.168.1.100"
+    reason: >-
+      Zywy host spoza zarzadzanej floty (odpowiada na ping). Wykryty aktywnym
+      skanem puli 10-100 dnia 2026-08-30 przed rotacja na klastry 11.4
+      (orionv13-r10 .30-.33, cassiopeiav12-r9 .40-.43). Nie wystepuje w
+      inventory PVE ani w zadnym najemcy.

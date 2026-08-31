@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from ..crypto import FORMAT_VERSION, LEGACY_FORMAT_VERSION
 from ..errors import BackupError, combine_failures
 from ..fsutil import file_sha256_and_size
 from .artifacts import (
@@ -93,7 +94,7 @@ class S3Backend:
         if owner_objs:
             try:
                 data = self._get_json(owner_key)
-                if data.get("cluster_name") != self.cluster_name or data.get("format_version") != 1:
+                if data.get("cluster_name") != self.cluster_name or data.get("format_version") not in (LEGACY_FORMAT_VERSION, FORMAT_VERSION):
                     raise BackupError(
                         "E_OWNER_CONFLICT",
                         f"S3 bucket '{self.bucket}' is owned by another cluster '{data.get('cluster_name')}'"
@@ -331,7 +332,7 @@ class S3Backend:
                 meta_key = f"{b_prefix}/metadata.json"
                 try:
                     meta = self._get_json(meta_key)
-                    if meta.get("cluster_name") == self.cluster_name and meta.get("format_version") == 1:
+                    if meta.get("cluster_name") == self.cluster_name and meta.get("format_version") in (LEGACY_FORMAT_VERSION, FORMAT_VERSION):
                         candidates.append((metadata_unixtime(meta, meta_key), b_prefix, meta))
                 except BackupError:
                     raise

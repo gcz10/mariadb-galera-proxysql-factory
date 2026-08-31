@@ -91,6 +91,15 @@ def check_definition(root: Path, kind: str, def_dir: Path, violations: list[str]
     if not hosts:
         return
 
+    # Maszyny z poza Terraformu (machines-from-elsewhere): cluster.yml z
+    # `terraform_managed: false` to jawne, kontrolowane wyjecie. Definicja bez
+    # tego pola nadal wymaga roota — wyjecie nie moze powstac przez przypadek.
+    cluster_cfg_path = def_dir / "cluster.yml"
+    if cluster_cfg_path.is_file():
+        cluster_cfg = yaml.safe_load(cluster_cfg_path.read_text(encoding="utf-8")) or {}
+        if cluster_cfg.get("terraform_managed") is False:
+            return
+
     rel_def = def_dir.relative_to(root)
     tf_main = root / "terraform" / def_dir.name / "main.tf"
     tf_rel = tf_main.relative_to(root)

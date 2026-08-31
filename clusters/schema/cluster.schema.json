@@ -699,6 +699,11 @@
           "description": "Dodatkowe opcje wsrep providera (np. 'evs.suspect_timeout=PT5S;pc.weight=2;pc.recovery=1')."
         }
       }
+    },
+    "terraform_managed": {
+      "type": "boolean",
+      "default": true,
+      "description": "false = VM-y klastra NIE sa zarzadzane przez terraform (machines-from-elsewhere): probe-inventory-tf-consistency pomija wymaganie terraform/<name>/main.tf, a infra-* cele sa nieobowiazujace. Brak pola = true (kontrakt dotychczasowy)."
     }
   }
 }

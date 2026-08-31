@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ..crypto import FORMAT_VERSION, LEGACY_FORMAT_VERSION
 from ..errors import BackupError, combine_failures
 from ..fsutil import file_sha256_and_size, remove_tree_or_raise
 from ..runner import CommandRunner
@@ -112,7 +113,7 @@ class FilesystemBackend:
         if owner_file.exists():
             try:
                 data = json.loads(owner_file.read_text(encoding="utf-8"))
-                if data.get("cluster_name") != self.cluster_name or data.get("format_version") != 1:
+                if data.get("cluster_name") != self.cluster_name or data.get("format_version") not in (LEGACY_FORMAT_VERSION, FORMAT_VERSION):
                     raise BackupError(
                         "E_OWNER_CONFLICT",
                         f"Filesystem storage '{cluster_dir}' is owned by another cluster '{data.get('cluster_name')}'"
@@ -235,7 +236,7 @@ class FilesystemBackend:
                 if payload.exists() and checksum.exists() and metadata.exists():
                     try:
                         meta = json.loads(metadata.read_text(encoding="utf-8"))
-                        if meta.get("cluster_name") == self.cluster_name and meta.get("format_version") == 1:
+                        if meta.get("cluster_name") == self.cluster_name and meta.get("format_version") in (LEGACY_FORMAT_VERSION, FORMAT_VERSION):
                             candidates.append((metadata_unixtime(meta, str(metadata)), child, meta))
                     except BackupError:
                         raise

@@ -226,13 +226,14 @@ def main():
             )
             return finish(failures, undetermined, "")
 
-        # ISC-33: encrypted (OpenSSL salted magic, not a plaintext tar/gzip).
+        # ISC-33: encrypted — v2 (AES-GCM, naglowek GB2G) albo legacy v1
+        # (OpenSSL salted magic). Plaintext tar/gzip odpada w obu formatach.
         with open(enc, "rb") as fh:
             magic = fh.read(8)
         check(
-            magic == b"Salted__",
+            magic[:4] == b"GB2G" or magic == b"Salted__",
             f"ISC-33 — backup not encrypted (magic={magic!r}, "
-            f"expected OpenSSL Salted__)",
+            f"expected GB2G (AES-GCM) or OpenSSL Salted__)",
             failures,
         )
 
@@ -284,8 +285,8 @@ def main():
             failures,
         )
         check(
-            meta.get("format_version") == 1,
-            f"ISC-35 — format_version {meta.get('format_version')!r} != 1",
+            meta.get("format_version") in (1, 2),
+            f"ISC-35 — unsupported format_version {meta.get('format_version')!r}",
             failures,
         )
         check(

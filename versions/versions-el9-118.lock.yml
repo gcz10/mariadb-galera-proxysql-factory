@@ -1,7 +1,8 @@
 ---
-# versions-el9-118.lock.yml — zatwierdzony lockfile klastrów EL9 na MariaDB 11.8.
-# Używany przez `orionv12-r9` i `cassiopeiav11-r9`; pozostałe bloki są
-# platformowymi pinami EL9 współdzielonymi z `versions.lock.yml`.
+# versions-el9-118.lock.yml — historyczny lockfile klastrów EL9 na MariaDB 11.8.
+# Ostatni użytkownik: zarchiwizowane definicje orionv12-r9 i cassiopeiav11-r9
+# (docs/records/archives/). Żaden żywy klaster go nie używa — żywe staki EL9
+# są na serii 11.4 (versions.lock.yml), a Rocky 10 na versions-el10.lock.yml.
 #
 # Powstaje z versions.lock.yml przez zmianę WYŁĄCZNIE bloku mariadb (11.4.12 → 11.8.9);
 # pozostałe bloki identyczne (piny platformowe EL9 bez zmian).
