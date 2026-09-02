@@ -729,11 +729,11 @@ cluster-upgrade-plan:  ## F12 — wygeneruj read-only plan major upgrade (ISC-53
 	$(cluster_guard)
 	ansible-playbook playbooks/f12_upgrade_plan.yml $(CLUSTER_RUN) $(ANSIBLE_OPTS)
 
-cluster-upgrade-node:  ## F12 — rolling upgrade pojedynczego węzła (CLUSTER=<klaster> target_node=<host> old_mariadb_version=<wer>)
+cluster-upgrade-node:  ## F12 — rolling upgrade pojedynczego węzła (CLUSTER=<klaster> target_node=<wezel> old_mariadb_version=<wersja>)
 	$(cluster_guard)
-	@test -n "$(target_node)" || { echo "ERROR: Ustaw target_node=<host> (np. make cluster-upgrade-node CLUSTER=<klaster> target_node=o13db1 old_mariadb_version=<wer>)" >&2; exit 1; }
+	@test -n "$(target_node)" || { echo "ERROR: Ustaw target_node=<wezel> (np. make cluster-upgrade-node CLUSTER=<klaster> target_node=<wezel> old_mariadb_version=<wersja>)" >&2; exit 1; }
 	@test "$(target_node)" != "galera[0]" || { echo "ERROR: target_node nie moze byc wzorcem grupowym" >&2; exit 1; }
-	@test -n "$(old_mariadb_version)" || { echo "ERROR: Ustaw old_mariadb_version=<wersja instalowana na węzle przed upgrade> (np. 11.4.12)" >&2; exit 1; }
+	@test -n "$(old_mariadb_version)" || { echo "ERROR: Ustaw old_mariadb_version=<wersja> (np. old_mariadb_version=11.4.12)" >&2; exit 1; }
 	ansible-playbook playbooks/cluster_upgrade_node.yml $(CLUSTER_RUN) -e target_node=$(target_node) -e old_mariadb_version=$(old_mariadb_version) $(ANSIBLE_OPTS)
 
 lab-upgrade-plan-verify:  ## F12 — zweryfikuj plan major upgrade (ISC-53/54/56)
