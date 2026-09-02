@@ -102,6 +102,20 @@ fi
 
 [ -f "$KEY_FILE" ] || { echo "BŁĄD: Brak pliku klucza SSH: $KEY_FILE" >&2; exit 2; }
 
+# Walidacja zmiennych konfiguracyjnych pętli SSH przed wywołaniami PVE (fail-closed)
+WAIT_RETRIES="${PVE_SSH_WAIT_RETRIES:-90}"
+WAIT_SLEEP="${PVE_SSH_WAIT_SLEEP:-3}"
+
+if ! [[ "$WAIT_RETRIES" =~ ^[0-9]+$ ]] || [ "$WAIT_RETRIES" -le 0 ]; then
+  echo "BŁĄD: PVE_SSH_WAIT_RETRIES musi być dodatnią liczbą całkowitą (podano: '$PVE_SSH_WAIT_RETRIES')" >&2
+  exit 2
+fi
+
+if ! [[ "$WAIT_SLEEP" =~ ^[0-9]+$ ]]; then
+  echo "BŁĄD: PVE_SSH_WAIT_SLEEP musi być nieujemną liczbą całkowitą (podano: '$PVE_SSH_WAIT_SLEEP')" >&2
+  exit 2
+fi
+
 EP="${PROXMOX_VE_ENDPOINT%/}"
 H="Authorization: PVEAPIToken=$PROXMOX_VE_API_TOKEN"
 
@@ -211,19 +225,15 @@ fi
 echo "Maszyna $NAME (VMID: $VMID) uruchomiona."
 
 if [ "$WAIT_SSH" = true ]; then
-  wait_retries="${PVE_SSH_WAIT_RETRIES:-90}"
-  wait_sleep="${PVE_SSH_WAIT_SLEEP:-3}"
-  [[ "$wait_retries" =~ ^[0-9]+$ ]] || wait_retries=90
-  [[ "$wait_sleep" =~ ^[0-9]+$ ]] || wait_sleep=3
   echo "=== [5/5] Oczekiwanie na podniesienie SSH ($IP_FULL:22) ==="
-  for i in $(seq 1 "$wait_retries"); do
+  for i in $(seq 1 "$WAIT_RETRIES"); do
     if timeout 2 bash -c "echo > /dev/tcp/$IP_FULL/22" 2>/dev/null; then
-      echo "Sukces: $NAME ($VMID, $IP_FULL) odpowiada na porcie SSH 22 (próba $i/$wait_retries)."
+      echo "Sukces: $NAME ($VMID, $IP_FULL) odpowiada na porcie SSH 22 (próba $i/$WAIT_RETRIES)."
       exit 0
     fi
-    [ "$i" -lt "$wait_retries" ] && [ "$wait_sleep" -gt 0 ] && sleep "$wait_sleep"
+    [ "$i" -lt "$WAIT_RETRIES" ] && [ "$WAIT_SLEEP" -gt 0 ] && sleep "$WAIT_SLEEP"
   done
-  echo "BŁĄD: Maszyna wystartowała, ale port 22 na $IP_FULL nie odpowiedział po $wait_retries próbach." >&2
+  echo "BŁĄD: Maszyna wystartowała, ale port 22 na $IP_FULL nie odpowiedział po $WAIT_RETRIES próbach." >&2
   echo "      Sprawdź konsolę PVE lub cloud-init w razie problemów (lub użyj --no-wait-ssh)." >&2
   exit 1
 else
