@@ -5,33 +5,12 @@
 # non-writers, writer ostatni (runbook §4). Playbook obsługuje JEDEN węzeł.
 #
 # Użycie:
-#   ansible-playbook playbooks/cluster_upgrade_node.yml \
-#     -i clusters/<klaster>/inventory.yml -e @clusters/<klaster>/cluster.yml \
-#     -e target_node=o13db1 -e old_mariadb_version=11.4.12
+#   make cluster-upgrade-node CLUSTER=<klaster> target_node=<węzeł> \
+#     old_mariadb_version=<wersja instalowana przed upgrade>
 #
 # Rollback: NIE istnieje jako downgrade (ISC-56) — po mariadb-upgrade jedyny
 # rollback to restore z backupu. Backup PRZED (runbook §3) jest kontraktem
 # operatora; playbook go nie robi.
-
-# === Play 0: Walidacja parametrów wejściowych na localhost ===
-- name: "F12-node — walidacja parametrów"
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  become: false
-  tasks:
-    - name: "Weryfikacja podania target_node i old_mariadb_version"
-      ansible.builtin.assert:
-        that:
-          - target_node is defined
-          - target_node | length > 0
-          - target_node in (groups['galera'] | default([]))
-          - old_mariadb_version is defined
-          - old_mariadb_version | length > 0
-        fail_msg: >-
-          Ustaw -e target_node=<hostname> (z grupy galera: {{ groups['galera'] | default([]) | join(', ') }})
-          oraz -e old_mariadb_version=<wersja> (np. -e old_mariadb_version=11.4.12).
-
 
 # === Play 1: Drain węzła w ProxySQL (OFFLINE_SOFT) ===
 - name: "F12-node — drain węzła w ProxySQL (OFFLINE_SOFT)"
@@ -43,11 +22,10 @@
   tasks:
     - name: "Drain węzła (OFFLINE_SOFT — klienci idą na backup-writera)"
       ansible.builtin.command:
-- name: "F12-node — upgrade pakietów i tabele systemowe na wskazanym węźle"
-  hosts: "{{ target_node | default('galera[0]') }}"
-  become: true
-  serial: 1
-  gather_facts: false
+        argv:
+          - mariadb
+          - --defaults-extra-file=/etc/proxysql/admin-check.cnf
+          - -h127.0.0.1
           - -P6032
           - -uadmin
           - -N
@@ -175,7 +153,7 @@
 
 
 # === Play 4: Weryfikacja po upgrade na wskazanym węźle ===
-- name: "F12-node — weryfikacja po upgrade"
+- name: "F12-node — weryfikacja po upgrade na wskazanym węźle"
   hosts: "{{ target_node | default('galera[0]') }}"
   become: true
   gather_facts: false
