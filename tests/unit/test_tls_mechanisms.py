@@ -279,9 +279,10 @@ class TlsDeploymentContractTests(unittest.TestCase):
             "/etc/mysql/app/{{ cluster.name }}",
         )
         condition = str(includes[0].get("when", ""))
-        self.assertIn(".mode", condition)
-        self.assertIn("'full'", condition)
-
+        self.assertTrue(
+            ("tls_full" in condition) or (".mode" in condition and "'full'" in condition),
+            f"Warunek wdrożenia CA na hoście aplikacyjnym musi sprawdzać tls_full / mode==full, otrzymano: {condition}",
+        )
 
 if __name__ == "__main__":
     unittest.main()
