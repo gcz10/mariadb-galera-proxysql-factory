@@ -178,6 +178,27 @@ class PveCreateVmScriptBehavioralExecutionTests(unittest.TestCase):
             f"--no-wait-ssh musi zwracać exit 0, otrzymano: {proc.returncode}. Stderr:\n{proc.stderr}",
         )
         self.assertIn("Pominięto oczekiwanie na SSH (--no-wait-ssh)", proc.stdout)
+    def test_invalid_wait_env_variables_fallback_safely(self):
+        """Niepoprawne zmienne środowiskowe PVE_SSH_WAIT_* bezpiecznie powracają do wartości domyślnych."""
+        bad_env = dict(self.env)
+        bad_env["PVE_SSH_WAIT_RETRIES"] = "-5"
+        bad_env["PVE_SSH_WAIT_SLEEP"] = "invalid"
+        proc = subprocess.run(
+            [
+                str(SCRIPT),
+                "--vmid", "10020",
+                "--name", "c12db1",
+                "--ip", "192.168.1.254",
+                "--cluster", "test-cluster",
+                "--key-file", str(self.key_file),
+                "--no-wait-ssh",
+            ],
+            capture_output=True,
+            text=True,
+            env=bad_env,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0)
 
     def test_static_script_contract_has_fail_closed_exit(self):
         """Weryfikacja kodu skryptu: gałąź timeoutu musi kończyć się exit 1."""
