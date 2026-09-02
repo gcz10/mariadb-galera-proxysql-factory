@@ -733,6 +733,7 @@ cluster-upgrade-node:  ## F12 — rolling upgrade pojedynczego węzła (CLUSTER=
 	$(cluster_guard)
 	@test -n "$(target_node)" || { echo "ERROR: Ustaw target_node=<wezel> (np. make cluster-upgrade-node CLUSTER=<klaster> target_node=<wezel> old_mariadb_version=<wersja>)" >&2; exit 1; }
 	@test "$(target_node)" != "galera[0]" || { echo "ERROR: target_node nie moze byc wzorcem grupowym" >&2; exit 1; }
+	@python3 -c "import yaml,sys; inv=yaml.safe_load(open('clusters/$(CLUSTER)/inventory.yml')) or {}; nodes=list(((inv.get('all',{}).get('children',{}).get('galera',{}).get('hosts')) or {}).keys()); sys.exit(0 if sys.argv[1] in nodes else 1)" "$(target_node)" || { echo "ERROR: target_node '$(target_node)' nie jest węzłem grupy galera w clusters/$(CLUSTER)/inventory.yml" >&2; exit 1; }
 	@test -n "$(old_mariadb_version)" || { echo "ERROR: Ustaw old_mariadb_version=<wersja> (np. old_mariadb_version=11.4.12)" >&2; exit 1; }
 	ansible-playbook playbooks/cluster_upgrade_node.yml $(CLUSTER_RUN) -e target_node=$(target_node) -e old_mariadb_version=$(old_mariadb_version) $(ANSIBLE_OPTS)
 
