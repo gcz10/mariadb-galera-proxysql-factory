@@ -1,0 +1,131 @@
+---
+# Major upgrade JEDNEGO wezla Galera wg docs/runbooks/upgrade-mariadb-major.md
+# (procedura 11.4.12 -> 11.8.9, wykonana 2026-08-31 na orionv13-r10 i
+# cassiopeiav12-r9). Operator sekwencjonuje: canary non-writer, pozostali
+# non-writers, writer ostatni (runbook §4). Playbook obsluguje JEDEN węzeł.
+#
+# Użycie:
+#   ansible-playbook playbooks/cluster_upgrade_node.yml \
+#     -i clusters/<klaster>/inventory.yml -e @clusters/<klaster>/cluster.yml \
+#     -e target_node=o13db1 -e old_mariadb_version=11.4.12
+#
+# Rollback: NIE istnieje jako downgrade (ISC-56) — po mariadb-upgrade jedyny
+# rollback to restore z backupu. Backup PRZED (runbook §3) jest kontraktem
+# operatora; playbook go nie robi.
+
+- name: "F12-node — drain węzła w ProxySQL (OFFLINE_SOFT)"
+  hosts: proxysql[0]
+  become: true
+  gather_facts: false
+  vars:
+    target_ip: "{{ hostvars[target_node].galera_node_address }}"
+  tasks:
+    - name: "Drain węzła (OFFLINE_SOFT — klienci idą na backup-writera)"
+      ansible.builtin.shell: |
+        mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf -h127.0.0.1 -P6032 -uadmin -N -B -e "UPDATE mysql_servers SET status='OFFLINE_SOFT' WHERE hostname='{{ target_ip }}'; LOAD MYSQL SERVERS TO RUNTIME"
+      register: drain_out
+      changed_when: "'OFFLINE_SOFT' in drain_out.stdout"
+
+- name: "F12-node — upgrade pakietow i tabele systemowe"
+  hosts: galera
+  become: true
+  vars_files:
+    - vars/secret_policy.yml
+    - "{{ versions.lock_file }}"
+  tasks:
+    - name: "Brama zdrowia klastra przed dotknięciem węzła (ISC-55)"
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+
+    - name: "Czysty flush i stop MariaDB (runbook §5b)"
+      ansible.builtin.shell: |
+        mysql -e 'SET GLOBAL innodb_fast_shutdown=0'
+        systemctl stop mariadb
+      changed_when: true
+
+    - name: "Swap repo mariadb-server na serię docelową"
+      ansible.builtin.replace:
+        path: /etc/yum.repos.d/mariadb.repo
+        regexp: "/repo/mariadb-server/{{ old_mariadb_version }}/"
+        replace: "/repo/mariadb-server/{{ lock.mariadb.version }}/"
+
+    - name: "Gcache 512M -> 2G (okno IST zamiast SST, warunek #2 planu F12)"
+      ansible.builtin.replace:
+        path: /etc/my.cnf.d/server.cnf
+        regexp: "gcache.size=512M"
+        replace: "gcache.size=2G"
+
+    - name: "Instaluj pakiety docelowej serii (piny z lockfile; ISC-56: allow_downgrade=false)"
+      ansible.builtin.dnf:
+        name:
+          - "MariaDB-server-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+          - "MariaDB-client-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+          - "MariaDB-backup-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+          - "galera-4-{{ lock.galera_provider_version }}-{{ lock.galera_provider_rpm_release }}"
+        state: present
+        disablerepo: "*"
+        enablerepo: "mariadb-main"
+        allow_downgrade: false
+
+    - name: "Start MariaDB"
+      ansible.builtin.systemd:
+        name: mariadb
+        state: started
+
+    - name: "Czekaj na powrót węzła do Synced (runbook §5b — 5 min, ISC-55)"
+      when: inventory_hostname == target_node
+      ansible.builtin.command:
+        argv:
+          - mysql
+          - -N
+          - -B
+          - -e
+          - "SHOW GLOBAL STATUS LIKE 'wsrep_local_state_comment'"
+      register: wsrep_state
+      until: "'Synced' in wsrep_state.stdout"
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: "MariaDB-upgrade tabel systemowych (--skip-write-binlog, runbook §5b)"
+      when: inventory_hostname == target_node
+      ansible.builtin.command:
+        argv:
+          - mariadb-upgrade
+          - --skip-write-binlog
+      register: mupgrade
+      changed_when: "'Phase' in mupgrade.stdout"
+
+- name: "F12-node — undrain węzła w ProxySQL (ONLINE)"
+  hosts: proxysql[0]
+  become: true
+  gather_facts: false
+  vars:
+    target_ip: "{{ hostvars[target_node].galera_node_address }}"
+  tasks:
+    - name: "Undrain (ONLINE — monitor galera sam wyrówna placement)"
+      ansible.builtin.shell: |
+        mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf -h127.0.0.1 -P6032 -uadmin -N -B -e "UPDATE mysql_servers SET status='ONLINE' WHERE hostname='{{ target_ip }}'; LOAD MYSQL SERVERS TO RUNTIME"
+      register: undrain_out
+      changed_when: true
+
+- name: "F12-node — weryfikacja po upgrade"
+  hosts: galera
+  become: true
+  tasks:
+    - name: "Brama zdrowia klastra po upgrade (ISC-55)"
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+    - name: "Wersja po upgrade = wersja z lockfile"
+      ansible.builtin.command:
+        argv:
+          - mysql
+          - -N
+          - -B
+          - -e
+          - "SELECT @@version"
+      register: version_after
+      changed_when: false
+    - name: "Assert wersji docelowej"
+      ansible.builtin.assert:
+        that:
+          - "lock.mariadb.version in version_after.stdout"
+        fail_msg: "Węzeł {{ inventory_hostname }} raportuje {{ version_after.stdout | trim }} zamiast {{ lock.mariadb.version }}"

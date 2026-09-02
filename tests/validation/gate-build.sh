@@ -57,6 +57,9 @@ steps() {
 			seed)
 				"$make_bin" lab-seed-smoke
 				;;
+			app-host)
+				"$make_bin" cluster-app-host
+				;;
 			backup)
 				"$make_bin" cluster-backup-configure
 				"$make_bin" cluster-backup
@@ -65,9 +68,6 @@ steps() {
 				;;
 			alerts)
 				"$make_bin" cluster-alerts
-				;;
-			app-host)
-				"$make_bin" cluster-app-host
 				;;
 		esac
 	done

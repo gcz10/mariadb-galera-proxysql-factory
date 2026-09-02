@@ -201,6 +201,26 @@ class ClusterBuildContractTests(unittest.TestCase):
             "backup w cluster-build musi wykonac configure, backup, drill i refresh",
         )
 
+    def test_app_host_precedes_backup_in_conditional_steps(self):
+        """app-host musi powstawac PRZED backupem/drillem.
+
+        Awaria drillu na pustym buckecie nie moze blokowac wdrozenia CA i usera
+        na hoscie aplikacyjnym, co zmierzone 2026-08-31 na orionv13-r10.
+        """
+        script = (REPO / "tests" / "validation" / "gate-build.sh").read_text(
+            encoding="utf-8"
+        )
+        match = re.search(r"for\s+step\s+in\s+([a-z0-9_\-\s]+);", script)
+        self.assertIsNotNone(match, "brak petli for step in w gate-build.sh")
+        steps = match.group(1).split()
+        self.assertIn("app-host", steps)
+        self.assertIn("backup", steps)
+        self.assertLess(
+            steps.index("app-host"),
+            steps.index("backup"),
+            "app-host musi poprzedzac backup w kolejnosci krokow warunkowych",
+        )
+
     def test_gate_is_the_last_step(self):
         invoked = sub_make_targets(self.lines)
         self.assertEqual(invoked[-1], BUILD_GATE, "build konczy sie bramka stanu ustalonego")
