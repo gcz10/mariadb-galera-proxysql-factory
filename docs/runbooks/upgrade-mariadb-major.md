@@ -80,6 +80,13 @@ ostatni**.
 
 ## 5. Procedura per węzeł (powtórz dla każdego)
 
+> **Automatyzacja per węzeł:** Całą poniższą sekwencję (5a drain w ProxySQL, 5b flush/stop/repo/dnf/start/IST/mup, 5c undrain i weryfikację zdrowia klastra)
+> wykonuje dedykowane polecenie fabryki:
+> ```bash
+> make cluster-upgrade-node CLUSTER=<klaster> target_node=<węzeł> old_mariadb_version=<wersja_przed>
+> ```
+> Poniższy opis przedstawia kroki składowe i służy do weryfikacji manualnej lub diagnostyki.
+
 ### 5a. Drain w ProxySQL
 
 ```bash
