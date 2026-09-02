@@ -251,8 +251,17 @@ def main():
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "playbooks", "f15_alerts.yml",
     )
-    with open(alerts_playbook, encoding="utf-8") as alerts_file:
-        alerts_source = alerts_file.read()
+    alerts_rules_file = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "playbooks", "vars", "alert_rules.yml",
+    )
+    alerts_source = ""
+    if os.path.isfile(alerts_rules_file):
+        with open(alerts_rules_file, encoding="utf-8") as rf:
+            alerts_source += rf.read() + "\n"
+    if os.path.isfile(alerts_playbook):
+        with open(alerts_playbook, encoding="utf-8") as alerts_file:
+            alerts_source += alerts_file.read()
     # Reguly czytamy BLOKAMI, nie pojedyncza regexpa po UID: kazdy wpis moze
     # nosic marker (`shared`, `requires_tls`), ktory decyduje, czy regula w ogole
     # powstaje dla TEGO klastra. Sama lista UID-ow tego nie widzi i sonda

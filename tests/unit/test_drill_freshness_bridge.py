@@ -125,6 +125,9 @@ def _alert_rules(alerts_path, uid):
                 _walk(item)
 
     _walk(yaml.safe_load(alerts_path.read_text(encoding="utf-8")))
+    vars_file = alerts_path.parent / "vars" / "alert_rules.yml"
+    if vars_file.is_file():
+        _walk(yaml.safe_load(vars_file.read_text(encoding="utf-8")))
     return [r for r in rules if r.get("uid") == uid]
 
 

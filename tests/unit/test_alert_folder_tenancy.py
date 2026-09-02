@@ -25,6 +25,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 CLUSTERS = REPO / "clusters"
 F15 = REPO / "playbooks" / "f15_alerts.yml"
+ALERT_RULES = REPO / "playbooks" / "vars" / "alert_rules.yml"
 LAB = REPO / "tests" / "lab"
 if str(LAB) not in sys.path:
     sys.path.insert(0, str(LAB))
@@ -49,6 +50,8 @@ def _rule_uid_templates():
                 _walk(value)
 
     _walk(yaml.safe_load(F15.read_text(encoding="utf-8")))
+    if ALERT_RULES.is_file():
+        _walk(yaml.safe_load(ALERT_RULES.read_text(encoding="utf-8")))
     return uids
 
 def _effective_uid_prefix(cluster_label):

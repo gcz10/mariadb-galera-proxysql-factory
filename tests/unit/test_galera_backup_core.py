@@ -883,26 +883,28 @@ class CutoverContractTests(unittest.TestCase):
         self.assertIn("for metric_name in EXPECTED_GALERA_BACKUP_METRICS:", pmm_probe)
 
     def test_backup_failure_alert_has_no_pending_delay(self):
-        alerts_playbook = (
-            WORKSPACE_ROOT / "playbooks" / "f15_alerts.yml"
-        ).read_text()
-        failure_rule = alerts_playbook.split(
+        f15_path = WORKSPACE_ROOT / "playbooks" / "f15_alerts.yml"
+        rules_path = WORKSPACE_ROOT / "playbooks" / "vars" / "alert_rules.yml"
+        alerts_source = (rules_path.read_text() if rules_path.is_file() else "") + "\n" + f15_path.read_text()
+        failure_rule = alerts_source.split(
             '- uid: "{{ f15_uid_prefix }}-backup-failed"', 1
-        )[1].split("\n      - uid:", 1)[0]
+        )[1]
+        failure_rule = re.split(r'\n\s*-\s*uid:', failure_rule, maxsplit=1)[0]
         self.assertIn('pending_for: "0s"', failure_rule)
-        self.assertIn('for: "{{ item.pending_for | default(\'2m\') }}"', alerts_playbook)
+        self.assertIn('for: "{{ item.pending_for | default(\'2m\') }}"', f15_path.read_text())
         pmm_probe = (WORKSPACE_ROOT / "tests" / "lab" / "probe-pmm-native.py").read_text()
         self.assertIn('backup_failure_rule.get("for") == "0s"', pmm_probe)
 
-
     def test_alerts_playbook_includes_galera_backup_rules(self):
-        alerts_playbook = (WORKSPACE_ROOT / "playbooks" / "f15_alerts.yml").read_text()
-        self.assertIn("galera_backup_last_success_unixtime", alerts_playbook)
-        self.assertIn("galera_backup_last_run_success", alerts_playbook)
-        self.assertIn("Backup run failed", alerts_playbook)
-        self.assertIn("Backup freshness stale", alerts_playbook)
-        self.assertIn("backup_freshness_sla_hours", alerts_playbook)
-        self.assertNotIn("backup_retention_days", alerts_playbook)
-        self.assertNotIn("isa_backup_last_success_unixtime", alerts_playbook)
+        f15_path = WORKSPACE_ROOT / "playbooks" / "f15_alerts.yml"
+        rules_path = WORKSPACE_ROOT / "playbooks" / "vars" / "alert_rules.yml"
+        alerts_source = (rules_path.read_text() if rules_path.is_file() else "") + "\n" + f15_path.read_text()
+        self.assertIn("galera_backup_last_success_unixtime", alerts_source)
+        self.assertIn("galera_backup_last_run_success", alerts_source)
+        self.assertIn("Backup run failed", alerts_source)
+        self.assertIn("Backup freshness stale", alerts_source)
+        self.assertIn("backup_freshness_sla_hours", alerts_source)
+        self.assertNotIn("backup_retention_days", alerts_source)
+        self.assertNotIn("isa_backup_last_success_unixtime", alerts_source)
 if __name__ == "__main__":
     unittest.main()

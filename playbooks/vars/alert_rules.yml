@@ -1,0 +1,210 @@
+---
+# playbooks/vars/alert_rules.yml — definicje reguł alertowych Grafana / PMM (ISC-47)
+#
+# audit#9: reguły MUSZĄ zawsze zwracać wartość (operator `bool` + `or vector(...)`).
+# Wyrażenie filtrujące (np. `size < 3`) zwraca PUSTY wektor gdy jest zdrowo — Grafana
+# interpretuje to jako NoData, więc noDataState=Alerting zapalałoby alarm na zdrowym
+# klastrze (zweryfikowane na claude-pve: "Alerting (NoData)" przy 3/3 Synced).
+# Konstrukcja: zdrowo => 0 (Normal), awaria => 1 (Alerting),
+# BRAK metryk => `or vector(...)` daje wartość awaryjną => 1 (wykrywa utratę monitoringu).
+# noDataState=Alerting zostaje jako ostatnia linia obrony (padnięta datasource).
+# audit#14: UID-y/folder/contact point namespacowane cluster_name.
+# restore-drill-stale i metrics-frozen mierzą ŚWIEŻOŚĆ metryk, nie ich brak:
+# `or vector(0)` NIE widzi .prom, które node_exporter podaje bez zmian (zamrożony
+# plik textfile po padniętym runnerze/kolektorze), więc mtime/last_success
+# porównujemy z time() jawnie — to jedyny sygnał tego trybu awarii.
+
+f15_cluster_rules:
+  - uid: "{{ f15_uid_prefix }}-node-loss"
+    title: "Galera node loss (cluster size < expected)"
+    expr: "(min(mysql_global_status_wsrep_cluster_size{cluster=\"{{ cluster_label }}\"}) or vector(0)) < bool {{ galera.nodes_expected }}"
+    summary: "Galera cluster size dropped below {{ galera.nodes_expected }} (node/writer lost) or metrics missing"
+    severity: "critical"
+    noDataState: "Alerting"
+  - uid: "{{ f15_uid_prefix }}-node-silent"
+    title: "Galera node registered in PMM but reporting no metrics"
+    # Uzupelnia `node-loss`, ktory czyta WLASNY widok Galery: gdy wezel
+    # oslepnie monitoringowo, pozostale nadal raportuja pelny
+    # `wsrep_cluster_size`, wiec `min` sie nie zmienia i alert nie strzela.
+    # Zmierzone 2026-08-21 na n16g3: pmm-agent `active`+`enabled`, ale
+    # `Connected:false` i zero eksporterow przez ~16 minut. Tutaj liczymy
+    # wezly, ktore REALNIE oddaly probke.
+    expr: "(count(count by (node_name) (node_boot_time_seconds{cluster=\"{{ cluster_label }}\"})) or vector(0)) < bool {{ galera.nodes_expected }}"
+    summary: >-
+      Mniej niz {{ galera.nodes_expected }} wezlow Galery oddaje metryki do PMM.
+      Baza moze byc zdrowa, a wezel niewidoczny dla monitoringu — sprawdz `pmm-admin status`.
+    severity: "critical"
+    noDataState: "Alerting"
+  - uid: "{{ f15_uid_prefix }}-quorum-loss"
+    title: "Galera quorum loss (not Primary)"
+    expr: "(max(mysql_global_status_wsrep_cluster_status{cluster=\"{{ cluster_label }}\"}) or vector(0)) != bool 1"
+    summary: "Galera left Primary Component (quorum at risk) or metrics missing"
+    severity: "critical"
+    noDataState: "Alerting"
+  - uid: "{{ f15_uid_prefix }}-not-synced"
+    title: "Galera node not Synced"
+    expr: "(min(mysql_global_status_wsrep_local_state{cluster=\"{{ cluster_label }}\"}) or vector(4)) != bool 4"
+    summary: "Galera node not in Synced (local_state != 4)"
+    severity: "warning"
+    noDataState: "OK"
+  # Metryka ZWERYFIKOWANA na claude-pve: proxysql_mysql_servers_status NIE ISTNIEJE w PMM 3.
+  # Właściwa: proxysql_connpool_conns_status (cluster, hostgroup, endpoint, service_name;
+  # 1=ONLINE, 2=SHUNNED, 4=OFFLINE_HARD). Zdrowo: >=1 seria ONLINE w writer hostgroup.
+  # Nazwa metryki pochodzi z Perconowego proxysql_exportera (pmm-client).
+  # Poprzednio bylo `proxysql_connpool_conns_status` z restapi ProxySQL —
+  # po migracji na pmm-client ten namespace ma ZERO serii, wiec regula
+  # znow palila sie falszywie. Semantyka wartosci jest ta sama (zweryfikowane
+  # wobec stats_mysql_connection_pool: 1=ONLINE, 2=SHUNNED).
+  #
+  # BRAK FILTRA `cluster` JEST CELOWY — nie przywracaj go.
+  # Para ProxySQL jest WSPOLNA dla floty i rejestruje ja w PMM wylacznie owner,
+  # wiec KAZDA seria proxysql_* nosi etykiete cluster= ownera, takze te opisujace
+  # hostgroupy konsumenta. Filtr cluster="<konsument>" nie trafial w nic, `or vector(0)`
+  # dawal 0 i regula palila sie na stale jako critical, mimo dzialajacego writera.
+  # Wlasciwym dyskryminatorem najemcy jest hostgroup: ID sa globalnie rozlaczne na
+  # wspolnej parze, co wymusza tests/validation/probe-proxysql-tenancy.py.
+  - uid: "{{ f15_uid_prefix }}-backends-offline"
+    title: "ProxySQL moved Galera backends to the offline hostgroup"
+    # ZASTAPILA regule `no-writer`, ktora NIE MOGLA ZADZIALAC.
+    #
+    # Tamta brzmiala `count(...{hostgroup=<writer>} == 1) < 1`, czyli
+    # "hostgroup writera jest pusty". Zmierzone 2026-08-21 na newclaude16-r9:
+    # nie udalo sie jej zapalic w ZADNYM z trzech scenariuszy —
+    #   1. jeden wezel poza kworum (partycja 4567): wypada do offline_hg,
+    #      pozostale przejmuja role,
+    #   2. CALKOWITA utrata kworum (wszystkie trzy non-Primary,
+    #      primary_partition=NO, wsrep_local_state=0),
+    #   3. wszystkie backendy nieosiagalne dla monitora (martwy port).
+    # Za kazdym razem ProxySQL zostawial JEDEN wezel ONLINE w hostgroupie
+    # writera. To polityka "last man standing": ProxySQL nie oprozni tej
+    # hostgrupy do zera. Dokumentacja produktu tego nie opisuje — kryteria
+    # sa wylacznie w schematach blokowych (obrazki na stronie Galera
+    # Configuration), wiec zachowanie jest ZMIERZONE, nie zacytowane.
+    # Efekt: 151 probek w oknie obu awarii, zero zapalen.
+    #
+    # Ta wersja mierzy DECYZJE ROUTINGOWA samego ProxySQL, ktora realnie sie
+    # zmienia: 0 wezlow w offline_hostgroup przy zdrowym klastrze, N przy
+    # awarii (zmierzone: 0 -> 1 -> 2 -> 4). Utrate kworum po stronie Galery
+    # pokrywaja osobno `quorum-loss` i `not-synced` — obie zapalily sie
+    # w tym samym oknie, wiec operator nie byl slepy; slepy byl ten alert.
+    expr: "(count(proxysql_connection_pool_status{hostgroup=\"{{ galera_offline_hg }}\"}) or vector(0)) > bool 0"
+    summary: >-
+      ProxySQL przeniosl backendy klastra do offline hostgroup {{ galera_offline_hg }} —
+      ruch nie jest do nich kierowany. Sprawdz Primary Component i stan wezlow Galery.
+    severity: "critical"
+    noDataState: "Alerting"
+
+  - uid: "{{ f15_uid_prefix }}-backup-failed"
+    requires_backup: true
+    title: "Backup run failed"
+    expr: "(min(galera_backup_last_run_success{cluster=\"{{ cluster_label }}\"}) or vector(0)) != bool 1"
+    summary: "Last Galera backup run failed or metrics missing for cluster {{ cluster_label }}"
+    severity: "critical"
+    noDataState: "Alerting"
+    pending_for: "0s"
+  - uid: "{{ f15_uid_prefix }}-backup-stale"
+    requires_backup: true
+    title: "Backup freshness stale"
+    expr: "(time() - (max(galera_backup_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool ({{ backup_freshness_sla_hours }} * 3600)"
+    summary: "Last successful backup older than {{ backup_freshness_sla_hours }} hours (or freshness metric missing)"
+    severity: "critical"
+    noDataState: "Alerting"
+  # Swiezosc drillu ma DWA zrodla prawdy, bo sa dwie sciezki uruchomienia:
+  #   * `isa_restore_test_last_success_unixtime` — publikuje f11_freshness na
+  #     galera[0] (sciezka Ansible: `make cluster-restore-drill`),
+  #   * `galera_restore_last_success_unixtime` — publikuje SAM runner na hoscie
+  #     restore (sciezka cron: /etc/cron.d/galera-restore-<cluster>).
+  # Jedyny selector po `__name__` buduje zbior OBU metryk, dopiero `max`
+  # wybiera najnowsza. `max(metric) or vector(0)` osobno dla kazdego zrodla
+  # usuwa nazwe metryki i zawsze daje ten sam pusty label set; zewnetrzne
+  # `or` zachowuje wtedy LHS i ignoruje RHS niezaleznie od jego wartosci.
+  - uid: "{{ f15_uid_prefix }}-restore-drill-stale"
+    requires_backup: true
+    title: "Restore drill stale (no successful drill in 8 days)"
+    expr: "(time() - (max({__name__=~\"isa_restore_test_last_success_unixtime|galera_restore_last_success_unixtime\",cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool (8 * 24 * 3600)"
+    summary: "Last successful restore drill older than 8 days (schedule: {{ backup.restore_test_schedule }}) or drill metric missing"
+    severity: "critical"
+    noDataState: "Alerting"
+  - uid: "{{ f15_uid_prefix }}-metrics-frozen"
+    requires_backup: true
+    title: "Backup metrics file frozen (node_exporter serves stale .prom)"
+    # Etykieta `file` niesie pelna sciezke, ale katalog zalezy od trybu:
+    # samodzielny node_exporter czyta /var/lib/node_exporter, a node_exporter
+    # z pmm-agenta raportuje /usr/local/percona/pmm/collectors. PromQL kotwiczy
+    # regex z obu stron, wiec `.*` dopuszcza oba katalogi, a DOKLADNY basename
+    # i etykieta klastra nie pozwalaja swiezemu tenantowi maskowac zamrozonego.
+    # Basename jest identycznie normalizowany jak `metric_file` w config.json.j2.
+    expr: "(time() - (max(node_textfile_mtime_seconds{cluster=\"{{ cluster_label }}\",file=~\".*/galera_backup-{{ cluster.name | regex_replace('[^A-Za-z0-9_-]', '_') }}[.]prom\"}) or vector(0))) > bool ({{ backup_freshness_sla_hours }} * 3600)"
+    summary: "galera_backup textfile mtime older than {{ backup_freshness_sla_hours }} hours — runner stopped rewriting metrics"
+    severity: "critical"
+    noDataState: "Alerting"
+
+  # Metryka isa_tls_cert_expiry_unixtime byla publikowana przez f11_freshness
+  # od dawna i NIKT jej nie pilnowal — klasyczny martwy sygnal: koszt zbierania
+  # ponoszony, wartosc zerowa. Wygasly certyfikat Galery to natychmiastowe
+  # zerwanie replikacji, awaria bez ostrzezenia i bez zwiazku z obciazeniem.
+  #
+  # Prog 30 dni jest CELOWO ten sam co TLS_CERT_MIN_DAYS w probe-hardening.py:
+  # jedna liczba do uzasadnienia zamiast dwoch, ktore z czasem sie rozjada.
+  #
+  # `requires_tls` — regula nie powstaje przy tls.mode != full. Przy wylaczonym
+  # TLS f11_freshness publikuje 0, a 0 - time() jest gleboko ujemne, wiec regula
+  # palilaby sie wiecznie na klastrze, ktory certu w ogole nie ma.
+  - uid: "{{ f15_uid_prefix }}-tls-cert-expiring"
+    requires_tls: true
+    title: "TLS certificate expiring (Galera nodes)"
+    expr: "((max(isa_tls_cert_expiry_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0)) - time()) < bool (30 * 24 * 3600)"
+    summary: >-
+      Certyfikat TLS wezlow Galery wygasa w ciagu 30 dni albo metryka zniknela.
+      Rotacja bez przestoju: `make cluster-tls-rotate CLUSTER={{ cluster.name }}`.
+    severity: "critical"
+    noDataState: "Alerting"
+
+f15_shared_rules:
+  # === Alert WARSTWY WSPOLNEJ — patrz komentarz przy samej regule ===
+  #
+  # Luka znaleziona przy testach failoveru endpointu: gdy pada JEDEN wezel
+  # ProxySQL, keepalived przenosi VIP i aplikacja dziala dalej — wiec zadna
+  # istniejaca regula nie zapala sie NIGDY. Para po cichu degraduje sie do
+  # jednego proxy i zostaje tak do momentu, az padnie drugi. Wtedy nie ma juz
+  # dokad przeniesc VIP-a i awaria jest natychmiastowa i pelna.
+  #
+  # Liczymy ZDROWE instancje, a nie `min(proxysql_up) != 1`. Przy utracie
+  # calej maszyny eksporter znika razem z nia i seria PRZESTAJE ISTNIEC —
+  # `min()` po pozostalych daje wtedy 1, czyli "zdrowo". Zliczanie wylapuje
+  # oba tryby: wygaszony proces (proxysql_up=0) i zniknieta maszyne.
+  # Zmierzone na fcp1/fcp2: `proxysql_up` ma etykiete node_name per wezel.
+  - uid: "isa-shared-proxysql-down"
+    # UID bez etykiety klastra jest zamierzony: regula NIE NALEZY do zadnego
+    # klastra, tylko do warstwy wspolnej — tworzy ja i kasuje wylacznie
+    # platforma (make platform-alerts), a derejestracja najemcy omija ja
+    # wzorcem `^isa-<cluster_label>-`. Gdyby wzial ja najemca, jedno
+    # padniecie fcp1 wyslaloby N identycznych maili, a UID trzyma tylko
+    # jedna kopie — ostatnio uruchomiony klaster cicho nadpisywalby regule
+    # pozostalym.
+    title: "ProxySQL instance down (shared endpoint pair degraded)"
+    expr: "(count(proxysql_up == 1) or vector(0)) < bool {{ proxysql.nodes_expected }}"
+    summary: >-
+      Zdrowych instancji ProxySQL mniej niz {{ proxysql.nodes_expected }} —
+      endpoint dziala, ale stracil redundancje. Kolejna awaria zdejmie VIP bez zapasu.
+    severity: "critical"
+    noDataState: "Alerting"
+
+  - uid: "isa-shared-node-silent"
+    title: "Node registered in PMM but reporting no metrics"
+    # Wykrywa DOKLADNIE stan zmierzony 2026-08-21 na n16g3 po twardej utracie
+    # maszyny: `systemctl is-active pmm-agent` = active, `is-enabled` = enabled,
+    # a `pmm-admin status` = Connected:false i ZERO eksporterow. Wezel milczal
+    # ~16 minut, monitoring go nie widzial, a zaden istniejacy alert nie mogl
+    # tego zlapac: `node-loss` czyta `wsrep_cluster_size`, czyli WLASNY widok
+    # Galery — pozostale wezly nadal raportowaly size=3, wiec `min` = 3.
+    #
+    # Tu liczymy wezly, ktore REALNIE oddaly probke, a nie to, co mowi o sobie
+    # klaster. Zmierzona latencja wykrycia to ~5 min (staleness magazynu
+    # metryk), wiec `for` trzymamy krotkie — inaczej okno slepoty rosnie.
+    expr: "(count(count by (node_name) (node_boot_time_seconds{cluster=\"{{ cluster_label }}\"})) or vector(0)) < bool {{ proxysql.nodes_expected }}"
+    summary: >-
+      Mniej niz {{ proxysql.nodes_expected }} wezlow warstwy wspolnej oddaje metryki.
+      Wezel moze byc zarejestrowany i miec dzialajaca usluge pmm-agent, a mimo to nie raportowac.
+    severity: "critical"
+    noDataState: "Alerting"

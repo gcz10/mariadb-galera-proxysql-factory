@@ -25,6 +25,10 @@ import unittest
 
 import yaml
 
+RULES_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "playbooks", "vars", "alert_rules.yml",
+)
 PLAYBOOK = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "playbooks", "f15_alerts.yml",
@@ -32,7 +36,15 @@ PLAYBOOK = os.path.join(
 
 
 def rule_sets() -> dict:
-    """Zwraca `f15_cluster_rules` i `f15_shared_rules` prosto z playbooka."""
+    """Zwraca `f15_cluster_rules` i `f15_shared_rules` z pliku reguł lub playbooka."""
+    if os.path.isfile(RULES_FILE):
+        with open(RULES_FILE, encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+        if "f15_cluster_rules" in data:
+            return {
+                "cluster": data["f15_cluster_rules"],
+                "shared": data.get("f15_shared_rules", []),
+            }
     with open(PLAYBOOK, encoding="utf-8") as handle:
         doc = yaml.safe_load(handle)
     for play in doc:
@@ -42,7 +54,7 @@ def rule_sets() -> dict:
                 "cluster": variables["f15_cluster_rules"],
                 "shared": variables.get("f15_shared_rules", []),
             }
-    raise AssertionError(f"nie znaleziono f15_cluster_rules w {PLAYBOOK}")
+    raise AssertionError(f"nie znaleziono f15_cluster_rules w {RULES_FILE} ani {PLAYBOOK}")
 
 
 class NodeSilentRuleTests(unittest.TestCase):

@@ -25,6 +25,10 @@ import unittest
 
 import yaml
 
+RULES_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "playbooks", "vars", "alert_rules.yml",
+)
 PLAYBOOK = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "playbooks", "f15_alerts.yml",
@@ -34,11 +38,19 @@ PLAYBOOK = os.path.join(
 def load_play() -> dict:
     with open(PLAYBOOK, encoding="utf-8") as handle:
         doc = yaml.safe_load(handle)
-    for play in doc:
-        if "f15_cluster_rules" in (play.get("vars") or {}):
-            return play
-    raise AssertionError(f"nie znaleziono play z f15_cluster_rules w {PLAYBOOK}")
-
+    play = doc[0] if doc else {}
+    if "vars" not in play:
+        play["vars"] = {}
+    if os.path.isfile(RULES_FILE):
+        with open(RULES_FILE, encoding="utf-8") as handle:
+            rules_data = yaml.safe_load(handle) or {}
+        play["vars"].update(rules_data)
+    if "f15_cluster_rules" in play["vars"]:
+        return play
+    for p in doc:
+        if "f15_cluster_rules" in (p.get("vars") or {}):
+            return p
+    raise AssertionError(f"nie znaleziono play z f15_cluster_rules w {RULES_FILE} ani {PLAYBOOK}")
 
 class AlertRuleContractTests(unittest.TestCase):
     @classmethod
