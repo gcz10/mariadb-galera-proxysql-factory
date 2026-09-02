@@ -18,6 +18,8 @@
   connection: local
   gather_facts: false
   become: false
+  vars:
+    ansible_become: false
   tasks:
     - name: "Weryfikacja podania target_node i old_mariadb_version"
       ansible.builtin.assert:
@@ -63,8 +65,12 @@
   serial: 1
   vars_files:
     - vars/secret_policy.yml
-    - "../{{ versions.lock_file }}"
   tasks:
+    - name: "Zaladuj lockfile klastra do namespace lock"
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
     - name: "Brama zdrowia klastra przed dotknięciem węzła (ISC-55)"
       ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
 
@@ -176,9 +182,12 @@
   hosts: '{{ (target_node | default("__NIE_ZDEFINIOWANO_target_node__")) }}:&galera'
   become: true
   gather_facts: false
-  vars_files:
-    - "../{{ versions.lock_file }}"
   tasks:
+    - name: "Zaladuj lockfile klastra do namespace lock"
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
     - name: "Brama zdrowia klastra po upgrade (ISC-55)"
       ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
 
