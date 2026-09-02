@@ -69,6 +69,14 @@
         owner: root
         group: root
         mode: "0644"
+        timeout: 120
+      register: node_exporter_dl
+      # Zewnętrzny GitHub Release pada transientnie (zmierzone 2026-08-30:
+      # "The read operation timed out" po 10s na czystym VM przy pierwszym build) —
+      # retry zamiast porzucenia całego builda po przejściu deploy/bootstrap/join.
+      until: node_exporter_dl is not failed
+      retries: 5
+      delay: 5
 
     - name: "Rozpakuj przypięty node_exporter"
       ansible.builtin.unarchive:

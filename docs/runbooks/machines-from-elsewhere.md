@@ -24,6 +24,14 @@ usuwa najemcę z ProxySQL i PMM niezależnie od pochodzenia maszyn.
 
 ## Utworzenie maszyn — REST API Proxmoxa, bez Terraforma
 
+> **Automatyzacja:** Całą opisaną poniżej procedurę (pre-flight check wolumenów ZFS,
+> `POST /qemu`, asynchroniczne czekanie na task, resize dysku do 40G, start i weryfikację SSH)
+> realizuje gotowe narzędzie w repozytorium:
+> ```bash
+> ./tools/pve-create-vm.sh --vmid <ID> --name <NAZWA> --ip <IP> --cluster <KLASTER> [--role galera|restore]
+> ```
+> Poniższe kroki opisują działanie pod maską i służą do weryfikacji lub ręcznego wykonania.
+
 Wzorzec zweryfikowany: trzy węzły Rocky 9.8 z czystego obrazu cloud. Klonowanie
 działającej maszyny bazodanowej jest ZABRONIONE — klon dziedziczy `grastate.dat`,
 certyfikaty węzła i konto SST, więc po starcie `mariadb` potrafi cicho dołączyć

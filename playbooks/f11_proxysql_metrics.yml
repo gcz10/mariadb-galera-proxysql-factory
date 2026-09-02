@@ -24,7 +24,7 @@
 - name: "F11 — włącz restapi ProxySQL (metryki Prometheus :6070)"
   hosts: proxysql
   become: true
-  gather_facts: false
+  gather_facts: true
   vars:
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
     restapi_port: 6070
@@ -184,7 +184,7 @@
           generic:
             node_name: "{{ pmm_cluster_name_effective }}-{{ item }}"
             address: "{{ hostvars[item].proxysql_node_address | default(hostvars[item].ansible_host) }}"
-            distro: "rocky-{{ platform.rocky_linux_major }}"
+            distro: "rocky-{{ hostvars[item].ansible_distribution_major_version | default(platform.rocky_linux_major) }}"
             custom_labels:
               cluster: "{{ pmm_cluster_name_effective }}"
               environment: "{{ pmm_environment_effective }}"
