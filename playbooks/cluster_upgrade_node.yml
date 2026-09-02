@@ -12,6 +12,25 @@
 # rollback to restore z backupu. Backup PRZED (runbook §3) jest kontraktem
 # operatora; playbook go nie robi.
 
+# === Play 0: Walidacja parametrów (localhost, przed dotknięciem floty) ===
+- name: "F12-node — walidacja parametrów"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: "Weryfikacja podania target_node i old_mariadb_version"
+      ansible.builtin.assert:
+        that:
+          - target_node is defined
+          - target_node | length > 0
+          - target_node in (groups['galera'] | default([]))
+          - old_mariadb_version is defined
+          - old_mariadb_version | length > 0
+        fail_msg: >-
+          Ustaw -e target_node=<hostname z grupy galera: {{ groups['galera'] | default([]) | join(', ') }}>
+          oraz -e old_mariadb_version=<wersja> (np. -e old_mariadb_version=11.4.12).
+
 # === Play 1: Drain węzła w ProxySQL (OFFLINE_SOFT) ===
 - name: "F12-node — drain węzła w ProxySQL (OFFLINE_SOFT)"
   hosts: proxysql[0]
