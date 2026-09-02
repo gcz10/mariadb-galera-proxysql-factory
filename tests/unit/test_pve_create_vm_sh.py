@@ -89,9 +89,12 @@ class PveCreateVmScriptBehavioralExecutionTests(unittest.TestCase):
         # Mock curl emulujący odpowiedzi Proxmox VE REST API
         self.mock_bin = self.td_path / "bin"
         self.mock_bin.mkdir()
+        self.curl_log = self.td_path / "curl.log"
+
         mock_curl = self.mock_bin / "curl"
         mock_curl.write_text(
             "#!/usr/bin/env bash\n"
+            "if [ -n \"${CURL_LOG:-}\" ]; then echo \"curl-called\" >> \"$CURL_LOG\"; fi\n"
             "is_mutation=0\n"
             "for arg in \"$@\"; do\n"
             "  case \"$arg\" in\n"
@@ -119,6 +122,18 @@ class PveCreateVmScriptBehavioralExecutionTests(unittest.TestCase):
         )
         mock_curl.chmod(0o755)
 
+        # Deterministic mock timeout — eliminuje zależność od sieci/zewnętrznego IP
+        mock_timeout = self.mock_bin / "timeout"
+        mock_timeout.write_text(
+            "#!/usr/bin/env bash\n"
+            "if [ \"${MOCK_SSH_PROBE_SUCCESS:-0}\" = \"1\" ]; then\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        mock_timeout.chmod(0o755)
+
         # Atrapa klucza SSH
         self.key_file = self.td_path / "ssh_key.pub"
         self.key_file.write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI-test-key test@lab\n", encoding="utf-8")
@@ -129,6 +144,7 @@ class PveCreateVmScriptBehavioralExecutionTests(unittest.TestCase):
             "PROXMOX_VE_API_TOKEN": "root@pam!token=secret",
             "PVE_SSH_WAIT_RETRIES": "2",
             "PVE_SSH_WAIT_SLEEP": "0",
+            "CURL_LOG": str(self.curl_log),
         }
 
     def test_ssh_timeout_fails_closed_with_exit_1(self):
@@ -155,6 +171,27 @@ class PveCreateVmScriptBehavioralExecutionTests(unittest.TestCase):
         self.assertIn("BŁĄD: Maszyna wystartowała, ale port 22", proc.stderr)
         self.assertNotIn("exit 0", proc.stderr)
 
+    def test_ssh_probe_success_exits_0(self):
+        """Zielony test kontraktu: udana sonda portu SSH kończy skrypt kodem 0 bez oczekiwania na timeout."""
+        success_env = dict(self.env)
+        success_env["MOCK_SSH_PROBE_SUCCESS"] = "1"
+        proc = subprocess.run(
+            [
+                str(SCRIPT),
+                "--vmid", "10020",
+                "--name", "c12db1",
+                "--ip", "192.168.1.40",
+                "--cluster", "test-cluster",
+                "--key-file", str(self.key_file),
+            ],
+            capture_output=True,
+            text=True,
+            env=success_env,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, f"Udana sonda SSH musi kończyć się exit 0: {proc.stderr}")
+        self.assertIn("Sukces: c12db1 (10020, 192.168.1.40) odpowiada na porcie SSH 22", proc.stdout)
+
     def test_no_wait_ssh_flag_succeeds_with_exit_0(self):
         """Zielony test kontraktu: jawna flaga --no-wait-ssh pomija pętlę i kończy się kodem 0."""
         proc = subprocess.run(
@@ -178,6 +215,7 @@ class PveCreateVmScriptBehavioralExecutionTests(unittest.TestCase):
             f"--no-wait-ssh musi zwracać exit 0, otrzymano: {proc.returncode}. Stderr:\n{proc.stderr}",
         )
         self.assertIn("Pominięto oczekiwanie na SSH (--no-wait-ssh)", proc.stdout)
+
     def test_invalid_wait_env_variables_fail_closed_before_pve_calls(self):
         """Niepoprawne zmienne środowiskowe PVE_SSH_WAIT_* odrzucane są kodem 2 przed wywołaniami PVE (fail-closed)."""
         bad_cases = [
@@ -207,11 +245,19 @@ class PveCreateVmScriptBehavioralExecutionTests(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 2, f"Oczekiwano exit 2 dla {extra_env}, otrzymano: {proc.returncode}")
                 self.assertIn(expected_msg, proc.stderr)
+                # Weryfikacja: ani jedno zapytanie curl do PVE nie zostało wykonane
+                self.assertFalse(
+                    self.curl_log.is_file() and len(self.curl_log.read_text(encoding="utf-8").strip()) > 0,
+                    f"Błąd walidacji env wykonał zapytanie do PVE: {self.curl_log.read_text(encoding='utf-8') if self.curl_log.is_file() else ''}",
+                )
+
     def test_static_script_contract_has_fail_closed_exit(self):
         """Weryfikacja kodu skryptu: gałąź timeoutu musi kończyć się exit 1."""
         body = SCRIPT.read_text(encoding="utf-8")
         timeout_branch = body[body.find("echo \"BŁĄD: Maszyna wystartowała") :]
         self.assertIn("exit 1", timeout_branch)
         self.assertNotIn("exit 0", timeout_branch[: timeout_branch.find("else")])
+
+
 if __name__ == "__main__":
     unittest.main()
