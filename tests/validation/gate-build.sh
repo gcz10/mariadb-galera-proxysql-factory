@@ -39,13 +39,17 @@ preflight() {
 }
 
 # Kroki warunkowe budowy. Kolejnosc jest kontraktem: seed zasilaj backup,
-# backup musi istniec zanim drill go odtworzy, a metryki swiezosci odswiezaja
-# sie PO drille. `make` przerywa na pierwszym bledzie (set -e).
+# app-host (material TLS i konto aplikacyjne na hoscie app) przed testami
+# danych — bramka app-conformance nie ma prawa padac na braku infrastruktury,
+# co zmierzone 2026-08-31 na orionv13-r10 (drill padl na pustym buckecie,
+# app-host nigdy nie wstal). Backup musi istniec zanim drill go odtworzy,
+# a metryki swiezosci odswiezaja sie PO drille. `make` przerywa na pierwszym
+# bledzie (set -e).
 steps() {
 	local build_skip="$1"
 	local make_bin="${MAKE:-make}"
 	local step
-	for step in seed backup alerts app-host; do
+	for step in seed app-host backup alerts; do
 		case " $build_skip " in
 			*" $step "*) continue ;;
 		esac
