@@ -211,15 +211,18 @@ fi
 echo "Maszyna $NAME (VMID: $VMID) uruchomiona."
 
 if [ "$WAIT_SSH" = true ]; then
+  wait_retries="${PVE_SSH_WAIT_RETRIES:-90}"
+  wait_sleep="${PVE_SSH_WAIT_SLEEP:-3}"
+  wait_budget=$((wait_retries * wait_sleep))
   echo "=== [5/5] Oczekiwanie na podniesienie SSH ($IP_FULL:22) ==="
-  for i in $(seq 1 60); do
+  for i in $(seq 1 "$wait_retries"); do
     if timeout 2 bash -c "echo > /dev/tcp/$IP_FULL/22" 2>/dev/null; then
-      echo "Sukces: $NAME ($VMID, $IP_FULL) odpowiada na porcie SSH 22 (po $((i * 3))s)."
+      echo "Sukces: $NAME ($VMID, $IP_FULL) odpowiada na porcie SSH 22 (po $((i * wait_sleep))s)."
       exit 0
     fi
-    sleep 3
+    [ "$wait_sleep" -gt 0 ] && sleep "$wait_sleep"
   done
-  echo "BŁĄD: Maszyna wystartowała, ale port 22 na $IP_FULL nie odpowiedział w ciągu 180s." >&2
+  echo "BŁĄD: Maszyna wystartowała, ale port 22 na $IP_FULL nie odpowiedział w ciągu ${wait_budget}s." >&2
   echo "      Sprawdź konsolę PVE lub cloud-init w razie problemów (lub użyj --no-wait-ssh)." >&2
   exit 1
 else
