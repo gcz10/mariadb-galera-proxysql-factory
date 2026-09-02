@@ -43,10 +43,11 @@
   tasks:
     - name: "Drain węzła (OFFLINE_SOFT — klienci idą na backup-writera)"
       ansible.builtin.command:
-        argv:
-          - mariadb
-          - --defaults-extra-file=/etc/proxysql/admin-check.cnf
-          - -h127.0.0.1
+- name: "F12-node — upgrade pakietów i tabele systemowe na wskazanym węźle"
+  hosts: "{{ target_node | default('galera[0]') }}"
+  become: true
+  serial: 1
+  gather_facts: false
           - -P6032
           - -uadmin
           - -N
@@ -62,6 +63,7 @@
   hosts: "{{ target_node | default('galera[0]') }}"
   become: true
   gather_facts: false
+  serial: 1
   vars_files:
     - vars/secret_policy.yml
     - "../{{ versions.lock_file }}"
