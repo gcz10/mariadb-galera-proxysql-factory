@@ -52,6 +52,7 @@ def _rule_uid_templates():
     _walk(yaml.safe_load(F15.read_text(encoding="utf-8")))
     if ALERT_RULES.is_file():
         _walk(yaml.safe_load(ALERT_RULES.read_text(encoding="utf-8")))
+    assert len(uids) >= 10, f"Oczekiwano co najmniej 10 reguł alertów, znaleziono {len(uids)}"
     return uids
 
 def _effective_uid_prefix(cluster_label):

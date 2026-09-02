@@ -28,6 +28,7 @@
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     pmm_validate_certs: "{{ monitoring.get('pmm', {}).get('validate_certs', true) | bool }}"
     cluster_label: "{{ monitoring.pmm.cluster_name }}"
+    tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
     # `default(..., true)` a nie samo `default`: pusty string tez ma wpasc na
     # wyprowadzenie. Szablon do 2026-08-25 wysylal twarde `isa-alerts` — wspolne
     # dla WSZYSTKICH najemcow — wiec drugi klaster na tym samym PMM dostawal
@@ -80,7 +81,7 @@
                 | rejectattr('requires_tls', 'defined')
                 | rejectattr('requires_backup', 'defined') | list)
                + (f15_cluster_rules | selectattr('requires_tls', 'defined') | list
-                  if ((tls | default({})).mode | default('disabled')) == 'full' else [])
+                  if tls_full | bool else [])
                + (f15_cluster_rules | selectattr('requires_backup', 'defined') | list
                   if (backup | default({})).enabled | default(false) else [])) }}
   pre_tasks:
