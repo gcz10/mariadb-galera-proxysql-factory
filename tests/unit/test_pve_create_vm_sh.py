@@ -94,7 +94,14 @@ class PveCreateVmScriptBehavioralExecutionTests(unittest.TestCase):
         mock_curl = self.mock_bin / "curl"
         mock_curl.write_text(
             "#!/usr/bin/env bash\n"
-            "if [ -n \"${CURL_LOG:-}\" ]; then echo \"curl-called\" >> \"$CURL_LOG\"; fi\n"
+            "if [ -n \"${CURL_LOG:-}\" ]; then\n"
+            "  for a in \"$@\"; do\n"
+            "    if [[ \"$a\" == *\"PVEAPIToken\"* ]]; then\n"
+            "      echo \"TOKEN_LEAK_IN_ARGV: $a\" >> \"$CURL_LOG\"\n"
+            "    fi\n"
+            "  done\n"
+            "  echo \"curl-called\" >> \"$CURL_LOG\"\n"
+            "fi\n"
             "is_mutation=0\n"
             "for arg in \"$@\"; do\n"
             "  case \"$arg\" in\n"
@@ -216,6 +223,27 @@ class PveCreateVmScriptBehavioralExecutionTests(unittest.TestCase):
         )
         self.assertIn("Pominięto oczekiwanie na SSH (--no-wait-ssh)", proc.stdout)
 
+    def test_pve_token_not_leaked_in_argv_and_passed_via_file(self):
+        """Bezpieczeństwo PVE: token API NIE może pojawić się w argv curl (przekazywany przez plik -H @...)."""
+        proc = subprocess.run(
+            [
+                str(SCRIPT),
+                "--vmid", "10020",
+                "--name", "c12db1",
+                "--ip", "192.168.1.254",
+                "--cluster", "test-cluster",
+                "--key-file", str(self.key_file),
+                "--no-wait-ssh",
+            ],
+            capture_output=True,
+            text=True,
+            env=self.env,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, f"Skrypt powinien zakończyć się kodem 0: {proc.stderr}")
+        curl_log_content = self.curl_log.read_text(encoding="utf-8") if self.curl_log.is_file() else ""
+        self.assertIn("curl-called", curl_log_content)
+        self.assertNotIn("TOKEN_LEAK_IN_ARGV", curl_log_content, "Token PVE wyciekł do argumentów linii poleceń curl!")
     def test_invalid_wait_env_variables_fail_closed_before_pve_calls(self):
         """Niepoprawne zmienne środowiskowe PVE_SSH_WAIT_* odrzucane są kodem 2 przed wywołaniami PVE (fail-closed)."""
         bad_cases = [

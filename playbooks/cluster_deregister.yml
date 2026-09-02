@@ -94,7 +94,7 @@
     # `become: false` to slowo kluczowe play'a, a `ansible_become`
     # z inwentarza jest ZMIENNA i wygrywa z nim w precedencji.
     ansible_become: false
-    pmm_api_url: "{{ lookup('ansible.builtin.env', 'PMM_SERVER_URL') | default((monitoring | default({})).get('pmm', {}).get('server_url', 'https://192.168.1.130'), true) | regex_replace('/$', '') }}"
+    pmm_api_url: "{{ lookup('ansible.builtin.env', 'PMM_SERVER_URL') | default((monitoring | default({})).get('pmm', {}).get('server_url', ''), true) | regex_replace('/$', '') }}"
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     cluster_label: "{{ (monitoring | default({})).get('pmm', {}).get('cluster_name', cluster.name) }}"
     f15_folder_uid: "{{ (monitoring | default({})).get('alerts', {}).get('folder_uid', 'isa-alerts-' ~ cluster_label) }}"
@@ -108,9 +108,9 @@
     f15_contact_name: "ISA Email Alerts ({{ cluster_label }})"
 
   tasks:
-    - name: "Pomin jesli PMM_ADMIN_PASSWORD nie jest ustawione"
+    - name: "Pomin jesli PMM_ADMIN_PASSWORD lub PMM_SERVER_URL nie jest ustawione"
       ansible.builtin.meta: end_play
-      when: pmm_admin_password | length == 0
+      when: pmm_admin_password | length == 0 or pmm_api_url | length == 0
 
     # ==========================================================================
     # KROK 1: Usun reguly alertow Grafana (musza zniknac PRZED folderem)

@@ -117,8 +117,13 @@ if ! [[ "$WAIT_SLEEP" =~ ^[0-9]+$ ]]; then
 fi
 
 EP="${PROXMOX_VE_ENDPOINT%/}"
-H="Authorization: PVEAPIToken=$PROXMOX_VE_API_TOKEN"
 
+# Bezpieczne przekazanie tokenu API do curl przez plik tymczasowy 0600 (zapobiega wyciekowi do argv / ps)
+AUTH_HEADER_FILE=$(mktemp "${TMPDIR:-/tmp}/pve-auth.XXXXXX")
+chmod 0600 "$AUTH_HEADER_FILE"
+trap 'rm -f "$AUTH_HEADER_FILE"' EXIT
+printf 'Authorization: PVEAPIToken=%s\n' "$PROXMOX_VE_API_TOKEN" > "$AUTH_HEADER_FILE"
+H=@"$AUTH_HEADER_FILE"
 echo "=== [1/5] Pre-flight check: unikalność VMID $VMID na węźle $NODE ==="
 vm_exists=$(curl -sk -H "$H" "$EP/api2/json/nodes/$NODE/qemu" \
   | python3 -c "import json,sys; print(any(int(v.get('vmid',0))==$VMID for v in (json.load(sys.stdin).get('data') or [])))")

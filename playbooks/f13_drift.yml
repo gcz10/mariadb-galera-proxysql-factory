@@ -115,12 +115,36 @@
   gather_facts: false
   vars:
     ansible_become: false
-    f13_expected_mariadb: "{{ versions.mariadb | default('') }}"
-
   tasks:
+    - name: "Załaduj lockfile klastra (wersja deklarowana)"
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
     - name: "Agreguj cluster_state_uuid z węzłów Galera"
       ansible.builtin.set_fact:
         f13_uuids: "{{ groups['galera'] | map('extract', hostvars, 'f13_wsrep_uuid') | map(attribute='stdout') | list }}"
+        f13_binvers: "{{ groups['galera'] | map('extract', hostvars, 'f13_mariadb_binver') | map(attribute='stdout') | list }}"
+        f13_sst_methods: "{{ groups['galera'] | map('extract', hostvars, 'f13_sst_method') | map(attribute='stdout') | list }}"
+
+    - name: "ISC-21 drift: wersja binariów MariaDB na węzłach zgodna z lockfile"
+      ansible.builtin.assert:
+        that:
+          - f13_binvers | unique | length == 1
+          - (f13_binvers | first | default('')) is search('^' ~ (lock.mariadb.version | regex_escape))
+        fail_msg: >-
+          DRIFT wersji MariaDB: oczekiwano {{ lock.mariadb.version }},
+          otrzymano na węzłach: {{ f13_binvers }}
+        success_msg: "Wersja MariaDB zgodna z lockfile ({{ f13_binvers | unique | first }})"
+
+    - name: "ISC-21 drift: metoda SST w server.cnf jednolita na węzłach (mariabackup)"
+      ansible.builtin.assert:
+        that:
+          - f13_sst_methods | unique | length == 1
+          - (f13_sst_methods | first | default('')) == 'mariabackup'
+        fail_msg: >-
+          DRIFT metody SST: oczekiwano 'mariabackup', otrzymano na węzłach: {{ f13_sst_methods }}
+        success_msg: "Metoda SST jednolita (mariabackup)"
 
     - name: "ISC-21 drift: wszystkie węzły mają ten sam cluster_state_uuid"
       ansible.builtin.assert:
@@ -155,5 +179,7 @@
       ansible.builtin.debug:
         msg: >-
           F13 drift: PASS — ProxySQL runtime==disk ({{ groups['proxysql'] | length }} węzłów),
-          Galera uuid spójny ({{ f13_uuids | unique | list | first | default('?') }}).
+          Galera uuid spójny ({{ f13_uuids | unique | list | first | default('?') }}),
+          MariaDB binver zgodna z lockfile ({{ f13_binvers | unique | first | default('?') }}),
+          metoda SST: {{ f13_sst_methods | unique | first | default('?') }}.
           Drift detection read-only (§18: nie naprawia automatycznie).
