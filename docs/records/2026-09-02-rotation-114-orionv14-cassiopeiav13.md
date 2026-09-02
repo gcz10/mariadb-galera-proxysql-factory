@@ -44,7 +44,7 @@ Oba klastry przeszły pełną bramkę `lab-post-build-gate` w pierwszym podejśc
   - `probe-pmm-native`: PASS (PMM 3.9.1, 3 węzły, 3 eksportery, 10 reguł ISC-47)
 - **`cassiopeiav13-r9`**:
   - `probe-app-conformance`: PASS (identyczny komplet dowodów aplikacyjnych, writer `c13db3`)
-  - `probe-backup`: PASS (artefakt `galera-cassiopeiav13-r9-20260902-195919` w S3, GCM v2, MariaDB `11.4.12`)
+  - `probe-backup`: PASS (artefakt `galera-cassiopeiav13-r9-20260902-195919` w S3, szyfrowanie `aes-256-gcm-pbkdf2-sha256`, sha256 OK, MariaDB `11.4.12`, `seqno=0`)
   - `probe-restore`: PASS (odtworzenie na izolowany host `c13r1`)
   - `probe-rolling-restart`: PASS (3/3 węzły Synced/Primary)
   - `probe-gcache`: PASS (`512M`)

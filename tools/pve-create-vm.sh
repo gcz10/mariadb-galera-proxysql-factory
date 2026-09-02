@@ -219,9 +219,9 @@ if [ "$WAIT_SSH" = true ]; then
     fi
     sleep 3
   done
-  echo "OSTRZEŻENIE: Maszyna wystartowała, ale port 22 na $IP_FULL nie odpowiedział w ciągu 180s." >&2
-  echo "             Sprawdź konsolę PVE lub cloud-init w razie problemów." >&2
-  exit 0
+  echo "BŁĄD: Maszyna wystartowała, ale port 22 na $IP_FULL nie odpowiedział w ciągu 180s." >&2
+  echo "      Sprawdź konsolę PVE lub cloud-init w razie problemów (lub użyj --no-wait-ssh)." >&2
+  exit 1
 else
   echo "Pominięto oczekiwanie na SSH (--no-wait-ssh)."
   exit 0
