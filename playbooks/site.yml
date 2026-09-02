@@ -16,7 +16,7 @@
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
     gcache_size: "{{ mariadb_tuning.gcache_size }}"
     mariadb_config_dir: /etc/my.cnf.d
-
+    tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
   pre_tasks:
     - name: "Wymagaj SST_PASSWORD (zapobiega pustemu wsrep_sst_auth)"
       ansible.builtin.assert:
@@ -45,18 +45,8 @@
         - { path: /run/mariadb, owner: mysql, group: mysql, mode: "0755" }
         - { path: /var/log/mariadb, owner: mysql, group: mysql, mode: "0755" }
         - { path: "{{ mariadb_config_dir }}", owner: root, group: root, mode: "0755" }
-    - name: "Trwały /run/mariadb po reboocie (tmpfiles.d — /run jest tmpfs)"
-      ansible.builtin.copy:
-        content: |
-          # Odkryte chaosem sysrq 2026-08-29 (orionv11-r9): /run/mariadb powstawal
-          # tylko przy converge — po twardym reboocie maszyny znikal, mysqld nie
-          # mogl zapisac pidfile i nie podnosil sie po reboocie (Errcode: 2).
-          d /run/mariadb 0755 mysql mysql -
-        dest: /etc/tmpfiles.d/mariadb.conf
-        owner: root
-        group: root
-        mode: "0644"
-      notify: "Zastosuj tmpfiles (natychmiastowe utworzenie /run/mariadb)"
+    - name: "Konfiguruj trwały /run/mariadb po reboocie"
+      ansible.builtin.include_tasks: tasks/mariadb_tmpfiles.yml
 
     - name: "Utworz plik logu MariaDB z poprawnymi uprawnieniami"
       ansible.builtin.file:
@@ -118,10 +108,9 @@
         - "Restart MariaDB (systemd, on config change)"
         - "Verify MariaDB health after config restart"
 
-    - name: "Dystrybuuj certyfikaty TLS (gdy tls.mode=full)"
+    - name: "TLS: wdróż certyfikaty i klucz prywatny (gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
-      when: (tls | default({})).mode | default('disabled') == 'full'
-
+      when: tls_full | bool
     # Rotacja certu NIE wymaga restartu. Dokumentacja Galery ma na to osobna
     # strone (galera-security/reloading-tls-certificates-without-downtime.md):
     # podmien pliki atomowo pod tymi samymi sciezkami i wykonaj `FLUSH SSL`,
@@ -167,9 +156,10 @@
           - FLUSH SSL
       changed_when: true
       when:
-        - (tls | default({})).mode | default('disabled') == 'full'
+        - tls_full | bool
         - (tls_files_changed | default(false)) | bool
         - (mariadb_active | default({})).rc | default(1) == 0
+
     - name: "Brama zdrowia przed zaplanowanym restartem konfiguracji"
       ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
       vars:

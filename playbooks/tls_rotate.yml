@@ -27,12 +27,13 @@
   become: true
   gather_facts: false
   serial: 1
-
+  vars:
+    tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
   pre_tasks:
     - name: "Wymagaj tls.mode=full"
       ansible.builtin.assert:
         that:
-          - (tls | default({})).mode | default('disabled') == 'full'
+          - tls_full | bool
         fail_msg: >-
           Rotacja dotyczy wyłącznie klastrów z tls.mode=full;
           ten ma '{{ (tls | default({})).mode | default('disabled') }}'.
@@ -124,7 +125,8 @@
   hosts: proxysql
   become: true
   gather_facts: false
-
+  vars:
+    tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
   tasks:
     - name: "Podmień CA klastra na węźle ProxySQL (atomowo)"
       ansible.builtin.include_tasks: tls_certs.yml
@@ -132,7 +134,7 @@
         tls_file_owner: proxysql
         tls_deploy_key: false
         tls_dir: "/etc/mysql/tls/{{ cluster.name }}"
-      when: (tls | default({})).mode | default('disabled') == 'full'
+      when: tls_full | bool
 
     - name: "Raport zaufania ProxySQL"
       ansible.builtin.debug:
@@ -149,7 +151,8 @@
   hosts: app
   become: true
   gather_facts: false
-
+  vars:
+    tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
   tasks:
     - name: "Podmień CA klastra na hoście aplikacyjnym (atomowo)"
       ansible.builtin.include_tasks: tls_certs.yml
@@ -157,7 +160,7 @@
         tls_file_owner: root
         tls_deploy_key: false
         tls_dir: "/etc/mysql/app/{{ cluster.name }}"
-      when: (tls | default({})).mode | default('disabled') == 'full'
+      when: tls_full | bool
 
     - name: "Raport zaufania hosta aplikacyjnego"
       ansible.builtin.debug:

@@ -34,7 +34,7 @@
     app_lock_by_major:
       "9": "../versions/versions.lock.yml"
       "10": "../versions/versions-el10.lock.yml"
-
+    tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
   pre_tasks:
     - name: "Wymagaj lockfile dla platformy hosta"
       ansible.builtin.assert:
@@ -101,7 +101,7 @@
         tls_file_owner: root
         tls_deploy_key: false
         tls_dir: "/etc/mysql/app/{{ cluster.name }}"
-      when: (tls | default({})).mode | default('disabled') == 'full'
+      when: tls_full | bool
 
 
     - name: "Raport"
@@ -109,4 +109,4 @@
         msg: >-
           {{ inventory_hostname }}: klient MariaDB {{ lock.mariadb.version }} gotowy;
           CA klastra {{ cluster.name }}
-          {{ 'w /etc/mysql/app/' ~ cluster.name if (tls | default({})).mode | default('disabled') == 'full' else 'pominiete (tls.mode != full)' }}
+          {{ 'w /etc/mysql/app/' ~ cluster.name if (tls_full | bool) else 'pominiete (tls.mode != full)' }}

@@ -15,6 +15,7 @@
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') | default('', true) }}"
     gcache_size: "{{ mariadb_tuning.gcache_size }}"
     mariadb_config_dir: /etc/my.cnf.d
+    tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
   pre_tasks:
     - name: "Wymagaj SST_PASSWORD przed konfiguracja"
       ansible.builtin.assert:
@@ -54,17 +55,8 @@
         - /run/mariadb
         - /var/log/mariadb
         - "{{ mariadb_config_dir }}"
-    - name: "Trwały /run/mariadb po reboocie (tmpfiles.d — /run jest tmpfs)"
-      ansible.builtin.copy:
-        content: |
-          # Odkryte chaosem sysrq 2026-08-29 (orionv11-r9): /run/mariadb powstawal
-          # tylko przy converge — po twardym reboocie maszyny znikal, mysqld nie
-          # mogl zapisac pidfile i nie podnosil sie po reboocie (Errcode: 2).
-          d /run/mariadb 0755 mysql mysql -
-        dest: /etc/tmpfiles.d/mariadb.conf
-        owner: root
-        group: root
-        mode: "0644"
+    - name: "Konfiguruj trwały /run/mariadb po reboocie"
+      ansible.builtin.include_tasks: tasks/mariadb_tmpfiles.yml
 
     - name: "Wdróż server.cnf z mariabackup SST"
       ansible.builtin.template:
@@ -76,7 +68,7 @@
       no_log: true
     - name: "Dystrybuuj certyfikaty TLS (gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
-      when: (tls | default({})).mode | default('disabled') == 'full'
+      when: tls_full | bool
 
 - name: "F5 — zapewnij konto SST na klastrze"
   hosts: "{{ join_bootstrap_node | default('galera[0]') }}"

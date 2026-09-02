@@ -68,8 +68,8 @@
     app_password_sql: >-
       {{ app_password | replace("'", "''") }}
     galera_backends: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | list }}"
-    tls_use_ssl: "{{ 1 if (tls | default({})).mode | default('disabled') == 'full' else 0 }}"
-    # Katalog CA per klaster na WSPOLDZIELONYCH wezlach ProxySQL.
+    tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
+    tls_use_ssl: "{{ 1 if (tls_full | bool) else 0 }}"
     #
     # Pod /etc/mysql/tls, a NIE /etc/proxysql/tls: `/etc/proxysql` jest celowo
     # zamkniete (0750 root:root, trzyma proxysql.cnf z haslem admina), wiec
@@ -156,7 +156,7 @@
       ansible.builtin.set_fact:
         proxysql_ca_src: "{{ tls.ca_reference if tls.ca_reference.startswith('/') else (playbook_dir | dirname) ~ '/' ~ tls.ca_reference }}"
         proxysql_ca_basename: "ca-{{ lookup('ansible.builtin.file', tls.ca_reference if tls.ca_reference.startswith('/') else (playbook_dir | dirname) ~ '/' ~ tls.ca_reference) | hash('sha256') | truncate(12, true, '') }}.pem"
-      when: (tls | default({})).mode | default('disabled') == 'full'
+      when: tls_full | bool
 
     - name: "TLS: rozprowadź CA na węzeł ProxySQL (walidacja backendu; gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
@@ -164,7 +164,7 @@
         tls_file_owner: proxysql
         tls_deploy_key: false
         tls_dir: "{{ proxysql_cluster_tls_dir }}"
-      when: (tls | default({})).mode | default('disabled') == 'full'
+      when: tls_full | bool
 
     - name: "TLS: zapisz CA pod nazwą zależną od treści"
       ansible.builtin.copy:
@@ -175,7 +175,7 @@
         mode: "0644"
       register: proxysql_backend_ca
       notify: "proxysql-ca-reload"
-      when: (tls | default({})).mode | default('disabled') == 'full'
+      when: tls_full | bool
 
     # Stare odciski tego najemcy sa smieciem, ale kasujemy je DOPIERO po tym, jak
     # nowa sciezka trafi do konfiguracji — inaczej ProxySQL zostalby bez pliku,
@@ -186,7 +186,7 @@
         patterns: "ca-*.pem"
         excludes: "{{ proxysql_ca_basename }}"
       register: proxysql_stale_ca
-      when: (tls | default({})).mode | default('disabled') == 'full'
+      when: tls_full | bool
 
     # Lista hostow budowana JAWNA PETLA, nie `regex_replace` z backreferencja.
     # W bloku YAML `|`/`>-` zapis "'\\1'" nie dociera do Jinja jako odwolanie do
@@ -204,7 +204,7 @@
       register: proxysql_tls_ca_rows
       changed_when: false
       no_log: true
-      when: (tls | default({})).mode | default('disabled') == 'full'
+      when: tls_full | bool
 
     # DELETE jest skopowany do nazw hostow TEGO klastra. Tabela nie ma kolumny
     # hostgroup, wiec czyszczenie "wszystkiego" skasowaloby wpisy sasiada.
@@ -223,7 +223,7 @@
       no_log: true
       changed_when: true
       when:
-        - (tls | default({})).mode | default('disabled') == 'full'
+        - tls_full | bool
         - (proxysql_tls_ca_rows.stdout | default('0') | trim | int) != (galera_backends | length)
 
     # Dopiero teraz: konfiguracja wskazuje juz nowy plik i zostala przeladowana.
@@ -234,7 +234,7 @@
       loop: "{{ proxysql_stale_ca.files | default([]) }}"
       loop_control:
         label: "{{ item.path | basename }}"
-      when: (tls | default({})).mode | default('disabled') == 'full'
+      when: tls_full | bool
 
     - name: "Sprawdź aktualne backendy Galera"
       ansible.builtin.command:

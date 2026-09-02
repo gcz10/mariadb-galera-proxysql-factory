@@ -12,7 +12,7 @@
   vars:
     sst_user: "sst_user"
     sst_password: "{{ lookup('ansible.builtin.env', 'SST_PASSWORD') }}"
-
+    tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
   pre_tasks:
     - name: "Blokuj bootstrap bez confirm=yes"
       ansible.builtin.assert:
@@ -103,7 +103,7 @@
   tasks:
     - name: "Dystrybuuj certyfikaty TLS (gdy tls.mode=full)"
       ansible.builtin.include_tasks: tls_certs.yml
-      when: (tls | default({})).mode | default('disabled') == 'full'
+      when: tls_full | bool
 
     - name: "Bootstrap Galera (galera_new_cluster przez systemd)"
       ansible.builtin.command: galera_new_cluster

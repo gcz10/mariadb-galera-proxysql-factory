@@ -1,0 +1,27 @@
+---
+# playbooks/tasks/mariadb_tmpfiles.yml — trwały /run/mariadb po reboocie (tmpfiles.d)
+#
+# Odkryte chaosem sysrq 2026-08-29 (orionv11-r9): /run/mariadb powstawal
+# tylko przy converge — po twardym reboocie maszyny znikal, mysqld nie
+# mogl zapisac pidfile i nie podnosil sie po reboocie (Errcode: 2).
+#
+# Wspólny dla site.yml i f5_join.yml: gwarantuje identyczną treść i natychmiastowe
+# zastosowanie przy zmianie bez rozjeżdżania handlerów między playbookami.
+
+- name: "Trwały /run/mariadb po reboocie (tmpfiles.d — /run jest tmpfs)"
+  ansible.builtin.copy:
+    content: |
+      # Odkryte chaosem sysrq 2026-08-29 (orionv11-r9): /run/mariadb powstawal
+      # tylko przy converge — po twardym reboocie maszyny znikal, mysqld nie
+      # mogl zapisac pidfile i nie podnosil sie po reboocie (Errcode: 2).
+      d /run/mariadb 0755 mysql mysql -
+    dest: /etc/tmpfiles.d/mariadb.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: _mariadb_tmpfiles_conf
+
+- name: "Zastosuj tmpfiles (natychmiastowe utworzenie /run/mariadb przy zmianie)"
+  ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/mariadb.conf  # noqa: no-handler
+  when: _mariadb_tmpfiles_conf.changed
+  changed_when: true
