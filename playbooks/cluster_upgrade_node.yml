@@ -37,7 +37,7 @@
   become: true
   gather_facts: false
   vars:
-    target_ip: "{{ hostvars[target_node | default(groups['galera'][0] | default('localhost'))].galera_node_address | default('') }}"
+    target_ip: "{{ hostvars[target_node].galera_node_address }}"
   tasks:
     - name: "Drain węzła (OFFLINE_SOFT — klienci idą na backup-writera)"
       ansible.builtin.command:
@@ -57,7 +57,7 @@
 
 # === Play 2: Upgrade pakietów i bazy na wskazanym węźle ===
 - name: "F12-node — upgrade pakietów i tabele systemowe na wskazanym węźle"
-  hosts: "{{ target_node | default('galera[0]') }}"
+  hosts: '{{ (target_node | default("__NIE_ZDEFINIOWANO_target_node__")) }}:&galera'
   become: true
   gather_facts: false
   serial: 1
@@ -153,7 +153,7 @@
   become: true
   gather_facts: false
   vars:
-    target_ip: "{{ hostvars[target_node | default(groups['galera'][0] | default('localhost'))].galera_node_address | default('') }}"
+    target_ip: "{{ hostvars[target_node].galera_node_address }}"
   tasks:
     - name: "Undrain (ONLINE — monitor galera sam wyrówna placement)"
       ansible.builtin.command:
@@ -173,7 +173,7 @@
 
 # === Play 4: Weryfikacja po upgrade na wskazanym węźle ===
 - name: "F12-node — weryfikacja po upgrade na wskazanym węźle"
-  hosts: "{{ target_node | default('galera[0]') }}"
+  hosts: '{{ (target_node | default("__NIE_ZDEFINIOWANO_target_node__")) }}:&galera'
   become: true
   gather_facts: false
   vars_files:
