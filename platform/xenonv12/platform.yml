@@ -1,0 +1,40 @@
+---
+platform:
+  name: "xenonv12"
+  environment: "laboratory"
+  rocky_linux_major: 9
+  infra:
+    services:
+      - "pmm"
+      - "minio"
+      - "maildev"
+versions:
+  policy: "locked"
+  lock_file: "versions/versions.lock.yml"
+proxysql:
+  nodes_expected: 2
+  frontend_tls:
+    ca_reference: "pki/xenonv12/ca.pem"
+    certificate_reference: "pki/xenonv12/server-cert.pem"
+    private_key_reference: "pki/xenonv12/server-key.pem"
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.74"
+    port: 6033
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.70/32"]
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.70"
+    cluster_name: "xenonv12"
+    validate_certs: false
+    credentials_revision: 1
+    backup_retention: 2
+  agent_groups: ["proxysql"]
+  alerts:
+    email: "ops@claude.local"
+    folder_uid: ""
+    datasource_uid: ""
