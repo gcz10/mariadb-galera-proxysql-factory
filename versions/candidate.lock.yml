@@ -3,6 +3,16 @@
 # Wypełniony w F1 na podstawie oficjalnych źródeł (2026-07-22).
 # Produkcja używa versions.lock.yml (po F0 walidacji na hostach).
 # Nigdy state: latest; deployment zatrzymuje się, gdy pakiet niedostępny.
+#
+# 2026-09-04: blok `proxysql` odświeżony 3.0.9 → 3.0.11 razem z lockfile'ami
+# LOCKED, żeby definicja z `policy: candidate` też startowała na wersji z
+# łatkami bezpieczeństwa 3.0.11, a nie na wydaniu sprzed dwóch serii. Przy
+# okazji naprawione dwa realne defekty tego pliku: `rpm_release` był
+# placeholderem `to-confirm-F0`, więc URL RPM-u był nieskładalny, a
+# `repo_baseurl`/`repositories[].url` wskazywały na `rocky/9`, czyli ścieżkę
+# zwracającą 404 — wydawca publikuje pod `centos/<major>`. Bez `rpm_sha256`
+# `platform_install.yml` odmawiał instalacji (asercja audit#6), więc plik nie
+# nadawał się do postawienia czegokolwiek.
 
 rocky_linux:
   major: 9
@@ -24,16 +34,22 @@ mariadb:
   eol_warning_10_6: "2026-07-06"
 
 proxysql:
-  version: "3.0.9"
+  version: "3.0.11"
   series: "3.0"
   tier: "Stable"
-  released: "2026-06-05"
-  rpm_release: "to-confirm-F0"
-  repo_baseurl: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/"
+  released: "2026-08-27"
+  rpm_release: "1"
+  repo_baseurl: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/9/"
   repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+  # Kontrola integralnosci identyczna jak w lockfile'ach LOCKED: przypieta suma
+  # RPM-u, weryfikowana przez get_url w playbooks/platform_install.yml.
+  rpm_sha256:
+    x86_64: "41f0d7aebd93cf6a4ba9681074202b8b1495adec4e810beb5480d8ee3a689fff"  # proxysql-3.0.11-1-centos9.x86_64.rpm, 42484661B
   cves_patched:
     - "CVE-2026-48772"
     - "CVE-2026-48773"
+    - "GHSA-fvch-fpgq-pwfx"
+  source: "https://github.com/sysown/proxysql/releases/tag/v3.0.11"
 
 pmm:
   version: "3.8.1"
@@ -87,8 +103,10 @@ repositories:
     url: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
     gpg_fingerprint: "to-verify-F2"  # F2: gpg --recv-keys przed gpgcheck=1
   - name: "proxysql-official"
-    url: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/rocky/9/"
+    url: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/9/"
     gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
-    gpg_fingerprint: "to-verify-F2"
+    # Odcisk zweryfikowany uzyciem: rpm_key importuje go w platform_install.yml,
+    # a `rpm -K` na pobranym RPM zwraca "digests signatures OK".
+    gpg_fingerprint: "653F85BB38256DF8A96206C3E8CA2E8D8217C97E"
 
 # Status: candidate — do promocji do versions.lock.yml po F0 walidacji na hostach.
