@@ -7,12 +7,14 @@
 variable "vms" {
   description = "Maszyny zbioru: klucz = nazwa VM w PVE. id to VMID, ip to ostatni oktet."
   type = map(object({
-    id   = number
-    ip   = number
-    role = string
-    cpu  = number
-    ram  = number
-    disk = number
+    id                                   = number
+    ip                                   = number
+    role                                 = string
+    cpu                                  = number
+    ram                                  = number
+    disk                                 = number
+    purge_on_destroy                     = optional(bool)
+    delete_unreferenced_disks_on_destroy = optional(bool)
   }))
 }
 

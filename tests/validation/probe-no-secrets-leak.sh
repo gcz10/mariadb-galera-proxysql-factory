@@ -115,7 +115,13 @@ fi
 
 # 3. Uruchom testy jednostkowe bezpieczeństwa sekretów w runnerze
 echo "--- Running behavioral secret safety unit tests ---"
-if ! python3 -m unittest tests.unit.test_galera_backup_core.GaleraBackupCoreTests.test_secret_cannot_enter_subprocess_argv tests.unit.test_galera_backup_core.GaleraBackupCoreTests.test_secret_redaction >/dev/null 2>&1; then
+if ! python3 -m unittest \
+    tests.unit.test_galera_backup_core.GaleraBackupCoreTests.test_secret_cannot_enter_subprocess_argv \
+    tests.unit.test_galera_backup_core.GaleraBackupCoreTests.test_secret_redaction \
+    tests.unit.test_pve_create_vm_sh.PveCreateVmScriptBehavioralExecutionTests.test_pve_token_not_leaked_in_argv_and_passed_via_file \
+    tests.unit.test_pve_teardown_contract.PveTeardownCredentialContractTests.test_password_never_leaks_into_curl_argv_behavioral \
+    tests.unit.test_pve_teardown_contract.PveTeardownCredentialContractTests.test_token_never_enters_process_arguments \
+    >/dev/null 2>&1; then
   echo "FAIL: ISC-43 — secret redaction/argv unit tests failed"
   FAIL=1
 fi

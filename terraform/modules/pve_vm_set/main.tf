@@ -40,11 +40,10 @@ resource "proxmox_virtual_environment_vm" "node" {
 
   started         = var.started
   stop_on_destroy = var.stop_on_destroy
-  # Flagi destroy przekazywane jako null zostaja pominiete w konfiguracji —
-  # rooty, ktore ich nigdy nie ustawialy, zachowuja wartosci ze stanu.
-  purge_on_destroy                     = var.purge_on_destroy
-  delete_unreferenced_disks_on_destroy = var.delete_unreferenced_disks_on_destroy
-
+  # Flagi destroy: jesli zdefiniowane per-maszyna, uzywamy jej wlasnej wartosci,
+  # w przeciwnym razie wartosci ze zmiennych modulu.
+  purge_on_destroy                     = try(each.value.purge_on_destroy, null) != null ? each.value.purge_on_destroy : var.purge_on_destroy
+  delete_unreferenced_disks_on_destroy = try(each.value.delete_unreferenced_disks_on_destroy, null) != null ? each.value.delete_unreferenced_disks_on_destroy : var.delete_unreferenced_disks_on_destroy
   cpu {
     type    = "host"
     cores   = each.value.cpu

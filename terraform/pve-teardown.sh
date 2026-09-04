@@ -208,15 +208,23 @@ echo "=== sprzatanie sierot ZFS dla VMID: ${VMIDS[*]} ==="
 # jest dlugowieczny, a argv widzi kazdy uzytkownik przez `ps` (ticket zyje 2 h,
 # wiec jego dotychczasowa sciezka zostaje bez zmian).
 AUTH_ARGS=()
+AUTH_HEADER_FILE=""
+AUTH_PASS_FILE=""
 if [ -n "${PROXMOX_VE_API_TOKEN:-}" ]; then
   AUTH_HEADER_FILE=$(mktemp)
   chmod 600 "$AUTH_HEADER_FILE"
   printf 'Authorization: PVEAPIToken=%s\n' "$PROXMOX_VE_API_TOKEN" > "$AUTH_HEADER_FILE"
   AUTH_ARGS=(-H @"$AUTH_HEADER_FILE")
 else
+  # Bezpieczne przekazanie hasla przez plik 0600 (zapobiega wyciekowi do argv / ps)
+  AUTH_PASS_FILE=$(mktemp)
+  chmod 600 "$AUTH_PASS_FILE"
+  printf '%s' "$PROXMOX_VE_PASSWORD" > "$AUTH_PASS_FILE"
   AUTH=$(curl -sk --max-time 20 -X POST "${PVE_API}/api2/json/access/ticket" \
     --data-urlencode "username=${PROXMOX_VE_USERNAME}" \
-    --data-urlencode "password=${PROXMOX_VE_PASSWORD}")
+    --data-urlencode "password@${AUTH_PASS_FILE}")
+  rm -f "$AUTH_PASS_FILE"
+  AUTH_PASS_FILE=""
   # Bez sprawdzenia bilet bywa pusty (zle haslo, API nieosiagalne), a skrypt
   # leci dalej z pustym cookie i sypie kaskada nieczytelnych 401.
   if ! TICKET=$(printf '%s' "$AUTH" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["ticket"])' 2>/dev/null) \
@@ -230,8 +238,7 @@ else
 fi
 
 CONTENT_FILE=$(mktemp)
-trap 'rm -f "$CONTENT_FILE" ${AUTH_HEADER_FILE:+"$AUTH_HEADER_FILE"}' EXIT
-
+trap 'rm -f "$CONTENT_FILE" ${AUTH_HEADER_FILE:+"$AUTH_HEADER_FILE"} ${AUTH_PASS_FILE:+"$AUTH_PASS_FILE"}' EXIT
 # Lista wolumenow MUSI byc sprawdzona. Wczesniej kazdy VMID parsowal odpowiedz
 # osobno z `2>/dev/null`, wiec HTML zamiast JSON-a konczyl sie komunikatem
 # "usunietych sierot: 0" i kodem 0 — sprzatanie nie odbywalo sie wcale, a

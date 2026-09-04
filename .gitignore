@@ -68,3 +68,4 @@ clusters/trust-*/
 # Konfiguracja edytorów lokalnych — kontrakt repo nie obejmuje ustawień IDE.
 .vscode/
 .idea/
+.commandcode/

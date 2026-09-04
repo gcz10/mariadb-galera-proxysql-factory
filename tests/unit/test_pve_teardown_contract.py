@@ -242,6 +242,33 @@ class PveTeardownCredentialContractTests(unittest.TestCase):
         self.assertIn("-H @", text)
         self.assertNotIn('-H "Authorization: PVEAPIToken=${PROXMOX_VE_API_TOKEN}"', text)
 
+    def test_password_never_enters_process_arguments(self):
+        """Haslo PVE nie moze trafic do argv/ps w wywolaniu curl."""
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("password@", text)
+        self.assertNotIn('password=${PROXMOX_VE_PASSWORD}', text)
+        self.assertNotIn('password="${PROXMOX_VE_PASSWORD}"', text)
 
+    def test_password_never_leaks_into_curl_argv_behavioral(self):
+        """Behawioralny dowod braku wycieku hasla do argv (CURL_LOG)."""
+        harness = TeardownHarness()
+        self.addCleanup(harness.cleanup)
+        secret_pass = "SUPER_SECRET_PVE_PASSWORD_SHOULD_NEVER_LEAK"
+        ticket_response = '{"data":{"ticket":"PVEAuthCookie=ticket123","CSRFPreventionToken":"csrf123"}}'
+        # Zwroc bilet przy POST, nastepnie pusta liste wolumenow
+        result = harness.run(
+            ticket_response,
+            env_extra={
+                "PROXMOX_VE_API_TOKEN": "",
+                "PROXMOX_VE_USERNAME": "root@pam",
+                "PROXMOX_VE_PASSWORD": secret_pass,
+            },
+        )
+        logged_args = harness.requested_urls()
+        self.assertNotIn(
+            secret_pass,
+            logged_args,
+            "PROXMOX_VE_PASSWORD pojawilo sie w argv wywolania curl!",
+        )
 if __name__ == "__main__":
     unittest.main()
