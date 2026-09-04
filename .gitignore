@@ -43,6 +43,7 @@ terraform/**/*.tfstate.backup
 terraform/**/*.tfplan
 terraform/**/.teardown-vmids
 terraform/**/.teardown-protected-vmids
+# SSH known_hosts - artefakt klienta
 clusters/**/known_hosts
 clusters/*/known_hosts.old
 platform/**/known_hosts

@@ -53,7 +53,19 @@ exit 0
 # oba ksztalty wywolania (przechwycenie stdout oraz `-o plik -w %{http_code}`),
 # zeby test nie zakladal implementacji, tylko obserwowalne zachowanie.
 FAKE_CURL = """#!/bin/sh
-printf '%s\\n' "$*" >> "$CURL_LOG"
+printf 'ARGV:%s\\n' "$*" >> "$CURL_LOG"
+for arg in "$@"; do
+  case "$arg" in
+    @*)
+      f="${arg#@}"
+      if [ -f "$f" ]; then
+        printf 'FILE_CONTENT:%s:\\n' "$f" >> "$CURL_LOG"
+        cat "$f" >> "$CURL_LOG"
+        printf '\\n' >> "$CURL_LOG"
+      fi
+      ;;
+  esac
+done
 OUT=""
 prev=""
 for a in "$@"; do
@@ -275,22 +287,36 @@ class PveTeardownCredentialContractTests(unittest.TestCase):
             },
         )
         self.assertEqual(result.returncode, 0, f"Teardown powinien zakonczyc sie sukcesem: {result.stderr}")
-        logged_args = harness.requested_urls()
+        self.assertNotIn(secret_pass, result.stdout)
+        self.assertNotIn(secret_pass, result.stderr)
+        self.assertNotIn("ticket123", result.stdout)
+        self.assertNotIn("ticket123", result.stderr)
+        self.assertNotIn("csrf123", result.stdout)
+        self.assertNotIn("csrf123", result.stderr)
+
+        logged = harness.requested_urls()
+        argv_lines = "\n".join(
+            line for line in logged.splitlines() if line.startswith("ARGV:")
+        )
         self.assertNotIn(
             secret_pass,
-            logged_args,
+            argv_lines,
             "PROXMOX_VE_PASSWORD pojawilo sie w argv wywolania curl!",
         )
         self.assertNotIn(
             "ticket123",
-            logged_args,
+            argv_lines,
             "PVEAuthCookie ticket pojawil sie w argv wywolania curl!",
         )
         self.assertNotIn(
             "csrf123",
-            logged_args,
+            argv_lines,
             "CSRFPreventionToken pojawil sie w argv wywolania curl!",
         )
+        # Dowod pozytywny: bilet i CSRF zostaly przekazane w pliku naglowka
+        self.assertIn("Cookie: PVEAuthCookie=ticket123", logged)
+        self.assertIn("CSRFPreventionToken: csrf123", logged)
+
     def test_protected_infra_disk_preserved_during_teardown(self):
         """Ochrona danych: dysk danych maszyny z role:infra / delete_unreferenced_disks_on_destroy:false NIE moze zostac usuniety."""
         harness = TeardownHarness()

@@ -258,10 +258,16 @@ else
     exit 1
   fi
   CSRF=$(printf '%s' "$AUTH" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["CSRFPreventionToken"])')
-  # Bezpieczne przekazanie biletu i CSRF przez plik naglowkow 0600 bez wycieku do argv / ps
+  # Bezpieczne przekazanie biletu i CSRF przez plik naglowkow 0600 bez wycieku do argv / ps.
+  # Normalizujemy prefiks PVEAuthCookie= (API zwraca go z prefiksem lub bez).
+  COOKIE_VAL="$TICKET"
+  case "$COOKIE_VAL" in
+    PVEAuthCookie=*) ;;
+    *) COOKIE_VAL="PVEAuthCookie=$COOKIE_VAL" ;;
+  esac
   AUTH_HEADER_FILE=$(mktemp)
   chmod 600 "$AUTH_HEADER_FILE"
-  printf 'Cookie: PVEAuthCookie=%s\nCSRFPreventionToken: %s\n' "$TICKET" "$CSRF" > "$AUTH_HEADER_FILE"
+  printf 'Cookie: %s\nCSRFPreventionToken: %s\n' "$COOKIE_VAL" "$CSRF" > "$AUTH_HEADER_FILE"
   AUTH_ARGS=(-H @"$AUTH_HEADER_FILE")
 fi
 
