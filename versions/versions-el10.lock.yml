@@ -45,22 +45,22 @@ mariadb:
   galera_provider_source: "https://github.com/codership/galera/releases/tag/release_26.4.27"
 
 proxysql:
-  version: "3.0.10"
+  version: "3.0.11"
   series: "3.0"
   tier: "Stable"
-  released: "2026-07-31"
+  released: "2026-08-27"
   rpm_release: "1"
   # PUŁAPKA: ProxySQL nie publikuje ścieżki `rocky/*` (404 dla 9 i 10) — oficjalna jest `centos/<major>`.
   repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
   # audit#6: klucz repo_pub_key.gpg jest binarny (nie ASCII-armored) → rpm --import odrzuca.
   # Kontrolą integralności jest przypięty sha256 RPM-u (weryfikowany przez get_url).
   rpm_sha256:
-    x86_64: "61493587a4770c7218a54701c4945f00e38e8d292d9a9ff7ec8844ce54e7c9c5"  # proxysql-3.0.10-1-centos10.x86_64.rpm, 41291948B
+    x86_64: "e42592f374772846dc24bea1824a996324071f049401c57a22e104c23fe39486"  # proxysql-3.0.11-1-centos10.x86_64.rpm, 42893410B
   cves_patched:
     - "CVE-2026-48772"
     - "CVE-2026-48773"
     - "GHSA-fvch-fpgq-pwfx"
-  source: "https://github.com/sysown/proxysql/releases/tag/v3.0.10"
+  source: "https://github.com/sysown/proxysql/releases/tag/v3.0.11"
 
 pmm:
   # Kontener — niezalezny od OS hosta; identyczny z lockfile EL9.

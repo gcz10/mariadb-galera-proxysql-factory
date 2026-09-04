@@ -48,19 +48,19 @@ mariadb:
   galera_provider_source: "https://github.com/codership/galera/releases/tag/release_26.4.27"
 
 proxysql:
-  version: "3.0.10"
+  version: "3.0.11"
   series: "3.0"
   tier: "Stable"
-  released: "2026-07-31"
+  released: "2026-08-27"
   rpm_release: "1"
   repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
   rpm_sha256:
-    x86_64: "04d5696c2b9b12bf5dd758a3024c4553231c629521929274d5dd1d53bc35ecc0"  # proxysql-3.0.10-1-centos9.x86_64.rpm, 41610935B
+    x86_64: "41f0d7aebd93cf6a4ba9681074202b8b1495adec4e810beb5480d8ee3a689fff"  # proxysql-3.0.11-1-centos9.x86_64.rpm, 42484661B
   cves_patched:
     - "CVE-2026-48772"
     - "CVE-2026-48773"
     - "GHSA-fvch-fpgq-pwfx"
-  source: "https://github.com/sysown/proxysql/releases/tag/v3.0.10"
+  source: "https://github.com/sysown/proxysql/releases/tag/v3.0.11"
 
 pmm:
   version: "3.9.1"
