@@ -62,17 +62,27 @@ if [ "${#NODES[@]}" -gt 0 ]; then
   NODE_FILTER=$(printf '%s,' "${NODES[@]}")
 fi
 VMIDS=()
-while IFS= read -r line; do
-  [ -n "$line" ] && VMIDS+=("$line")
+PROTECTED_DISK_VMIDS=()
+while IFS=':' read -r vmid role del_disks; do
+  [ -n "$vmid" ] && VMIDS+=("$vmid")
+  if [ "$role" = "infra" ] || [ "$del_disks" = "false" ]; then
+    PROTECTED_DISK_VMIDS+=("$vmid")
+  fi
 done < <(
   cd "$TF_DIR" && terraform output -json vms 2>/dev/null |
     NODE_FILTER="$NODE_FILTER" python3 -c '
 import sys, json, os
 want = [n for n in os.environ.get("NODE_FILTER", "").split(",") if n]
-data = json.load(sys.stdin)
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    data = {}
 for name, v in data.items():
     if not want or name in want:
-        print(v["vmid"])
+        vmid = str(v.get("vmid", ""))
+        role = str(v.get("role", ""))
+        del_disks = str(v.get("delete_unreferenced_disks_on_destroy", "")).lower()
+        print(vmid + ":" + role + ":" + del_disks)
 ' 2>/dev/null
 )
 if [ "${#VMIDS[@]}" -eq 0 ] && [ -f "$TF_DIR/.teardown-vmids" ]; then
@@ -82,11 +92,21 @@ if [ "${#VMIDS[@]}" -eq 0 ] && [ -f "$TF_DIR/.teardown-vmids" ]; then
     [ -n "$line" ] && VMIDS+=("$line")
   done < "$TF_DIR/.teardown-vmids"
   [ "${#VMIDS[@]}" -gt 0 ] && echo "WZNOWIONO: VMID z poprzedniego przebiegu: ${VMIDS[*]}" >&2
+  if [ -f "$TF_DIR/.teardown-protected-vmids" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] && PROTECTED_DISK_VMIDS+=("$line")
+    done < "$TF_DIR/.teardown-protected-vmids"
+  fi
 fi
 if [ "${#VMIDS[@]}" -eq 0 ]; then
   echo "UWAGA: nie odczytano VMID z terraform output — sprzatanie sierot pominiete." >&2
 else
   printf '%s\n' "${VMIDS[@]}" > "$TF_DIR/.teardown-vmids"
+  if [ "${#PROTECTED_DISK_VMIDS[@]}" -gt 0 ]; then
+    printf '%s\n' "${PROTECTED_DISK_VMIDS[@]}" > "$TF_DIR/.teardown-protected-vmids"
+  else
+    rm -f "$TF_DIR/.teardown-protected-vmids"
+  fi
 fi
 
 # --- Zabezpieczenie 2: potwierdzenie musi POWTORZYC cel ---
@@ -252,9 +272,12 @@ if [ "$CONTENT_CODE" != "200" ]; then
   exit 1
 fi
 
-if ! VOLS_RAW=$(VMIDS_CSV="$(printf '%s,' "${VMIDS[@]}")" python3 -c '
+if ! VOLS_RAW=$(VMIDS_CSV="$(printf '%s,' "${VMIDS[@]}")" \
+                PROTECTED_CSV="$(printf '%s,' "${PROTECTED_DISK_VMIDS[@]:-}")" \
+                python3 -c '
 import json, os, re, sys
 want = [v for v in os.environ["VMIDS_CSV"].split(",") if v]
+protected = [v for v in os.environ.get("PROTECTED_CSV", "").split(",") if v]
 with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle).get("data") or []
 for item in data:
@@ -264,6 +287,11 @@ for item in data:
     # Pelny segment zamiast substringa: "vm-992-" nie moze dopasowac
     # wolumenow sasiada "vm-9920-..." (3-cyfrowe VMID-y wroca).
     if match and match.group(1) in want:
+        vmid = match.group(1)
+        # Ochrona dyskow danych dla maszyn z rola infra lub delete_unreferenced_disks_on_destroy=false
+        if vmid in protected and "-disk-" in disk:
+            print(f"  zachowano chroniony dysk danych: {volid}", file=sys.stderr)
+            continue
         print(volid)
 ' "$CONTENT_FILE"); then
   echo "BLAD: odpowiedz PVE API nie jest poprawnym JSON-em — nie wiadomo, czy zostaly sieroty." >&2

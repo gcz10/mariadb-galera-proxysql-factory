@@ -270,5 +270,25 @@ class PveTeardownCredentialContractTests(unittest.TestCase):
             logged_args,
             "PROXMOX_VE_PASSWORD pojawilo sie w argv wywolania curl!",
         )
+
+    def test_protected_infra_disk_preserved_during_teardown(self):
+        """Ochrona danych: dysk danych maszyny z role:infra / delete_unreferenced_disks_on_destroy:false NIE moze zostac usuniety."""
+        harness = TeardownHarness()
+        self.addCleanup(harness.cleanup)
+        custom_tf = """#!/bin/sh
+case "$*" in
+  *output*) printf '{"x12mon":{"vmid":10035,"role":"infra","delete_unreferenced_disks_on_destroy":false}}' ;;
+esac
+exit 0
+"""
+        _write_executable(harness.bindir / "terraform", custom_tf)
+        volumes_json = '{"data":[{"volid":"local-zfs:vm-10035-disk-0"},{"volid":"local-zfs:vm-10035-cloudinit"}]}'
+        result = harness.run(volumes_json)
+        self.assertEqual(result.returncode, 0, f"Teardown powinien zakonczyc sie sukcesem: {result.stderr}")
+        self.assertIn("zachowano chroniony dysk danych: local-zfs:vm-10035-disk-0", result.stderr)
+        self.assertIn("usunieto sierote: local-zfs:vm-10035-cloudinit", result.stdout)
+        logged = harness.requested_urls()
+        self.assertNotIn("local-zfs:vm-10035-disk-0", logged)
+        self.assertIn("local-zfs:vm-10035-cloudinit", logged)
 if __name__ == "__main__":
     unittest.main()
