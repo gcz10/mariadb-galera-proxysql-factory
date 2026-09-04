@@ -113,6 +113,14 @@ class GaleraBackupS3Tests(unittest.TestCase):
         self.backend.preflight()
         self.assertIn("galera-backup-owner.json", self.client.objects)
 
+    def test_owner_marker_rejects_artifact_format_version(self):
+        self.client.objects["galera-backup-owner.json"] = json.dumps(
+            {"format_version": 2, "cluster_name": "claude-r10b"}
+        ).encode()
+        with self.assertRaises(pipeline.BackupError) as ctx:
+            self.backend.preflight()
+        self.assertEqual(ctx.exception.code, "E_OWNER_CONFLICT")
+
     def test_owner_marker_foreign_fails(self):
         self.client.objects["galera-backup-owner.json"] = json.dumps(
             {"format_version": 1, "cluster_name": "other-cluster"}
@@ -120,6 +128,28 @@ class GaleraBackupS3Tests(unittest.TestCase):
         with self.assertRaises(pipeline.BackupError) as ctx:
             self.backend.preflight()
         self.assertEqual(ctx.exception.code, "E_OWNER_CONFLICT")
+
+    def test_fetch_latest_accepts_v2_metadata(self):
+        backup_name = "galera-claude-r10b-20260729-120000"
+        prefix = f"{backup_name}/"
+        self.client.objects[f"{prefix}backup.tar.enc"] = b"v2-payload"
+        self.client.objects[f"{prefix}backup.sha256"] = b"fixture\n"
+        self.client.objects[f"{prefix}metadata.json"] = json.dumps(
+            {
+                "format_version": 2,
+                "cluster_name": "claude-r10b",
+                "created_unixtime": 1785240000,
+            }
+        ).encode()
+
+        with tempfile.TemporaryDirectory() as td:
+            artifact = self.backend.fetch_latest(Path(td))
+
+            self.assertEqual(artifact.backup_name, backup_name)
+            self.assertEqual(
+                json.loads(artifact.metadata_path.read_text(encoding="utf-8"))["format_version"],
+                2,
+            )
 
     def test_publication_order_and_verification(self):
         with tempfile.TemporaryDirectory() as td:

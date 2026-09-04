@@ -30,7 +30,7 @@ from .common import (
     publish_drill_freshness,
     set_module_redactor,
 )
-from .crypto import ENCRYPTION_METHOD_V2, FORMAT_VERSION, encrypt_payload
+from .crypto import ENCRYPTION_METHOD_V3, FORMAT_VERSION, encrypt_payload
 from .config import RunConfig, load_run_config, load_secrets
 from .errors import BackupError, combine_failures
 from .fsutil import file_sha256_and_size, remove_sensitive_work_dir
@@ -643,7 +643,7 @@ def run_backup(
             "encrypted_sha256": enc_sha,
             "size_bytes": enc_size,
             "encrypted_size_bytes": enc_size,
-            "encryption_method": ENCRYPTION_METHOD_V2,
+            "encryption_method": ENCRYPTION_METHOD_V3,
             "backend": b_type,
             "backend_type": b_type,
         }

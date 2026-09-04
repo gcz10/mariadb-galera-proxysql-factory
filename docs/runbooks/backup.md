@@ -5,13 +5,18 @@
 
 ## Kontrakt
 
-`galera-backup` wykonuje pełny fizyczny backup przez `mariadb-backup`, szyfruje go
-AES-256-GCM przez `python3-cryptography` (format_version 2 — AEAD, integralność
-pilnuje tag GCM, nie tylko sha256; `openssl enc` nie wspiera szyfrów AEAD).
-Klucz bez zmian: `GALERA_BACKUP_ENCRYPTION_KEY`. Kopie sprzed migracji
-(format_version 1, `openssl aes-256-cbc` + PBKDF2) nadal się odtwarzają — dispatch
-po nagłówku pliku. Publikuje checksumę i metadata, a następnie usuwa lokalny
-staging. Obsługiwane backendy:
+`galera-backup` wykonuje pełny fizyczny backup przez `mariadb-backup`, a potem
+szyfruje archiwum strumieniowo przez `python3-cryptography` w formacie 3:
+`GB3G | salt | nonce | ciphertext | tag`. Nagłówek jest AAD; odszyfrowany plik
+jest publikowany atomowo dopiero po poprawnej weryfikacji tagu GCM. Pamięć
+pozostaje ograniczona rozmiarem fragmentu, niezależnie od rozmiaru backupu.
+Czytniki formatu 2 (`GB2G`, wcześniejszy GCM one-shot) i formatu 1 (`openssl
+aes-256-cbc` + PBKDF2) pozostają dostępne dla istniejących kopii. Klucz bez
+zmian: `GALERA_BACKUP_ENCRYPTION_KEY`. Kontrakt `Cipher`/GCM:
+https://github.com/pyca/cryptography/blob/main/docs/hazmat/primitives/symmetric-encryption.rst
+
+Runner publikuje checksumę i metadata, a następnie usuwa lokalny staging.
+Obsługiwane backendy:
 
 - `s3` — bucket S3/MinIO;
 - `smb` — udział montowany tylko na czas operacji; sukces jest zapisywany dopiero po poprawnym unmount;

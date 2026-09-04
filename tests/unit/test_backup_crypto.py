@@ -1,17 +1,22 @@
-"""Kontrakt szyfrowania kopii (tests/unit/test_backup_crypto.py — F2).
+"""Kontrakt szyfrowania kopii (tests/unit/test_backup_crypto.py — P1-B).
 
-AES-256-GCM (format_version 2) musi dostarczac integralnosc: podmiana
-ciphertextu badz zle haslo konczy sie E_INTEGRITY zanim cokolwiek trafi na
-dysk. Sciezka legacy (format_version 1, CBC przez `openssl enc`) zostaje
-utrzymana celowo — istniejace kopie sprzed migracji musza sie dac odtworzyc.
+AES-256-GCM (format_version 3) szyfruje strumieniowo i uwierzytelnia caly
+artefakt. Czytniki formatow 2 (GCM one-shot) i 1 (CBC przez `openssl enc`)
+pozostaja dostepne, aby istniejace kopie nadal dalo sie odtworzyc.
 """
 
+import filecmp
 import shutil
 import subprocess
 import sys
 import tempfile
+import tracemalloc
 import unittest
 from pathlib import Path
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(WORKSPACE_ROOT / "roles" / "galera_backup" / "files"))
@@ -22,6 +27,21 @@ from galera_backup.runner import CommandRunner  # noqa: E402
 
 KEY_MATERIAL = "test-encryption-key-f2"
 PLAINTEXT = b"galera-backup-payload-" + b"x" * 4096
+
+
+def write_v2_payload(payload: Path, plaintext: bytes, key_material: str) -> None:
+    """Zbuduj niezalezny fixture formatu GB2G zapisywanego przed P1-B."""
+    salt = b"\x11" * 16
+    nonce = b"\x22" * 12
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=200_000,
+    )
+    key = kdf.derive(key_material.encode("utf-8"))
+    token = AESGCM(key).encrypt(nonce, plaintext, None)
+    payload.write_bytes(b"GB2G" + salt + nonce + token)
 
 
 class GcmRoundTripTests(unittest.TestCase):
@@ -35,11 +55,11 @@ class GcmRoundTripTests(unittest.TestCase):
 
             crypto.encrypt_payload(tar, payload, KEY_MATERIAL)
             blob = payload.read_bytes()
-            self.assertTrue(blob.startswith(crypto.MAGIC), "payload v2 musi miec naglowek GB2G")
+            self.assertTrue(blob.startswith(crypto.MAGIC_V3), "payload v3 musi miec naglowek GB3G")
 
             out = td_path / "restored.tar"
             fmt = crypto.decrypt_payload(payload, out, KEY_MATERIAL, runner)
-            self.assertEqual(fmt, "v2")
+            self.assertEqual(fmt, "v3")
             self.assertEqual(out.read_bytes(), PLAINTEXT)
 
     def test_tampered_payload_fails_authentication(self):
@@ -48,6 +68,7 @@ class GcmRoundTripTests(unittest.TestCase):
             tar = td_path / "backup.tar"
             payload = td_path / "backup.tar.enc"
             out = td_path / "restored.tar"
+            out.write_bytes(b"existing-safe-output")
             tar.write_bytes(PLAINTEXT)
             runner = CommandRunner(secret_values=[KEY_MATERIAL])
             crypto.encrypt_payload(tar, payload, KEY_MATERIAL)
@@ -59,7 +80,24 @@ class GcmRoundTripTests(unittest.TestCase):
             with self.assertRaises(BackupError) as ctx:
                 crypto.decrypt_payload(payload, out, KEY_MATERIAL, runner)
             self.assertEqual(ctx.exception.code, "E_INTEGRITY")
-            self.assertFalse(out.exists(), "odszyfrowany tar nie moze powstac z przeklamaniem")
+            self.assertEqual(out.read_bytes(), b"existing-safe-output")
+
+    def test_v3_header_cannot_be_downgraded_to_v2(self):
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            tar = td_path / "backup.tar"
+            payload = td_path / "backup.tar.enc"
+            out = td_path / "restored.tar"
+            tar.write_bytes(PLAINTEXT)
+            crypto.encrypt_payload(tar, payload, KEY_MATERIAL)
+
+            with payload.open("r+b") as target:
+                target.write(crypto.MAGIC_V2)
+
+            with self.assertRaises(BackupError) as ctx:
+                crypto.decrypt_payload(payload, out, KEY_MATERIAL, None)
+            self.assertEqual(ctx.exception.code, "E_INTEGRITY")
+            self.assertFalse(out.exists())
 
     def test_wrong_password_fails_authentication(self):
         with tempfile.TemporaryDirectory() as td:
@@ -84,6 +122,51 @@ class GcmRoundTripTests(unittest.TestCase):
             crypto.encrypt_payload(tar, p1, KEY_MATERIAL)
             crypto.encrypt_payload(tar, p2, KEY_MATERIAL)
             self.assertNotEqual(p1.read_bytes(), p2.read_bytes(), "ten sam plaintext nie moze dawac identycznego ciphertextu")
+
+    def test_large_payload_roundtrip_uses_bounded_python_memory(self):
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            tar = td_path / "large.tar"
+            payload = td_path / "large.tar.enc"
+            out = td_path / "restored.tar"
+            block = b"x" * (1024 * 1024)
+            with tar.open("wb") as target:
+                for _ in range(24):
+                    target.write(block)
+            source_size = tar.stat().st_size
+
+            tracemalloc.start()
+            try:
+                crypto.encrypt_payload(tar, payload, KEY_MATERIAL)
+                encrypt_peak = tracemalloc.get_traced_memory()[1]
+            finally:
+                tracemalloc.stop()
+
+            tracemalloc.start()
+            try:
+                fmt = crypto.decrypt_payload(payload, out, KEY_MATERIAL, None)
+                decrypt_peak = tracemalloc.get_traced_memory()[1]
+            finally:
+                tracemalloc.stop()
+
+            self.assertEqual(fmt, "v3")
+            self.assertTrue(filecmp.cmp(tar, out, shallow=False))
+            self.assertLess(encrypt_peak, source_size // 2)
+            self.assertLess(decrypt_peak, source_size // 2)
+
+
+class GcmV2CompatibilityTests(unittest.TestCase):
+    def test_existing_v2_payload_remains_decryptable(self):
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = td_path / "backup-v2.tar.enc"
+            out = td_path / "restored.tar"
+            write_v2_payload(payload, PLAINTEXT, KEY_MATERIAL)
+
+            fmt = crypto.decrypt_payload(payload, out, KEY_MATERIAL, None)
+
+            self.assertEqual(fmt, "v2")
+            self.assertEqual(out.read_bytes(), PLAINTEXT)
 
 
 @unittest.skipUnless(shutil.which("openssl"), "openssl niedostepny")
@@ -117,7 +200,10 @@ class LegacyCbcDecryptTests(unittest.TestCase):
                 capture_output=True,
             )
             self.assertEqual(enc.returncode, 0, enc.stderr)
-            self.assertFalse(payload.read_bytes().startswith(crypto.MAGIC), "legacy payload nie moze miec naglowka GB2G")
+            self.assertFalse(
+                payload.read_bytes().startswith((crypto.MAGIC_V3, crypto.MAGIC_V2)),
+                "legacy payload nie moze miec naglowka AES-GCM",
+            )
 
             runner = CommandRunner(secret_values=[KEY_MATERIAL])
             fmt = crypto.decrypt_payload(payload, out, KEY_MATERIAL, runner)
@@ -145,6 +231,7 @@ class LegacyCbcDecryptTests(unittest.TestCase):
             with self.assertRaises(BackupError) as ctx:
                 crypto.decrypt_payload(payload, out, "other-key", runner)
             self.assertEqual(ctx.exception.code, "E_INTEGRITY")
+            self.assertFalse(out.exists(), "bledny klucz legacy nie moze opublikowac plaintextu")
 
 
 if __name__ == "__main__":

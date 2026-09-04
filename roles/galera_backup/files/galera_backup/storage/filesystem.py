@@ -14,13 +14,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from ..crypto import FORMAT_VERSION, LEGACY_FORMAT_VERSION
+from ..crypto import SUPPORTED_FORMAT_VERSIONS
 from ..errors import BackupError, combine_failures
 from ..fsutil import file_sha256_and_size, remove_tree_or_raise
 from ..runner import CommandRunner
 from ..textutil import normalize_smb_source, sanitize_cluster_name, validate_smb_options
 from .artifacts import (
     ArtifactSet,
+    OWNER_MARKER_FORMAT_VERSION,
     DRILL_MARKER_FILENAME,
     PublishedArtifact,
     metadata_unixtime,
@@ -108,12 +109,17 @@ class FilesystemBackend:
         cluster_dir.mkdir(parents=True, exist_ok=True)
 
         owner_file = cluster_dir / "galera-backup-owner.json"
-        owner_content = json.dumps({"format_version": 1, "cluster_name": self.cluster_name})
+        owner_content = json.dumps(
+            {
+                "format_version": OWNER_MARKER_FORMAT_VERSION,
+                "cluster_name": self.cluster_name,
+            }
+        )
 
         if owner_file.exists():
             try:
                 data = json.loads(owner_file.read_text(encoding="utf-8"))
-                if data.get("cluster_name") != self.cluster_name or data.get("format_version") not in (LEGACY_FORMAT_VERSION, FORMAT_VERSION):
+                if data.get("cluster_name") != self.cluster_name or data.get("format_version") != OWNER_MARKER_FORMAT_VERSION:
                     raise BackupError(
                         "E_OWNER_CONFLICT",
                         f"Filesystem storage '{cluster_dir}' is owned by another cluster '{data.get('cluster_name')}'"
@@ -236,7 +242,7 @@ class FilesystemBackend:
                 if payload.exists() and checksum.exists() and metadata.exists():
                     try:
                         meta = json.loads(metadata.read_text(encoding="utf-8"))
-                        if meta.get("cluster_name") == self.cluster_name and meta.get("format_version") in (LEGACY_FORMAT_VERSION, FORMAT_VERSION):
+                        if meta.get("cluster_name") == self.cluster_name and meta.get("format_version") in SUPPORTED_FORMAT_VERSIONS:
                             candidates.append((metadata_unixtime(meta, str(metadata)), child, meta))
                     except BackupError:
                         raise

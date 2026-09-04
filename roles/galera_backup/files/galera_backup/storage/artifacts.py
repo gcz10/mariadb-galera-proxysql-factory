@@ -8,6 +8,8 @@ from typing import Any
 
 from ..errors import BackupError
 
+OWNER_MARKER_FORMAT_VERSION = 1
+
 
 @dataclass
 class ArtifactSet:

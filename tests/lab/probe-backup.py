@@ -226,14 +226,14 @@ def main():
             )
             return finish(failures, undetermined, "")
 
-        # ISC-33: encrypted — v2 (AES-GCM, naglowek GB2G) albo legacy v1
-        # (OpenSSL salted magic). Plaintext tar/gzip odpada w obu formatach.
+        # ISC-33: AES-GCM v3/v2 albo legacy v1 (OpenSSL salted magic).
+        # Plaintext tar/gzip odpada we wszystkich obslugiwanych formatach.
         with open(enc, "rb") as fh:
             magic = fh.read(8)
         check(
-            magic[:4] == b"GB2G" or magic == b"Salted__",
+            magic[:4] in (b"GB3G", b"GB2G") or magic == b"Salted__",
             f"ISC-33 — backup not encrypted (magic={magic!r}, "
-            f"expected GB2G (AES-GCM) or OpenSSL Salted__)",
+            f"expected GB3G/GB2G (AES-GCM) or OpenSSL Salted__)",
             failures,
         )
 
@@ -285,7 +285,7 @@ def main():
             failures,
         )
         check(
-            meta.get("format_version") in (1, 2),
+            meta.get("format_version") in (1, 2, 3),
             f"ISC-35 — unsupported format_version {meta.get('format_version')!r}",
             failures,
         )
@@ -299,7 +299,7 @@ def main():
             failures,
             undetermined,
             f"backup verified — {latest} off-cluster in s3://{bucket}, encrypted "
-            f"({meta.get('encryption_method', 'aes-256-gcm-pbkdf2-sha256')}), sha256 OK, metadata "
+            f"({meta.get('encryption_method', 'aes-256-gcm-stream-pbkdf2-sha256')}), sha256 OK, metadata "
             f"{meta.get('mariadb_version', 'unknown')} "
             f"seqno={meta.get('wsrep_seqno', 'unknown')} "
             f"cluster={meta.get('cluster_name', 'unknown')}",

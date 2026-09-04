@@ -89,6 +89,50 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
                     backend.preflight()
                 self.assertEqual(ctx.exception.code, "E_OWNER_CONFLICT")
 
+                # 3. Wersja artefaktu nie jest wersja markera ownership.
+                owner_file.write_text(json.dumps({"format_version": 2, "cluster_name": "claude-r10b"}))
+                with self.assertRaises(pipeline.BackupError) as ctx:
+                    backend.preflight()
+                self.assertEqual(ctx.exception.code, "E_OWNER_CONFLICT")
+
+    def test_fetch_latest_accepts_v2_metadata(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            mount_path = root / "mount"
+            mount_path.mkdir()
+            backend = pipeline.FilesystemBackend(
+                mount_point=mount_path,
+                expected_fstype="nfs4",
+                cluster_name="claude-r10b",
+            )
+            fake_mount = self.make_fake_findmnt_info(str(mount_path))
+            backup_name = "galera-claude-r10b-20260729-120000"
+
+            with patch.object(backend, "_get_mount_info", return_value=fake_mount):
+                backend.preflight()
+                backup_dir = mount_path / "claude-r10b" / backup_name
+                backup_dir.mkdir()
+                (backup_dir / "backup.tar.enc").write_bytes(b"v2-payload")
+                (backup_dir / "backup.sha256").write_text("fixture\n", encoding="utf-8")
+                (backup_dir / "metadata.json").write_text(
+                    json.dumps(
+                        {
+                            "format_version": 2,
+                            "cluster_name": "claude-r10b",
+                            "created_unixtime": 1785240000,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                artifact = backend.fetch_latest(root / "fetched")
+
+            self.assertEqual(artifact.backup_name, backup_name)
+            self.assertEqual(
+                json.loads(artifact.metadata_path.read_text(encoding="utf-8"))["format_version"],
+                2,
+            )
+
     def test_atomic_publication_and_partial_cleanup(self):
         with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as work_td:
             mount_path = Path(td)
