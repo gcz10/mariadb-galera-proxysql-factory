@@ -48,11 +48,53 @@
 - name: "Wspolna rejestracja konta pmm_monitor"
   ansible.builtin.include_tasks: monitor_account.yml
 
-- name: "Repozytorium Percony"
-  ansible.builtin.dnf:
-    name: "{{ pmm_client.release_rpm }}"
+# P1-A (audyt 2026-09): wczesniej percona-release byl instalowany prosto z dnf
+# pod mutowalnym URL `percona-release-latest.noarch.rpm` i z `disable_gpg_check:
+# true` — zadna kontrola integralnosci na calym lancuchu. Wzorzec z
+# platform_install.yml (audit#6, ProxySQL): pinned URL + sha256 z lockfile +
+# klucz wydawcy importowany po odcisku palca + instalacja lokalnego pliku Z
+# wymuszonym sprawdzeniem podpisu. Odcisk klucza jest zgodny z
+# issuer-fingerprint w tagu 268 RPM; pelna weryfikacje podpisu wykonuje dnf.
+- name: "Wymagaj pinow integralnosci percona-release w lockfile"
+  ansible.builtin.assert:
+    that:
+      - pmm_client.release_rpm_sha256 | default('') | regex_search('^[a-f0-9]{64}$')
+      - pmm_client.gpg_key_sha256 | default('') | regex_search('^[a-f0-9]{64}$')
+      - pmm_client.gpg_fingerprint | default('') | length == 40
+    fail_msg: >-
+      Lockfile nie ma kompletnych pinow integralnosci pmm_client
+      (release_rpm_sha256 / gpg_key_sha256 / gpg_fingerprint). Dodaj je przed
+      instalacja percona-release.
+
+- name: "Pobierz klucz GPG Percona z weryfikacja sha256"
+  ansible.builtin.get_url:
+    url: "{{ pmm_client.gpg_key_url }}"
+    dest: /var/tmp/PERCONA-PACKAGING-KEY
+    checksum: "sha256:{{ pmm_client.gpg_key_sha256 }}"
+    mode: "0644"
+
+- name: "Zaimportuj klucz GPG Percona (odcisk palca z lockfile)"
+  ansible.builtin.rpm_key:
+    key: /var/tmp/PERCONA-PACKAGING-KEY
+    fingerprint: "{{ pmm_client.gpg_fingerprint }}"
     state: present
-    disable_gpg_check: true
+
+- name: "Pobierz przypiete release RPM Percona z weryfikacja sha256"
+  ansible.builtin.get_url:
+    url: "{{ pmm_client.release_rpm }}"
+    dest: "/var/tmp/percona-release-{{ pmm_client.release_rpm_version }}.noarch.rpm"
+    checksum: "sha256:{{ pmm_client.release_rpm_sha256 }}"
+    mode: "0644"
+  register: pmm_release_rpm_dl
+
+# Bez disable_gpg_check: dnf sprawdza podpis pakietu wzgledem zaimportowanego
+# klucza. Import klucza stoi BEZWARUNKOWO (nie tylko gdy RPM jest pobierany),
+# bo gpgcheck repozytorium pmm3-client zalezalby od obecnosci klucza nawet gdy
+# ten task jest juz no-op na wczesniej zbudowanym hoscie.
+- name: "Zainstaluj release RPM Percona (podpis weryfikowany)"
+  ansible.builtin.dnf:
+    name: "{{ pmm_release_rpm_dl.dest }}"
+    state: present
   register: pmm_release_rpm
   changed_when: pmm_release_rpm.changed
 

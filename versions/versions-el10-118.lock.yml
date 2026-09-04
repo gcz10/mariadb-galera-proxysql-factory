@@ -128,6 +128,14 @@ pmm_client:
   rpm_release: "1.el10"
   package: "pmm-client-3.9.1-1.el10"
   repo_component: "pmm3-client"
-  release_rpm: "https://repo.percona.com/yum/percona-release-latest.noarch.rpm"
+  release_rpm_version: "1.0-34"
+  release_rpm: "https://repo.percona.com/yum/percona-release-1.0-34.noarch.rpm"
+  # integrity (P1-A): URL -latest byl mutowalny i instalowany z disable_gpg_check.
+  # Teraz pinned URL + sha256 z lockfile + klucz GPG importowany po odcisku palca,
+  # wiec dnf weryfikuje podpis release RPM. sha256/fingerprint zweryfikowane 2026-09-04.
+  release_rpm_sha256: "48d3a6d65a718c6fd15612df409764b70ac2764475a875fc264e118332ae9d8e"
+  gpg_key_url: "https://raw.githubusercontent.com/percona/percona-repositories/release-1.0-34/rpm/PERCONA-PACKAGING-KEY"
+  gpg_key_sha256: "55909a2d3869ed261f139fc5cae894673e0e8a1b300115f056ef4cf3976972a2"
+  gpg_fingerprint: "4D1BB29D63D98E422B2113B19334A25F8507EFA5"
   metrics_mode: "push"
   source: "https://docs.percona.com/percona-monitoring-and-management/3/install-pmm/install-pmm-client/package_manager.html"

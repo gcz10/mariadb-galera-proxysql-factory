@@ -16,7 +16,10 @@ pmm-client, tryb agentless dla hostów bez agenta, konto monitorujące ProxySQL.
 
 ## Kontrakty
 
-- `metrics_mode: push` jest WYMUSZONY (auto wybrałoby pull → porty 42000-51999
-  blokowane firewalldem; patrz lockfile `pmm_client`).
+- Tryb metryk push jest WYMUSZONY wykonawczo przez `push_metrics: true` w
+  `tasks/agent_register.yml` (`auto` wymagaloby portow 42000-51999 blokowanych firewalldem).
 - Serwer PMM ≥ klient (lockfile `pmm` vs `pmm_client`).
+- `percona-release` instalowany wyłącznie z przypiętego URL: sha256 RPM i klucza
+  GPG oraz odcisk palca klucza żyją w lockfile (`pmm_client.*`), bez
+  `disable_gpg_check`; pilnuje sonda `verify-no-state-latest` (P1-A).
 - Weryfikacja: `make lab-monitoring-verify`, sonda PMM-native w post-build gate.

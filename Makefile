@@ -601,7 +601,7 @@ verify-no-secrets-leak:  ## Statyczny guard: brak sekretów w repo i argv proces
 verify-dead-code:  ## Statyczny guard: martwe importy, nieuzywane zmienne, puste f-stringi (pyflakes)
 	python3 -m pyflakes tests roles/galera_backup/filter_plugins roles/galera_backup/files/galera_backup
 
-verify-no-state-latest:  ## Statyczny guard: brak state: latest w rolach i playbookach (ISC-63)
+verify-no-state-latest:  ## Guard ISC-63/P1-A: brak latest, mutowalnych RPM URL i disable_gpg_check
 	bash tests/validation/probe-no-state-latest.sh
 
 # `node`, nie `deno`: CI ma node w obrazie, deno wymagaloby dodatkowego kroku.

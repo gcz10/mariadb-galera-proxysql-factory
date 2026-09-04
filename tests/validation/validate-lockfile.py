@@ -44,6 +44,14 @@ REQUIRED = {
         "archive_package", "cron_package", "cifs_userspace_package",
     ],
     "pmm": ["version", "image", "image_digest"],
+    # P1-A (audyt 2026-09): lancuch dostaw percona-release musi miec piny
+    # integralnosci — bez nich agent_install.yml nie ma czym zweryfikowac
+    # pobieranego RPM i klucza GPG.
+    "pmm_client": [
+        "version", "package", "repo_component", "release_rpm_version",
+        "release_rpm", "release_rpm_sha256", "gpg_key_url",
+        "gpg_key_sha256", "gpg_fingerprint",
+    ],
     "maildev": ["image"],
     "node_exporter": ["version", "linux_sha256"],
 }
@@ -114,6 +122,17 @@ def validate(path: Path) -> list[str]:
             digest = str(data[section]["mc_image_digest"])
             if not re.match(r"^sha256:[a-f0-9]{64}$", digest):
                 errors.append(f"{path}: minio.mc_image_digest '{digest}' ma niepoprawny format sha256")
+        # P1-A: piny integralnosci lancucha percona-release musza byc wazne,
+        # zanim agent_install uzylby ich jako checksum/fingerprint.
+        if section == "pmm_client" and is_locked:
+            block = data[section]
+            for key in ("release_rpm_sha256", "gpg_key_sha256"):
+                value = str(block.get(key, ""))
+                if value and not re.match(r"^[a-f0-9]{64}$", value):
+                    errors.append(f"{path}: pmm_client.{key} '{value}' ma niepoprawny format sha256")
+            fp = str(block.get("gpg_fingerprint", ""))
+            if fp and not re.match(r"^[A-F0-9]{40}$", fp):
+                errors.append(f"{path}: pmm_client.gpg_fingerprint '{fp}' nie jest 40-znakowym odciskiem GPG")
 
     # 4. Spoijnosc: repo_setup_args ~ seria z mariadb.version
     mb = data.get("mariadb", {})
