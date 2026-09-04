@@ -145,3 +145,12 @@ pmm_client:
   gpg_fingerprint: "4D1BB29D63D98E422B2113B19334A25F8507EFA5"
   metrics_mode: "push"
   source: "https://docs.percona.com/percona-monitoring-and-management/3/install-pmm/install-pmm-client/package_manager.html"
+
+# Status: LOCKED — wskazywany przez definicje z `versions.policy: locked`
+# (cassiopeiav12-r9). Stopka nie jest ozdobą: validate-lockfile.py wybiera
+# po niej rygor (bramka placeholderów ISC-63, komplet kluczy REQUIRED,
+# format sum, wymóg `source`). Bez niej plik przechodził ścieżką łagodną
+# mimo że jest w użyciu — dopisane 2026-09-04 po pomiarze, który wykazał
+# brak stopki w obu lockfile'ach serii 11.8. Sam plik był kompletny
+# (0 brakujących kluczy, 0 placeholderów), więc to domknięcie kontroli,
+# nie naprawa treści.

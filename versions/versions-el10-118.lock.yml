@@ -139,3 +139,9 @@ pmm_client:
   gpg_fingerprint: "4D1BB29D63D98E422B2113B19334A25F8507EFA5"
   metrics_mode: "push"
   source: "https://docs.percona.com/percona-monitoring-and-management/3/install-pmm/install-pmm-client/package_manager.html"
+
+# Status: LOCKED — wskazywany przez definicje z `versions.policy: locked`
+# (orionv13-r10). Stopka steruje rygorem validate-lockfile.py (placeholdery
+# ISC-63, komplet kluczy REQUIRED, format sum, wymóg `source`); bez niej plik
+# był walidowany łagodnie mimo bycia w użyciu. Dopisane 2026-09-04; treść była
+# już kompletna, więc to domknięcie kontroli, nie naprawa pinów.
