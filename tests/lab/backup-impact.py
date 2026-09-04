@@ -11,6 +11,7 @@ Lab-only (writes to isa_test); refuses on production.
 Requires APP_DB_PASSWORD (+ backup secrets inherited by the backup playbook).
 """
 
+import json
 import os
 import re
 import subprocess
@@ -44,6 +45,7 @@ with open(INVENTORY, encoding="utf-8") as fh:
     INV = yaml.safe_load(fh)
 
 ENVIRONMENT = CLUSTER["cluster"]["environment"]
+CLUSTER_NAME = CLUSTER["cluster"]["name"]
 VIP = CLUSTER["proxysql"]["endpoint"]["address"]
 VIP_PORT = CLUSTER["proxysql"]["endpoint"]["port"]
 APP_USER = CLUSTER.get("proxysql", {}).get("app_user", "app_user")
@@ -89,6 +91,29 @@ def committed_times():
     return times
 
 
+def last_backup_success_unixtime():
+    """Najnowszy `last_success` backupu w calym klastrze.
+
+    Donora wybiera runner przy starcie, wiec stan moze byc na dowolnym wezle
+    Galery — bierzemy maksimum. Sluzy do udowodnienia, ze w oknie pomiaru
+    NAPRAWDE powstala kopia; bez tego zerowy flow control niczego nie dowodzi.
+    """
+    newest = 0
+    for node in GALERA:
+        result = sh(node, f"cat /opt/galera-backup/clusters/{CLUSTER_NAME}/state.json 2>/dev/null || true")
+        payload = body(node, result.stdout).strip()
+        if not payload:
+            continue
+        try:
+            state = json.loads(payload)
+        except ValueError:
+            continue
+        success = state.get("last_success") or {}
+        if success.get("command") == "backup":
+            newest = max(newest, int(success.get("unixtime") or 0))
+    return newest
+
+
 def main():
     failures = []
     if ENVIRONMENT == "production":
@@ -124,15 +149,23 @@ def main():
         time.sleep(5)  # establish write load
 
         fc_before = flow_control_max()
+        success_before = last_backup_success_unixtime()
         backup_start = time.time()
         print(f"running backup under load (flow_control baseline={fc_before} ns)…")
+        # `galera_backup_action=run` jest OBOWIAZKOWE. f10_backup.yml defaultuje
+        # akcje na `configure` (linia 11), a play wykonujacy backup ma bramke
+        # `when: galera_backup_action == 'run'` (linia 137). Bez tego przelacznika
+        # ta sonda mierzyla okno BEZ backupu: flow control i stall wychodzily
+        # zerowe z konstrukcji pomiaru, wiec bramka nie mogla sie zapalic na
+        # czerwono. Forma identyczna z Makefile (cel `cluster-backup`).
         bkp = subprocess.run(
             [ANSIBLE.replace("ansible", "ansible-playbook") if ANSIBLE == "ansible" else "ansible-playbook",
              "playbooks/f10_backup.yml", "-i", INVENTORY,
-             "-e", f"@{CONFIG_PATH}"],
-            capture_output=True, text=True, timeout=300)
+             "-e", f"@{CONFIG_PATH}", "-e", "galera_backup_action=run"],
+            capture_output=True, text=True, timeout=900)
         backup_end = time.time()
         fc_after = flow_control_max()
+        success_after = last_backup_success_unixtime()
 
         if bkp.returncode != 0:
             failures.append(f"backup failed during load test: {bkp.stdout[-400:]}")
@@ -155,6 +188,11 @@ def main():
                             f"(>= {COMMIT_GAP_THRESHOLD}s threshold)")
         if not times:
             failures.append("ISC-39 — no writes committed during backup window (workload not running?)")
+        if success_after <= success_before:
+            failures.append(
+                "ISC-39 — w oknie pomiaru nie powstala nowa kopia "
+                f"(last_success {success_before} -> {success_after}); bez wykonanego "
+                "backupu zerowy flow control nie jest dowodem")
 
     finally:
         sh(WORKLOAD_HOST, f"rm -f /tmp/workload.run {CNF_REMOTE}", timeout=30)
@@ -170,7 +208,8 @@ def main():
     print(
         f"PASS: backup did not degrade writer — flow control {fc_delta} ns "
         f"(< {FLOW_THRESHOLD_NS} ns), max write stall {gap:.2f}s "
-        f"(< {COMMIT_GAP_THRESHOLD}s) across {len(times)} commits during backup")
+        f"(< {COMMIT_GAP_THRESHOLD}s) across {len(times)} commits during backup; "
+        f"kopia wykonana w oknie (last_success {success_before} -> {success_after})")
     return 0
 
 
