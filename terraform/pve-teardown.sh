@@ -225,11 +225,15 @@ fi
 echo "=== sprzatanie sierot ZFS dla VMID: ${VMIDS[*]} ==="
 # Naglowki uwierzytelniajace. Wedlug dokumentacji Proxmox VE API ("API Tokens")
 # token nie wymaga CSRF przy DELETE, a naglowek nalezy podawac PLIKIEM: token
-# jest dlugowieczny, a argv widzi kazdy uzytkownik przez `ps` (ticket zyje 2 h,
-# wiec jego dotychczasowa sciezka zostaje bez zmian).
+# jest dlugowieczny, a argv widzi kazdy uzytkownik przez `ps`.
+# Identycznie bilet sesyjny i CSRF z galezi username+haslo przekazujemy przez
+# plik naglowkow 0600 (-H @...), aby nie wyciekly do ps/argv (bilet zyje 2 h).
 AUTH_ARGS=()
 AUTH_HEADER_FILE=""
 AUTH_PASS_FILE=""
+CONTENT_FILE=""
+trap 'rm -f ${CONTENT_FILE:+"$CONTENT_FILE"} ${AUTH_HEADER_FILE:+"$AUTH_HEADER_FILE"} ${AUTH_PASS_FILE:+"$AUTH_PASS_FILE"}' EXIT
+
 if [ -n "${PROXMOX_VE_API_TOKEN:-}" ]; then
   AUTH_HEADER_FILE=$(mktemp)
   chmod 600 "$AUTH_HEADER_FILE"
@@ -254,11 +258,14 @@ else
     exit 1
   fi
   CSRF=$(printf '%s' "$AUTH" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["CSRFPreventionToken"])')
-  AUTH_ARGS=(-b "PVEAuthCookie=${TICKET}" -H "CSRFPreventionToken: ${CSRF}")
+  # Bezpieczne przekazanie biletu i CSRF przez plik naglowkow 0600 bez wycieku do argv / ps
+  AUTH_HEADER_FILE=$(mktemp)
+  chmod 600 "$AUTH_HEADER_FILE"
+  printf 'Cookie: PVEAuthCookie=%s\nCSRFPreventionToken: %s\n' "$TICKET" "$CSRF" > "$AUTH_HEADER_FILE"
+  AUTH_ARGS=(-H @"$AUTH_HEADER_FILE")
 fi
 
 CONTENT_FILE=$(mktemp)
-trap 'rm -f "$CONTENT_FILE" ${AUTH_HEADER_FILE:+"$AUTH_HEADER_FILE"} ${AUTH_PASS_FILE:+"$AUTH_PASS_FILE"}' EXIT
 # Lista wolumenow MUSI byc sprawdzona. Wczesniej kazdy VMID parsowal odpowiedz
 # osobno z `2>/dev/null`, wiec HTML zamiast JSON-a konczyl sie komunikatem
 # "usunietych sierot: 0" i kodem 0 — sprzatanie nie odbywalo sie wcale, a

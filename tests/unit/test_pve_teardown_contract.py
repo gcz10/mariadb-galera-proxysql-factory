@@ -65,6 +65,13 @@ case "$*" in
     [ -n "$OUT" ] && : > "$OUT"
     printf '%s' "${DELETE_CODE:-200}"
     ;;
+  *access/ticket*)
+    if [ -n "${TICKET_BODY:-}" ]; then
+      printf '%s' "$TICKET_BODY"
+    else
+      cat "$CONTENT_BODY"
+    fi
+    ;;
   *)
     if [ -n "$OUT" ]; then
       cp "$CONTENT_BODY" "$OUT"
@@ -243,34 +250,47 @@ class PveTeardownCredentialContractTests(unittest.TestCase):
         self.assertNotIn('-H "Authorization: PVEAPIToken=${PROXMOX_VE_API_TOKEN}"', text)
 
     def test_password_never_enters_process_arguments(self):
-        """Haslo PVE nie moze trafic do argv/ps w wywolaniu curl."""
+        """Haslo PVE, bilet sesyjny i CSRF nie moga trafic do argv/ps w wywolaniu curl."""
         text = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("password@", text)
         self.assertNotIn('password=${PROXMOX_VE_PASSWORD}', text)
         self.assertNotIn('password="${PROXMOX_VE_PASSWORD}"', text)
+        self.assertNotIn('PVEAuthCookie=${TICKET}', text)
+        self.assertNotIn('CSRFPreventionToken: ${CSRF}', text)
 
     def test_password_never_leaks_into_curl_argv_behavioral(self):
-        """Behawioralny dowod braku wycieku hasla do argv (CURL_LOG)."""
+        """Behawioralny dowod braku wycieku hasla, biletu i CSRF do argv (CURL_LOG)."""
         harness = TeardownHarness()
         self.addCleanup(harness.cleanup)
         secret_pass = "SUPER_SECRET_PVE_PASSWORD_SHOULD_NEVER_LEAK"
         ticket_response = '{"data":{"ticket":"PVEAuthCookie=ticket123","CSRFPreventionToken":"csrf123"}}'
-        # Zwroc bilet przy POST, nastepnie pusta liste wolumenow
+        # Zwroc bilet przy POST access/ticket, a przy listingu pusta liste wolumenow
         result = harness.run(
-            ticket_response,
+            '{"data":[]}',
             env_extra={
                 "PROXMOX_VE_API_TOKEN": "",
                 "PROXMOX_VE_USERNAME": "root@pam",
                 "PROXMOX_VE_PASSWORD": secret_pass,
+                "TICKET_BODY": ticket_response,
             },
         )
+        self.assertEqual(result.returncode, 0, f"Teardown powinien zakonczyc sie sukcesem: {result.stderr}")
         logged_args = harness.requested_urls()
         self.assertNotIn(
             secret_pass,
             logged_args,
             "PROXMOX_VE_PASSWORD pojawilo sie w argv wywolania curl!",
         )
-
+        self.assertNotIn(
+            "ticket123",
+            logged_args,
+            "PVEAuthCookie ticket pojawil sie w argv wywolania curl!",
+        )
+        self.assertNotIn(
+            "csrf123",
+            logged_args,
+            "CSRFPreventionToken pojawil sie w argv wywolania curl!",
+        )
     def test_protected_infra_disk_preserved_during_teardown(self):
         """Ochrona danych: dysk danych maszyny z role:infra / delete_unreferenced_disks_on_destroy:false NIE moze zostac usuniety."""
         harness = TeardownHarness()

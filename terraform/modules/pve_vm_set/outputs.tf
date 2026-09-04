@@ -7,7 +7,7 @@ output "vms" {
     cpu                                  = v.cpu
     ram_mb                               = v.ram
     disk_gb                              = v.disk
-    purge_on_destroy                     = try(v.purge_on_destroy, null)
-    delete_unreferenced_disks_on_destroy = try(v.delete_unreferenced_disks_on_destroy, null)
+    purge_on_destroy                     = try(v.purge_on_destroy, null) != null ? v.purge_on_destroy : var.purge_on_destroy
+    delete_unreferenced_disks_on_destroy = try(v.delete_unreferenced_disks_on_destroy, null) != null ? v.delete_unreferenced_disks_on_destroy : var.delete_unreferenced_disks_on_destroy
   } }
 }
