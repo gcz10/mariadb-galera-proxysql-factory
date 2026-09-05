@@ -61,7 +61,7 @@
     - (f12_apply_packages | default([]) | length) > 0
 
 - name: "Audit#11: real patch — komenda operatora"
-  # noqa: command-instead-of-shell — komenda operatora (-e f12_patch_command=...)
+  # noqa: command-instead-of-shell — komenda operatora (-e f12_galera_patch_command=... / f12_proxysql_patch_command=...)
   # moze legalnie uzywac featurow shella (potoki, &&, redyrekcje), bo to dane
   # operatora, nie nasz staly kod; wymuszenie modulu command zepsuloby kazda
   # taka komenda w runtime.

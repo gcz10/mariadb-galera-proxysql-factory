@@ -178,8 +178,8 @@
     f12_role: "proxysql"
     f12_service: "proxysql"
     f12_version_cmd: "proxysql --version"
-    f12_patch_command: "{{ f12_proxysql_patch_command | default('') }}"
-    f12_patch_packages: "{{ f12_proxysql_patch_packages | default([]) }}"
+    f12_apply_command: "{{ f12_proxysql_patch_command | default('') }}"
+    f12_apply_packages: "{{ f12_proxysql_patch_packages | default([]) }}"
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
   environment:
     MYSQL_PWD: "{{ proxysql_admin_password }}"
