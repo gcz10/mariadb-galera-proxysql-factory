@@ -4,12 +4,16 @@
 # "zdrowy raport" bez zmiany pakietów), a nadpisana komenda nie restartowała usługi
 # ani nie weryfikowała runtime.
 #
-# Vars (ustawiane przez play-rodzica):
+# Vars (ustawiane przez play-rodzica, NIGDY przez operatora wprost —
+# extra-vars maja pierwszenstwo nad play-vars, wiec operator steruje
+# zmiennymi zakresowymi `f12_galera_patch_*` / `f12_proxysql_patch_*`,
+# a playe mapuja je na ponizsze; dzieki temu lista pakietow MariiDB
+# nigdy nie wycieka do play'a ProxySQL i odwrotnie):
 #   f12_role:           'galera' | 'proxysql'
 #   f12_service:        usługa systemd do restartu gdy binarium się zmieni ('mariadb' / 'proxysql' / 'proxysql-nr')
 #   f12_version_cmd:    komenda zwracająca wersję binaria ('mariadbd --version' / 'proxysql --version')
-#   f12_patch_packages: lista pakietów do `dnf update` (real) — domyślnie [] → dry-run
-#   f12_patch_command:  komenda operatora (real) — domyślnie '' → dry-run
+#   f12_apply_packages: lista pakietów do `dnf update` (real) — domyślnie [] → dry-run
+#   f12_apply_command:  komenda operatora (real) — domyślnie '' → dry-run
 
 - name: "Audit#11: odczytaj wersję binaria PRZED patch"
   ansible.builtin.command: "{{ f12_version_cmd }}"
@@ -19,52 +23,55 @@
 - name: "Audit#11: tryb patcha (real gdy pakiety LUB komenda operatora)"
   ansible.builtin.set_fact:
     f12_real_patch: >-
-      {{ ((f12_patch_packages | default([])) | length > 0)
-         or ((f12_patch_command | default('')) | length > 0) }}
+      {{ ((f12_apply_packages | default([])) | length > 0)
+         or ((f12_apply_command | default('')) | length > 0) }}
 
-- name: "Audit#11: DRY-RUN — brak f12_patch_packages/f12_patch_command (0 pakietów zmienionych)"
+- name: "Audit#11: DRY-RUN — brak f12_apply_packages/f12_apply_command (0 pakietów zmienionych)"
   ansible.builtin.debug:
     msg: >-
       DRY-RUN {{ inventory_hostname }}: wykonano tylko bramę zdrowia; 0 pakietów zmienionych.
-      Realny patch: -e f12_patch_packages='[pkg1,pkg2]' (dnf update) lub f12_patch_command='...'.
+      Realny patch: -e f12_galera_patch_packages='[pkg1,pkg2]' (dnf update) lub f12_galera_patch_command='...'.
   when: not (f12_real_patch | bool)
 
 # Moduł ansible.builtin.dnf wymaga `state: latest` żeby zaktualizować
 # zainstalowany pakiet — a ISC-63 bezwzględnie zabrania `state: latest`.
 # `dnf update` przez command omija ten zakaz, bo lista pakietów jest jawna
-# i kontrolowana (operator podaje -e f12_patch_packages='[...]'), a nie
+# i kontrolowana (operator podaje -e f12_galera_patch_packages='[...]'), a nie
 # "zaktualizuj wszystko co możliwe". Moduł dnf traci idempotencję, ale
 # patching z natury nie jest idempotentny — drugi przebieg nic nie zmienia.
 - name: "Audit#11: real patch — dnf update wskazanych pakietów"
   ansible.builtin.command:
-    argv: "{{ ['dnf', 'update', '-y'] + (f12_patch_packages | list) }}"
+    argv: "{{ ['dnf', 'update', '-y'] + (f12_apply_packages | list) }}"
   register: f12_dnf_result
   # Drugi przebieg po juz spatchowanym wezle (np. converge zrobil mutacje
   # przed sciezka f12) konczy sie rc=1 "No packages marked for upgrade".
   # To legalny no-op, nie blad: pakiety sa w wersji docelowej. Tolerujemy
   # WYLACZNIE ten stderr — kazdy inny rc nadal pada. changed=false, wiec
-  # restart uslugi nie nastapi.
   failed_when: >-
     f12_dnf_result.rc != 0
     and 'No packages marked for upgrade' not in (f12_dnf_result.stderr | default(''))
+  # rc=0, ale dnf nie mial nic do roboty ("Nothing to do"), to zadna mutacja —
+  # restart uslugi bylby zbedny. changed tylko przy faktycznej aktualizacji.
   changed_when: >-
     f12_dnf_result.rc == 0
+    and 'No packages marked for upgrade' not in (f12_dnf_result.stderr | default(''))
+    and 'Nothing to do' not in (f12_dnf_result.stdout | default(''))
   when:
     - f12_real_patch | bool
-    - (f12_patch_packages | default([]) | length) > 0
+    - (f12_apply_packages | default([]) | length) > 0
 
 - name: "Audit#11: real patch — komenda operatora"
   # noqa: command-instead-of-shell — komenda operatora (-e f12_patch_command=...)
   # moze legalnie uzywac featurow shella (potoki, &&, redyrekcje), bo to dane
   # operatora, nie nasz staly kod; wymuszenie modulu command zepsuloby kazda
   # taka komenda w runtime.
-  ansible.builtin.shell: "{{ f12_patch_command }}"
+  ansible.builtin.shell: "{{ f12_apply_command }}"
   register: f12_cmd_result
   changed_when: true
   when:
     - f12_real_patch | bool
-    - (f12_patch_command | default('') | length) > 0
-    - (f12_patch_packages | default([]) | length) == 0
+    - (f12_apply_command | default('') | length) > 0
+    - (f12_apply_packages | default([]) | length) == 0
 
 - name: "Audit#11: odczytaj wersję binaria PO patch"
   ansible.builtin.command: "{{ f12_version_cmd }}"

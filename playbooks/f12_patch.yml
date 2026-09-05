@@ -7,7 +7,7 @@
 #         (Synced+Primary+size) po każdym węźle; porażka zatrzymuje rolling.
 # ISC-57: ProxySQL aktualizuje się osobno, jedną instancję naraz (serial:1).
 #
-# audit#11: NIE ma już fałszywego "patcha". Bez -e f12_patch_packages/f12_patch_command
+# audit#11: NIE ma już fałszywego "patcha". Bez -e f12_galera_patch_*/f12_proxysql_patch_*
 # playbook jawnie raportuje DRY-RUN (0 pakietów zmienionych) i ćwiczy tylko canary+health-gate.
 # Realny patch: dnf update wskazanych pakietów + restart usługi gdy binarium się zmienił
 # + weryfikacja wersji runtime przed/po (playbooks/f12_apply_patch.yml).
@@ -75,6 +75,8 @@
     f12_role: "galera"
     f12_service: "mariadb"
     f12_version_cmd: "mariadbd --version"
+    f12_apply_packages: "{{ f12_galera_patch_packages | default([]) }}"
+    f12_apply_command: "{{ f12_galera_patch_command | default('') }}"
     expected_size: "{{ galera.nodes_expected | default(3) }}"
   tasks:
     - name: "Pomiń jeśli to nie canary"
@@ -108,6 +110,8 @@
     f12_role: "galera"
     f12_service: "mariadb"
     f12_version_cmd: "mariadbd --version"
+    f12_apply_packages: "{{ f12_galera_patch_packages | default([]) }}"
+    f12_apply_command: "{{ f12_galera_patch_command | default('') }}"
     expected_size: "{{ galera.nodes_expected | default(3) }}"
   tasks:
     - name: "Pomiń canary i writera"
@@ -140,6 +144,8 @@
     f12_role: "galera"
     f12_service: "mariadb"
     f12_version_cmd: "mariadbd --version"
+    f12_apply_packages: "{{ f12_galera_patch_packages | default([]) }}"
+    f12_apply_command: "{{ f12_galera_patch_command | default('') }}"
     expected_size: "{{ galera.nodes_expected | default(3) }}"
   tasks:
     - name: "Pomiń non-writery"

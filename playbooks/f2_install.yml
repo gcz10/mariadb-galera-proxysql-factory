@@ -89,12 +89,25 @@
     # Synced/Primary/full size. Bez niej jedyna ochrona byla kolejnoscia,
     # a restart po dnf robil scriptlet RPM, nie playbook (lukę pokazal
     # patch 11.4.12 -> 11.4.13, 2026-09-05).
+    # SWIEZY BUILD: cluster-deploy biegnie PRZED cluster-bootstrap
+    # (Makefile), a brama wymaga Primary/Synced/full size — na wezle bez
+    # historii Galera nie ma jeszcze grastate.dat, wiec tam brama jest
+    # pomijana; po pierwszym bootstrapie plik istnieje i kazdy kolejny
+    # converge jest juz bramkowany.
+    - name: "ISC-51: czy wezel ma juz stan Galera (grastate.dat)"
+      ansible.builtin.stat:
+        path: /var/lib/mysql/grastate.dat
+      register: f2_grastate
+      when: "'galera' in group_names"
+
     - name: "ISC-51: brama zdrowia wezla PO mutacji pakietow MariaDB"
       ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
       vars:
         health_gate_name: "ISC-51: wezel zdrowy po mutacji pakietow (converge rolling)"
         health_retries: 24
-      when: "'galera' in group_names"
+      when:
+        - "'galera' in group_names"
+        - f2_grastate.stat.exists | default(false)
 
     # Oficjalny pakiet MariaDB dostarcza źródło polityki Galera, ale nie ładuje
     # skompilowanego modułu. Bez niego SST mariabackup jest blokowany m.in. na setpgid.
