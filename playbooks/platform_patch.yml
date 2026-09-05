@@ -1,0 +1,141 @@
+---
+# Platform Patch — rolling patch pary ProxySQL warstwy WSPÓLNEJ (ISC-57).
+#
+# POWÓD ISTNIENIA. `f12_patch.yml` nie jest w stanie zaktualizować tej pary,
+# gdy najemcy są zatrzymani: play 0 czyta writera z `runtime_mysql_servers`
+# i asertuje jego jednoznaczność, a `any_errors_fatal: true` przerywa cały
+# przebieg zanim dojdzie do play'a ProxySQL. Patch zasobu PLATFORMOWEGO był
+# więc uzależniony od żywego klastra NAJEMCY — dokładnie ta klasa sprzężenia
+# właścicielskiego, którą usuwał `platform_install.yml`. Zmierzone na żywo
+# 2026-09-05 na parze `xenonv11` z czterema zatrzymanymi najemcami.
+#
+# TOŻSAMOŚĆ ADMINA. Port 6032 otwierany jest przez
+# `--defaults-extra-file=/etc/proxysql/admin-check.cnf` — tożsamość wdrażaną
+# przez `platform_proxysql.yml`, tę samą, której używa `check_proxysql.sh`
+# i sześć innych playbooków. Dzięki temu ścieżka platformowa NIE wymaga
+# `PROXYSQL_ADMIN_PASSWORD` od operatora i nie przekazuje hasła w argv.
+#
+# BRAMA ZDROWIA jest PORÓWNAWCZA, nie absolutna. Play 4 `f12_patch.yml` żąda
+# `>= 1` backendu ONLINE w hostgrupie writera najemcy — na warstwie wspólnej
+# z zatrzymanymi najemcami taki warunek nigdy nie przejdzie, choć ProxySQL
+# jest zdrowy. Liczba writerów ONLINE to własność NAJEMCY, nie ProxySQL-a.
+# Brama asertuje więc to, co jest w zasięgu patchowanej usługi: port admina
+# odpowiada, konfiguracja nie zniknęła (`mysql_servers` bez zmiany) i liczba
+# writerów ONLINE NIE SPADŁA względem stanu sprzed patcha. Falsyfikowalna:
+# zapali się na czerwono, gdy patch zgubi konfigurację albo zepsuje monitor
+# backendów — i przy zatrzymanych najemcach, i przy żywych.
+#
+# Operator steruje zmiennymi ZAKRESOWYMI `f12_proxysql_patch_packages` /
+# `f12_proxysql_patch_command`; play mapuje je na wewnętrzne `f12_apply_*`,
+# których operator nie ustawia (extra-vars mają pierwszeństwo nad play-vars).
+# Bez nich playbook jawnie raportuje DRY-RUN — patrz `f12_apply_patch.yml`.
+
+- name: "Platform Patch — ISC-57 ProxySQL warstwy wspólnej (serial:1)"
+  hosts: proxysql
+  become: true
+  gather_facts: false
+  serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
+
+  vars:
+    f12_role: "proxysql"
+    f12_service: "proxysql"
+    f12_version_cmd: "proxysql --version"
+    f12_apply_packages: "{{ f12_proxysql_patch_packages | default([]) }}"
+    f12_apply_command: "{{ f12_proxysql_patch_command | default('') }}"
+    proxysql_admin_argv:
+      - mariadb
+      - --defaults-extra-file=/etc/proxysql/admin-check.cnf
+      - --connect-timeout=2
+      - -h127.0.0.1
+      - -P6032
+      - -uadmin
+      - -N
+      - -B
+      - -e
+    # Trzy liczby jednym zapytaniem: aktywne grupy Galera, writery ONLINE
+    # w tych grupach, wiersze KONFIGURACJI. Trzecia jest niezależna od
+    # najemców — to ona wykrywa patch, który zgubił `proxysql.db`.
+    proxysql_state_query: >-
+      SELECT (SELECT COUNT(*) FROM runtime_mysql_galera_hostgroups WHERE active = 1),
+             (SELECT COUNT(*) FROM runtime_mysql_servers s
+                JOIN runtime_mysql_galera_hostgroups g ON s.hostgroup_id = g.writer_hostgroup
+               WHERE g.active = 1 AND s.status = 'ONLINE'),
+             (SELECT COUNT(*) FROM mysql_servers)
+
+  tasks:
+    - name: "ISC-57: wymagaj tożsamości administratora pary (wdraża platform_proxysql)"
+      ansible.builtin.stat:
+        path: /etc/proxysql/admin-check.cnf
+      register: platform_patch_admin_identity
+
+    - name: "ISC-57: brak admin-check.cnf — patch zablokowany"
+      ansible.builtin.assert:
+        that: [platform_patch_admin_identity.stat.exists]
+        fail_msg: >-
+          Brak /etc/proxysql/admin-check.cnf na {{ inventory_hostname }} —
+          tożsamość administratora pary wdraża `make platform-proxysql`.
+          Bez niej nie da się ani zapisać configu przed patchem, ani
+          zweryfikować stanu po nim.
+
+    - name: "ISC-57: stan PRZED patchem (grupy aktywne / writery ONLINE / wiersze configu)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_argv + [proxysql_state_query] }}"
+      register: platform_patch_state_before
+      changed_when: false
+
+    - name: "ISC-57: zapisz config ProxySQL do DISK przed patch (proxysql.com)"
+      ansible.builtin.command:
+        argv: >-
+          {{ proxysql_admin_argv + ['SAVE MYSQL SERVERS TO DISK; SAVE MYSQL USERS TO DISK;
+             SAVE MYSQL VARIABLES TO DISK; SAVE ADMIN VARIABLES TO DISK;'] }}
+      # Jak w f12_patch.yml:192 — SAVE utrwala runtime na dysk, nie zmienia
+      # KONFIGURACJI. `changed_when: true` czynilby kazdy przebieg "changed",
+      # co odbiera temu sygnalowi wartosc diagnostyczna.
+      changed_when: false
+
+    - name: "ISC-57: patch ProxySQL, jedna instancja naraz (real lub DRY-RUN)"
+      ansible.builtin.include_tasks: f12_apply_patch.yml
+
+    - name: "ISC-57: stan PO patchu — port admina musi odpowiadać"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_argv + [proxysql_state_query] }}"
+      register: platform_patch_state_after
+      until: platform_patch_state_after.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: "ISC-57: rozłóż stan przed/po na liczby"
+      ansible.builtin.set_fact:
+        platform_patch_before: "{{ platform_patch_state_before.stdout | trim | split('\t') | map('int') | list }}"
+        platform_patch_after: "{{ platform_patch_state_after.stdout | trim | split('\t') | map('int') | list }}"
+
+    - name: "ISC-57: brama porównawcza — config nietknięty, writery ONLINE bez regresji"
+      ansible.builtin.assert:
+        that:
+          - platform_patch_after[2] == platform_patch_before[2]
+          - platform_patch_after[1] >= platform_patch_before[1]
+        fail_msg: >-
+          {{ inventory_hostname }}: patch pogorszył stan ProxySQL.
+          Wiersze konfiguracji {{ platform_patch_before[2] }} -> {{ platform_patch_after[2] }}
+          (musi być bez zmiany), writery ONLINE {{ platform_patch_before[1] }} ->
+          {{ platform_patch_after[1] }} (nie wolno spaść).
+        success_msg: >-
+          {{ inventory_hostname }}: config {{ platform_patch_after[2] }} wierszy bez zmiany,
+          grupy aktywne {{ platform_patch_after[0] }}, writery ONLINE
+          {{ platform_patch_after[1] }} (przed: {{ platform_patch_before[1] }}).
+
+    # Bez `{{ inventory_hostname }}` w NAZWIE taska: przy `serial` Ansible
+    # szablonuje nazwe raz, dla pierwszego hosta partii, wiec przebieg na
+    # x11p2 raportowal naglowek "(x11p1)" — nazwa mylila co do hosta.
+    # Host jest w tresci komunikatu, ktory szablonuje sie per host.
+    - name: "ISC-57: raport stanu warstwy po patchu"
+      ansible.builtin.debug:
+        msg: >-
+          ProxySQL {{ inventory_hostname }} po patchu — grupy aktywne
+          {{ platform_patch_after[0] }}, writery ONLINE {{ platform_patch_after[1] }},
+          wiersze konfiguracji {{ platform_patch_after[2] }}.
+          {{ 'Zero writerow ONLINE jest stanem NAJEMCY (zatrzymane klastry), nie awaria ProxySQL.'
+             if platform_patch_after[1] | int == 0 else '' }}

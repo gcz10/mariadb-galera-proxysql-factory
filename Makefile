@@ -268,6 +268,15 @@ platform-deploy:  ## Instaluj pakiety warstwy wspolnej (ProxySQL wg lockfile EL1
 	$(platform_guard)
 	ansible-playbook playbooks/platform_install.yml $(PLATFORM_OPTS)
 
+# Patch pary ProxySQL jako zasobu PLATFORMY. `cluster-patch` tego nie zastapi:
+# f12_patch.yml przerywa na play'u 0, gdy zaden writer najemcy nie jest ONLINE,
+# wiec warstwa z zatrzymanymi najemcami nie miala ZADNEJ sciezki patcha.
+# Nie wymaga PROXYSQL_ADMIN_PASSWORD — tozsamosc admina bierze z
+# /etc/proxysql/admin-check.cnf wdrozonego przez platform-proxysql.
+platform-patch:  ## F12 — rolling patch pary ProxySQL warstwy wspolnej (serial:1, ISC-57)
+	$(platform_guard)
+	ansible-playbook playbooks/platform_patch.yml $(PLATFORM_OPTS)
+
 # Polityka hosta fcp1/fcp2/fcinfra/fcapp nalezy do warstwy wspolnej. Najemca
 # deklaruje te hosty w swoim inventory, ale ich firewalla nie dotyka — patrz
 # bramka wlasciciela w playbooks/firewall.yml.

@@ -331,6 +331,7 @@ istnieje; jego powrotu pilnuje `make verify-proxysql-tenancy`.
 | `make platform-validate` | schemat + inwarianty inwentarza + preflight |
 | `make platform-trust-hosts` | re-skan kluczy SSH po re-provision |
 | `make platform-deploy` | pakiety ProxySQL wg lockfile EL10 (sha256 + GPG) |
+| `make platform-patch` | rolling patch pary ProxySQL (serial:1, ISC-57) — dziala tez przy ZATRZYMANYCH najemcach; `cluster-patch` w tym stanie przerywa na play'u 0 |
 | `make platform-infra` | PMM, MinIO, maildev na `fcinfra` |
 | `make platform-proxysql` | konfiguracja pary: TLS frontendu, tozsamosc admina, monitor |
 | `make platform-endpoint` | Keepalived VIP — **wylacznie tutaj**, nigdy z klastra |

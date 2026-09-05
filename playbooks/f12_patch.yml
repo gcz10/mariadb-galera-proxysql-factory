@@ -203,6 +203,9 @@
       delay: 5
       changed_when: false
       no_log: true
-    - name: "ISC-57: ProxySQL zdrowy po patch ({{ inventory_hostname }})"
+    # Nazwa taska bez `{{ inventory_hostname }}`: przy `serial: 1` Ansible
+    # szablonuje ja raz, dla pierwszego hosta partii, wiec naglowek na
+    # drugim wezle wskazywal PIERWSZY. Host zostaje w tresci komunikatu.
+    - name: "ISC-57: ProxySQL zdrowy po patch"
       ansible.builtin.debug:
         msg: "ProxySQL {{ inventory_hostname }} online ({{ f12_proxysql_backends.stdout | trim }} backends ONLINE)"
