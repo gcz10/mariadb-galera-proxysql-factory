@@ -282,7 +282,7 @@ make lab-backup-impact CLUSTER=<nazwa>                  # ISC-39, lab-only
 # docs/runbooks/backup.md
 
 # F12 — patch w serii (canary+bramy), rolling restart, plan major upgrade, drift:
-make cluster-patch CLUSTER=<nazwa>                       # ISC-52/55/57; bez -e f12_galera_patch_packages / f12_proxysql_patch_packages robi DRY-RUN
+make cluster-patch CLUSTER=<nazwa>                       # ISC-52/55/57; bez -e f12_galera_patch_* / f12_proxysql_patch_* (packages lub command) robi DRY-RUN
 make cluster-rolling-restart CLUSTER=<nazwa>             # ISC-50/51
 make cluster-upgrade-plan CLUSTER=<nazwa> -e f12_target=<seria>  # ISC-53/54/56 (read-only; regresja EOL: + f12_allow_eol_regression)
 make cluster-drift CLUSTER=<nazwa>                       # ISC-21
