@@ -75,11 +75,11 @@ pmm:
 docker:
   # Zweryfikowane w repodata download.docker.com/linux/centos/10/x86_64/stable:
   # identyczne numery wersji co EL9, wyłącznie inny sufiks release.
-  engine_version: "3:29.7.2-1.el10"
-  cli_version: "1:29.7.2-1.el10"
-  containerd_version: "2.3.4-1.el10"
-  buildx_version: "0.36.1-1.el10"
-  compose_version: "5.5.0-1.el10"
+  engine_version: "3:29.8.0-1.el10"
+  cli_version: "1:29.8.0-1.el10"
+  containerd_version: "2.3.4-2.el10"
+  buildx_version: "0.37.0-1.el10"
+  compose_version: "5.5.1-1.el10"
   repo_baseurl: "https://download.docker.com/linux/centos/$releasever/$basearch/stable"
   repo_gpgkey: "https://download.docker.com/linux/centos/gpg"
 backup_tools:
