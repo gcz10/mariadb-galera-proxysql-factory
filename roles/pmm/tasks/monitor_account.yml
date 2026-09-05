@@ -6,7 +6,7 @@
     fail_msg: "Ustaw PMM_MONITOR_PASSWORD poza repozytorium."
   when: pmm_mode == 'agentless'
 - name: "Utwórz replikowane konto PMM na pierwszym węźle Galera"
-  ansible.mysql.mysql_user:
+  ansible.mariadb.mariadb_user:
     name: "{{ pmm_monitor_user }}"
     password: "{{ pmm_monitor_password }}"
     host: "%"

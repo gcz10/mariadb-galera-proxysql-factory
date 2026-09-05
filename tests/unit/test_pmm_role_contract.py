@@ -211,7 +211,7 @@ class RoleStructureTests(unittest.TestCase):
         shared = load_yaml(os.path.join(ROLE_TASKS, "monitor_account.yml"))
         users = [
             task for task in shared
-            if isinstance(task.get("ansible.mysql.mysql_user"), dict)
+            if isinstance(task.get("ansible.mariadb.mariadb_user"), dict)
         ]
         self.assertEqual(len(users), 1, "monitor_account.yml tworzy dokladnie jedno konto")
 

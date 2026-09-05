@@ -129,7 +129,7 @@
     # `mysql_query` (`query_result`), nie `shell` (`stdout`), wiec ksztalt
     # danych jest inny.
     - name: "Weryfikuj cluster status"
-      ansible.mysql.mysql_query:
+      ansible.mariadb.mariadb_query:
         query: "SHOW STATUS WHERE Variable_name IN ('wsrep_cluster_status','wsrep_cluster_size','wsrep_connected','wsrep_ready','wsrep_local_state')"
         login_unix_socket: /var/lib/mysql/mysql.sock
       register: wsrep_status
@@ -151,7 +151,7 @@
         msg: "{{ wsrep_status.query_result }}"
 
     - name: "Utworz SST user"
-      ansible.mysql.mysql_user:
+      ansible.mariadb.mariadb_user:
         name: "{{ sst_user }}"
         password: "{{ sst_password }}"
         priv: "*.*:RELOAD,PROCESS,LOCK TABLES,BINLOG ADMIN,REPLICATION CLIENT"

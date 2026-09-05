@@ -1,5 +1,6 @@
 ---
-# F1 finding: community.mysql deprecated -> ansible.mysql (2026-07-22, ansible.mysql 5.1.0).
+# F1 finding: community.mysql deprecated -> ansible.mysql (2026-07-22);
+# 2026-09-04: flota przeszla na ansible.mariadb (mariadb_query/mariadb_user).
 # Nie modyfikuje usług produkcyjnych.
 #
 # Satisfies: ISC-66 (raport discovery), ISC-67 (read-only)
@@ -107,7 +108,7 @@
       register: monitoring_procs
 
     - name: Audyt PK w information_schema (jeśli istnieje MariaDB)
-      ansible.mysql.mysql_query:
+      ansible.mariadb.mariadb_query:
         query: |
           SELECT t.TABLE_SCHEMA, t.TABLE_NAME
           FROM information_schema.TABLES t
@@ -124,7 +125,7 @@
       register: missing_pk
 
     - name: Wsrep received (jeśli istnieje MariaDB) — okno IST w raporcie
-      ansible.mysql.mysql_query:
+      ansible.mariadb.mariadb_query:
         query: SHOW GLOBAL STATUS LIKE 'wsrep_received'
         login_unix_socket: /var/lib/mysql/mysql.sock
       become: true

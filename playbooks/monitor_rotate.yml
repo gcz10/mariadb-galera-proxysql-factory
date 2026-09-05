@@ -82,7 +82,7 @@
     # EXPAND: obie tozsamosci dzialaja rownoczesnie. Konto zaklada sie na
     # galera[0]; Galera replikuje tabele uprawnien na pozostale wezly.
     - name: "Expand — utworz bezczynne konto monitora"
-      ansible.mysql.mysql_user:
+      ansible.mariadb.mariadb_user:
         name: "{{ monitor_idle_user }}"
         password: "{{ monitor_next_password }}"
         host: "%"
@@ -127,7 +127,7 @@
       when: rotation_phase == 'contract'
 
     - name: "Contract — usun bezczynne (poprzednie) konto monitora"
-      ansible.mysql.mysql_user:
+      ansible.mariadb.mariadb_user:
         name: "{{ monitor_idle_user }}"
         host: "%"
         state: absent

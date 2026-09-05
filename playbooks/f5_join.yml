@@ -95,7 +95,7 @@
       failed_when: false
 
     - name: "Utwórz konto SST (jeśli brak)"
-      ansible.mysql.mysql_user:
+      ansible.mariadb.mariadb_user:
         name: "{{ sst_user }}"
         password: "{{ sst_password }}"
         priv: "*.*:RELOAD,PROCESS,LOCK TABLES,BINLOG ADMIN,REPLICATION CLIENT"
@@ -150,7 +150,7 @@
       failed_when: false
 
     - name: "Ustaw wsrep_sst_auth zgodnie z konfiguracja"
-      ansible.mysql.mysql_query:
+      ansible.mariadb.mariadb_query:
         login_unix_socket: /var/lib/mysql/mysql.sock
         query: "SET GLOBAL wsrep_sst_auth = %s"
         positional_args:

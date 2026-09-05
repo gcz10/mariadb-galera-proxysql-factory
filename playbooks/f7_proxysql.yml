@@ -36,7 +36,7 @@
 
   tasks:
     - name: "Utwórz proxysql_monitor (PROCESS, REPLICATION CLIENT)"
-      ansible.mysql.mysql_user:
+      ansible.mariadb.mariadb_user:
         name: "{{ proxysql_monitor_user }}"
         password: "{{ proxysql_monitor_password }}"
         host: "%"
@@ -46,7 +46,7 @@
       no_log: true
 
     - name: "Utwórz app_user (test application access)"
-      ansible.mysql.mysql_user:
+      ansible.mariadb.mariadb_user:
         name: "{{ app_user }}"
         password: "{{ app_password }}"
         host: "%"

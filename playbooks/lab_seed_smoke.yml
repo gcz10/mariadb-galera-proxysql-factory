@@ -43,7 +43,7 @@
     # tworzacy jest poprzedzony sprawdzeniem istnienia. `CREATE ... IF NOT EXISTS`
     # z bezwarunkowym changed_when klamalby o stanie.
     - name: "Sprawdz, co juz istnieje"
-      ansible.mysql.mysql_query:
+      ansible.mariadb.mariadb_query:
         login_unix_socket: /var/lib/mysql/mysql.sock
         query: >-
           SELECT
@@ -59,14 +59,14 @@
       changed_when: false
 
     - name: "Utworz baze smoke"
-      ansible.mysql.mysql_query:
+      ansible.mariadb.mariadb_query:
         login_unix_socket: /var/lib/mysql/mysql.sock
         query: "CREATE DATABASE {{ seed_database }}"
       when: (seed_presence.query_result[0][0].db_present | int) == 0
       changed_when: true
 
     - name: "Utworz tabele smoke"
-      ansible.mysql.mysql_query:
+      ansible.mariadb.mariadb_query:
         login_unix_socket: /var/lib/mysql/mysql.sock
         query: >-
           CREATE TABLE {{ seed_database }}.{{ seed_table }} (
@@ -78,7 +78,7 @@
       changed_when: true
 
     - name: "Policz istniejace wiersze smoke"
-      ansible.mysql.mysql_query:
+      ansible.mariadb.mariadb_query:
         login_unix_socket: /var/lib/mysql/mysql.sock
         query: "SELECT COUNT(*) AS rows_present FROM {{ seed_database }}.{{ seed_table }}"
       register: seed_rows
@@ -87,7 +87,7 @@
     # Wstawiamy TYLKO gdy tabela jest pusta — powtorzone uruchomienie nie puchnie
     # i nie zmienia stanu, wiec cel nadaje sie do bezwarunkowego wolania w bring-upie.
     - name: "Wstaw wiersz startowy, gdy tabela pusta"
-      ansible.mysql.mysql_query:
+      ansible.mariadb.mariadb_query:
         login_unix_socket: /var/lib/mysql/mysql.sock
         query: "INSERT INTO {{ seed_database }}.{{ seed_table }} (note) VALUES (%s)"
         positional_args:
@@ -96,7 +96,7 @@
       changed_when: true
 
     - name: "Potwierdz, ze drill ma co weryfikowac"
-      ansible.mysql.mysql_query:
+      ansible.mariadb.mariadb_query:
         login_unix_socket: /var/lib/mysql/mysql.sock
         query: >-
           SELECT COUNT(*) AS user_databases FROM information_schema.SCHEMATA

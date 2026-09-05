@@ -1,6 +1,6 @@
 ---
 - name: "Usuń legacy replikowane konto eksportera"
-  ansible.mysql.mysql_user:
+  ansible.mariadb.mariadb_user:
     name: pmm
     host: "%"
     state: absent
@@ -10,7 +10,7 @@
   no_log: true
 
 - name: "Usuń znane legacy lokalne konta eksporterów"
-  ansible.mysql.mysql_user:
+  ansible.mariadb.mariadb_user:
     name: "{{ item }}"
     host: localhost
     state: absent

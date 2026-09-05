@@ -800,7 +800,7 @@ class CutoverContractTests(unittest.TestCase):
 
     def test_sst_rotation_uses_parameterized_sql_and_validates_password(self):
         join_playbook = (WORKSPACE_ROOT / "playbooks" / "f5_join.yml").read_text()
-        self.assertIn("ansible.mysql.mysql_query", join_playbook)
+        self.assertIn("ansible.mariadb.mariadb_query", join_playbook)
         self.assertIn("positional_args:", join_playbook)
         self.assertIn("SET GLOBAL wsrep_sst_auth = %s", join_playbook)
         self.assertNotIn(

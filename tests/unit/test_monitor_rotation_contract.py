@@ -83,17 +83,17 @@ class NeverDropTheActiveIdentityTests(unittest.TestCase):
             cls.tasks.extend(play.get("pre_tasks") or [])
             cls.tasks.extend(play.get("tasks") or [])
 
-    def _mysql_user_tasks(self):
-        return [t for t in self.tasks if "ansible.mysql.mysql_user" in t]
+    def _mariadb_user_tasks(self):
+        return [t for t in self.tasks if "ansible.mariadb.mariadb_user" in t]
 
     def test_absent_task_targets_the_idle_identity_only(self):
         removals = [
-            t for t in self._mysql_user_tasks()
-            if t["ansible.mysql.mysql_user"].get("state") == "absent"
+            t for t in self._mariadb_user_tasks()
+            if t["ansible.mariadb.mariadb_user"].get("state") == "absent"
         ]
         self.assertTrue(removals, "faza contract musi usuwac konto")
         for task in removals:
-            name = task["ansible.mysql.mysql_user"]["name"]
+            name = task["ansible.mariadb.mariadb_user"]["name"]
             self.assertIn(
                 "monitor_idle_user", name,
                 "kasujemy WYLACZNIE tozsamosc bezczynna; uzycie 'active' albo "
@@ -103,12 +103,12 @@ class NeverDropTheActiveIdentityTests(unittest.TestCase):
 
     def test_creation_targets_the_idle_identity(self):
         creations = [
-            t for t in self._mysql_user_tasks()
-            if t["ansible.mysql.mysql_user"].get("state") == "present"
+            t for t in self._mariadb_user_tasks()
+            if t["ansible.mariadb.mariadb_user"].get("state") == "present"
         ]
         self.assertTrue(creations)
         for task in creations:
-            self.assertIn("monitor_idle_user", task["ansible.mysql.mysql_user"]["name"])
+            self.assertIn("monitor_idle_user", task["ansible.mariadb.mariadb_user"]["name"])
 
     def test_contract_asserts_identities_differ_before_dropping(self):
         blob = yaml.safe_dump(self.tasks, allow_unicode=True)

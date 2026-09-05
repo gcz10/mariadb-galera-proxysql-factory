@@ -186,7 +186,7 @@
       when: (mariadb_active | default({})).rc | default(1) == 0
 
     - name: "Utworz SST user (tylko na pierwszym węźle, jeśli nie istnieje)"
-      ansible.mysql.mysql_user:
+      ansible.mariadb.mariadb_user:
         name: "{{ sst_user }}"
         password: "{{ sst_password }}"
         priv: "*.*:RELOAD,PROCESS,LOCK TABLES,BINLOG ADMIN,REPLICATION CLIENT"

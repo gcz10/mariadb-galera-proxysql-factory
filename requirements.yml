@@ -9,16 +9,14 @@
 # jedynym instalującym jest `ansible-galaxy collection install -r requirements.yml`
 # (.github/workflows/ci.yml).
 #
-# F1 research: community.mysql deprecated -> ansible.mysql (2026-07-22).
-# ansible.mysql wspiera MariaDB do mid-2027; potem ansible.mariadb.
+# 2026-09-04: flota uzywa dedykowanej kolekcji `ansible.mariadb` (FQCN
+# mariadb_query/mariadb_user). `ansible.mysql` deprecatuje wsparcie MariaDB
+# (usuniecie w 6.0.0, nie wczesniej niz mid-2027), wiec zniknelo z zaleznosci
+# calkowicie — czysty cutover: bez redirectow i bez ostrzezen na kazdym tasku.
 
 collections:
-  # 5.2.0: wsparcie MariaDB oznaczone jako deprecated, usuniecie w 6.0.0
-  # (nie wczesniej niz mid-2027) — nastepca to kolekcja `ansible.mariadb`.
-  # Skutek uboczny 5.2.0: modul emituje ostrzezenie przy wykryciu serwera
-  # MariaDB, czyli na kazdym tasku tej floty. Migracja FQCN to osobny pakiet.
-  - name: "ansible.mysql"
-    version: "5.2.0"
+  - name: "ansible.mariadb"
+    version: "6.0.2"
     source: "https://galaxy.ansible.com"
   # 13.x wymaga ansible-core >= 2.18.0 (meta/runtime.yml) — mamy 2.21.3.
   # Jedyny uzywany modul to `seport`; w majorach 11/12/13 nie ma dla niego
