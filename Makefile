@@ -371,7 +371,14 @@ platform-monitor-rotate:  ## Rotuj globalne haslo monitora ProxySQL w calej floc
 
 platform-verify:  ## Sondy warstwy wspolnej: para ProxySQL, VIP, TLS endpointu, rejestracja w PMM
 	$(platform_guard)
-	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	@# Sonda rozwiazuje sekret SAMA: srodowisko ALBO tests/lab/.env
+	@# (tests/lab/_probe_common.py:79-89) — tak samo jak probe-orphans, ktora
+	@# guardu nie ma wcale. Straznik zadajacy WYLACZNIE zmiennej srodowiskowej
+	@# byl wiec ostrzejszy od konsumenta i blokowal przebieg, ktory zadzialalby.
+	@# Zmierzone 2026-09-05: cel odmawial startu (Error 127) i zostal opisany
+	@# jako "zablokowany brakiem poswiadczen", choc haslo lezalo w tests/lab/.env.
+	@test -n "$${PMM_ADMIN_PASSWORD}" || grep -q '^PMM_ADMIN_PASSWORD=' tests/lab/.env 2>/dev/null \
+	  || { echo "ERROR: ustaw PMM_ADMIN_PASSWORD w srodowisku albo w tests/lab/.env" >&2; exit 1; }
 	CLUSTER=$(PLATFORM) CLUSTER_CONFIG=$(PLATFORM_DIR)/platform.yml CLUSTER_INVENTORY=$(PLATFORM_DIR)/inventory.yml \
 	  PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-platform.py
 
