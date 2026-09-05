@@ -15,15 +15,15 @@ rocky_linux:
 
 mariadb:
   # KLUCZOWE: EL10 ma DOKŁADNIE te same wersje co EL9. To zmiana OS, nie upgrade bazy.
-  version: "11.4.12"
+  version: "11.4.13"
   series: "11.4"
   type: "LTS"
   eol: "2029-05"
-  rpm_release: "1.el10"            # zweryfikowane w repodata: MariaDB-server-11.4.12-1.el10
+  rpm_release: "1.el10"            # zweryfikowane w repodata 2026-09-04 (MariaDB-server-11.4.13-1.el10)
   repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
   # Pelna wersja z prefiksem: repozytorium serii trzyma tylko najnowsza latke,
   # wiec przypiecie do "11.4" nie jest przypieciem (patrz komentarz w EL9).
-  repo_setup_args: "--mariadb-server-version=mariadb-11.4.12"
+  repo_setup_args: "--mariadb-server-version=mariadb-11.4.13"
   # Skrypt repo_setup jest OS-agnostyczny — ta sama suma co w lockfile EL9 (v2026-06-30, 44184B).
   repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"
   galera_provider: "galera-4"
@@ -41,7 +41,7 @@ mariadb:
   # Zrodla pinow — zweryfikowane pobraniem 2026-08-15 (HTTP 200 + wzmianka
   # o dokladnej wersji). Identyczne z lockfile EL9: pakiet rozni sie tylko
   # sufiksem release, wydanie upstream jest to samo.
-  source: "https://github.com/mariadb-corporation/mariadb-docs/blob/main/platform/post-download/mariadb-server-11.4.12.md"
+  source: "https://github.com/mariadb-corporation/mariadb-docs/blob/main/platform/post-download/mariadb-server-11.4.13.md"
   galera_provider_source: "https://github.com/codership/galera/releases/tag/release_26.4.27"
 
 proxysql:
@@ -94,7 +94,7 @@ backup_tools:
 minio:
   image: "minio/minio:RELEASE.2025-09-07T16-13-09Z"
   image_digest: "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
-  sdk_version: "7.2.7"
+  sdk_version: "7.2.20"
   mc_image: "minio/mc:RELEASE.2025-08-13T08-35-41Z"
   mc_image_digest: "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
 

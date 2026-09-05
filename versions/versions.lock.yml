@@ -11,11 +11,11 @@ rocky_linux:
   major_eol: "2032-05-31"
 
 mariadb:
-  version: "11.4.12"
+  version: "11.4.13"
   series: "11.4"
   type: "LTS"
   eol: "2029-05"
-  rpm_release: "1.el9"          # audit#12: potwierdzone na hostach (MariaDB-server-11.4.12-1.el9)
+  rpm_release: "1.el9"          # zweryfikowane w repodata 2026-09-04 (MariaDB-server-11.4.13-1.el9)
   repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
   # Prefiks `mariadb-` i PELNA wersja sa wymagane: bez nich skrypt konfiguruje
   # repozytorium SERII (.../mariadb-server/11.4/...), ktore trzyma wylacznie
@@ -23,7 +23,7 @@ mariadb:
   # upstreamu i swiezy build przestaje byc odtwarzalny — 2026-08-24 wyszlo
   # 11.4.13 w trakcie budowy, wiec czesc wezlow dostala 11.4.12, a host
   # dolaczany chwile pozniej juz nie mial jej skad wziac.
-  repo_setup_args: "--mariadb-server-version=mariadb-11.4.12"
+  repo_setup_args: "--mariadb-server-version=mariadb-11.4.13"
   repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"  # audit#6: integralność skryptu (v2026-06-30, 44184B)
   galera_provider: "galera-4"
   galera_provider_version: "26.4.27"   # audit#12: galera-4-26.4.27-1.el9
@@ -37,7 +37,7 @@ mariadb:
   # Zrodla pinow — zweryfikowane pobraniem 2026-08-15 (HTTP 200 + wzmianka
   # o dokladnej wersji na stronie). Bez nich pin byl nieweryfikowalny inaczej
   # niz powtorzeniem calego rozeznania; egzekwuje to validate-lockfile.py.
-  source: "https://github.com/mariadb-corporation/mariadb-docs/blob/main/platform/post-download/mariadb-server-11.4.12.md"
+  source: "https://github.com/mariadb-corporation/mariadb-docs/blob/main/platform/post-download/mariadb-server-11.4.13.md"
   galera_provider_source: "https://github.com/codership/galera/releases/tag/release_26.4.27"
 
 proxysql:
@@ -95,7 +95,7 @@ minio:
   image_digest: "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
   # R1/B3: klient S3 uzywany przez f10_backup / f10_restore (pip). Wczesniej "7.2.7"
   # bylo wpisane na sztywno w obu playbookach - wersja poza kontrola lockfile.
-  sdk_version: "7.2.7"
+  sdk_version: "7.2.20"
   mc_image: "minio/mc:RELEASE.2025-08-13T08-35-41Z"
   mc_image_digest: "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
 

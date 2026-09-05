@@ -21,7 +21,7 @@ rocky_linux:
   major_eol: "2032-05-31"
 
 mariadb:
-  version: "11.4.12"
+  version: "11.4.13"
   series: "11.4"
   type: "LTS"
   eol: "2029-05"
