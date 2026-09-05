@@ -39,7 +39,16 @@
   ansible.builtin.command:
     argv: "{{ ['dnf', 'update', '-y'] + (f12_patch_packages | list) }}"
   register: f12_dnf_result
-  changed_when: true
+  # Drugi przebieg po juz spatchowanym wezle (np. converge zrobil mutacje
+  # przed sciezka f12) konczy sie rc=1 "No packages marked for upgrade".
+  # To legalny no-op, nie blad: pakiety sa w wersji docelowej. Tolerujemy
+  # WYLACZNIE ten stderr — kazdy inny rc nadal pada. changed=false, wiec
+  # restart uslugi nie nastapi.
+  failed_when: >-
+    f12_dnf_result.rc != 0
+    and 'No packages marked for upgrade' not in (f12_dnf_result.stderr | default(''))
+  changed_when: >-
+    f12_dnf_result.rc == 0
   when:
     - f12_real_patch | bool
     - (f12_patch_packages | default([]) | length) > 0

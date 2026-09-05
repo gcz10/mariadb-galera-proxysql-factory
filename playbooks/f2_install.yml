@@ -84,6 +84,17 @@
           - checkpolicy
         state: present
       when: "'galera' in group_names"
+    # serial:1 + brama PO mutacji pakietow czyni converge kontrolowanym
+    # rollingiem: kolejny wezel nie rusza, dopoki ten nie wroci do
+    # Synced/Primary/full size. Bez niej jedyna ochrona byla kolejnoscia,
+    # a restart po dnf robil scriptlet RPM, nie playbook (lukę pokazal
+    # patch 11.4.12 -> 11.4.13, 2026-09-05).
+    - name: "ISC-51: brama zdrowia wezla PO mutacji pakietow MariaDB"
+      ansible.builtin.include_tasks: tasks/assert_galera_healthy.yml
+      vars:
+        health_gate_name: "ISC-51: wezel zdrowy po mutacji pakietow (converge rolling)"
+        health_retries: 24
+      when: "'galera' in group_names"
 
     # Oficjalny pakiet MariaDB dostarcza źródło polityki Galera, ale nie ładuje
     # skompilowanego modułu. Bez niego SST mariabackup jest blokowany m.in. na setpgid.

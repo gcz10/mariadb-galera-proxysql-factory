@@ -71,10 +71,20 @@
         mode: "0755"
         checksum: "sha256:{{ lock.mariadb.repo_setup_sha256 }}"
 
+    # `creates:` nie konwergowal repo po podbiciu wersji (plika juz byl,
+    # wiec repo_setup nigdy nie ruszal) — host app zostawal na kliencie
+    # starej latki, choc lockfile mowil co innego. Jak w f2_install:
+    # bramka na TRESCI baseurl, nie na istnieniu pliku.
+    - name: "MariaDB repo - sprawdz, czy wskazuje wersje z lockfile"
+      ansible.builtin.command: "grep -Eq 'mariadb-(server/)?{{ lock.mariadb.version | regex_escape }}/' /etc/yum.repos.d/mariadb.repo"
+      register: app_mariadb_repo_pinned
+      failed_when: false
+      changed_when: false
+
     - name: "MariaDB repo — konfiguruj wersje z lockfile"
       ansible.builtin.command: "/usr/local/bin/mariadb_repo_setup {{ lock.mariadb.repo_setup_args }} --skip-check-installed"
-      args:
-        creates: /etc/yum.repos.d/mariadb.repo
+      when: app_mariadb_repo_pinned.rc | default(1) != 0
+      changed_when: true
 
     # Wersja przypieta tak samo jak na wezlach: aplikacja ma testowac TEN klient,
     # ktory flota faktycznie wdraza, a nie dowolny z repozytorium dystrybucji.
