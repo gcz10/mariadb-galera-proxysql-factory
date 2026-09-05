@@ -126,7 +126,7 @@
     # CELOWO inline, nie `tasks/assert_galera_healthy.yml`. Bootstrap tworzy
     # JEDNOWEZLOWY Primary Component, wiec asertuje `size == 1`, a nie
     # `nodes_expected` — helper padlby tu zawsze. Uzywa tez modulu
-    # `mysql_query` (`query_result`), nie `shell` (`stdout`), wiec ksztalt
+    # `mariadb_query` (`query_result`), nie `shell` (`stdout`), wiec ksztalt
     # danych jest inny.
     - name: "Weryfikuj cluster status"
       ansible.mariadb.mariadb_query:
