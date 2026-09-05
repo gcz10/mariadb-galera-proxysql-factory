@@ -174,11 +174,20 @@ def main() -> int:
     # `openssl verify` na lancuchu, nie samo "TLS obecny": endpoint podajacy
     # self-signed cert przechodzilby slabszy test, a klient by go odrzucil.
     if app_hosts:
+        # stderr NIE jest wyrzucany: bez niego brak POLACZENIA wygladal
+        # identycznie jak zly certyfikat — grep nie znajdowal "Verify return
+        # code", wiec sonda raportowala "certyfikat nie weryfikuje sie wobec
+        # CA", choc zmierzyla "No route to host". Zmierzone 2026-09-05 na
+        # xenonv11: VIP zdjety przez keepalived (brak writera ONLINE),
+        # openssl zwracal errno=113, a certyfikat na samym wezle weryfikowal
+        # sie poprawnie ("Verify return code: 0 (ok)"). Komunikat wysylal
+        # operatora na polowanie na nieistniejacy problem PKI.
         tls_script = (
             f"if [ ! -f {SHARED_CA} ]; then echo CA=MISSING; else echo CA=OK; "
             f"echo | openssl s_client -connect {vip}:{port} -starttls mysql "
-            f"-CAfile {SHARED_CA} 2>/dev/null "
-            "| grep -E '^(Verify return code|subject=|issuer=)' | tr '\\n' ';'; fi"
+            f"-CAfile {SHARED_CA} 2>&1 "
+            "| grep -E '^(Verify return code|subject=|issuer=)|BIO_connect|connect:errno' "
+            "| tr '\\n' ';'; fi"
         )
         tls_raw = run_ansible(ctx, "app[0]", tls_script)
         require_hosts(tls_raw, app_hosts[:1], "TLS wspolnego endpointu", failures, undetermined)
@@ -191,11 +200,19 @@ def main() -> int:
                     f"{node}: brak {SHARED_CA} — warstwa nie rozprowadzila CA endpointu"
                 )
                 continue
-            check(
-                "Verify return code: 0 (ok)" in body,
+            if "Verify return code: 0 (ok)" in body:
+                continue
+            if "BIO_connect" in body or "connect:errno" in body:
+                # Rozroznienie jest istotne diagnostycznie: tu NIE wiadomo nic
+                # o certyfikacie, bo handshake nigdy sie nie zaczal.
+                failures.append(
+                    f"{node}: endpoint {vip}:{port} nie przyjmuje polaczen — "
+                    f"certyfikatu NIE zmierzono ({body.strip()[:200]})"
+                )
+                continue
+            failures.append(
                 f"{node}: certyfikat VIP {vip}:{port} nie weryfikuje sie wobec CA "
-                f"warstwy wspolnej ({body.strip()[:200]})",
-                failures,
+                f"warstwy wspolnej ({body.strip()[:200]})"
             )
     else:
         undetermined.append("brak hosta w grupie 'app' — nie zmierzono TLS endpointu")
