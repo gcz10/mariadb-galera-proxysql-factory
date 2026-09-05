@@ -86,18 +86,6 @@ node_exporter:
     amd64: "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
     arm64: "ad35b605f9954b9f1ffddf5ba054bdc5a98d790b9eae5291e1eeb83f1ecbd0e7"
 
-ansible:
-  core_version: "2.21.3"
-  core_released: "2026-08-10"
-  collections:
-    - name: "ansible.mysql"
-      version: "5.1.0"
-      note: "successor of deprecated community.mysql; FQCN ansible.mysql.*"
-    - name: "community.general"
-      version: "latest-stable"
-    - name: "ansible.posix"
-      version: "latest-stable"
-
 repositories:
   - name: "mariadb-official"
     url: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"

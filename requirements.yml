@@ -1,5 +1,14 @@
 ---
-# requirements.yml — kolekcje Ansible.
+# requirements.yml — kolekcje Ansible. JEDYNE źródło prawdy dla ich wersji.
+#
+# Kolekcje żyją na KONTROLERZE, nie na hostach floty, więc nie mają nic wspólnego
+# z podziałem lockfile'ów na EL9/EL10 ani z serią MariaDB. Do 2026-09-04 ich piny
+# stały równolegle w czterech lockfile'ach jako blok `ansible` — bez konsumenta
+# (żaden playbook, rola ani sonda go nie czytały), poza kontraktem
+# `validate-lockfile.py` i bez bramki spójności z tym plikiem. Blok usunięto;
+# jedynym instalującym jest `ansible-galaxy collection install -r requirements.yml`
+# (.github/workflows/ci.yml).
+#
 # F1 research: community.mysql deprecated -> ansible.mysql (2026-07-22).
 # ansible.mysql wspiera MariaDB do mid-2027; potem ansible.mariadb.
 
