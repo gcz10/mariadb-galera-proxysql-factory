@@ -31,6 +31,17 @@ CN="$1"
 SAN_INPUT="$2"
 OUT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/${CN%%-*}"
 
+# LEAF nazywa PLIKI liscia w katalogu CA. Domyslnie `server` — czyli dotychczasowe
+# `server-cert.pem`/`server-key.pem`. Osobna nazwa jest potrzebna, gdy pod jednym
+# CA warstwy zyje WIECEJ niz jedna usluga: `pki/generate.sh xenonv12-pmm ...`
+# trafialoby do tego samego katalogu (prefiks przed pierwszym `-`) i NADPISALOBY
+# certyfikat endpointu ProxySQL. Wtedy: LEAF=pmm REUSE_CA=1 pki/generate.sh ...
+LEAF="${LEAF:-server}"
+if [[ ! "$LEAF" =~ ^[A-Za-z0-9_-]+$ ]] || [ "$LEAF" = "ca" ]; then
+  echo "FAIL: nieprawidlowa lub niebezpieczna nazwa liscia LEAF='$LEAF' (wymagany bezpieczny basename [A-Za-z0-9_-], nie moze nadpisywac CA)" >&2
+  exit 1
+fi
+
 # Rozdziel SAN-y na DNS: i IP: — openssl wymaga jawnego typu, a wpisanie adresu
 # jako DNS: sprawia, ze weryfikacja po IP cicho nie dziala.
 san_list=""
@@ -72,6 +83,27 @@ if [ "${REUSE_CA:-0}" = "1" ]; then
     echo "FAIL: REUSE_CA=1, ale brakuje $OUT_DIR/ca.pem albo ca-key.pem" >&2
     exit 1
   fi
+  # CA wystawione przed dodaniem subjectKeyIdentifier nie pozwala liscia zwiazac
+  # z wystawca po kluczu, a strict-weryfikacja (m.in. ansible.builtin.uri) odrzuca
+  # wtedy lancuch: "Missing Authority Key Identifier". Certyfikat CA jest wtedy
+  # wystawiany PONOWNIE na TYM SAMYM kluczu i z ta sama nazwa, wiec wczesniej
+  # podpisane liscie pozostaja wazne — to odswiezenie certyfikatu, nie rotacja CA.
+  if ! openssl x509 -in "$OUT_DIR/ca.pem" -noout -text | grep -q "Subject Key Identifier"; then
+    echo "== CA: uzupelniam subjectKeyIdentifier (ten sam klucz i ta sama nazwa)"
+    ca_subject_before="$(openssl x509 -in "$OUT_DIR/ca.pem" -noout -subject)"
+    # `x509 -signkey` podpisuje PONOWNIE istniejacy certyfikat, wiec subject i
+    # issuer biora sie z pliku — zadnego przepisywania DN, ktore potrafi zmienic
+    # nazwe wystawcy i uniewaznic wszystkie wczesniej podpisane liscie.
+    openssl x509 -in "$OUT_DIR/ca.pem" -signkey "$OUT_DIR/ca-key.pem" -sha256 -days 1095 \
+      -out "$OUT_DIR/ca.refreshed.pem" \
+      -extfile <(printf 'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n') 2>/dev/null
+    if [ "$(openssl x509 -in "$OUT_DIR/ca.refreshed.pem" -noout -subject)" != "$ca_subject_before" ]; then
+      rm -f "$OUT_DIR/ca.refreshed.pem"
+      echo "FAIL: odswiezenie CA zmienilo nazwe wystawcy — przerwane przed nadpisaniem" >&2
+      exit 1
+    fi
+    mv "$OUT_DIR/ca.refreshed.pem" "$OUT_DIR/ca.pem"
+  fi
   echo "== CA: uzywam istniejacego $OUT_DIR/ca.pem (rotacja liscia)"
 else
   echo "== CA: CN=${CN} CA"
@@ -79,31 +111,32 @@ else
     -keyout "$OUT_DIR/ca-key.pem" -out "$OUT_DIR/ca.pem" \
     -subj "/CN=${CN} CA" \
     -addext "basicConstraints=critical,CA:TRUE" \
-    -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -addext "subjectKeyIdentifier=hash" 2>/dev/null
 fi
 
-echo "== Serwer: CN=${CN}, SAN=${san_list}"
+echo "== Lisc '${LEAF}': CN=${CN}, SAN=${san_list}"
 openssl req -newkey rsa:4096 -sha256 -nodes \
-  -keyout "$OUT_DIR/server-key.pem" -out "$OUT_DIR/server.csr" \
+  -keyout "$OUT_DIR/${LEAF}-key.pem" -out "$OUT_DIR/${LEAF}.csr" \
   -subj "/CN=${CN}" 2>/dev/null
 
 # extendedKeyUsage z OBIEMA rolami: ten sam cert obsluguje polaczenia
 # przychodzace (serwer) i wychodzace do innych wezlow (klient) — tak jak
 # istniejacy cert fc9, ktory ma "TLS Web Server Authentication,
 # TLS Web Client Authentication".
-openssl x509 -req -in "$OUT_DIR/server.csr" -sha256 -days 1095 \
+openssl x509 -req -in "$OUT_DIR/${LEAF}.csr" -sha256 -days 1095 \
   -CA "$OUT_DIR/ca.pem" -CAkey "$OUT_DIR/ca-key.pem" -CAcreateserial \
-  -out "$OUT_DIR/server-cert.pem" \
-  -extfile <(printf 'subjectAltName=%s\nextendedKeyUsage=serverAuth,clientAuth\nbasicConstraints=CA:FALSE\n' "$san_list") \
+  -out "$OUT_DIR/${LEAF}-cert.pem" \
+  -extfile <(printf 'subjectAltName=%s\nextendedKeyUsage=serverAuth,clientAuth\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' "$san_list") \
   2>/dev/null
 
-rm -f "$OUT_DIR/server.csr" "$OUT_DIR/ca.srl"
+rm -f "$OUT_DIR/${LEAF}.csr" "$OUT_DIR/ca.srl"
 chmod 0600 "$OUT_DIR"/*.pem
 
 echo "== Weryfikacja"
-openssl verify -CAfile "$OUT_DIR/ca.pem" "$OUT_DIR/server-cert.pem"
+openssl verify -CAfile "$OUT_DIR/ca.pem" "$OUT_DIR/${LEAF}-cert.pem"
 # `-ext subjectAltName` nie istnieje w LibreSSL (macOS), a host kontrolny moze
 # byc jednym albo drugim. `-text | grep` dziala wszedzie.
-openssl x509 -in "$OUT_DIR/server-cert.pem" -noout -text \
+openssl x509 -in "$OUT_DIR/${LEAF}-cert.pem" -noout -text \
   | grep -A1 "Subject Alternative Name" | sed 's/^/   /'
 echo "OK: $OUT_DIR"
