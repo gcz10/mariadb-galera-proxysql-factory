@@ -21,6 +21,22 @@ POOL="${FLEET_POOL:-claude-isa}"
 : "${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
 : "${PROXMOX_VE_API_TOKEN:?Ustaw PROXMOX_VE_API_TOKEN}"
 
+# Poswiadczenia NIGDY nie ida w argv (byly widoczne w `ps` kazdemu na hoscie):
+# repo ma na to wzorzec z pve-teardown.sh i pve-create-vm.sh — plik naglowkow
+# 0600 czytany przez `curl -H @plik`. Python nie dostaje ich wcale: pobiera
+# gotowy JSON ze standardowego wejscia.
+AUTH_HEADER_FILE=$(mktemp)
+chmod 600 "$AUTH_HEADER_FILE"
+trap 'rm -f "$AUTH_HEADER_FILE"' EXIT
+printf 'Authorization: PVEAPIToken=%s\n' "$PROXMOX_VE_API_TOKEN" > "$AUTH_HEADER_FILE"
+
+# `--fail` we WSZYSTKICH wywolaniach: bez niego curl konczy sie zerem takze przy
+# HTTP 500/403, wiec skrypt raportowalby pusta pule albo "skasowana" dla maszyny,
+# ktora zyje.
+api() {
+  curl -sS --fail -k -H @"$AUTH_HEADER_FILE" "$@"
+}
+
 # Stan terraform czytamy PRZED jakakolwiek mutacja: maszyna widziana przez
 # jakikolwiek root NIE jest sierota puli i nalezy do `infra-teardown`.
 managed=""
@@ -36,26 +52,17 @@ print(" ".join(str(vm["vmid"]) for vm in data.values() if isinstance(vm, dict) a
   managed="$managed $ids"
 done
 
-REPORT=$(POOL="$POOL" MANAGED="$managed" python3 - "$PROXMOX_VE_ENDPOINT" "$PROXMOX_VE_API_TOKEN" <<'PY'
-import json, os, ssl, sys, urllib.request
+REPORT=$(api "${PROXMOX_VE_ENDPOINT%/}/api2/json/cluster/resources?type=vm" |
+  POOL="$POOL" MANAGED="$managed" python3 -c '
+import json, os, sys
 
-endpoint, token = sys.argv[1].rstrip("/"), sys.argv[2]
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
-request = urllib.request.Request(
-    f"{endpoint}/api2/json/cluster/resources?type=vm",
-    headers={"Authorization": f"PVEAPIToken={token}"},
-)
-with urllib.request.urlopen(request, context=ctx, timeout=30) as response:
-    resources = json.load(response)["data"]
-
+resources = json.load(sys.stdin)["data"]
 managed = {int(v) for v in os.environ["MANAGED"].split()}
 for vm in sorted(resources, key=lambda v: v.get("vmid", 0)):
     if vm.get("pool") != os.environ["POOL"] or vm.get("vmid") in managed:
         continue
-    print(f"{vm['vmid']} {vm.get('node', '')} {vm.get('name', '')} {vm.get('status', '')}")
-PY
+    print(vm["vmid"], vm.get("node", ""), vm.get("name", ""), vm.get("status", ""))
+'
 )
 
 if [ -z "$REPORT" ]; then
@@ -72,11 +79,8 @@ if [ "${CONFIRM:-}" != "yes" ]; then
   exit 1
 fi
 
-# `--fail` we WSZYSTKICH wywolaniach: bez niego curl konczy sie zerem takze przy
-# HTTP 500/403, wiec skrypt drukowalby "skasowana" dla maszyny, ktora zyje.
-api() {
-  curl -sS --fail -k -H "Authorization: PVEAPIToken=${PROXMOX_VE_API_TOKEN}" "$@"
-}
+# Sierota kasowana jest dopiero po zatrzymaniu: DELETE na dzialajacej maszynie
+# PVE odrzuca.
 
 echo "$REPORT" | while read -r vmid node name status; do
   echo "== $vmid ($name) na $node: $status"
