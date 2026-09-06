@@ -445,6 +445,11 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
   pyflakes bez zgloszen. Deklaracje floty pozostaja `validate_certs: false`
   (PMM z certyfikatem self-signed) — pakiet nie zmienia zadnej deklaracji,
   usuwa tylko rozjazd miedzy deklaracja a zachowaniem.
+  Warunek wejscia, jawnie: `infra_services.yml` nie instaluje zadnego CA, a PMM
+  przy pierwszym starcie ma certyfikat self-signed. Platforma deklarujaca
+  `validate_certs: true` musi miec zaufany certyfikat wdrozony ZANIM uruchomi
+  `platform-infra`, inaczej petla gotowosci PMM (60 x 5 s) nie przejdzie.
+  Zywa platforma `xenonv12` deklaruje `false`, wiec dzis nie dotyczy to nikogo.
 
 - ISC-1: PASS — lab2-cluster wdrożony na czystych kontenerach (f2_install + site.yml + bootstrap + f5_join, wszystkie taski PASS, failed=0). 2026-07-24.
 
