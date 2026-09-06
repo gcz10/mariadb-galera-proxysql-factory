@@ -429,6 +429,23 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
   zatrzymanego klastra sonda kończy się `UNDETERMINED` (exit 2), nie zielono.
   Wpięta w `make lab-selinux-verify` i `make lab-post-build-gate`.
 
+- Pakiet C (sekrety/TLS) — weryfikacja lokalna, bez zmian na flocie:
+  `monitoring.pmm.validate_certs` jest polem WYMAGANYM przez oba schematy, ale
+  `cluster_deregister.yml` (11 wywolan), `infra_services.yml` (3) mialy
+  `validate_certs: false` zaszyte na sztywno, a `platform_adopt.yml` domyslal sie
+  `false` przy braku pola. Wszystkie te wywolania niosą haslo admina PMM w naglowku
+  Basic Auth, wiec klaster deklarujacy `true` i tak wysylal je bez weryfikacji
+  certyfikatu — deklaracja byla ozdobna. Teraz decyduje deklaracja, a brak pola
+  oznacza `true` (fail-closed). Nowy kontrakt `tests/unit/test_pmm_tls_validation_contract.py`
+  skanuje wszystkie zadania `uri` w `playbooks/` i renderuje wyrazenia szesciu
+  playbookow PMM dla wartosci `true`/`false`/brak pola.
+  Dowod: 631 testow OK; falsyfikowalnosc kontraktu potwierdzona — playbook
+  z literalnym `validate_certs: false` przewraca test (`FAILED (failures=1)`),
+  po usunieciu pliku wraca zielono. `ansible-lint playbooks roles` — 0 failures/0 warnings;
+  pyflakes bez zgloszen. Deklaracje floty pozostaja `validate_certs: false`
+  (PMM z certyfikatem self-signed) — pakiet nie zmienia zadnej deklaracji,
+  usuwa tylko rozjazd miedzy deklaracja a zachowaniem.
+
 - ISC-1: PASS — lab2-cluster wdrożony na czystych kontenerach (f2_install + site.yml + bootstrap + f5_join, wszystkie taski PASS, failed=0). 2026-07-24.
 
 - ISC-2: PASS — idempotentny converge: f3_galera_config re-run → config changed=False (server.cnf stabilny); F11 monitoring changed=0 na wszystkich hostach. 2026-07-24.

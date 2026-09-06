@@ -48,6 +48,10 @@
     # w jeden zestaw i przebudowa PMM zabierala ze soba magazyn kopii floty.
     infra_services: "{{ platform.infra.services | default(['pmm', 'minio', 'maildev']) }}"
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
+    # Deklaracja platformy zamiast zaszytego `false`: ponizsze wywolania niosą
+    # haslo admina PMM, wiec weryfikacja certyfikatu ma wynikac z `platform.yml`,
+    # a nie byc wylaczona bezwarunkowo. Brak pola (schema go wymaga) = `true`.
+    pmm_validate_certs: "{{ (monitoring | default({})).get('pmm', {}).get('validate_certs', true) | bool }}"
     minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
     minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
     infra_compose_dir: /etc/isa-infra
@@ -287,7 +291,7 @@
       ansible.builtin.uri:
         url: "https://{{ ansible_host }}/"
         method: GET
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code: 200
       register: pmm_readiness
       until: pmm_readiness.status == 200
@@ -354,7 +358,7 @@
         user: "{{ pmm_admin_user | default('admin') }}"
         password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code:
           - 200
           - 401
@@ -369,7 +373,7 @@
         user: "{{ pmm_admin_user | default('admin') }}"
         password: "{{ pmm_default_bootstrap_password | default('admin') }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         body_format: json
         body:
           oldPassword: "{{ pmm_default_bootstrap_password | default('admin') }}"

@@ -28,7 +28,9 @@
     pmm_url: "{{ monitoring.pmm.server_url | regex_replace('/$', '') }}"
     pmm_user: "admin"
     pmm_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
-    pmm_validate: "{{ monitoring.pmm.validate_certs | default(false) }}"
+    # Brak deklaracji nie moze oznaczac "nie weryfikuj" — schema wymaga tego
+    # pola, wiec fallback jest fail-closed jak w pozostalych playbookach PMM.
+    pmm_validate: "{{ monitoring.pmm.validate_certs | default(true) | bool }}"
     # Adres -> jedyna dozwolona nazwa wezla w PMM.
     platform_expected: >-
       {{ dict(groups['proxysql']

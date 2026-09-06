@@ -97,6 +97,11 @@
     pmm_api_url: "{{ lookup('ansible.builtin.env', 'PMM_SERVER_URL') | default((monitoring | default({})).get('pmm', {}).get('server_url', ''), true) | regex_replace('/$', '') }}"
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
     cluster_label: "{{ (monitoring | default({})).get('pmm', {}).get('cluster_name', cluster.name) }}"
+    # Deklaracja klastra, nie zaszyte `false`: klaster, ktory zadeklarowal
+    # `monitoring.pmm.validate_certs: true`, dostawal tu polaczenie BEZ
+    # weryfikacji certyfikatu, mimo ze wysyla haslo admina PMM. Domyslka `true`
+    # jest fail-closed dla definicji bez tego pola (schema go wymaga).
+    pmm_validate_certs: "{{ (monitoring | default({})).get('pmm', {}).get('validate_certs', true) | bool }}"
     f15_folder_uid: "{{ (monitoring | default({})).get('alerts', {}).get('folder_uid', 'isa-alerts-' ~ cluster_label) }}"
     # Najemca kasuje wyłącznie własne prefiksy UID. Dla krótkich nazw pozostaje
     # czytelne `isa-<cluster_label>-`; długie nazwy używają deterministycznego
@@ -122,7 +127,7 @@
         url_username: admin
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code: [200, 404]
       register: f15_dereg_rules
       no_log: true
@@ -134,7 +139,7 @@
         url_username: admin
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code: [200, 204, 404]
       # Najemca NIGDY nie zdejmuje regul `isa-shared-*`: naleza do warstwy
       # wspolnej i kasuje je wylacznie jej wlasny cykl zycia. Gdyby kazdy
@@ -169,7 +174,7 @@
         url_username: admin
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code: 200
       register: f15_dereg_policy
       no_log: true
@@ -181,7 +186,7 @@
         url_username: admin
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         body_format: json
         body: >-
           {{
@@ -208,7 +213,7 @@
         url_username: admin
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code: [200, 202, 204, 404]
       no_log: true
 
@@ -222,7 +227,7 @@
         url_username: admin
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code: 200
       register: f15_dereg_folders
       no_log: true
@@ -234,7 +239,7 @@
         url_username: admin
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code: [200, 204, 404]
       loop: >-
         {{ (f15_dereg_folders.json | default([]))
@@ -254,7 +259,7 @@
         url_username: admin
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code: 200
       register: pmm_dereg_services
       no_log: true
@@ -283,7 +288,7 @@
         url_username: admin
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code: [200, 204, 404]
       loop: "{{ pmm_cluster_service_ids | default([]) }}"
       no_log: true
@@ -298,7 +303,7 @@
         url_username: admin
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code: 200
       register: pmm_dereg_nodes
       no_log: true
@@ -326,7 +331,7 @@
         url_username: admin
         url_password: "{{ pmm_admin_password }}"
         force_basic_auth: true
-        validate_certs: false
+        validate_certs: "{{ pmm_validate_certs }}"
         status_code: [200, 204, 404]
       loop: "{{ pmm_cluster_node_ids | default([]) }}"
       no_log: true
