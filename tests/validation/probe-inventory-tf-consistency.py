@@ -165,10 +165,23 @@ def self_test(root: Path) -> int:
         # Fixture wybierany Z DRZEWA, nie po nazwie: samo-test przywiazany do
         # `orionv8-r9`/`cassiopeiav8-r9` padal przy KAZDYM sprzataniu definicji
         # martwego klastra, czyli bramka psula sie od operacji, ktorej pilnuje.
+        # Fixture MUSI stac na definicji, ktora bramka realnie sprawdza. Szablon
+        # albo `terraform_managed: false` sa pomijane przez `check_definition`,
+        # wiec falsyfikacja na nich wychodzilaby ZONK bez zadnego bledu w regule.
+        def validated(name: str) -> bool:
+            if name in TEMPLATE_DIRS:
+                return False
+            config = work / "clusters" / name / "cluster.yml"
+            if not config.is_file():
+                return True
+            data = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+            return data.get("terraform_managed") is not False
+
         pairs = sorted(
             (path.parent.name, host)
             for path in (work / "terraform").glob("*/main.tf")
-            if (work / "clusters" / path.parent.name / "inventory.yml").is_file()
+            if validated(path.parent.name)
+            and (work / "clusters" / path.parent.name / "inventory.yml").is_file()
             for host in parse_vms_map(path)
         )
         if not pairs:
