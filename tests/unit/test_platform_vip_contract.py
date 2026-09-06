@@ -60,6 +60,21 @@ class PlatformVipContractTests(unittest.TestCase):
         garbage = {host: {"GROUPS": "ERROR 2002", "WRITERS": ""} for host in HOSTS}
         self.assertFalse(probe.withdrawal_is_expected(garbage, HOSTS))
 
+    def test_pair_disagreement_keeps_the_vip_required(self):
+        """Jedna instancja widzi writera, druga nie — VIP zostaje wymagany.
+
+        Rozjazd w parze jest sam w sobie anomalią, ale nie wolno mu ZŁAGODZIĆ
+        bramki: dopóki ktokolwiek widzi writera ONLINE, jest komu obsłużyć ruch,
+        więc brak adresu pozostaje awarią. Odwrotna reguła (dowolny węzeł
+        raportujący zero rozgrzesza brak VIP-a) zamieniłaby błąd odczytu
+        na ciszę.
+        """
+        divergent = {
+            "p1": {"GROUPS": "4", "WRITERS": "1"},
+            "p2": {"GROUPS": "4", "WRITERS": "0"},
+        }
+        self.assertFalse(probe.withdrawal_is_expected(divergent, HOSTS))
+
     def test_layer_without_tenants_still_must_hold_the_vip(self):
         """Zero grup to przypadek (a) bramki: adres ma być trzymany.
 
