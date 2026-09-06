@@ -471,6 +471,21 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
   w `docs/records/` i `docs/superpowers/plans/`, czyli dokumentach historycznych
   opisujących stan z ich daty — zostawione bez zmian celowo.
 
+- ZNANA LUKA z 2026-09-04 (rygor lockfile'a z samodeklaracji) ZAMKNIĘTA 2026-09-06:
+  o ścieżce walidacji decyduje teraz UŻYCIE, nie stopka pliku. `validate-lockfile.py`
+  czyta `versions.lock_file` ze wszystkich `clusters/*/cluster.yml` i każdy wskazany
+  plik przechodzi rygor pełny — bramkę ISC-63, komplet wymaganych kluczy, proweniencję —
+  niezależnie od tego, czy sam deklaruje `# Status: LOCKED`. Brak zgodnej stopki przy
+  pliku wskazanym jest osobnym błędem. Kandydat, którego nie wskazuje żadna definicja,
+  zachowuje ścieżkę łagodną: szkic z placeholderami czekającymi na F0 ma prawo być
+  niekompletny. Wybór spośród dwóch wariantów świadomy: rygor pilnuje TREŚCI, nie
+  etykiety, więc przetestowanie kandydata na jednym klastrze pozostaje możliwe —
+  pod warunkiem, że plik jest kompletny. Zepsuty `cluster.yml` nie wycisza rygoru
+  dla pozostałych referencji.
+  Dowód: `tests/unit/test_lockfile_strictness.py` (4 testy) — na kodzie sprzed zmiany
+  wszystkie cztery padają; 638 testów OK; wszystkie pięć lockfile'ów w `versions/`
+  przechodzi walidację po zmianie (kandydat nie jest dziś przez nikogo wskazywany).
+
 - ISC-1: PASS — lab2-cluster wdrożony na czystych kontenerach (f2_install + site.yml + bootstrap + f5_join, wszystkie taski PASS, failed=0). 2026-07-24.
 
 - ISC-2: PASS — idempotentny converge: f3_galera_config re-run → config changed=False (server.cnf stabilny); F11 monitoring changed=0 na wszystkich hostach. 2026-07-24.

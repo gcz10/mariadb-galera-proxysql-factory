@@ -73,8 +73,32 @@ PROVENANCE = (
 
 PLACEHOLDER_MARKERS = ("to-confirm-f0", "to-verify", "todo:", "fixme:", "xxx:")
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
-def validate(path: Path) -> list[str]:
+
+def referenced_lockfiles(repo_root: Path = REPO_ROOT) -> set[Path]:
+    """Lockfile'e WSKAZANE przez definicje klastrow (`versions.lock_file`).
+
+    Wskazanie jest deklaracja "tym plikiem buduje sie klaster", wiec to ono —
+    a nie stopka `# Status:` w samym pliku — decyduje o rygorze. Wczesniej
+    plik ze stopka `candidate` przechodzil sciezka lagodna NAWET gdy wskazywal
+    go `cluster.yml`: bez bramki ISC-63, bez kompletu kluczy, bez proweniencji.
+    CI swiecilo zielono, a fail-closed przychodzil dopiero na hoscie.
+    """
+    referenced: set[Path] = set()
+    for cluster in sorted(repo_root.glob("clusters/*/cluster.yml")):
+        try:
+            cfg = yaml.safe_load(cluster.read_text(encoding="utf-8")) or {}
+        except (yaml.YAMLError, OSError):
+            # Zepsuta definicja jest bledem WALIDATORA KLASTRA, nie tego pliku.
+            continue
+        lock = ((cfg.get("versions") or {}) if isinstance(cfg, dict) else {}).get("lock_file")
+        if lock:
+            referenced.add((repo_root / str(lock)).resolve())
+    return referenced
+
+
+def validate(path: Path, referenced: set[Path] | None = None) -> list[str]:
     """Zwraca liste bledow (pusta = OK)."""
     errors: list[str] = []
     text = path.read_text(encoding="utf-8")
@@ -87,11 +111,21 @@ def validate(path: Path) -> list[str]:
     if not isinstance(data, dict):
         return [f"{path}: korzen nie jest slownikiem"]
 
-    # Rygor zalezy od dojrzalosci lockfile'a, ktora deklaruje on sam w stopce
-    # "# Status: LOCKED" / "# Status: candidate". Kandydat jest Z DEFINICJI niekompletny
-    # (placeholdery to-confirm-F0 czekaja na discovery), wiec egzekwowanie na nim bramki
-    # ISC-63 i kompletu kluczy byloby falszywym alarmem. Sprawdzamy go tylko strukturalnie.
-    is_locked = re.search(r"^#\s*Status:\s*LOCKED", text, re.MULTILINE | re.IGNORECASE)
+    # Rygor pelny obowiazuje, gdy plik SAM deklaruje dojrzalosc ("# Status: LOCKED")
+    # ALBO gdy wskazuje go jakikolwiek `cluster.yml`. Kandydat, ktorego nikt nie
+    # wskazuje, jest z definicji niekompletny (placeholdery czekaja na discovery)
+    # i sprawdzamy go tylko strukturalnie — ale kandydat, ktorym ktos BUDUJE
+    # klaster, przestaje byc szkicem i podlega bramce ISC-63 jak kazdy inny.
+    if referenced is None:
+        referenced = referenced_lockfiles()
+    self_declared = re.search(r"^#\s*Status:\s*LOCKED", text, re.MULTILINE | re.IGNORECASE)
+    in_use = path.resolve() in referenced
+    is_locked = bool(self_declared) or in_use
+    if in_use and not self_declared:
+        errors.append(
+            f"{path}: stopka nie deklaruje '# Status: LOCKED', a plik jest wskazany "
+            "przez definicje klastra — rygor pelny obowiazuje mimo to; uzupelnij stopke"
+        )
 
     # 2. Placeholdery (ISC-63) — tylko dla LOCKED
     if is_locked:
@@ -182,13 +216,14 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     rc = 0
+    referenced = referenced_lockfiles()
     for arg in argv[1:]:
         path = Path(arg)
         if not path.is_file():
             print(f"FAIL: {path}: nie istnieje")
             rc = 1
             continue
-        errs = validate(path)
+        errs = validate(path, referenced)
         if errs:
             for e in errs:
                 print(f"FAIL: {e}")
