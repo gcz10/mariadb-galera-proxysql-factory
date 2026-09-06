@@ -118,6 +118,16 @@ galera-rebuild:  ## Przebuduj TYLKO wezly Galera+restore (zachowuje PMM i ProxyS
 	CONFIRM_DESTROY=$(TF_DIR) terraform/pve-teardown.sh $(TF_DIR) $(GALERA_VMS)
 	cd $(TF_DIR) && terraform apply -auto-approve -parallelism=1
 
+# `infra-teardown` sprzata WYLACZNIE maszyny widziane przez `terraform output`
+# danego roota. Pula potrafi trzymac maszyny spoza stanu (postawione recznie,
+# resztki generacji bez roota) i to one blokuja pozniej VMID/IP przy odbudowie.
+fleet-orphans:  ## Raport: maszyny puli PVE spoza stanu terraform (nic nie kasuje)
+	tools/pve-pool-teardown.sh
+
+fleet-orphans-teardown:  ## Skasuj maszyny puli PVE spoza stanu terraform (wymaga CONFIRM=yes)
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje maszyny puli spoza stanu terraform)"; exit 1)
+	CONFIRM=yes tools/pve-pool-teardown.sh
+
 infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM=yes)
 	$(cluster_guard)
 	$(tf_dir_guard)
