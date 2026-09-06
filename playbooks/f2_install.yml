@@ -214,6 +214,35 @@
           mariadb_galera_policy_candidate.stat.checksum !=
           (mariadb_galera_policy_active.stat.checksum | default(''))
 
+    # Pakiety MariaDB.org instaluja demona jako /usr/sbin/mariadbd, a polityka
+    # dystrybucji zna wylacznie sciezke Rocky (/usr/libexec/mariadbd). Bez tej
+    # etykiety plik zostaje `bin_t`, systemd startuje baze w domenie `initrc_t`
+    # i SELinux BLOKUJE dawce SST: `mariadb-backup` (poprawnie `mysqld_t`) nie ma
+    # prawa `connectto` gniazda `initrc_t`. Zmierzone na swiezej budowie:
+    # "Failed to connect to MariaDB server: ... (13 Permission denied)" i AVC
+    # denied { connectto } ... tclass=unix_stream_socket. Pakietowy plik .fc
+    # etykietuje mariabackup i skrypty wsrep, ale demona juz nie. Regula celuje
+    # w /usr/bin/mariadbd, bo przy usrmerge SELinux ma rownowaznosc
+    # `/usr/sbin -> /usr/bin` i odrzuca spec na /usr/sbin (ten sam plik).
+    - name: "SELinux - etykieta mysqld_exec_t dla demona z pakietu MariaDB.org"
+      community.general.sefcontext:
+        target: "/usr/bin/mariadbd"
+        setype: mysqld_exec_t
+        state: present
+      register: mariadb_daemon_fcontext
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - przywroc kontekst demona po zmianie etykiety"
+      ansible.builtin.command:
+        argv: [restorecon, -Fv, /usr/sbin/mariadbd]
+      register: mariadb_daemon_restorecon
+      changed_when: mariadb_daemon_restorecon.stdout | length > 0
+      when:
+        - "'galera' in group_names"
+        - ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
 
     - name: "Katalog drop-in mariadb.service"
       ansible.builtin.file:

@@ -41,6 +41,8 @@ CLUSTER_RUN = -i clusters/$(CLUSTER)/inventory.yml -e @clusters/$(CLUSTER)/clust
 PLATFORM ?= example
 PLATFORM_DIR = platform/$(PLATFORM)
 PLATFORM_OPTS = -i $(PLATFORM_DIR)/inventory.yml -e @$(PLATFORM_DIR)/platform.yml $(ANSIBLE_OPTS)
+# Root terraform warstwy wspolnej — jak TF_DIR dla najemcy, nadpisywalny.
+PLATFORM_TF_DIR ?= terraform/$(PLATFORM)
 
 # Cel zwiazany z konkretnym klastrem wymaga jawnego CLUSTER= (command line/env),
 # nie domyslnego example-cluster. Dotyczy tak samo celow mutujacych, jak sond:
@@ -241,6 +243,17 @@ EXISTING_DATA ?=
 # skonfigurujemy pare, para musi odpowiadac zanim Keepalived uzna ja za zdrowa,
 # a rejestracja w PMM ma sens dopiero gdy eksportery maja co zbierac.
 # ---------------------------------------------------------------------------
+
+# Maszyny warstwy wspolnej powstawaly dotad POZA `make`: byl `infra-provision`
+# dla najemcy (TF_DIR z nazwy KLASTRA), ale zadnego celu dla platformy. Odbudowa
+# floty od zera wymagala wiec recznego `terraform apply` w terraform/<platforma>,
+# czyli kroku, ktorego repozytorium nie opisuje. Kontrakt jest teraz symetryczny.
+platform-provision:  ## Utwórz VM warstwy wspolnej (parallelism=1 — równoległość wywala locki ZFS na PVE)
+	$(platform_guard)
+	@test -d "$(PLATFORM_TF_DIR)" || { echo "ERROR: brak $(PLATFORM_TF_DIR) — ta warstwa nie ma roota terraform (maszyny z innego zrodla: pomin ten cel)" >&2; exit 1; }
+	@: "$${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
+	$(pve_auth_guard)
+	cd $(PLATFORM_TF_DIR) && terraform init -input=false >/dev/null && terraform apply -auto-approve -parallelism=1
 
 platform-validate:  ## Waliduj definicje warstwy wspolnej (schema + invarianty inwentarza + preflight)
 	$(platform_guard)

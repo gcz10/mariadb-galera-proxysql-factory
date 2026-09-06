@@ -90,10 +90,12 @@ pki/issue-node-certs.sh <klaster> <g1=ip-g1,g2=ip-g2,g3=ip-g3>
 #    read-only SSH preflight sprawdza system i wersję Rocky Linux.
 make cluster-validate CLUSTER=<nazwa>
 
-# 6. Budowa. Na świeżym obrazie chmurowym pierwszy przebieg potrafi zażądać
-#    restartu do zainstalowanego kernela — playbook powie to wprost.
+# 6. Budowa. Na świeżym obrazie chmurowym OBA cele wymagają zgody na restart
+#    do zainstalowanego kernela: bez jego modułów `xtables` nie powstanie filtr
+#    ingress Dockera, więc bramka odmawia pracy zamiast zbudować host po cichu
+#    inaczej. Na maszynie już zrestartowanej flaga jest bez efektu.
 make platform-build PLATFORM=<nazwa> ANSIBLE_OPTS="-e allow_kernel_reboot=yes"
-make cluster-build CLUSTER=<nazwa> CONFIRM=yes
+make cluster-build CLUSTER=<nazwa> CONFIRM=yes ANSIBLE_OPTS="-e allow_kernel_reboot=yes"
 ```
 
 Po skopiowaniu szablonu uzupełnij **całą** listę poniżej. `cluster-validate`
@@ -185,8 +187,9 @@ export MINIO_ROOT_PASSWORD='<minio-s3-secret>'
 # Alternatywnie załaduj lokalny, ignorowany plik utworzony dla działającego labu:
 # set -a; . tests/lab/.env; set +a
 
-# Opcjonalne prowizjonowanie VM klastra w Proxmox VE (wymaga endpointu i
-# poświadczeń PVE). Maszyny z innego źródła pomijają ten cel:
+# Opcjonalne prowizjonowanie VM w Proxmox VE (wymaga endpointu i poświadczeń
+# PVE). Maszyny z innego źródła pomijają te cele:
+# make platform-provision PLATFORM=<nazwa>
 # make infra-provision CLUSTER=<nazwa>
 # make cluster-trust-hosts CLUSTER=<nazwa>
 
@@ -333,6 +336,7 @@ istnieje; jego powrotu pilnuje `make verify-proxysql-tenancy`.
 
 | Cel | Co robi |
 |---|---|
+| `make platform-provision` | VM warstwy z `terraform/<platforma>` (opcjonalne, jak `infra-provision` u najemcy) |
 | `make platform-validate` | schemat + inwarianty inwentarza + preflight |
 | `make platform-trust-hosts` | re-skan kluczy SSH po re-provision |
 | `make platform-deploy` | pakiety ProxySQL wg lockfile EL10 (sha256 + GPG) |
@@ -351,8 +355,10 @@ istnieje; jego powrotu pilnuje `make verify-proxysql-tenancy`.
 Warstwa daje sie zweryfikowac **bez ani jednego klastra** — `probe-platform.py`
 nie loguje sie do bazy, tylko sprawdza lancuch certyfikatu endpointu przez
 `openssl`, bo platforma z zerem najemcow nie ma zadnych uzytkownikow.
-Udowodnione odbudowa od zera: `fcp1`/`fcp2` zniszczone Terraformem, postawione
-jednym `make platform-build`, konfiguracja koncowa identyczna z baseline.
+Udowodnione odbudowa od zera 2026-09-06: cala flota skasowana (43 maszyny
+Terraformem, 25 przez API PVE), po czym `platform-provision` + `platform-build`
+i dwa `infra-provision` + `cluster-build` postawily warstwe i obu najemcow
+wylacznie przez `make`. Bramki po budowie i `platform-verify` zielone.
 
 Odbudowa wspolnych hostow uniewaznia `known_hosts` **kazdego** najemcy (osobny
 plik per klaster) — przed pierwszym `cluster-proxysql` uruchom

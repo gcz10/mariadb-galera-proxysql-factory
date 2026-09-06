@@ -113,6 +113,18 @@
     allow_downgrade: true
 
 
+# Stan agenta odczytany PRZED dotknieciem zaufania. Na swiezej maszynie pakiet
+# zostawia plik konfiguracyjny, ale agent NIE jest zarejestrowany — sama obecnosc
+# pliku nie jest wiec dowodem, ze jest czego "przelaczac". Bez tego rozroznienia
+# brama ponizej czekala na polaczenie agenta, ktory dopiero mial byc zalozony,
+# i budowa od zera padala po 12 probach ("pmm-agent is running, but not set up").
+- name: "PMM agent — odczytaj stan agenta przed zmiana zaufania"
+  ansible.builtin.command:
+    argv: [timeout, "20", pmm-admin, status, --json]
+  register: pmm_agent_before
+  changed_when: false
+  failed_when: false
+
 - name: "PMM CA — zapewnij katalog anchorów zaufania CA"
   ansible.builtin.file:
     path: /etc/pki/ca-trust/source/anchors
@@ -160,7 +172,7 @@
     state: restarted
     enabled: true
   when:
-    - pmm_agent_config_stat.stat.exists | default(false)
+    - pmm_agent_before.rc == 0
     - (pmm_ca_anchor_copy.changed | default(false))
       or ((pmm_agent_insecure.stdout | default('0') | trim != '0') == (pmm_validate_certs_effective | bool))
 
@@ -173,7 +185,7 @@
   delay: 5
   changed_when: false
   when:
-    - pmm_agent_config_stat.stat.exists | default(false)
+    - pmm_agent_before.rc == 0
     - (pmm_ca_anchor_copy.changed | default(false))
       or ((pmm_agent_insecure.stdout | default('0') | trim != '0') == (pmm_validate_certs_effective | bool))
 
