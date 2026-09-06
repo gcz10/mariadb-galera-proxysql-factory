@@ -36,12 +36,10 @@ HOSTS = ["p1", "p2"]
 
 
 def state(groups: int, writers: int, hosts=HOSTS) -> dict:
-    # Odczyt jest per węzeł pary; obie instancje widzą tę samą konfigurację
-    # runtime, więc rozkładamy zmierzone liczby na pierwszy węzeł.
-    return {
-        host: {"GROUPS": str(groups if i == 0 else 0), "WRITERS": str(writers if i == 0 else 0)}
-        for i, host in enumerate(hosts)
-    }
+    # Obie instancje pary widzą TĘ SAMĄ konfigurację runtime i raportują
+    # identyczne liczby — fixture musi to odwzorowywać, inaczej maskuje błąd
+    # agregacji (sumowanie podwajałoby obie wartości).
+    return {host: {"GROUPS": str(groups), "WRITERS": str(writers)} for host in hosts}
 
 
 class PlatformVipContractTests(unittest.TestCase):
@@ -52,6 +50,15 @@ class PlatformVipContractTests(unittest.TestCase):
     def test_live_writer_keeps_the_vip_mandatory(self):
         """Jest komu obsłużyć ruch — brak VIP-a pozostaje awarią."""
         self.assertFalse(probe.withdrawal_is_expected(state(groups=4, writers=1), HOSTS))
+
+    def test_unreadable_counter_does_not_excuse_a_missing_vip(self):
+        """Śmieć po błędzie klienta liczy się jako 0 — w stronę rygoru.
+
+        Gdyby nieczytelny odczyt szedł w stronę pobłażliwości, awaria klienta
+        admina uciszałaby bramkę VIP-a dokładnie wtedy, gdy nic nie wiadomo.
+        """
+        garbage = {host: {"GROUPS": "ERROR 2002", "WRITERS": ""} for host in HOSTS}
+        self.assertFalse(probe.withdrawal_is_expected(garbage, HOSTS))
 
     def test_layer_without_tenants_still_must_hold_the_vip(self):
         """Zero grup to przypadek (a) bramki: adres ma być trzymany.

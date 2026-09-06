@@ -105,9 +105,20 @@ def withdrawal_is_expected(state: dict, proxysql_hosts: list) -> bool:
     """
     if not state or len(state) != len(proxysql_hosts):
         return False
-    active_groups = sum(int(v.get("GROUPS", "0") or 0) for v in state.values())
-    writers_online = sum(int(v.get("WRITERS", "0") or 0) for v in state.values())
-    return active_groups > 0 and writers_online == 0
+
+    def count(key: str) -> int:
+        # Obie instancje pary widza TE SAMA konfiguracje runtime, wiec bierzemy
+        # maksimum, nie sume: sumowanie podwajaloby liczby i sugerowalo, ze
+        # sonda agreguje rozne swiaty. Niepoprawny odczyt (pusty string, smiec
+        # po bledzie klienta) liczy sie jako 0 — czyli w kierunku RYGORU: przy
+        # zerze grup VIP pozostaje wymagany.
+        best = 0
+        for values in state.values():
+            raw = str(values.get(key, "0")).strip()
+            best = max(best, int(raw) if raw.isdigit() else 0)
+        return best
+
+    return count("GROUPS") > 0 and count("WRITERS") == 0
 
 
 def main() -> int:
