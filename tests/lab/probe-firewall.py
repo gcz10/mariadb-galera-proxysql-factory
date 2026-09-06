@@ -168,6 +168,24 @@ def check(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def reach_targets(groups: dict, owned: tuple[str, ...]) -> tuple[str | None, str | None, str | None]:
+    """Adresy do sond osiagalnosci — WYLACZNIE z grup nalezacych do wlasciciela.
+
+    Wczesniej sonda indeksowala `groups['galera']` na sztywno, wiec uruchomiona
+    na definicji PLATFORMY (grupy proxysql/infra/app) wywalala sie z KeyError
+    zamiast cokolwiek zmierzyc — polityka firewalla warstwy wspolnej byla
+    niesprawdzalna, mimo ze `owned_groups()` deklaruje jej obsluge.
+    """
+    def first(group: str) -> str | None:
+        if group not in owned:
+            return None
+        for name, values in (groups.get(group, {}).get("hosts") or {}).items():
+            return (values or {}).get("ansible_host", name)
+        return None
+
+    return first("galera"), first("proxysql"), first("infra")
+
+
 def main() -> int:
     failures: list[str] = []
     owned_hosts = set().union(*(hosts(group) for group in OWNED_GROUPS))
@@ -209,22 +227,30 @@ def main() -> int:
             failures,
         )
 
-    first_galera = next(iter(GROUPS["galera"]["hosts"].values()))["ansible_host"]
-    first_proxy = next(iter(GROUPS["proxysql"]["hosts"].values()))["ansible_host"]
-    infra_host = next(iter(GROUPS["infra"]["hosts"].values()))["ansible_host"]
-    controller_ip = source_address(first_galera)
+    first_galera, first_proxy, infra_host = reach_targets(GROUPS, OWNED_GROUPS)
+    reach_reference = first_galera or first_proxy or infra_host
+    if reach_reference is None:
+        print("FAIL: inwentarz nie ma zadnego hosta w grupach wlasciciela "
+              f"({', '.join(OWNED_GROUPS)}) — nie ma czego zmierzyc")
+        return 1
+    controller_ip = source_address(reach_reference)
 
-    check(reachable(first_galera, 22), "controller cannot reach SSH after policy", failures)
-    check(reachable(first_galera, 3306), "controller cannot reach allowed Galera client port", failures)
-    check(reachable(first_proxy, 6033), "controller cannot reach allowed ProxySQL client port", failures)
-    check(reachable(infra_host, 443), "controller cannot reach allowed PMM port", failures)
-    check(not reachable(first_galera, 111), "unexpected rpcbind port 111 reachable", failures)
-    check(not reachable(first_proxy, 6132), "unexpected ProxySQL TLS admin port 6132 reachable", failures)
-    check(not reachable(first_proxy, 6133), "unexpected ProxySQL TLS client port 6133 reachable", failures)
+    check(reachable(reach_reference, 22), "controller cannot reach SSH after policy", failures)
+    if first_galera:
+        check(reachable(first_galera, 3306), "controller cannot reach allowed Galera client port", failures)
+        check(not reachable(first_galera, 111), "unexpected rpcbind port 111 reachable", failures)
+    if first_proxy:
+        check(reachable(first_proxy, 6033), "controller cannot reach allowed ProxySQL client port", failures)
+        check(not reachable(first_proxy, 6132), "unexpected ProxySQL TLS admin port 6132 reachable", failures)
+        check(not reachable(first_proxy, 6133), "unexpected ProxySQL TLS client port 6133 reachable", failures)
+    if infra_host:
+        check(reachable(infra_host, 443), "controller cannot reach allowed PMM port", failures)
 
     if not in_cidrs(controller_ip, NETWORK["monitoring_cidrs"]):
-        check(not reachable(first_galera, 9100), "node_exporter reachable outside monitoring CIDRs", failures)
-        check(not reachable(first_proxy, 6070), "ProxySQL metrics reachable outside monitoring CIDRs", failures)
+        if first_galera:
+            check(not reachable(first_galera, 9100), "node_exporter reachable outside monitoring CIDRs", failures)
+        if first_proxy:
+            check(not reachable(first_proxy, 6070), "ProxySQL metrics reachable outside monitoring CIDRs", failures)
 
     # Filtr ingress Dockera opiera sie na module xt_conntrack (match --ctorigdst).
     # Kernele bez modulow xtables (np. Rocky 10 / 6.12) nie moga go zrealizowac —

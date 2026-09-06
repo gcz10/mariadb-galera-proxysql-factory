@@ -292,7 +292,7 @@
     # `monitoring.pmm.validate_certs: true` musi wiec miec zaufany certyfikat
     # wdrozony ZANIM uruchomi `platform-infra` — inaczej ta petla gotowosci
     # (60 x 5 s) nie przejdzie. Swiadomie NIE obchodzimy tego zaszytym `false`:
-    # kolejne dwa wywolania nizej niosa haslo admina, a rozjazd "sprawdzam raz
+    # kolejne dwa wywolania nizej niosą haslo admina, a rozjazd "sprawdzam raz
     # tak, raz inaczej" jest gorszy niz jawny warunek wejscia.
     - name: "Sprawdź gotowość PMM"
       ansible.builtin.uri:
