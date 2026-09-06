@@ -175,6 +175,13 @@ def reach_targets(groups: dict, owned: tuple[str, ...]) -> tuple[str | None, str
     na definicji PLATFORMY (grupy proxysql/infra/app) wywalala sie z KeyError
     zamiast cokolwiek zmierzyc — polityka firewalla warstwy wspolnej byla
     niesprawdzalna, mimo ze `owned_groups()` deklaruje jej obsluge.
+
+    ZMIANA ZACHOWANIA, swiadoma: przy zakresie NAJEMCY sondy osiagalnosci do
+    pary ProxySQL i hosta infra znikaja. Wczesniej najemca je odpytywal, choc
+    nie wlada ich polityka — czerwone swiatlo na cudzym hoscie ladowalo w jego
+    wyniku, a ten sam host mierzyla druga sonda. Polityke wspolnych hostow
+    mierzy przebieg warstwy (`PLATFORM=...`), ktory po tej naprawie w ogole
+    istnieje. Granica jest jedna dla asercji i dla sond: wlasciciel.
     """
     def first(group: str) -> str | None:
         if group not in owned:

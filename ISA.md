@@ -463,6 +463,10 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
   bez śladu, że pliki nie istnieją.
   Dowód: `tests/unit/test_probe_firewall_scope.py` (3 testy) plus pomiar na żywo —
   najemca `orionv15-r10` PASS 4/4, warstwa `xenonv12` PASS 4/4 (przed zmianą: traceback).
+  Zmiana zachowania, świadoma: przebieg najemcy nie odpytuje już osiągalności
+  pary ProxySQL ani hosta infra. Wcześniej to robił, choć ich polityką nie włada
+  — cudzy czerwony lądował w wyniku najemcy, a ten sam host mierzył drugi przebieg.
+  Wspólne hosty mierzy `PLATFORM=...`, który po tej naprawie w ogóle istnieje.
   Przegląd odwołań w dokumentacji: pozostałe nieistniejące ścieżki występują wyłącznie
   w `docs/records/` i `docs/superpowers/plans/`, czyli dokumentach historycznych
   opisujących stan z ich daty — zostawione bez zmian celowo.
