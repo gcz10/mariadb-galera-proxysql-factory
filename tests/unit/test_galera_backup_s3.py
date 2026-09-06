@@ -299,6 +299,98 @@ class GaleraBackupS3Tests(unittest.TestCase):
             )
             self.assertIn("cleanup denied", cleanup_ctx.exception.public_message)
 
+    def _published_artifact(self, root: Path, backup_name: str) -> pipeline.ArtifactSet:
+        import hashlib
+
+        payload = root / "backup.tar.enc"
+        payload_content = b"encrypted-readback-payload"
+        payload.write_bytes(payload_content)
+        checksum = root / "backup.sha256"
+        digest = hashlib.sha256(payload_content).hexdigest()
+        checksum.write_text(f"{digest}  backup.tar.enc\n", encoding="utf-8")
+        metadata = root / "metadata.json"
+        metadata.write_text(
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "cluster_name": "claude-r10b",
+                    "backup_name": backup_name,
+                    "created_unixtime": 1785240002,
+                    "encrypted_sha256": digest,
+                    "encrypted_size_bytes": len(payload_content),
+                }
+            ),
+            encoding="utf-8",
+        )
+        return pipeline.ArtifactSet(
+            backup_name=backup_name,
+            payload_path=payload,
+            checksum_path=checksum,
+            metadata_path=metadata,
+        )
+
+    def test_readback_allocates_on_staging_filesystem(self):
+        # Read-back calego payloadu MUSI powstac na filesystemie stagingu
+        # (obok artefaktu), a nie w domyslnym tempdirze procesu — inaczej
+        # publikacja omija przydzial miejsca wymiarowany pod kopie.
+        # Obserwacja: realna sciezka przekazana do fget_object.
+        with tempfile.TemporaryDirectory() as td:
+            staging = Path(td)
+            artifact = self._published_artifact(
+                staging, "galera-claude-r10b-20260729-120002"
+            )
+
+            readback_targets = []
+            original_fget = self.client.fget_object
+
+            def record_fget(bucket, name, path):
+                if name.endswith("/backup.tar.enc"):
+                    readback_targets.append(Path(path))
+                original_fget(bucket, name, path)
+
+            self.client.fget_object = record_fget
+            self.backend.publish(artifact)
+
+            self.assertEqual(len(readback_targets), 1)
+            readback_path = readback_targets[0]
+            self.assertEqual(readback_path.parent, artifact.payload_path.parent)
+            self.assertEqual(readback_path.parent, staging)
+            # Udany publish nie zostawia na stagingu zadnych plikow
+            # oprocz trzech artefaktow.
+            self.assertEqual(
+                sorted(path.name for path in staging.iterdir()),
+                ["backup.sha256", "backup.tar.enc", "metadata.json"],
+            )
+
+    def test_failed_readback_cleans_up_staging_allocation(self):
+        # Porazka weryfikacji read-backu tez nie moze zostawic pliku
+        # tymczasowego na filesystemie stagingu.
+        with tempfile.TemporaryDirectory() as td:
+            staging = Path(td)
+            artifact = self._published_artifact(
+                staging, "galera-claude-r10b-20260729-120003"
+            )
+
+            readback_targets = []
+
+            def corrupted_readback(bucket, name, path):
+                readback_targets.append(Path(path))
+                with open(path, "wb") as handle:
+                    handle.write(b"tampered-in-transit")
+
+            self.client.fget_object = corrupted_readback
+            with self.assertRaises(pipeline.BackupError) as ctx:
+                self.backend.publish(artifact)
+
+            self.assertEqual(ctx.exception.code, "E_INTEGRITY")
+            self.assertEqual(len(readback_targets), 1)
+            self.assertEqual(readback_targets[0].parent, staging)
+            self.assertEqual(
+                sorted(path.name for path in staging.iterdir()),
+                ["backup.sha256", "backup.tar.enc", "metadata.json"],
+            )
+
+
     def test_retention_prunes_only_own_expired_backups(self):
         # Create expired backup metadata and payload
         prefix_old = "galera-claude-r10b-20260701-120000/"
@@ -353,6 +445,38 @@ class GaleraBackupS3Tests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "E_STORAGE")
         self.assertIn(f"{prefix}metadata.json", self.client.objects)
+
+    def test_retention_refuses_nonpositive_days_without_deleting(self):
+        # Entry point destrukcji musi odmowic ZANIM skasuje cokolwiek:
+        # retencja <= 0 (takze jako string) dalaby cutoff w przyszlosci
+        # i wykasowala kazda kopie, wlacznie swiezo opublikowanej.
+        prefix_old = "galera-claude-r10b-20260701-120000/"
+        self.client.objects[f"{prefix_old}metadata.json"] = json.dumps(
+            {
+                "format_version": 1,
+                "cluster_name": "claude-r10b",
+                "created_unixtime": 1000,
+            }
+        ).encode()
+        self.client.objects[f"{prefix_old}backup.tar.enc"] = b"old-data"
+
+        now = datetime.fromtimestamp(1785240000, tz=timezone.utc)
+        for invalid in (0, -1, "0", "-1"):
+            with self.subTest(retention_days=invalid):
+                with self.assertRaises(pipeline.BackupError) as ctx:
+                    self.backend.prune(now, retention_days=invalid)
+                self.assertEqual(ctx.exception.code, "E_CONFIG")
+                self.assertIn(
+                    f"{prefix_old}metadata.json",
+                    self.client.objects,
+                    "odrzucenie retencji nie moze kasowac kopii",
+                )
+
+        # Poprawna retencja nadal dziala: ta sama kopia, ktora przetrwala
+        # odrzucone proby, teraz wygasa zgodnie z umowa.
+        self.assertEqual(self.backend.prune(now, retention_days=14), 1)
+        self.assertNotIn(f"{prefix_old}metadata.json", self.client.objects)
+
     def test_fetch_latest_rejects_non_integer_metadata_timestamp(self):
         prefix = "galera-claude-r10b-20260701-120000/"
         self.client.objects[f"{prefix}metadata.json"] = json.dumps(

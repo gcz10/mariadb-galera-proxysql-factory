@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 import subprocess
+import shutil
 import yaml
 from pathlib import Path
 
@@ -162,6 +163,38 @@ class BackupConfigValidatorTests(unittest.TestCase):
         self.create_cluster_pair("c1", c, self.valid_inventory())
         res = self.validate()
         self.assertNotEqual(res.returncode, 0)
+
+    def test_rejects_non_positive_retention_days(self):
+        # Retencja <= 0 kasuje kazda kopie przy pierwszym prune — bramka
+        # repozytorium musi to odrzucac, takze gdy liczba przyjdzie jako
+        # string ("0"/"-1") albo bool z YAML-a.
+        for bad in (0, -1, "0", "-1", True, "fortnight"):
+            with self.subTest(retention_days=bad):
+                c = self.valid_s3_cluster()
+                c["backup"]["retention_days"] = bad
+                dir_path = self.create_cluster_pair(
+                    "bad-retention", c, self.valid_inventory()
+                )
+                try:
+                    res = self.validate()
+                    self.assertNotEqual(res.returncode, 0)
+                finally:
+                    shutil.rmtree(dir_path, ignore_errors=True)
+
+    def test_accepts_positive_integer_and_digit_string_retention_days(self):
+        # Zgodnosc wstecz: dodatni int i dodatni string cyfrowy przechodza.
+        for good in (14, "14"):
+            with self.subTest(retention_days=good):
+                c = self.valid_s3_cluster()
+                c["backup"]["retention_days"] = good
+                dir_path = self.create_cluster_pair(
+                    "good-retention", c, self.valid_inventory()
+                )
+                try:
+                    res = self.validate()
+                    self.assertEqual(res.returncode, 0, f"Stderr: {res.stderr}")
+                finally:
+                    shutil.rmtree(dir_path, ignore_errors=True)
 
 
     def test_rejects_encryption_disabled(self):

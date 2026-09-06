@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ..config import validate_retention_days
 from ..crypto import SUPPORTED_FORMAT_VERSIONS
 from ..errors import BackupError, combine_failures
 from ..fsutil import file_sha256_and_size, remove_tree_or_raise
@@ -276,6 +277,7 @@ class FilesystemBackend:
 
     def prune(self, now: datetime, retention_days: int) -> int:
         from datetime import timedelta
+        retention_days = validate_retention_days(retention_days)
         self._verify_mount_identity()
 
         cluster_dir = self.mount_point / self.cluster_name

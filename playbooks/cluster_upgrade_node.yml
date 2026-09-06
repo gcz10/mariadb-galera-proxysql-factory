@@ -7,6 +7,9 @@
 # Użycie:
 #   make cluster-upgrade-node CLUSTER=<klaster> target_node=<węzeł> \
 #     old_mariadb_version=<wersja instalowana przed upgrade>
+# Drain/undrain wykonuje się na KAŻDYM węźle grupy proxysql i jest fail-closed:
+# brak rejestracji węzła, błąd zapytania albo aktywne połączenia przerywają
+# przebieg zanim playbook zatrzyma MariaDB. Szczegóły kontraktu przy play 1.
 #
 # Rollback: NIE istnieje jako downgrade (ISC-56) — po mariadb-upgrade jedyny
 # rollback to restore z backupu. Backup PRZED (runbook §3) jest kontraktem
@@ -27,34 +30,127 @@
           - target_node is defined
           - target_node | length > 0
           - target_node in (groups['galera'] | default([]))
+          - groups['proxysql'] | default([]) | length > 0
           - old_mariadb_version is defined
           - old_mariadb_version | length > 0
         fail_msg: >-
           Ustaw -e target_node=<hostname z grupy galera: {{ groups['galera'] | default([]) | join(', ') }}>
           oraz -e old_mariadb_version=<wersja> (np. -e old_mariadb_version=11.4.12).
 
-# === Play 1: Drain węzła w ProxySQL (OFFLINE_SOFT) ===
-- name: "F12-node — drain węzła w ProxySQL (OFFLINE_SOFT)"
-  hosts: proxysql[0]
+# === Play 1: Drain węzła w ProxySQL (OFFLINE_SOFT + dowód opróżnienia) ===
+# WSZYSTKIE węzły grupy proxysql (jak f13_remove_node/cluster_deregister),
+# nie [0]: każda instancja ProxySQL trzyma własne pule połączeń, więc drain
+# pojedynczej zostawia ruch do węzła przez pozostałe. Fail-closed: brak
+# tożsamości admina, brak rejestracji węzła, błąd zapytania albo timeout
+# oczekiwania na ConnUsed==0 przerywa cały przebieg (serial+any_errors_fatal)
+# zanim cokolwiek dotknie węzła Galera. Sekrety: tożsamość z
+# /etc/proxysql/admin-check.cnf (zero haseł w argv/env), SQL przez stdin —
+# nie trafia na listę procesów. Już odłączony węzeł = świadomy no-op
+# (changed liczony ze stanu PRZED aktualizacją, nie na sztywno).
+- name: "F12-node — drain węzła w ProxySQL (OFFLINE_SOFT + dowód opróżnienia)"
+  hosts: proxysql
   become: true
   gather_facts: false
+  serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
   vars:
     target_ip: "{{ hostvars[target_node].galera_node_address }}"
+    upgrade_drain_retries: 60
+    upgrade_drain_delay: 2
+    proxysql_admin_cli:
+      - mariadb
+      - --defaults-extra-file=/etc/proxysql/admin-check.cnf
+      - --connect-timeout=2
+      - -h127.0.0.1
+      - -P6032
+      - -uadmin
+      - -N
+      - -B
   tasks:
-    - name: "Drain węzła (OFFLINE_SOFT — klienci idą na backup-writera)"
+    - name: "Tożsamość admina ProxySQL musi istnieć (fail-closed zamiast błędu połączenia)"
+      ansible.builtin.stat:
+        path: /etc/proxysql/admin-check.cnf
+      register: upgrade_admin_identity
+
+    - name: "Blokuj drain bez /etc/proxysql/admin-check.cnf"
+      ansible.builtin.assert:
+        that: [upgrade_admin_identity.stat.exists]
+        fail_msg: >-
+          Brak /etc/proxysql/admin-check.cnf na {{ inventory_hostname }} —
+          tożsamość administratora pary ProxySQL wdraża `make platform-proxysql`.
+          Bez niej nie da się bezpiecznie odłączyć węzła od ruchu.
+
+    - name: "Dowód rejestracji węzła w konfiguracji ProxySQL (SELECT, nie ROW_COUNT)"
       ansible.builtin.command:
-        argv:
-          - mariadb
-          - --defaults-extra-file=/etc/proxysql/admin-check.cnf
-          - -h127.0.0.1
-          - -P6032
-          - -uadmin
-          - -N
-          - -B
-          - -e
-          - "UPDATE mysql_servers SET status='OFFLINE_SOFT' WHERE hostname='{{ target_ip }}'; LOAD MYSQL SERVERS TO RUNTIME"
-      register: drain_out
-      changed_when: true
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: "SELECT COUNT(*), COALESCE(SUM(status<>'OFFLINE_SOFT'),0) FROM mysql_servers WHERE hostname='{{ target_ip }}'"
+      register: upgrade_drain_cfg
+      changed_when: false
+
+    - name: "Rozłóż odczyt rejestracji na liczby"
+      ansible.builtin.set_fact:
+        upgrade_drain_cfg_read: "{{ upgrade_drain_cfg.stdout | trim | split('\t') | map('int') | list }}"
+
+    - name: "Fail-closed: węzeł musi być zarejestrowany na TYM ProxySQL"
+      ansible.builtin.assert:
+        that:
+          - upgrade_drain_cfg_read[0] | int >= 1
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ target_node }} ({{ target_ip }}) nie ma wpisu
+          w mysql_servers. UPDATE po niezarejestrowanym hoście to cichy no-op —
+          upgrade zatrzymałby MariaDB pod żywym ruchem. Popraw konfigurację
+          ProxySQL/inventory i uruchom ponownie.
+
+    - name: "Drain: OFFLINE_SOFT w konfiguracji + runtime (klienci idą na backup-writera)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: >-
+          UPDATE mysql_servers SET status='OFFLINE_SOFT' WHERE hostname='{{ target_ip }}';
+          LOAD MYSQL SERVERS TO RUNTIME
+      # Stan PRZED aktualizacją decyduje o "changed": węzeł już odłączony
+      # (suma niedrainowanych wpisów == 0) to no-op, nie udawana zmiana.
+      changed_when: upgrade_drain_cfg_read[1] | int > 0
+      no_log: true
+
+    - name: "Dowód w runtime: żaden wpis węzła nie przyjmie nowych połączeń"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: "SELECT COUNT(*), COALESCE(SUM(status<>'OFFLINE_SOFT'),0) FROM runtime_mysql_servers WHERE hostname='{{ target_ip }}'"
+      register: upgrade_drain_rt
+      changed_when: false
+
+    - name: "Rozłóż odczyt runtime na liczby"
+      ansible.builtin.set_fact:
+        upgrade_drain_rt_read: "{{ upgrade_drain_rt.stdout | trim | split('\t') | map('int') | list }}"
+
+    - name: "Fail-closed: runtime musi pokazywać OFFLINE_SOFT dla wszystkich wpisów"
+      ansible.builtin.assert:
+        that:
+          - upgrade_drain_rt_read[0] | int >= 1
+          - upgrade_drain_rt_read[1] | int == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: runtime ProxySQL nie odzwierciedla OFFLINE_SOFT
+          dla {{ target_ip }} (wpisy={{ upgrade_drain_rt_read[0] }},
+          niedrainowane={{ upgrade_drain_rt_read[1] }}). LOAD MYSQL SERVERS TO
+          RUNTIME nie doszedł do skutku — nie zatrzymuj MariaDB w tym stanie.
+
+    - name: "Czekaj na zerowe aktywne połączenia do węzła (SUM(ConnUsed)==0, wzorzec f13)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: "SELECT COALESCE(SUM(ConnUsed),0) FROM stats_mysql_connection_pool WHERE srv_host='{{ target_ip }}'"
+      register: upgrade_drain_conns
+      until: >-
+        upgrade_drain_conns.rc == 0 and
+        (upgrade_drain_conns.stdout | trim) == '0'
+      retries: "{{ upgrade_drain_retries }}"
+      delay: "{{ upgrade_drain_delay }}"
+      changed_when: false
+      no_log: true
+
+    - name: "Zapisz potwierdzenie zakończenia drain na tej instancji"
+      ansible.builtin.set_fact:
+        upgrade_node_drained: "{{ target_node }}"
 
 
 # === Play 2: Upgrade pakietów i bazy na wskazanym węźle ===
@@ -66,6 +162,14 @@
   vars_files:
     - vars/secret_policy.yml
   tasks:
+    - name: "Wymagaj potwierdzenia drain od każdej instancji ProxySQL"
+      ansible.builtin.assert:
+        that:
+          - groups['proxysql'] | default([]) | length > 0
+          - hostvars[item].upgrade_node_drained | default('') == target_node
+        fail_msg: "Brak potwierdzonego drain {{ target_node }} na {{ item }} — stop MariaDB zabroniony."
+      loop: "{{ groups['proxysql'] | default(['__missing_proxysql__'], true) }}"
+
     - name: "Zaladuj lockfile klastra do namespace lock"
       ansible.builtin.include_vars:
         file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
@@ -98,8 +202,21 @@
     - name: "Gcache 512M -> 2G (okno IST zamiast SST, warunek #2 planu F12)"
       ansible.builtin.replace:
         path: /etc/my.cnf.d/server.cnf
-        regexp: "gcache\\.size=[^ \\t\\n]+"
+        # Wartość OGRANICZONA do ';', cudzysłowów i końca linii. Stare
+        # [^ \t\n]+ zjadało całą resztę listy opcji (gcache.page_size,
+        # socket.dynamic, socket.ssl_*) — między opcjami wsrep_provider_options
+        # nie ma spacji, więc każda podmiana rozmiaru wycinała TLS z configu.
+        regexp: "gcache\\.size=[^;\"'\\n]+"
         replace: "gcache.size=2G"
+
+    - name: "Dowód podmiany gcache (replace przy braku dopasowania przechodzi cicho)"
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -q
+          - "gcache\\.size=2G"
+          - /etc/my.cnf.d/server.cnf
+      changed_when: false
 
     - name: "Odśwież metadata repozytorium MariaDB"
       ansible.builtin.command:
@@ -154,27 +271,93 @@
 
 
 # === Play 3: Undrain w ProxySQL (ONLINE) ===
+# Ten sam zestaw ProxySQL co drain (play 1) — każdy host utrzymuje własny
+# stan, więc ONLINE musi wrócić wszędzie. Fail-closed na braku rejestracji:
+# zniknięcie węzła z mysql_servers w trakcie upgrade = konfiguracja zmieniona
+# poza playbookiem; cichy no-op undrain zostawiłby węzeł poza rotacją.
 - name: "F12-node — undrain węzła w ProxySQL (ONLINE)"
-  hosts: proxysql[0]
+  hosts: proxysql
   become: true
   gather_facts: false
+  serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
   vars:
     target_ip: "{{ hostvars[target_node].galera_node_address }}"
+    proxysql_admin_cli:
+      - mariadb
+      - --defaults-extra-file=/etc/proxysql/admin-check.cnf
+      - --connect-timeout=2
+      - -h127.0.0.1
+      - -P6032
+      - -uadmin
+      - -N
+      - -B
   tasks:
-    - name: "Undrain (ONLINE — monitor galera sam wyrówna placement)"
+    - name: "Tożsamość admina ProxySQL musi istnieć (fail-closed zamiast błędu połączenia)"
+      ansible.builtin.stat:
+        path: /etc/proxysql/admin-check.cnf
+      register: upgrade_admin_identity
+
+    - name: "Blokuj undrain bez /etc/proxysql/admin-check.cnf"
+      ansible.builtin.assert:
+        that: [upgrade_admin_identity.stat.exists]
+        fail_msg: >-
+          Brak /etc/proxysql/admin-check.cnf na {{ inventory_hostname }} —
+          tożsamość administratora pary ProxySQL wdraża `make platform-proxysql`.
+          Bez niej węzeł po upgrade nie wróci do rotacji na tej instancji.
+
+    - name: "Dowód rejestracji węzła w konfiguracji ProxySQL (SELECT, nie ROW_COUNT)"
       ansible.builtin.command:
-        argv:
-          - mariadb
-          - --defaults-extra-file=/etc/proxysql/admin-check.cnf
-          - -h127.0.0.1
-          - -P6032
-          - -uadmin
-          - -N
-          - -B
-          - -e
-          - "UPDATE mysql_servers SET status='ONLINE' WHERE hostname='{{ target_ip }}'; LOAD MYSQL SERVERS TO RUNTIME"
-      register: undrain_out
-      changed_when: true
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: "SELECT COUNT(*), COALESCE(SUM(status<>'ONLINE'),0) FROM mysql_servers WHERE hostname='{{ target_ip }}'"
+      register: upgrade_undrain_cfg
+      changed_when: false
+
+    - name: "Rozłóż odczyt rejestracji na liczby"
+      ansible.builtin.set_fact:
+        upgrade_undrain_cfg_read: "{{ upgrade_undrain_cfg.stdout | trim | split('\t') | map('int') | list }}"
+
+    - name: "Fail-closed: węzeł musi nadal być zarejestrowany na TYM ProxySQL"
+      ansible.builtin.assert:
+        that:
+          - upgrade_undrain_cfg_read[0] | int >= 1
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ target_node }} ({{ target_ip }}) zniknął
+          z mysql_servers w trakcie upgrade — konfiguracja ProxySQL została
+          zmieniona poza playbookiem. Undrain cichego braku rejestracji byłby
+          no-op i węzeł nie wróciłby do rotacji. Wyjaśnij rozjazd, potem ponów.
+
+    - name: "Undrain: ONLINE w konfiguracji + runtime (monitor galera wyrówna placement)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: >-
+          UPDATE mysql_servers SET status='ONLINE' WHERE hostname='{{ target_ip }}';
+          LOAD MYSQL SERVERS TO RUNTIME
+      changed_when: upgrade_undrain_cfg_read[1] | int > 0
+      no_log: true
+
+    - name: "Dowód w runtime: wszystkie wpisy węzła z powrotem ONLINE"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: "SELECT COUNT(*), COALESCE(SUM(status<>'ONLINE'),0) FROM runtime_mysql_servers WHERE hostname='{{ target_ip }}'"
+      register: upgrade_undrain_rt
+      changed_when: false
+
+    - name: "Rozłóż odczyt runtime na liczby"
+      ansible.builtin.set_fact:
+        upgrade_undrain_rt_read: "{{ upgrade_undrain_rt.stdout | trim | split('\t') | map('int') | list }}"
+
+    - name: "Fail-closed: runtime musi pokazywać ONLINE dla wszystkich wpisów"
+      ansible.builtin.assert:
+        that:
+          - upgrade_undrain_rt_read[0] | int >= 1
+          - upgrade_undrain_rt_read[1] | int == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: runtime ProxySQL nie pokazuje ONLINE dla
+          {{ target_ip }} (wpisy={{ upgrade_undrain_rt_read[0] }},
+          pozostające offline={{ upgrade_undrain_rt_read[1] }}). Węzeł nie wróci
+          do rotacji — sprawdź monitor galera i konfigurację hostgroup.
 
 
 # === Play 4: Weryfikacja po upgrade na wskazanym węźle ===

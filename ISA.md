@@ -390,6 +390,19 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 
 ## Verification
 
+- Pakiet A po ponownym review repo — weryfikacja lokalna, bez wdrożenia na flotę:
+  `cluster_upgrade_node.yml` zachowuje opcje TLS podczas podmiany gcache,
+  wymaga rejestracji/OFFLINE_SOFT/zerowego ConnUsed na wszystkich proxy
+  i potwierdzeń drain przed wejściem w upgrade (również przy `--limit`).
+  Retencja odrzuca niedodatnie wartości w deklaracji, loaderze i backendach;
+  read-back S3 używa stagingu i sprząta plik po sukcesie oraz błędzie.
+  Dowód: `python3 -m unittest discover -s tests/unit -p 'test_*.py'` —
+  602 testy OK, w tym lokalny `ansible-playbook` z atrapą SQL i znacznikiem
+  zamiast operacji systemd/dnf; testy backupu wykonują rzeczywiste operacje
+  na plikach tymczasowych, S3 używa klienta testowego. `ansible-lint playbooks roles` —
+  0 failures/0 warnings (106 plików); schema i walidator backupu — 11 deklaracji OK.
+  Nie wykonywano upgrade'u MariaDB ani kasowania backupów na żywej flocie.
+
 - ISC-1: PASS — lab2-cluster wdrożony na czystych kontenerach (f2_install + site.yml + bootstrap + f5_join, wszystkie taski PASS, failed=0). 2026-07-24.
 
 - ISC-2: PASS — idempotentny converge: f3_galera_config re-run → config changed=False (server.cnf stabilny); F11 monitoring changed=0 na wszystkich hostach. 2026-07-24.

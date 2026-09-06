@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,21 @@ class RunConfig:
     paths: Paths
 
 
+def validate_retention_days(raw: Any, config_path: Path | None = None) -> int:
+    """Reject unsafe retention before any backend can enumerate or delete backups."""
+    valid = (
+        type(raw) is int and raw > 0
+        or isinstance(raw, str) and re.fullmatch(r"[1-9][0-9]*", raw) is not None
+    )
+    if not valid:
+        location = f" in {config_path}" if config_path is not None else ""
+        raise BackupError(
+            "E_CONFIG",
+            f"Invalid retention_days {raw!r}{location}: must be a positive integer",
+        )
+    return int(raw)
+
+
 def load_run_config(config_path: Path, expected_cluster_name: str) -> RunConfig:
     if not config_path.exists():
         raise BackupError("E_CONFIG", f"Configuration file not found: {config_path}")
@@ -79,7 +95,7 @@ def load_run_config(config_path: Path, expected_cluster_name: str) -> RunConfig:
             galera_nodes_expected=int(data.get("galera_nodes_expected", 3)),
             galera_nodes=list(data.get("galera_nodes", [])),
             mariadb_version=str(data.get("mariadb_version", "")),
-            retention_days=int(data.get("retention_days", 14)),
+            retention_days=validate_retention_days(data.get("retention_days", 14), config_path),
             flow_control_threshold_ns=int(data.get("flow_control_threshold_ns", 1000000000)),
             proxysql=data.get("proxysql", {}),
             backend=data.get("backend", {}),

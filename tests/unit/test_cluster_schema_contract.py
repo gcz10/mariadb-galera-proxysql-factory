@@ -216,6 +216,24 @@ class ClusterSchemaContractTests(unittest.TestCase):
         cluster["mariadb_tuning"].update({"wsrep_slave_threads": 0})
         self.assert_invalid(cluster, "wsrep_slave_threads")
 
+    def test_retention_days_must_be_positive_in_both_representations(self):
+        # Retencja <= 0 kasuje kazda kopie przy pierwszym prune. Samo
+        # `minimum` nie siegnie galezi string — schema musi odrzucac i
+        # liczby, i cyfrowe stringi ("0"/"-1" przeszlyby koersje int()
+        # w runnerze bezbladowo), a takze bool z YAML-a (to nie liczba)
+        # i stringi z zerem wiodacym albo znakiem.
+        for bad in (0, -1, "0", "-1", True, "014", "+14"):
+            with self.subTest(retention_days=bad):
+                cluster = canonical_cluster()
+                cluster["backup"]["retention_days"] = bad
+                self.assert_invalid(cluster)
+
+        for good in (1, 14, "7", "365"):
+            with self.subTest(retention_days=good):
+                cluster = canonical_cluster()
+                cluster["backup"]["retention_days"] = good
+                self.assert_valid(cluster)
+
     def test_tls_full_without_certificate_source(self):
         # certificate_source byl polem-widmem: zero lookupow, jedyna wzmianka
         # to komentarz. mode=full wymaga wylacznie trojki *_reference.

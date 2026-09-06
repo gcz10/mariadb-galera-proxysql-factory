@@ -86,12 +86,26 @@ ostatni**.
 > make cluster-upgrade-node CLUSTER=<klaster> target_node=<węzeł> old_mariadb_version=<wersja_przed>
 > ```
 > Poniższy opis przedstawia kroki składowe i służy do weryfikacji manualnej lub diagnostyki.
+>
+> Playbook wymaga rejestracji węzła na każdej instancji grupy `proxysql`,
+> potwierdzenia `OFFLINE_SOFT` w runtime i wyniku `SUM(ConnUsed)=0`.
+> Brak rejestracji, błąd SQL, niepoprawny wynik albo wyczerpanie prób blokują
+> upgrade. Brama przy wejściu w play upgrade wymaga potwierdzeń ze wszystkich
+> proxy, także gdy `--limit` pominął ich zadania. Po przerwaniu część proxy może
+> pozostać odłączona od węzła — sprawdź stan obu instancji przed ponowieniem.
+> Zmiana `gcache.size` zachowuje pozostałe opcje providera, w tym ścieżki TLS.
 
 ### 5a. Drain w ProxySQL
 
 ```bash
 ansible x10p1 -i platform/<platforma>/inventory.yml -b -m shell -a "mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf -h127.0.0.1 -P6032 -uadmin -N -B -e \"UPDATE mysql_servers SET status='OFFLINE_SOFT' WHERE hostname='<ip_węzła>'; LOAD MYSQL SERVERS TO RUNTIME; SELECT hostgroup_id,hostname,status FROM runtime_mysql_servers WHERE hostname='<ip_węzła>'\""
 ```
+
+Powyższe polecenie jest tylko krokiem zmiany statusu na **jednej** instancji,
+nie dowodem zakończenia drain. Nie przechodź do 5b po samym `UPDATE`/`LOAD`:
+wymagane są kontrole rejestracji, runtime i aktywnych połączeń na wszystkich
+proxy. Preferuj `cluster-upgrade-node`, który wykonuje te kontrole i blokuje
+stop przy niespełnionych warunkach.
 
 ### 5b. Upgrade na węźle (atomiczny skrypt — przerwanie w połowie zostawia węzeł zatrzymany, co jest bezpieczne dla klastra)
 

@@ -16,6 +16,7 @@ Testy pilnuja czterech wlasnosci, bez ktorych most jest teatrem:
   3. publikacja emituje dokladnie te nazwe metryki, ktorej szuka regula ISC-47,
   4. brak znacznika daje uczciwe 0, a nie awarie backupu.
 """
+import json
 import re
 import sys
 import tempfile
@@ -59,8 +60,27 @@ class TestDrillMarkerSurvivesStorage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             b = _backend(Path(tmp))
             b.write_drill_marker(build_drill_marker(CLUSTER, 1787019064, "galera-x", 3))
-            # Retencja 0 dni skasowalaby KAZDA kopie; znacznik ma przezyc.
-            b.prune(datetime.now(timezone.utc), 0)
+            # Skan retencji ma biec NA ZYWYM przykladzie: wygasla kopia
+            # (stamp sprzed cutoffu) znika, wiec przetrwanie znacznika jest
+            # cecha skanu, a nie pustego katalogu. Retencja <= 0 jest jawnie
+            # odrzucana przez prune, wiec uzywamy poprawnej, dodatniej.
+            expired = Path(tmp) / CLUSTER / "galera-newclaude13-r9-20260701-120000"
+            expired.mkdir(parents=True)
+            (expired / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "format_version": 1,
+                        "cluster_name": CLUSTER,
+                        "created_unixtime": 1000,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            b.prune(datetime.fromtimestamp(1785240000, tz=timezone.utc), 14)
+            self.assertFalse(
+                expired.exists(),
+                "prune nie skasowal wygaslej kopii — skan retencji nie biegl",
+            )
             self.assertIsNotNone(
                 b.read_drill_marker(),
                 "retencja skasowala znacznik drillu — most swiezosci zniknie po pierwszym pruningu",

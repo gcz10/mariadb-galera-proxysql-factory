@@ -345,9 +345,15 @@
           "minimum": 1
         },
         "retention_days": {
-          "type": [
-            "integer",
-            "string"
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
           ]
         },
         "encryption_enabled": {

@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from ..config import validate_retention_days
 from ..crypto import SUPPORTED_FORMAT_VERSIONS
 from ..errors import BackupError, combine_failures
 from ..fsutil import file_sha256_and_size
@@ -171,7 +172,13 @@ class S3Backend:
                 ) from exc
 
             try:
-                with tempfile.NamedTemporaryFile("wb", delete=False) as readback_file:
+                # Keep the full-payload readback on the staging filesystem.
+                with tempfile.NamedTemporaryFile(
+                    "wb",
+                    dir=artifact.payload_path.parent,
+                    prefix=f".{artifact.backup_name}.readback.",
+                    delete=False,
+                ) as readback_file:
                     readback_path = Path(readback_file.name)
                 self.client.fget_object(
                     self.bucket,
@@ -367,6 +374,7 @@ class S3Backend:
 
     def prune(self, now: datetime, retention_days: int) -> int:
         from datetime import timedelta
+        retention_days = validate_retention_days(retention_days)
         cluster_prefix = f"galera-{self.cluster_name}-"
         all_objs = list(self.client.list_objects(self.bucket, prefix=cluster_prefix, recursive=True))
 

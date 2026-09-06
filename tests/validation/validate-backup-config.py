@@ -175,6 +175,20 @@ def validate_pair(cluster_path: Path, inventory_path: Path) -> list[str]:
     if not isinstance(sla, int) or isinstance(sla, bool) or sla < 1:
         errors.append(f"freshness_sla_hours must be a positive integer, got '{sla}'")
 
+    # Retention check. Duplikuje ograniczenie `oneOf` ze schematu swiadomie:
+    # walidacja schematem wyzej jest warunkowa (`if schema_path.exists()`),
+    # a retencja <= 0 kasuje kazda kopie przy pierwszym prune — kontrola nie
+    # moze zalezec od obecnosci schema/. String przyjmowany pod tym samym
+    # wzorcem co schemat: wylacznie cyfry bez zera wiodacego i bez znaku.
+    retention_days = backup.get("retention_days")
+    retention_valid = isinstance(retention_days, int) and not isinstance(
+        retention_days, bool
+    ) and retention_days >= 1
+    if isinstance(retention_days, str):
+        retention_valid = re.fullmatch(r"[1-9][0-9]*", retention_days) is not None
+    if not retention_valid:
+        errors.append(f"retention_days must be a positive integer, got '{retention_days}'")
+
     dest = backup.get("destination")
     s3_block = backup.get("s3")
     smb_block = backup.get("smb")

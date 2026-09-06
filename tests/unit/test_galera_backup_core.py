@@ -75,6 +75,55 @@ class GaleraBackupCoreTests(unittest.TestCase):
             if tf_path.exists():
                 tf_path.unlink()
 
+    def _write_config_with_retention(self, raw) -> Path:
+        config = {
+            "format_version": 1,
+            "cluster_name": "claude-r10b",
+            "retention_days": raw,
+            "paths": {
+                "install_root": "/opt/galera-backup",
+                "cluster_dir": "/opt/galera-backup/clusters/claude-r10b",
+                "staging_root": "/var/tmp/galera-backup/claude-r10b",
+                "datadir": "/var/lib/mysql",
+                "socket": "/var/lib/mysql/mysql.sock",
+                "metric_file": "/var/lib/node_exporter/textfile_collector/galera_backup-claude-r10b.prom",
+            },
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+            json.dump(config, tf)
+            return Path(tf.name)
+
+    def test_nonpositive_retention_days_rejected_before_any_deletion(self):
+        # Retencja <= 0 przesuwa cutoff w przyszlosc: pierwszy prune skasilby
+        # kazda kopie, wlacznie swiezo opublikowanej. Walidacja konfiguracji
+        # musi odcac przebieg na starcie — takze gdy wartosc przyjdzie jako
+        # string ("0"/"-1" przechodza koersje int() bezbladowo) albo bool
+        # z YAML-a (int(True) to po cichu 1).
+        for raw in (0, -1, "0", "-1", True, "fortnight"):
+            with self.subTest(retention_days=raw):
+                tf_path = self._write_config_with_retention(raw)
+                try:
+                    with self.assertRaises(pipeline.BackupError) as ctx:
+                        pipeline.load_run_config(tf_path, "claude-r10b")
+                finally:
+                    if tf_path.exists():
+                        tf_path.unlink()
+                self.assertEqual(ctx.exception.code, "E_CONFIG")
+                self.assertIn("retention_days", ctx.exception.public_message)
+
+    def test_positive_retention_days_loads_including_digit_strings(self):
+        # Zgodnosc wstecz: dodatnie stringi cyfrowe pozostaja poprawne, bo
+        # config.json.j2 renderuje wartosc retencji wprost do JSON.
+        for raw, expected in ((1, 1), (14, 14), ("7", 7), ("365", 365)):
+            with self.subTest(retention_days=raw):
+                tf_path = self._write_config_with_retention(raw)
+                try:
+                    cfg = pipeline.load_run_config(tf_path, "claude-r10b")
+                finally:
+                    if tf_path.exists():
+                        tf_path.unlink()
+                self.assertEqual(cfg.retention_days, expected)
+
     def test_secrets_env_parsing_and_permissions(self):
         env_content = (
             'GALERA_BACKUP_ENCRYPTION_KEY="secret-pass-123"\n'

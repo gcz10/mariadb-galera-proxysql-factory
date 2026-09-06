@@ -275,6 +275,53 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "E_STORAGE")
             self.assertTrue(old_dir.exists())
 
+    def test_retention_refuses_nonpositive_days_without_deleting(self):
+        # Entry point destrukcji musi odmowic ZANIM skasuje cokolwiek:
+        # retencja <= 0 (takze jako string) dalaby cutoff w przyszlosci
+        # i wykasowala kazda kopie, wlacznie swiezo opublikowanej.
+        with tempfile.TemporaryDirectory() as td:
+            mount_path = Path(td)
+            backend = pipeline.FilesystemBackend(
+                mount_point=mount_path,
+                expected_fstype="nfs4",
+                cluster_name="claude-r10b",
+            )
+            fake_mount = self.make_fake_findmnt_info(str(mount_path))
+
+            old_dir = (
+                mount_path
+                / "claude-r10b"
+                / "galera-claude-r10b-20260701-120000"
+            )
+            old_dir.mkdir(parents=True)
+            (old_dir / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "format_version": 1,
+                        "cluster_name": "claude-r10b",
+                        "created_unixtime": 1000,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            now = datetime.fromtimestamp(1785240000, tz=timezone.utc)
+            with patch.object(backend, "_get_mount_info", return_value=fake_mount):
+                for invalid in (0, -1, "0", "-1"):
+                    with self.subTest(retention_days=invalid):
+                        with self.assertRaises(pipeline.BackupError) as ctx:
+                            backend.prune(now, retention_days=invalid)
+                        self.assertEqual(ctx.exception.code, "E_CONFIG")
+                        self.assertTrue(
+                            old_dir.exists(),
+                            "odrzucenie retencji nie moze kasowac kopii",
+                        )
+
+                # Poprawna retencja nadal dziala: ta sama kopia, ktora
+                # przetrwala odrzucone proby, teraz wygasa zgodnie z umowa.
+                self.assertEqual(backend.prune(now, retention_days=14), 1)
+                self.assertFalse(old_dir.exists())
+
 
     def test_retention_rejects_non_integer_metadata_timestamp(self):
         for invalid_timestamp in ("1000", True):

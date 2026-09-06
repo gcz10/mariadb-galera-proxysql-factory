@@ -53,6 +53,16 @@ backup:
 
 `scheduler.mode: cron` instaluje `/etc/cron.d/galera-backup-<cluster>` wyłącznie na `scheduler.host`. `manual` nie instaluje crona. `freshness_sla_hours` jest niezależnym od retencji progiem alarmowym ostatniego udanego backupu; dla harmonogramu dziennego wartość `26` daje dwie godziny tolerancji. `restore_test_schedule` opisuje oczekiwaną częstotliwość drill; repozytorium nie uruchamia automatycznego crona restore.
 
+`retention_days` musi być dodatnią liczbą całkowitą (np. `14`) lub jej zapisem
+cyfrowym bez znaku i zer wiodących (`"14"`). Schema, walidator deklaracji
+i runner odrzucają `0`, wartości ujemne i wartości logiczne. Backend ponownie
+sprawdza retencję przed przeglądaniem i usuwaniem kopii; obejście loadera
+konfiguracji nie wyłącza tej ochrony.
+
+Read-back pełnego payloadu S3 zapisuje plik tymczasowy obok artefaktu
+w stagingu, nie w domyślnym katalogu tymczasowym procesu. Plik jest sprzątany
+zarówno po weryfikacji, jak i po błędzie; staging musi pomieścić także tę kopię.
+
 SMB zastępuje blok `s3`:
 
 ```yaml
