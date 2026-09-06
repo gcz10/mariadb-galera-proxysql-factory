@@ -116,16 +116,15 @@ def validate(path: Path, referenced: set[Path] | None = None) -> list[str]:
     # wskazuje, jest z definicji niekompletny (placeholdery czekaja na discovery)
     # i sprawdzamy go tylko strukturalnie — ale kandydat, ktorym ktos BUDUJE
     # klaster, przestaje byc szkicem i podlega bramce ISC-63 jak kazdy inny.
+    #
+    # Sama etykieta w stopce NIE jest bledem: bramka pilnuje TRESCI pliku, nie
+    # jego nazwy dojrzalosci. Kompletny kandydat wskazany przez jedna definicje
+    # (promocja pinow testowana na jednym klastrze) przechodzi — niekompletny
+    # nie przejdzie, i o to w tej bramce chodzi.
     if referenced is None:
         referenced = referenced_lockfiles()
-    self_declared = re.search(r"^#\s*Status:\s*LOCKED", text, re.MULTILINE | re.IGNORECASE)
-    in_use = path.resolve() in referenced
-    is_locked = bool(self_declared) or in_use
-    if in_use and not self_declared:
-        errors.append(
-            f"{path}: stopka nie deklaruje '# Status: LOCKED', a plik jest wskazany "
-            "przez definicje klastra — rygor pelny obowiazuje mimo to; uzupelnij stopke"
-        )
+    is_locked = bool(re.search(r"^#\s*Status:\s*LOCKED", text, re.MULTILINE | re.IGNORECASE))
+    is_locked = is_locked or path.resolve() in referenced
 
     # 2. Placeholdery (ISC-63) — tylko dla LOCKED
     if is_locked:

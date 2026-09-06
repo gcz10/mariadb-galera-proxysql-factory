@@ -77,7 +77,24 @@ class LockfileStrictnessTests(unittest.TestCase):
         errors = "\n".join(self.errors_for(referenced))
         self.assertIn("to-confirm-f0", errors)          # bramka ISC-63
         self.assertIn("brak sekcji 'proxysql'", errors)  # komplet kluczy
-        self.assertIn("Status: LOCKED", errors)          # stopka nie zgadza się z użyciem
+
+    def test_complete_candidate_in_use_is_not_punished_for_its_label(self):
+        """Rygor pilnuje TREŚCI, nie etykiety: kompletny kandydat przechodzi.
+
+        To rozstrzyga wariant (a) wobec (b): wskazanie pliku ze stopką
+        `candidate` NIE jest samo w sobie błędem, więc promocja pinów
+        testowana na jednym klastrze pozostaje możliwa.
+        """
+        complete = yaml.safe_load(
+            (REPO / "versions" / "versions.lock.yml").read_text(encoding="utf-8")
+        )
+        promoted = self.root / "versions" / "promoted.lock.yml"
+        promoted.write_text("# Status: candidate\n" + yaml.safe_dump(complete), encoding="utf-8")
+        write_cluster(self.root, "tenant", "versions/promoted.lock.yml")
+
+        referenced = validator.referenced_lockfiles(self.root)
+        self.assertIn(promoted.resolve(), referenced)
+        self.assertEqual(validator.validate(promoted, referenced), [])
 
     def test_reference_scan_reads_the_declaration(self):
         write_cluster(self.root, "with-lock", "versions/versions-el10.lock.yml")

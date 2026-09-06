@@ -475,16 +475,17 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
   o ścieżce walidacji decyduje teraz UŻYCIE, nie stopka pliku. `validate-lockfile.py`
   czyta `versions.lock_file` ze wszystkich `clusters/*/cluster.yml` i każdy wskazany
   plik przechodzi rygor pełny — bramkę ISC-63, komplet wymaganych kluczy, proweniencję —
-  niezależnie od tego, czy sam deklaruje `# Status: LOCKED`. Brak zgodnej stopki przy
-  pliku wskazanym jest osobnym błędem. Kandydat, którego nie wskazuje żadna definicja,
-  zachowuje ścieżkę łagodną: szkic z placeholderami czekającymi na F0 ma prawo być
-  niekompletny. Wybór spośród dwóch wariantów świadomy: rygor pilnuje TREŚCI, nie
-  etykiety, więc przetestowanie kandydata na jednym klastrze pozostaje możliwe —
-  pod warunkiem, że plik jest kompletny. Zepsuty `cluster.yml` nie wycisza rygoru
-  dla pozostałych referencji.
-  Dowód: `tests/unit/test_lockfile_strictness.py` (4 testy) — na kodzie sprzed zmiany
-  wszystkie cztery padają; 638 testów OK; wszystkie pięć lockfile'ów w `versions/`
-  przechodzi walidację po zmianie (kandydat nie jest dziś przez nikogo wskazywany).
+  niezależnie od tego, czy sam deklaruje `# Status: LOCKED`. Sama etykieta w stopce
+  NIE jest błędem — bramka pilnuje TREŚCI, nie nazwy dojrzałości, więc kompletny
+  kandydat wskazany przez jedną definicję (promocja pinów testowana na jednym
+  klastrze) przechodzi, a niekompletny nie. Kandydat, którego nie wskazuje żadna
+  definicja, zachowuje ścieżkę łagodną: szkic z placeholderami czekającymi na F0 ma
+  prawo być niekompletny. To rozstrzyga wariant (a) wobec (b): zakaz wskazywania
+  kandydata odrzucony jako karzący etykietę zamiast treści. Zepsuty `cluster.yml`
+  nie wycisza rygoru dla pozostałych referencji.
+  Dowód: `tests/unit/test_lockfile_strictness.py` (5 testów, w tym kompletny kandydat
+  w użyciu przechodzi) — na kodzie sprzed zmiany padają; wszystkie pięć lockfile'ów
+  w `versions/` przechodzi walidację (kandydat nie jest dziś przez nikogo wskazywany).
 
 - ISC-1: PASS — lab2-cluster wdrożony na czystych kontenerach (f2_install + site.yml + bootstrap + f5_join, wszystkie taski PASS, failed=0). 2026-07-24.
 
