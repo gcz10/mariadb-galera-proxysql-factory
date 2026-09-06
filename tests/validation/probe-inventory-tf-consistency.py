@@ -162,47 +162,56 @@ def self_test(root: Path) -> int:
 
         results.append(("czyste drzewo repo przechodzi", not scan(work)))
 
+        # Fixture wybierany Z DRZEWA, nie po nazwie: samo-test przywiazany do
+        # `orionv8-r9`/`cassiopeiav8-r9` padal przy KAZDYM sprzataniu definicji
+        # martwego klastra, czyli bramka psula sie od operacji, ktorej pilnuje.
+        pairs = sorted(
+            (path.parent.name, host)
+            for path in (work / "terraform").glob("*/main.tf")
+            if (work / "clusters" / path.parent.name / "inventory.yml").is_file()
+            for host in parse_vms_map(path)
+        )
+        if not pairs:
+            print("ZONK brak pary klaster+root terraform do samo-testu")
+            return 1
+        cluster, host = pairs[0]
+        root_tf = work / "terraform" / cluster / "main.tf"
+        text = root_tf.read_text(encoding="utf-8")
+
         # dryf w strone "inwentarz > TF": usun klucz z vms
-        orion = work / "terraform" / "orionv8-r9" / "main.tf"
-        text = orion.read_text(encoding="utf-8")
-        orion.write_text(
-            "\n".join(
-                line for line in text.splitlines() if "o8r1" not in line
-            ) + "\n",
+        root_tf.write_text(
+            "\n".join(line for line in text.splitlines() if host not in line) + "\n",
             encoding="utf-8",
         )
         violations = scan(work)
         results.append(
             (
-                "usuniecie o8r1 z mapy vms zapala FAIL",
-                any("o8r1" in v for v in violations),
+                f"usuniecie {host} z mapy vms zapala FAIL",
+                any(host in v for v in violations),
             )
         )
 
         # dryf w druga strone: TF > inwentarz
-        orion.write_text(text, encoding="utf-8")
-        inv = work / "clusters" / "orionv8-r9" / "inventory.yml"
+        root_tf.write_text(text, encoding="utf-8")
+        inv = work / "clusters" / cluster / "inventory.yml"
         inv_text = inv.read_text(encoding="utf-8")
-        inv.write_text(
-            inv_text.replace('        o8r1:\n', '        o8rX:\n'),
-            encoding="utf-8",
-        )
+        inv.write_text(inv_text.replace(f"{host}:", f"{host}X:"), encoding="utf-8")
         violations = scan(work)
         results.append(
             (
                 "rebrand hosta w inwentarzu bez TF zapala FAIL w obu kierunkach",
-                any("o8rX" in v for v in violations) and any("o8r1" in v for v in violations),
+                any(f"{host}X" in v for v in violations) and any(host in v for v in violations),
             )
         )
 
         # brak roota TF przy zywych hostach
         inv.write_text(inv_text, encoding="utf-8")
-        shutil.rmtree(work / "terraform" / "cassiopeiav8-r9")
+        shutil.rmtree(work / "terraform" / cluster)
         violations = scan(work)
         results.append(
             (
                 "najemca bez roota TF zapala FAIL",
-                any("brak terraform/cassiopeiav8-r9" in v for v in violations),
+                any(f"brak terraform/{cluster}" in v for v in violations),
             )
         )
 

@@ -3,9 +3,6 @@ cluster:
   name: "cassiopeiav14-r9"
   environment: "laboratory"
 
-# VM-y tworzone recznie przez tools/pve-create-vm.sh (machines-from-elsewhere)
-terraform_managed: false
-
 platform:
   rocky_linux_major: 9
 

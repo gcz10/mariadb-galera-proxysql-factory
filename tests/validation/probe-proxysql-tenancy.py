@@ -442,16 +442,27 @@ def self_test(root):
         )
 
         fresh_clusters(work)
-        drifted = work / "clusters" / "orionv8-r9" / "inventory.yml"
-        if not drifted.is_file():
-            drifted = next((work / "clusters").glob("*/inventory.yml"), None)
+        # Adres bierzemy Z DRZEWA, nie z literalu: fixture przywiazany do
+        # `192.168.1.119` cicho przestawal wstrzykiwac dryf, gdy definicja z tym
+        # adresem znikala — samo-test raportowal wtedy ZONK zamiast chronic regule.
         injected = False
-        if drifted is not None:
-            before = drifted.read_text(encoding="utf-8")
-            after = before.replace("192.168.1.119", "192.168.1.199", 1)
+        for inventory in sorted((work / "clusters").glob("*/inventory.yml")):
+            children = (yaml.safe_load(inventory.read_text(encoding="utf-8")) or {}).get(
+                "all", {}
+            ).get("children", {})
+            hosts = (children.get("proxysql") or {}).get("hosts") or {}
+            address = next(
+                (h.get("ansible_host") for h in hosts.values() if isinstance(h, dict) and h.get("ansible_host")),
+                None,
+            )
+            if not address:
+                continue
+            before = inventory.read_text(encoding="utf-8")
+            after = before.replace(address, "192.168.1.199", 1)
             if after != before:
-                drifted.write_text(after, encoding="utf-8")
+                inventory.write_text(after, encoding="utf-8")
                 injected = True
+                break
         violations, _ = check(work)
         results.append(
             (
