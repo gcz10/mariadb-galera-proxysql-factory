@@ -64,8 +64,10 @@ class ProbeFirewallScopeTests(unittest.TestCase):
         module = load_probe(TENANT_INVENTORY, CONFIG)
         galera, proxy, infra = module.reach_targets(module.GROUPS, module.OWNED_GROUPS)
         self.assertEqual(galera, "192.0.2.11")
-        # Para ProxySQL i host infra naleza do warstwy wspolnej — najemca ich
-        # polityki nie wlada i nie moze jej zglaszac jako swojego naruszenia.
+        # ZMIANA ZACHOWANIA wzgledem poprzedniej wersji sondy, swiadoma: para
+        # ProxySQL i host infra naleza do warstwy wspolnej. Najemca ich polityki
+        # nie wlada, wiec cudzy czerwony nie moze ladowac w jego wyniku; mierzy
+        # je przebieg `PLATFORM=...` (test nizej), ktory wczesniej sie wywalal.
         self.assertIsNone(proxy)
         self.assertIsNone(infra)
 
