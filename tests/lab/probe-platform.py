@@ -25,33 +25,29 @@ from __future__ import annotations
 import base64
 import json
 import os
-import ssl
 import sys
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from _probe_common import ProbeContext, check, finish, require_hosts, run_ansible
+from _probe_common import ProbeContext, check, finish, pmm_ssl_context, require_hosts, run_ansible
 
 IFACE = os.environ.get("PROXYSQL_ENDPOINT_INTERFACE", "eth0")
 # Rozprowadza go platform_proxysql.yml — platforma jest wlascicielem CA frontendu.
 SHARED_CA = "/etc/mysql/app/shared/proxysql-ca.pem"
 
 
-def pmm_json(base_url: str, user: str, password: str, path: str):
+def pmm_json(base_url: str, user: str, password: str, path: str, pmm_config: dict):
     token = base64.b64encode(f"{user}:{password}".encode()).decode()
     request = Request(f"{base_url}{path}", headers={"Authorization": f"Basic {token}"})
-    context = ssl.create_default_context()
-    if os.environ.get("PMM_VALIDATE_CERTS", "0") != "1":
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = pmm_ssl_context(pmm_config)
     with urlopen(request, context=context, timeout=10) as response:
         return json.load(response)
 
 
-def pmm_query(base_url: str, user: str, password: str, expr: str):
+def pmm_query(base_url: str, user: str, password: str, expr: str, pmm_config: dict):
     """Zapytanie natychmiastowe do magazynu metryk PMM."""
     payload = urlencode({"query": expr})
-    body = pmm_json(base_url, user, password, f"/prometheus/api/v1/query?{payload}")
+    body = pmm_json(base_url, user, password, f"/prometheus/api/v1/query?{payload}", pmm_config)
     return body.get("data", {}).get("result", [])
 
 
@@ -301,7 +297,7 @@ def main() -> int:
         for host in ctx.group_hosts("proxysql")
     }
     try:
-        nodes = pmm_json(pmm_url, "admin", ctx.env_secret("PMM_ADMIN_PASSWORD"), "/v1/inventory/nodes")
+        nodes = pmm_json(pmm_url, "admin", ctx.env_secret("PMM_ADMIN_PASSWORD"), "/v1/inventory/nodes", pmm)
     except Exception as exc:  # noqa: BLE001 - kazdy blad tu jest niezmierzeniem
         undetermined.append(f"nie odpytano PMM Inventory ({exc})")
     else:
@@ -334,11 +330,11 @@ def main() -> int:
     try:
         live = pmm_query(
             pmm_url, "admin", ctx.env_secret("PMM_ADMIN_PASSWORD"),
-            "proxysql_up",
+            "proxysql_up", pmm,
         )
         pool = pmm_query(
             pmm_url, "admin", ctx.env_secret("PMM_ADMIN_PASSWORD"),
-            "time() - max(timestamp(proxysql_connection_pool_status))",
+            "time() - max(timestamp(proxysql_connection_pool_status))", pmm,
         )
     except Exception as exc:  # noqa: BLE001 - kazdy blad tu jest niezmierzeniem
         undetermined.append(f"nie odpytano metryk PMM ({exc})")

@@ -191,6 +191,11 @@
   connection: local
   gather_facts: false
   any_errors_fatal: true
+  vars_files:
+    - vars/pmm_tls.yml
+  module_defaults:
+    ansible.builtin.uri:
+      ca_path: "{{ pmm_controller_ca_path | default(omit, true) }}"
   vars:
     ansible_become: false
     pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"

@@ -30,7 +30,10 @@ monitoring:
   pmm:
     server_url: "https://192.168.1.70"
     cluster_name: "xenonv12"
-    validate_certs: false
+    validate_certs: true
+    certificate_reference: "pki/xenonv12/pmm-cert.pem"
+    private_key_reference: "pki/xenonv12/pmm-key.pem"
+    ca_reference: "pki/xenonv12/ca.pem"
     credentials_revision: 1
     backup_retention: 2
   agent_groups: ["proxysql"]

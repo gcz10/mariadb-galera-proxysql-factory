@@ -575,6 +575,11 @@
             "credentials_revision": {
               "type": "integer",
               "minimum": 1
+            },
+            "ca_reference": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Sciezka w repo do CA, ktore wystawilo certyfikat serwera PMM (np. pki/<platforma>/ca.pem). Wymagana przez klientow do weryfikacji serwera PMM, gdy validate_certs: true."
             }
           }
         },

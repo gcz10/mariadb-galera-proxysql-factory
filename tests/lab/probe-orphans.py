@@ -12,7 +12,6 @@ from __future__ import annotations
 import base64
 import json
 import shlex
-import ssl
 import sys
 import textwrap
 import urllib.error
@@ -26,12 +25,11 @@ except ImportError:
     print("FAIL: brak modulu PyYAML", file=sys.stderr)
     sys.exit(2)
 
-from _probe_common import ProbeContext, finish, require_hosts, run_ansible
+from _probe_common import ProbeContext, finish, pmm_ssl_context, require_hosts, run_ansible
 from alert_identity import alert_uid_prefixes
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SSL_CONTEXT = ssl._create_unverified_context()
 
 
 def api_get(
@@ -40,6 +38,7 @@ def api_get(
     auth_header: str,
     undetermined: list[str],
     unavailable: set[str],
+    pmm_config: dict,
 ) -> dict | list:
     """Pobierz odpowiedz PMM; blad nigdy nie staje sie pustym pomiarem."""
     url = server_url + path
@@ -48,7 +47,7 @@ def api_get(
         headers={"Authorization": auth_header, "Accept": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, context=SSL_CONTEXT, timeout=15) as resp:
+        with urllib.request.urlopen(req, context=pmm_ssl_context(pmm_config), timeout=15) as resp:
             status = getattr(resp, "status", None)
             if status is None:
                 status = resp.getcode()
@@ -240,6 +239,7 @@ def main() -> int:
             auth_header,
             undetermined,
             pmm_unavailable,
+            pmm_cfg,
         )
         if isinstance(nodes_data, dict):
             all_nodes = []
@@ -273,6 +273,7 @@ def main() -> int:
             auth_header,
             undetermined,
             pmm_unavailable,
+            pmm_cfg,
         )
         if isinstance(services_data, dict):
             for service_type, service_list in services_data.items():
@@ -315,6 +316,7 @@ def main() -> int:
             auth_header,
             undetermined,
             pmm_unavailable,
+            pmm_cfg,
         )
         owned_alert_prefixes = {
             prefix
@@ -346,6 +348,7 @@ def main() -> int:
             auth_header,
             undetermined,
             pmm_unavailable,
+            pmm_cfg,
         )
         if isinstance(contact_points, list):
             for contact_point in contact_points:
@@ -374,6 +377,7 @@ def main() -> int:
             auth_header,
             undetermined,
             pmm_unavailable,
+            pmm_cfg,
         )
         if isinstance(folders, list):
             for folder in folders:
@@ -402,6 +406,7 @@ def main() -> int:
             auth_header,
             undetermined,
             pmm_unavailable,
+            pmm_cfg,
         )
         if isinstance(policies, dict):
             routes = policies.get("routes", [])

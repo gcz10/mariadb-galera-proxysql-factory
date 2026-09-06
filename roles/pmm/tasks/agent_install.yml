@@ -58,9 +58,9 @@
 - name: "Wymagaj pinow integralnosci percona-release w lockfile"
   ansible.builtin.assert:
     that:
-      - pmm_client.release_rpm_sha256 | default('') | regex_search('^[a-f0-9]{64}$')
-      - pmm_client.gpg_key_sha256 | default('') | regex_search('^[a-f0-9]{64}$')
-      - pmm_client.gpg_fingerprint | default('') | length == 40
+      - pmm_client.release_rpm_sha256 | default('') is match('^[a-f0-9]{64}$')
+      - pmm_client.gpg_key_sha256 | default('') is match('^[a-f0-9]{64}$')
+      - (pmm_client.gpg_fingerprint | default('') | length) == 40
     fail_msg: >-
       Lockfile nie ma kompletnych pinow integralnosci pmm_client
       (release_rpm_sha256 / gpg_key_sha256 / gpg_fingerprint). Dodaj je przed
@@ -111,6 +111,71 @@
     name: "{{ pmm_client.package }}"
     state: present
     allow_downgrade: true
+
+
+- name: "PMM CA — zapewnij katalog anchorów zaufania CA"
+  ansible.builtin.file:
+    path: /etc/pki/ca-trust/source/anchors
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: pmm_ca_reference | length > 0
+
+- name: "PMM CA — zainstaluj publiczny certyfikat CA serwera PMM"
+  ansible.builtin.copy:
+    src: "{{ pmm_controller_ca_path }}"
+    dest: "{{ pmm_remote_ca_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: pmm_ca_anchor_copy
+  notify: Update system CA trust
+  when: pmm_ca_reference | length > 0
+
+- name: "PMM CA — zastosuj nowy anchor przed konfiguracja agenta"
+  ansible.builtin.meta: flush_handlers
+
+- name: "PMM agent — sprawdź obecność istniejącego pliku konfiguracji"
+  ansible.builtin.stat:
+    path: /usr/local/percona/pmm/config/pmm-agent.yaml
+  register: pmm_agent_config_stat
+
+# Wartosci `insecure-tls` NIE edytujemy w pliku: `pmm-agent` zapisuje ja sam ze
+# zmiennej PMM_AGENT_SERVER_INSECURE_TLS, a recznie wstawiona linia rozjezdzala
+# wciecie YAML i agent odmawial startu ("did not find expected key"). Restart
+# jest wiec potrzebny takze wtedy, gdy deklaracja rozjechala sie z plikiem —
+# inaczej zmiana `validate_certs` nie doszlaby do dzialajacego agenta.
+- name: "PMM agent — odczytaj weryfikacje TLS zapisana przez agenta"
+  ansible.builtin.command:
+    argv: [grep, -c, "insecure-tls: true", /usr/local/percona/pmm/config/pmm-agent.yaml]
+  register: pmm_agent_insecure
+  changed_when: false
+  failed_when: pmm_agent_insecure.rc not in [0, 1]
+  when: pmm_agent_config_stat.stat.exists | default(false)
+
+- name: "PMM agent — zrestartuj agenta po zmianie zaufania CA lub deklaracji TLS"
+  ansible.builtin.systemd_service:
+    name: pmm-agent
+    state: restarted
+    enabled: true
+  when:
+    - pmm_agent_config_stat.stat.exists | default(false)
+    - (pmm_ca_anchor_copy.changed | default(false))
+      or ((pmm_agent_insecure.stdout | default('0') | trim != '0') == (pmm_validate_certs_effective | bool))
+
+- name: "PMM agent — poczekaj na ponowne połączenie po zmianie zaufania TLS"
+  ansible.builtin.command:
+    argv: [timeout, "20", pmm-admin, status, --json]
+  register: pmm_transition_status
+  until: pmm_transition_status.rc == 0 and ((pmm_transition_status.stdout | default('{}') | from_json).pmm_agent_status.connected | default(false))
+  retries: 12
+  delay: 5
+  changed_when: false
+  when:
+    - pmm_agent_config_stat.stat.exists | default(false)
+    - (pmm_ca_anchor_copy.changed | default(false))
+      or ((pmm_agent_insecure.stdout | default('0') | trim != '0') == (pmm_validate_certs_effective | bool))
 
 - name: "Sprawdz, czy agent jest juz skonfigurowany"
   ansible.builtin.command:

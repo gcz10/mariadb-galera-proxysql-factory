@@ -1,0 +1,9 @@
+---
+# Zadania API PMM biegna na kontrolerze; wezly dostaja WYLACZNIE to publiczne CA.
+# `ca_reference` jest zwykle sciezka repo-relatywna, ale sciezka absolutna
+# (CA spoza repo) musi zostac uzyta doslownie, a nie sklejona z playbook_dir.
+pmm_ca_reference: "{{ (monitoring | default({})).get('pmm', {}).get('ca_reference', '') }}"
+pmm_controller_ca_path: >-
+  {{ '' if pmm_ca_reference | length == 0
+     else (pmm_ca_reference if pmm_ca_reference.startswith('/')
+           else ((playbook_dir ~ '/../' ~ pmm_ca_reference) | realpath)) }}

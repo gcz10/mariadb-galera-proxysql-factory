@@ -1,0 +1,5 @@
+---
+- name: Update system CA trust
+  ansible.builtin.command:
+    argv: [update-ca-trust, extract]
+  changed_when: true

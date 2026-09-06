@@ -90,6 +90,10 @@
   gather_facts: false
   vars_files:
     - vars/alert_identity.yml
+    - vars/pmm_tls.yml
+  module_defaults:
+    ansible.builtin.uri:
+      ca_path: "{{ pmm_controller_ca_path | default(omit, true) }}"
   vars:
     # `become: false` to slowo kluczowe play'a, a `ansible_become`
     # z inwentarza jest ZMIENNA i wygrywa z nim w precedencji.

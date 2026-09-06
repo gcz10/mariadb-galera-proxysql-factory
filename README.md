@@ -115,8 +115,11 @@ budowy.
 - `proxysql.frontend_tls.{ca,certificate,private_key}_reference` — materiał
   wygenerowany w kroku 4 dla **pary ProxySQL i VIP-a**, nie dla klastra;
 - wszystkie cztery listy `network.*_cidrs` niepuste;
-- `monitoring.pmm.server_url` i `pmm.cluster_name`, a przy własnym PMM
-  z certyfikatem self-signed `pmm.validate_certs: false`;
+- `monitoring.pmm.server_url` i `pmm.cluster_name`. Certyfikat PMM wdraża ta
+  warstwa: podaj komplet `pmm.{certificate,private_key,ca}_reference`
+  (wygeneruj `LEAF=pmm REUSE_CA=1 pki/generate.sh <platforma>-pmm
+  <host>,<adres>`) i zostaw `pmm.validate_certs: true`. Samo `pmm.ca_reference`
+  wystarcza, gdy PMM prowadzi ktoś inny, a warstwa jest tylko klientem API;
 - `monitoring.alerts.email` — adres, który naprawdę odbiera pocztę.
 
 **`platform/<nazwa>/inventory.yml`:** grupy `proxysql` (dwa węzły z
@@ -152,7 +155,9 @@ pustej liście host usług może być zewnętrzny i zachowany poza tym inventory
   blok wybranego backendu i harmonogram;
 - `monitoring.enabled: false`, gdy nie używasz PMM; przy `true` ustaw
   `pmm.server_url`, `pmm.cluster_name`, `pmm.validate_certs`,
-  `agent_groups`, `credentials_revision` i rzeczywisty adres alertów.
+  `pmm.ca_reference` wskazujące CA serwera PMM (najemca dostaje tylko publiczne
+  CA — nigdy klucza), `agent_groups`, `credentials_revision` i rzeczywisty
+  adres alertów.
 - `mariadb_tuning.gcache_size` — bufor, z którego wracający węzeł dostaje IST
   zamiast pełnego SST. **Wymagane statycznie** w `cluster.yml` — playbook nie ma
   fallbacku. Sugerowaną wartość policz `tests/validation/calc-gcache.py

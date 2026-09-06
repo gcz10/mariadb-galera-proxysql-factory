@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import re
+import ssl
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +39,21 @@ EXIT_UNDETERMINED = 2
 _HEADER_RE = re.compile(
     r"^(?P<host>\S+)\s+\|\s+(?P<status>CHANGED|SUCCESS|FAILED!?|UNREACHABLE!?)(?P<rest>.*)$"
 )
+
+
+def pmm_ssl_context(pmm_config: dict) -> ssl.SSLContext:
+    """Use declared PMM trust; environment variables cannot weaken it."""
+    validate = pmm_config.get("validate_certs", True)
+    if not isinstance(validate, bool):
+        raise ValueError("monitoring.pmm.validate_certs must be a boolean")
+    ca_reference = pmm_config.get("ca_reference")
+    context = ssl.create_default_context(
+        cafile=str(REPO_ROOT / ca_reference) if ca_reference else None
+    )
+    if not validate:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
 
 
 class ProbeContext:

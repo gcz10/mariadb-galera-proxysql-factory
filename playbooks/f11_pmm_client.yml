@@ -9,6 +9,7 @@
   become: false
   vars_files:
     - vars/secret_policy.yml
+    - vars/pmm_tls.yml
     - "../{{ versions.lock_file }}"
   vars:
     ansible_become: false
@@ -23,6 +24,7 @@
           url_password: "{{ pmm_admin_password }}"
           force_basic_auth: true
           validate_certs: "{{ pmm_validate_certs_effective }}"
+          ca_path: "{{ pmm_controller_ca_path | default(omit, true) }}"
 
 - name: "F11 - Przygotuj konto monitorujące MariaDB"
   hosts: galera
@@ -39,6 +41,8 @@
   connection: local
   gather_facts: false
   become: false
+  vars_files:
+    - vars/pmm_tls.yml
   vars:
     ansible_become: false
   roles:
@@ -52,6 +56,7 @@
           url_password: "{{ pmm_admin_password }}"
           force_basic_auth: true
           validate_certs: "{{ pmm_validate_certs_effective }}"
+          ca_path: "{{ pmm_controller_ca_path | default(omit, true) }}"
 
 - name: "F11 - Usuń zastąpiony monitoring standalone"
   hosts: galera

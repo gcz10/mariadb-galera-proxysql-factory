@@ -114,7 +114,11 @@
   become: false
   vars_files:
     - vars/secret_policy.yml
+    - vars/pmm_tls.yml
     - "../{{ versions.lock_file }}"
+  module_defaults:
+    ansible.builtin.uri:
+      ca_path: "{{ pmm_controller_ca_path | default(omit, true) }}"
 
   vars:
     ansible_become: false

@@ -26,6 +26,8 @@ pmm_api_url: >-
 # fallback false. Jawne monitoring.pmm.validate_certs wygrywa w obu trybach.
 pmm_validate_certs_effective: "{{ monitoring.get('pmm', {}).get('validate_certs', pmm_mode == 'agentless') | bool }}"
 
+pmm_remote_ca_path: "/etc/pki/ca-trust/source/anchors/isa-pmm-ca.pem"
+
 # Wspolne etykiety i rewizja sekretow.
 #
 # Rola obsluguje DWIE definicje: najemce (blok `cluster`) i warstwe wspolna

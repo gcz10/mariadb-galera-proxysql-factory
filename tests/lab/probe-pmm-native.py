@@ -5,13 +5,13 @@ import base64
 import json
 import os
 import re
-import ssl
 import sys
 import time
 import yaml
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 from alert_identity import alert_uid_prefixes
+from _probe_common import pmm_ssl_context
 
 PMM_USER = os.environ.get("PMM_ADMIN_USER", "admin")
 PMM_PASSWORD = os.environ.get("PMM_ADMIN_PASSWORD")
@@ -159,10 +159,7 @@ ALL_STATE_METRICS = (
 def get_json(path):
     token = base64.b64encode(f"{PMM_USER}:{PMM_PASSWORD}".encode()).decode()
     request = Request(f"{PMM_URL}{path}", headers={"Authorization": f"Basic {token}"})
-    context = ssl.create_default_context()
-    if os.environ.get("PMM_VALIDATE_CERTS", "0") != "1":
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = pmm_ssl_context(PMM_CONFIG)
     with urlopen(request, context=context, timeout=10) as response:
         return json.load(response)
 

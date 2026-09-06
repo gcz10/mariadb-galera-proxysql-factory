@@ -18,9 +18,13 @@
   gather_facts: false
   vars_files:
     - vars/secret_policy.yml
+    - vars/pmm_tls.yml
     - vars/proxysql_hostgroups.yml
     - vars/alert_identity.yml
     - vars/alert_rules.yml
+  module_defaults:
+    ansible.builtin.uri:
+      ca_path: "{{ pmm_controller_ca_path | default(omit, true) }}"
   vars:
     ansible_become: false
     pmm_api_url: "{{ lookup('ansible.builtin.env', 'PMM_SERVER_URL') | default(monitoring.pmm.server_url, true) | regex_replace('/$', '') }}"

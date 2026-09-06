@@ -76,7 +76,8 @@ monitoring:
   pmm:
     server_url: "https://192.168.1.70"
     cluster_name: "cassiopeiav14-r9"
-    validate_certs: false
+    validate_certs: true
+    ca_reference: "pki/xenonv12/ca.pem"
     credentials_revision: 1
   alerts:
     email: "ops@claude.local"

@@ -27,6 +27,21 @@
           infra_services.yml przyjmuje wyłącznie konfigurację platformy.
           Użyj kanonicznego celu platform-infra.
 
+    - name: "Wymagaj kompletnego materiału TLS przed mutacją hosta"
+      ansible.builtin.assert:
+        that:
+          - >-
+            ('certificate_reference' not in pmm_tls and 'private_key_reference' not in pmm_tls) or
+            (pmm_tls.get('certificate_reference', '') is string and
+             pmm_tls.get('private_key_reference', '') is string and
+             pmm_tls.get('ca_reference', '') is string and
+             pmm_tls.get('certificate_reference', '') | length > 0 and
+             pmm_tls.get('private_key_reference', '') | length > 0 and
+             pmm_tls.get('ca_reference', '') | length > 0)
+        fail_msg: "TLS serwera PMM wymaga certificate_reference, private_key_reference i ca_reference."
+      vars:
+        pmm_tls: "{{ (monitoring | default({})).get('pmm', {}) }}"
+
 - name: "Infra — wymuś dokładną politykę host firewall przed uruchomieniem usług"
   ansible.builtin.import_playbook: firewall.yml
   vars:
@@ -52,6 +67,16 @@
     # haslo admina PMM, wiec weryfikacja certyfikatu ma wynikac z `platform.yml`,
     # a nie byc wylaczona bezwarunkowo. Brak pola (schema go wymaga) = `true`.
     pmm_validate_certs: "{{ (monitoring | default({})).get('pmm', {}).get('validate_certs', true) | bool }}"
+    # Material TLS dla PMM jest OPCJONALNY: platforma bez tych pol zostaje na
+    # certyfikacie self-signed (i musi deklarowac `validate_certs: false`).
+    # Komplet odwolan wlacza podmiane na serwerze; samo ca_reference wystarcza
+    # dla platformy bedacej wylacznie klientem API zewnetrznego PMM.
+    pmm_tls: "{{ (monitoring | default({})).get('pmm', {}) }}"
+    pmm_tls_has_cert: "{{ pmm_tls.get('certificate_reference', '') | length > 0 }}"
+    pmm_tls_has_key: "{{ pmm_tls.get('private_key_reference', '') | length > 0 }}"
+    pmm_tls_has_ca: "{{ pmm_tls.get('ca_reference', '') | length > 0 }}"
+    pmm_tls_declared: "{{ 'pmm' in infra_services and pmm_tls_has_cert and pmm_tls_has_key and pmm_tls_has_ca }}"
+    pmm_ca_path: "{{ (infra_compose_dir ~ '/pmm-tls/ca-certs.pem') if (pmm_tls_has_ca and pmm_validate_certs) else omit }}"
     minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
     minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
     infra_compose_dir: /etc/isa-infra
@@ -287,18 +312,221 @@
         timeout: 180
       loop: "{{ infra_published_ports }}"
 
-    # UWAGA NA BOOTSTRAP: ten playbook nie instaluje zadnego CA, a PMM przy
-    # pierwszym starcie generuje certyfikat self-signed. Platforma deklarujaca
-    # `monitoring.pmm.validate_certs: true` musi wiec miec zaufany certyfikat
-    # wdrozony ZANIM uruchomi `platform-infra` — inaczej ta petla gotowosci
-    # (60 x 5 s) nie przejdzie. Swiadomie NIE obchodzimy tego zaszytym `false`:
-    # kolejne dwa wywolania nizej niosą haslo admina, a rozjazd "sprawdzam raz
-    # tak, raz inaczej" jest gorszy niz jawny warunek wejscia.
+    # Apply declared server material before readiness or password-bearing requests.
+    # PMM stores nginx certificates in its persistent /srv volume.
+    - name: "PMM TLS — upewnij sie, ze katalog na certyfikaty istnieje"
+      ansible.builtin.file:
+        path: "{{ infra_compose_dir }}/pmm-tls"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when: pmm_tls_has_ca
+
+    - name: "PMM TLS — wdróż CA na hosta infra"
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../{{ pmm_tls.ca_reference }}"
+        dest: "{{ infra_compose_dir }}/pmm-tls/ca-certs.pem"
+        owner: root
+        group: root
+        mode: "0644"
+      when: pmm_tls_has_ca
+
+    - name: "PMM TLS — wdróż certyfikat i klucz serwera na hosta infra"
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../{{ item.src }}"
+        dest: "{{ infra_compose_dir }}/pmm-tls/{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - {src: "{{ pmm_tls.certificate_reference }}", dest: certificate.crt, mode: "0644"}
+        - {src: "{{ pmm_tls.private_key_reference }}", dest: certificate.key, mode: "0600"}
+      loop_control:
+        label: "{{ item.dest }}"
+      when: pmm_tls_declared
+
+    - name: "PMM TLS — zweryfikuj poprawność materiału przed wdrożeniem do kontenera"
+      ansible.builtin.shell: >-
+        set -euo pipefail;
+        pub_cert=$(openssl x509 -noout -pubkey -in {{ infra_compose_dir }}/pmm-tls/certificate.crt);
+        pub_key=$(openssl pkey -pubout -in {{ infra_compose_dir }}/pmm-tls/certificate.key);
+        [ -n "$pub_cert" ] && [ "$pub_cert" = "$pub_key" ] || {
+          echo "FAIL: klucz prywatny nie pasuje do certyfikatu PMM" >&2; exit 1;
+        };
+        openssl verify -purpose sslserver -verify_ip {{ ansible_host | quote }}
+        -CAfile {{ (infra_compose_dir ~ '/pmm-tls/ca-certs.pem') | quote }}
+        {{ (infra_compose_dir ~ '/pmm-tls/certificate.crt') | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: pmm_tls_declared
+
+    - name: "PMM TLS — odczytaj sumy plikow serwowanych przez kontener"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - -u
+          - "0"
+          - pmm-server
+          - sha256sum
+          - /srv/nginx/certificate.crt
+          - /srv/nginx/certificate.key
+          - /srv/nginx/ca-certs.pem
+      register: pmm_tls_in_container
+      changed_when: false
+      failed_when: false
+      when: pmm_tls_declared
+
+    - name: "PMM TLS — odczytaj sumy plikow zadeklarowanych"
+      ansible.builtin.command:
+        argv:
+          - sha256sum
+          - "{{ infra_compose_dir }}/pmm-tls/certificate.crt"
+          - "{{ infra_compose_dir }}/pmm-tls/certificate.key"
+          - "{{ infra_compose_dir }}/pmm-tls/ca-certs.pem"
+      register: pmm_tls_on_host
+      changed_when: false
+      when: pmm_tls_declared
+
+    - name: "PMM TLS — odczytaj fingerprint certyfikatu serwowanego przez live endpoint"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        echo | timeout 15 openssl s_client -connect {{ (ansible_host ~ ':443') | quote }} 2>/dev/null \
+          | openssl x509 -noout -fingerprint -sha256 2>/dev/null \
+          | cut -d= -f2
+      args:
+        executable: /bin/bash
+      register: pmm_tls_live_fingerprint
+      changed_when: false
+      failed_when: false
+      when: pmm_tls_declared
+
+    - name: "PMM TLS — odczytaj fingerprint certyfikatu zadeklarowanego na hoscie"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        openssl x509 -in {{ infra_compose_dir }}/pmm-tls/certificate.crt \
+          -noout -fingerprint -sha256 2>/dev/null \
+          | cut -d= -f2
+      args:
+        executable: /bin/bash
+      register: pmm_tls_staged_fingerprint
+      changed_when: false
+      failed_when: false
+      when: pmm_tls_declared
+
+    - name: "PMM TLS — ustal stan zgodności materiału na dysku i live leaf endpointu"
+      ansible.builtin.set_fact:
+        pmm_tls_disk_matches: >-
+          {{
+            (pmm_tls_in_container.rc | default(1)) == 0 and
+            (pmm_tls_on_host.rc | default(1)) == 0 and
+            ((pmm_tls_in_container.stdout_lines | default([]) | length) == 3) and
+            ((pmm_tls_on_host.stdout_lines | default([]) | length) == 3) and
+            (pmm_tls_in_container.stdout | regex_findall('^[0-9a-f]{64}', multiline=True)) ==
+            (pmm_tls_on_host.stdout | regex_findall('^[0-9a-f]{64}', multiline=True))
+          }}
+        pmm_tls_leaf_matches: >-
+          {{
+            (pmm_tls_live_fingerprint.rc | default(1)) == 0 and
+            (pmm_tls_staged_fingerprint.rc | default(1)) == 0 and
+            ((pmm_tls_live_fingerprint.stdout | default('') | trim | length) > 0) and
+            ((pmm_tls_live_fingerprint.stdout | trim) == (pmm_tls_staged_fingerprint.stdout | default('') | trim))
+          }}
+      when: pmm_tls_declared
+
+    - name: "PMM TLS — ustal, czy wdrozenie wymaga mutacji lub przeladowania"
+      ansible.builtin.set_fact:
+        pmm_tls_matches: "{{ (pmm_tls_disk_matches | default(false) | bool) and (pmm_tls_leaf_matches | default(false) | bool) }}"
+      when: pmm_tls_declared
+
+    - name: "PMM TLS — wgraj certyfikat do kontenera i przeladuj nginx"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        backup=$(docker exec -u 0 pmm-server mktemp -d /srv/nginx/.isa-tls.XXXXXX)
+        docker exec -u 0 pmm-server sh -ec '
+          for f in certificate.crt certificate.key ca-certs.pem; do
+            if [ -f "/srv/nginx/$f" ]; then
+              cp -p "/srv/nginx/$f" "$1/$f"
+            fi
+          done
+        ' sh "$backup"
+        rollback() {
+          rc=$?
+          trap - ERR
+          docker exec -u 0 pmm-server sh -ec '
+            for f in certificate.crt certificate.key ca-certs.pem; do
+              if [ -f "$1/$f" ]; then
+                cp -p "$1/$f" "/srv/nginx/$f"
+                chown pmm:root "/srv/nginx/$f"
+              else
+                rm -f "/srv/nginx/$f"
+              fi
+            done
+          ' sh "$backup"
+          docker exec -u 0 pmm-server supervisorctl restart nginx
+          echo "PMM TLS deployment failed; restored previous material. Backup: $backup" >&2
+          exit "$rc"
+        }
+        trap rollback ERR
+        docker cp {{ (infra_compose_dir ~ '/pmm-tls/certificate.crt') | quote }} pmm-server:/srv/nginx/certificate.crt
+        docker cp {{ (infra_compose_dir ~ '/pmm-tls/certificate.key') | quote }} pmm-server:/srv/nginx/certificate.key
+        docker cp {{ (infra_compose_dir ~ '/pmm-tls/ca-certs.pem') | quote }} pmm-server:/srv/nginx/ca-certs.pem
+        docker exec -u 0 pmm-server chown pmm:root /srv/nginx/certificate.crt /srv/nginx/certificate.key /srv/nginx/ca-certs.pem
+        docker exec -u 0 pmm-server chmod 644 /srv/nginx/certificate.crt /srv/nginx/ca-certs.pem
+        docker exec -u 0 pmm-server chmod 600 /srv/nginx/certificate.key
+        docker exec -u 0 pmm-server supervisorctl restart nginx
+        trap - ERR
+        docker exec -u 0 pmm-server rm -rf "$backup"
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when:
+        - pmm_tls_declared
+        - not (pmm_tls_matches | default(false) | bool)
+
+    - name: "PMM TLS — upewnij się, że uprawnienia plików w kontenerze są poprawne (pmm:root, 644/600)"
+      ansible.builtin.shell: >-
+        set -euo pipefail;
+        curr=$(docker exec -u 0 pmm-server stat -c '%U:%G %a' \
+          /srv/nginx/certificate.crt \
+          /srv/nginx/ca-certs.pem \
+          /srv/nginx/certificate.key 2>/dev/null || true);
+        expected=$(printf 'pmm:root 644\npmm:root 644\npmm:root 600');
+        if [ "$curr" != "$expected" ]; then
+          docker exec -u 0 pmm-server chown pmm:root /srv/nginx/certificate.crt /srv/nginx/certificate.key /srv/nginx/ca-certs.pem;
+          docker exec -u 0 pmm-server chmod 644 /srv/nginx/certificate.crt /srv/nginx/ca-certs.pem;
+          docker exec -u 0 pmm-server chmod 600 /srv/nginx/certificate.key;
+          echo "FIXED";
+        else
+          echo "OK";
+        fi
+      args:
+        executable: /bin/bash
+      register: pmm_tls_perms_fix
+      changed_when: "'FIXED' in pmm_tls_perms_fix.stdout"
+      when: pmm_tls_declared
+
+    - name: "PMM TLS — zweryfikuj endpoint HTTPS pod kątem handshake, łańcucha CA oraz tożsamości IP SAN"
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - "import ssl, socket; ctx = ssl.create_default_context(cafile='{{ infra_compose_dir }}/pmm-tls/ca-certs.pem'); s = socket.create_connection(('{{ ansible_host }}', 443), timeout=10); ss = ctx.wrap_socket(s, server_hostname='{{ ansible_host }}'); ss.close(); s.close()"
+      register: pmm_tls_probe
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: pmm_tls_probe.rc == 0
+      when: pmm_tls_declared
+
     - name: "Sprawdź gotowość PMM"
       ansible.builtin.uri:
         url: "https://{{ ansible_host }}/"
         method: GET
         validate_certs: "{{ pmm_validate_certs }}"
+        ca_path: "{{ pmm_ca_path | default(omit) }}"
         status_code: 200
       register: pmm_readiness
       until: pmm_readiness.status == 200
@@ -366,6 +594,7 @@
         password: "{{ pmm_admin_password }}"
         force_basic_auth: true
         validate_certs: "{{ pmm_validate_certs }}"
+        ca_path: "{{ pmm_ca_path | default(omit) }}"
         status_code:
           - 200
           - 401
@@ -381,6 +610,7 @@
         password: "{{ pmm_default_bootstrap_password | default('admin') }}"
         force_basic_auth: true
         validate_certs: "{{ pmm_validate_certs }}"
+        ca_path: "{{ pmm_ca_path | default(omit) }}"
         body_format: json
         body:
           oldPassword: "{{ pmm_default_bootstrap_password | default('admin') }}"

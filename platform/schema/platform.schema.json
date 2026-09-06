@@ -265,7 +265,32 @@
               "minimum": 1,
               "maximum": 5,
               "description": "Liczba najnowszych, zweryfikowanych volume backupu PMM zachowywanych po poprawnym converge."
+            },
+            "certificate_reference": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Sciezka w repo do certyfikatu serwera PMM (np. pki/<platforma>/pmm-cert.pem). Podana razem z private_key_reference i ca_reference zastepuje certyfikat self-signed, ktory PMM generuje przy pierwszym starcie."
+            },
+            "private_key_reference": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Sciezka w repo do klucza prywatnego certyfikatu PMM."
+            },
+            "ca_reference": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Sciezka w repo do CA, ktore wystawilo certyfikat PMM. Bez niego klienci nie maja czym zweryfikowac lancucha, wiec validate_certs: true nie ma sensu."
             }
+          },
+          "dependencies": {
+            "certificate_reference": [
+              "private_key_reference",
+              "ca_reference"
+            ],
+            "private_key_reference": [
+              "certificate_reference",
+              "ca_reference"
+            ]
           }
         },
         "agent_groups": {
