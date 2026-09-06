@@ -13,7 +13,7 @@
         lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test lab-failover-hard-test cluster-tls-rotate \
         cluster-app-host lab-app-verify lab-app-bench lab-app-degradation-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
-        lab-hardening-verify lab-selinux-verify lab-monitoring-verify lab-rolling-restart-verify \
+        lab-hardening-verify lab-selinux-verify lab-tls-expired-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code verify-inventory-tf \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify fleet-state \
@@ -682,6 +682,14 @@ lab-hardening-verify:  ## Zweryfikuj hardening MariaDB (ISC-40/41/42)
 lab-selinux-verify:  ## Zweryfikuj SELinux Enforcing na hostach klastra (ISC-4)
 	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-selinux.py
+
+# ISC-44 wariant "wygasly": stawia JEDNORAZOWY serwer na hoscie grupy `restore`
+# i sprzata po sobie. Nie dotyka certyfikatow klastra — dlatego celowo NIE jest
+# w `lab-post-build-gate`: bramka po budowie ma byc szybka i bezstanowa, a ten
+# pomiar tworzy i kasuje instancje bazy.
+lab-tls-expired-verify:  ## Zweryfikuj odrzucenie WYGASLEGO certyfikatu serwera (ISC-44)
+	$(cluster_guard)
+	$(TARGET_ENV) tests/lab/probe-tls-expired-cert.py
 
 # Najemca rejestruje WYLACZNIE wlasne wezly. Eksportery ProxySQL (fcp1/fcp2)
 # rejestruje `make platform-monitoring` — nalezą do warstwy wspolnej, a gdy

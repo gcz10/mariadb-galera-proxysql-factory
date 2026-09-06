@@ -4,15 +4,17 @@ slug: "20260722-172704_galera-proxysql-cluster-factory"
 effort: comprehensive
 effort_source: explicit
 phase: build
-progress: 68/68
-# 64 kryteria w pelni spelnione na biezacym dowodzie, 4 z zastrzezeniem (`[~]`):
-# ISC-1 (dowod historyczny z odbudowy 2026-08-02, powtorzenie wymaga teardownu),
-# ISC-22 (izolacja admin/app CIDR dowiedziona tylko w produkcji), ISC-44
-# (nieważny cert nieprzetestowany), ISC-66 (fio nigdy nie uruchomione w F0).
+progress: 67/68
+# 65 kryteriow spelnionych na biezacym dowodzie, 2 z zastrzezeniem (`[~]`):
+# ISC-1 (dowod historyczny z odbudowy 2026-08-02, powtorzenie wymaga teardownu)
+# i ISC-66 (fio nigdy nie uruchomione w F0). ISC-44 domkniety 2026-09-06
+# (wariant wygasly zmierzony sonda probe-tls-expired-cert.py).
+# ISC-22 OTWARTY: izolacja admin/app jest nieosiagalna przy plaskiej /24,
+# ktora deklaruje 16/16 definicji floty — wymaga decyzji o adresacji.
 # Zastrzezenia sa rozpisane w Verification przy kazdym ISC.
 mode: iterate
 started: "2026-07-22T15:27:04Z"
-updated: "2026-08-14T23:10:00Z"
+updated: "2026-09-06T15:30:00Z"
 principal_stated_goal: "Zbuduj powtarzalną, idempotentną i operacyjnie bezpieczną fabrykę produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących maszynach Rocky Linux 9, tak aby nowy niezależny klaster powstawał przez dodanie inventory i konfiguracji klastra, a każdy stan wysokiej dostępności, bezpieczeństwa, backupu i odtwarzania był potwierdzony wykonywalnym testem oraz dowodem."
 principal_stated_goal_source: prompt
 principal_stated_goal_signal: 4
@@ -104,7 +106,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 - [x] ISC-19: Węzeł non-Primary, non-Synced, not Ready lub przekraczający zatwierdzony lag jest wyłączony z ruchu ProxySQL.
 - [x] ISC-20: Monitorowanie Galery w ProxySQL osiąga poprawny stan w określonym progu czasu po deploy.
 - [x] ISC-21: Konfiguracja runtime i disk ProxySQL jest zgodna z repo (brak driftu po converge).
-- [~] ISC-22: Admin port ProxySQL (6032) nie jest osiągalny z application CIDR.
+- [ ] ISC-22: Admin port ProxySQL (6032) nie jest osiągalny z application CIDR. NIEWYKONALNE przy obecnej adresacji — 16/16 definicji floty deklaruje `application_cidrs == administration_cidrs` (płaska /24), więc reguła „6032 tylko dla administracji" wpuszcza też aplikację; zmierzone 2026-09-06 (Verification). Wymaga decyzji operatora o rozdzieleniu sieci, nie zmiany kodu.
 - [x] ISC-23: Anti: Read/write splitting pozostaje wyłączony, dopóki osobna analiza aplikacji go nie zatwierdzi.
 
 ### Endpoint HA
@@ -134,7 +136,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 - [x] ISC-41: Root nie loguje się zdalnie (tylko localhost/UNIX socket).
 - [x] ISC-42: Konta SST, monitor i app mają minimalne uprawnienia (least privilege).
 - [x] ISC-43: Anti: Sekrety nie występują w repo, logach CI, diffach ani argv procesu.
-- [~] ISC-44: W trybie `tls.mode=full` połączenie z niezaufanym lub nieważnym certyfikatem jest odrzucane.
+- [x] ISC-44: W trybie `tls.mode=full` połączenie z niezaufanym lub nieważnym certyfikatem jest odrzucane.
 - [x] ISC-45: W trybie `tls.mode=disabled` w profilu production powstaje jawne ostrzeżenie i udokumentowane risk acceptance.
 
 ### Obserwowalność
@@ -506,6 +508,40 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
   Dowód: `tests/unit/test_platform_vip_contract.py` (5 testów) oraz pomiar na żywo
   2026-09-06 — `xenonv12` (najemcy żywi) PASS exit 0, `xenonv11` (najemcy zatrzymani)
   UNDETERMINED exit 2 z przyczyną, wcześniej FAIL z dwoma naruszeniami. 644 testy OK.
+
+- ISC-44: PASS domknięty 2026-09-06 — wariant „nieważny (wygasły)" był dotąd
+  nieprzetestowany i trzymał kryterium na `[~]`. Zmierzone sondą
+  `tests/lab/probe-tls-expired-cert.py` na `o15r1` (grupa `restore`, klaster
+  `orionv15-r10`): jednorazowy `mariadbd` prezentujący certyfikat wystawiony na
+  przeszłość (`notAfter Sep 4 15:22:11 2026 GMT`) jest odrzucany przez klienta
+  z POPRAWNYM CA — `ERROR 2026 (HY000): TLS/SSL error: certificate has expired`.
+  Kontrola pozytywna w tym samym przebiegu: ten sam serwer z certyfikatem ważnym
+  (`notAfter Sep 7 15:22:11 2026 GMT`), podpisanym tym samym CA, przyjmuje
+  połączenie — bez niej „odrzucone" nie odróżniałoby się od „serwer nie wstał".
+  Dlaczego tak, a nie po stronie klienta: wygaszenie CA w magazynie zaufania
+  mierzyłoby zachowanie klienta wobec własnego magazynu, nie reakcję na zły
+  certyfikat SERWERA. Dlaczego nie na węźle klastra: podmiana certyfikatu
+  działającego węzła to mutacja produkcji. Serwer testowy, dane i klucze
+  usunięte w `finally`; brak procesu i katalogu potwierdzony osobnym odczytem.
+  SELinux pozostał Enforcing — katalog dostał kontekst `mysqld_db_t`, a port
+  wzięto z zakresu już oznakowanego `mysqld_port_t` (63132), zamiast dokładać
+  regułę polityki dla jednorazowego pomiaru. Cel: `make lab-tls-expired-verify`.
+
+- ISC-22: OTWARTY (był `[~]` z uzasadnieniem „dowiedzione tylko na produkcji" —
+  to uzasadnienie było nieścisłe). Zmierzone 2026-09-06 z `x12app`
+  (`192.168.1.73`, grupa `app` warstwy `xenonv12`) na `192.168.1.71`:
+  `PORT6032=OPEN`, `PORT6033=OPEN`. Kontrola osiągalności (6033) wyklucza
+  „port zamknięty, bo host martwy". Przyczyna NIE jest błędem firewalla:
+  `firewall.yml:48-49` mapuje `application_cidrs → 6033` i
+  `administration_cidrs → 6032`, a wszystkie 16 definicji floty (11 klastrów
+  + 5 platform, wliczając szablon `platform/example`) deklarują OBA pola jako
+  ten sam CIDR. Przy `application == administration` reguła „6032 tylko dla
+  administracji" z definicji wpuszcza aplikację — izolacja żądana przez ISC-22
+  jest na płaskiej /24 nieosiągalna, a domyślny szablon repozytorium też jej
+  nie pozwala spełnić. Zamknięcie wymaga decyzji operatora o adresacji
+  (zawężenie `administration_cidrs` do stacji administracyjnych), nie zmiany
+  kodu; playbook ma bramkę chroniącą sesję SSH przed odcięciem
+  (`firewall.yml:112-142`), ale zakres adresów musi podać operator.
 
 - ISC-1: PASS — lab2-cluster wdrożony na czystych kontenerach (f2_install + site.yml + bootstrap + f5_join, wszystkie taski PASS, failed=0). 2026-07-24.
 
