@@ -85,6 +85,31 @@ def check_pool_metric(
     return True
 
 
+def withdrawal_is_expected(state: dict, proxysql_hosts: list) -> bool:
+    """Czy bramka Keepalived MIALA prawo zdjac VIP (ISC-26)?
+
+    `check_proxysql.sh` zdejmuje adres, gdy sa aktywne grupy Galera, ale zaden
+    writer nie jest ONLINE — nie ma dokad kierowac ruchu. Sonda zadala VIP-a
+    BEZWARUNKOWO, wiec ten sam stan opisywala jako naruszenie: na warstwie
+    z zatrzymanymi najemcami `platform-verify` padal zawsze i przestawal
+    cokolwiek znaczyc (zmierzone 2026-09-05 na xenonv11).
+
+    Rozroznienie jest realne operacyjnie:
+      * writer ONLINE istnieje, a VIP-a nie ma -> AWARIA,
+      * zero writerow i VIP zdjety             -> nie ma czego mierzyc.
+
+    Zero aktywnych grup to swieza warstwa bez najemcow — tam bramka VIP-a NIE
+    zdejmuje (przypadek (a) w `check_proxysql.sh`), wiec wymaganie zostaje.
+    Niepelny odczyt pary tez nie uprawnia do poblazliwosci: brakujacy host
+    moze byc wlasnie tym, ktory trzymal adres.
+    """
+    if not state or len(state) != len(proxysql_hosts):
+        return False
+    active_groups = sum(int(v.get("GROUPS", "0") or 0) for v in state.values())
+    writers_online = sum(int(v.get("WRITERS", "0") or 0) for v in state.values())
+    return active_groups > 0 and writers_online == 0
+
+
 def main() -> int:
     failures: list[str] = []
     undetermined: list[str] = []
@@ -131,10 +156,19 @@ def main() -> int:
         "if pgrep -x proxysql >/dev/null; then echo PROC=1; else echo PROC=0; fi; "
         "mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf -h127.0.0.1 -P6032 -uadmin -N -B "
         "-e \"SELECT 'ADMIN=1'\" 2>/dev/null || echo ADMIN=0; "
-        # Liczba najemcow rozstrzyga, czy `connection_pool` MA prawo nie istniec.
+        # Liczba najemcow rozstrzyga, czy `connection_pool` MA prawo nie istniec,
+        # a liczba writerow ONLINE — czy VIP MA prawo byc zdjety. Oba zapytania
+        # sa DOKLADNIE tymi, ktorymi kieruje sie `check_proxysql.sh` (ISC-26):
+        # sonda czyta to samo zrodlo co bramka Keepalived, wiec nie moze uznac
+        # za awarie stanu, ktory tamta wywolala celowo.
         "echo GROUPS=$(mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf "
         "-h127.0.0.1 -P6032 -uadmin -N -B "
-        "-e \"SELECT COUNT(*) FROM runtime_mysql_galera_hostgroups WHERE active=1\" 2>/dev/null || echo 0)"
+        "-e \"SELECT COUNT(*) FROM runtime_mysql_galera_hostgroups WHERE active=1\" 2>/dev/null || echo 0); "
+        "echo WRITERS=$(mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf "
+        "-h127.0.0.1 -P6032 -uadmin -N -B "
+        "-e \"SELECT COUNT(*) FROM runtime_mysql_servers s "
+        "JOIN runtime_mysql_galera_hostgroups g ON s.hostgroup_id = g.writer_hostgroup "
+        "WHERE g.active=1 AND s.status='ONLINE'\" 2>/dev/null || echo 0)"
     )
     raw = run_ansible(ctx, "proxysql", probe)
     require_hosts(raw, proxysql_hosts, "stan pary ProxySQL", failures, undetermined)
@@ -157,10 +191,29 @@ def main() -> int:
         )
 
     holders = [n for n, v in state.items() if v.get("VIP") == "1"]
-    if state and len(state) == len(proxysql_hosts):
+    complete = bool(state) and len(state) == len(proxysql_hosts)
+
+    vip_may_be_withdrawn = withdrawal_is_expected(state, proxysql_hosts)
+
+    if complete and not vip_may_be_withdrawn:
         check(
             len(holders) == 1,
             f"VIP {vip} trzymany przez {len(holders)} wezlow {holders} (oczekiwano 1)",
+            failures,
+        )
+    elif vip_may_be_withdrawn and not holders:
+        undetermined.append(
+            f"VIP {vip} zdjety zgodnie z ISC-26: sa aktywne grupy Galera, ale zaden "
+            "writer nie jest ONLINE (najemcy zatrzymani), wiec bramka Keepalived "
+            "celowo wycofala adres — zdrowia endpointu NIE da sie zmierzyc"
+        )
+    elif vip_may_be_withdrawn:
+        # VIP trzymany mimo braku writera to odwrotna niespojnosc: bramka
+        # powinna byla go zdjac, a klient dostanie blad na kazde zapytanie.
+        check(
+            False,
+            f"VIP {vip} trzymany przez {holders} mimo zera writerow ONLINE — "
+            "bramka `check_proxysql.sh` nie wycofala adresu (ISC-26)",
             failures,
         )
     for holder in holders:
@@ -204,8 +257,12 @@ def main() -> int:
                 continue
             if "BIO_connect" in body or "connect:errno" in body:
                 # Rozroznienie jest istotne diagnostycznie: tu NIE wiadomo nic
-                # o certyfikacie, bo handshake nigdy sie nie zaczal.
-                failures.append(
+                # o certyfikacie, bo handshake nigdy sie nie zaczal. Gdy VIP
+                # zostal zdjety zgodnie z ISC-26, brak polaczenia jest SKUTKIEM
+                # tamtej decyzji, nie osobna awaria — inaczej jedno zdarzenie
+                # zapalalo dwa czerwone swiatla, a drugie klamalo o przyczynie.
+                target = undetermined if vip_may_be_withdrawn else failures
+                target.append(
                     f"{node}: endpoint {vip}:{port} nie przyjmuje polaczen — "
                     f"certyfikatu NIE zmierzono ({body.strip()[:200]})"
                 )

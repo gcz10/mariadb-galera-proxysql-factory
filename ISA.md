@@ -487,6 +487,26 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
   w użyciu przechodzi) — na kodzie sprzed zmiany padają; wszystkie pięć lockfile'ów
   w `versions/` przechodzi walidację (kandydat nie jest dziś przez nikogo wskazywany).
 
+- NIESPÓJNOŚĆ KONTRAKTU VIP z 2026-09-05 ZAMKNIĘTA 2026-09-06: `probe-platform.py`
+  żądała VIP-a trzymanego przez dokładnie jeden węzeł BEZWARUNKOWO, podczas gdy
+  `check_proxysql.sh` celowo go zdejmuje, gdy aktywne grupy Galera nie mają writera
+  ONLINE (ISC-26). Ten sam stan był więc raz zgodny z projektem, raz naruszeniem —
+  a `platform-verify` na warstwie z zatrzymanymi najemcami padał zawsze i przestawał
+  cokolwiek znaczyć. Sonda rozróżnia teraz trzy stany zamiast dwóch: writer ONLINE
+  istnieje, a VIP-a nie ma → FAIL; aktywne grupy bez writera i VIP zdjęty →
+  UNDETERMINED z podaną przyczyną; zero aktywnych grup (świeża warstwa bez najemców)
+  → VIP nadal wymagany, bo bramka w tym przypadku go NIE zdejmuje. Odwrotna
+  niespójność — VIP trzymany mimo zera writerów — jest osobną porażką. Wtórny objaw
+  (sonda TLS endpointu meldująca „nie przyjmuje połączeń") schodzi w tym samym
+  wypadku do UNDETERMINED: jedno zdarzenie nie może zapalać dwóch czerwonych świateł,
+  z których drugie kłamie o przyczynie. Niepełny odczyt pary nie uprawnia do
+  pobłażliwości — brakujący host mógł być tym, który trzymał adres.
+  Sonda czyta DOKŁADNIE to samo źródło co bramka (`runtime_mysql_galera_hostgroups`
+  + JOIN po `writer_hostgroup`, status `ONLINE`), więc rozjazd nie może wrócić bokiem.
+  Dowód: `tests/unit/test_platform_vip_contract.py` (5 testów) oraz pomiar na żywo
+  2026-09-06 — `xenonv12` (najemcy żywi) PASS exit 0, `xenonv11` (najemcy zatrzymani)
+  UNDETERMINED exit 2 z przyczyną, wcześniej FAIL z dwoma naruszeniami. 644 testy OK.
+
 - ISC-1: PASS — lab2-cluster wdrożony na czystych kontenerach (f2_install + site.yml + bootstrap + f5_join, wszystkie taski PASS, failed=0). 2026-07-24.
 
 - ISC-2: PASS — idempotentny converge: f3_galera_config re-run → config changed=False (server.cnf stabilny); F11 monitoring changed=0 na wszystkich hostach. 2026-07-24.
