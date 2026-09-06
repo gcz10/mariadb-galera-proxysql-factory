@@ -319,6 +319,64 @@ class NewClusterPreflightTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, output)
         self.assertIn("ansible-inventory nie zwrocilo zadnego ansible_host", output)
 
+    def test_platform_trust_hosts_rejects_empty_inventory(self):
+        """`0/0 zweryfikowanych` bylo sukcesem — pusty inwentarz musi byc bledem."""
+        with tempfile.TemporaryDirectory(
+            prefix="trust-empty-", dir=REPO / "platform"
+        ) as td:
+            platform = Path(td).name
+            (Path(td) / "inventory.yml").write_text(
+                yaml.safe_dump({"all": {"children": {}}}),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["make", "platform-trust-hosts", f"PLATFORM={platform}"],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("nie zwrocilo zadnego hosta", output)
+
+    def test_platform_trust_hosts_scans_host_with_inherited_address(self):
+        """Adres z group_vars nie ma linii `ansible_host:` — grep go gubil."""
+        with tempfile.TemporaryDirectory(
+            prefix="trust-inherit-", dir=REPO / "platform"
+        ) as td:
+            platform = Path(td).name
+            (Path(td) / "inventory.yml").write_text(
+                yaml.safe_dump(
+                    {
+                        "all": {
+                            "children": {
+                                "proxysql": {
+                                    "hosts": {"192.0.2.7": None},
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "make", "platform-trust-hosts", f"PLATFORM={platform}",
+                    "TRUST_KEY_RETRIES=1", "TRUST_KEYSCAN_TIMEOUT=1",
+                ],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("192.0.2.7", output)
+        self.assertIn("0/1", output)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -403,6 +403,32 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
   0 failures/0 warnings (106 plików); schema i walidator backupu — 11 deklaracji OK.
   Nie wykonywano upgrade'u MariaDB ani kasowania backupów na żywej flocie.
 
+- Pakiet B (wiarygodność bramek) — weryfikacja lokalna plus pomiar odczytowy floty:
+  `backup-impact.py` liczy pauzę flow control jako maksimum przyrostów per węzeł
+  (dominująca baseline jednego węzła nie maskuje już wzrostu na innym), a błąd
+  odczytu, brak węzła i cofnięcie licznika są porażką zamiast zera.
+  `probe-drift.py` wykrywa wieloczłonowe `SAVE`/`LOAD ... MYSQL SERVERS|USERS|
+  VARIABLES|ADMIN VARIABLES` również w wieloliniowych poleceniach i opisuje się
+  zgodnie z tym, co faktycznie robi (kontrakt statyczny, bez uruchamiania playbooka).
+  `make platform-trust-hosts` bierze hosty z `ansible-inventory` (adres dziedziczony
+  z group_vars nie wypada już ze skanu) i traktuje pusty inwentarz jako błąd,
+  nie sukces `0/0`. `monitor_rotate.yml` przed skasowaniem konta czyta tożsamość
+  monitora z warstwy runtime i dyskowej NA OBU instancjach ProxySQL i ponawia
+  odczyt bezpośrednio przed usunięciem; rozjazd par, nieznana tożsamość, brak
+  odpowiedzi albo pojawienie się kandydata w użyciu blokują kasowanie.
+  Dowód: `python3 -m unittest discover -s tests/unit -p 'test_*.py'` — 629 testów OK
+  (w tym rzeczywiste przebiegi `ansible-playbook` na atrapach dla bramek rotacji
+  i drainu); `ansible-lint playbooks roles` — 0 failures/0 warnings; pyflakes bez zgłoszeń.
+
+- ISC-4: PASS ponownie zmierzony 2026-09-06 — przywrócona sonda `tests/lab/probe-selinux.py`
+  (poprzednia `probe-selinux.sh` została usunięta razem z martwymi skryptami, a kryterium
+  zostało przy wyniku z 2026-08-14). Sonda sprawdza tryb bieżący (`getenforce`) ORAZ trwały
+  (`SELINUX=` w `/etc/selinux/config`), więc host wracający po restarcie w `permissive`
+  już nie przechodzi. Wynik: `Enforcing` teraz i po restarcie na 8/8 hostach `orionv15-r10`
+  oraz 8/8 hostach `cassiopeiav14-r9`. Falsyfikowalność potwierdzona: przy inwentarzu
+  zatrzymanego klastra sonda kończy się `UNDETERMINED` (exit 2), nie zielono.
+  Wpięta w `make lab-selinux-verify` i `make lab-post-build-gate`.
+
 - ISC-1: PASS — lab2-cluster wdrożony na czystych kontenerach (f2_install + site.yml + bootstrap + f5_join, wszystkie taski PASS, failed=0). 2026-07-24.
 
 - ISC-2: PASS — idempotentny converge: f3_galera_config re-run → config changed=False (server.cnf stabilny); F11 monitoring changed=0 na wszystkich hostach. 2026-07-24.

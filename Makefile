@@ -13,7 +13,7 @@
         lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test lab-failover-hard-test cluster-tls-rotate \
         cluster-app-host lab-app-verify lab-app-bench lab-app-degradation-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
-        lab-hardening-verify lab-monitoring-verify lab-rolling-restart-verify \
+        lab-hardening-verify lab-selinux-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code verify-inventory-tf \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify fleet-state \
@@ -247,20 +247,30 @@ platform-validate:  ## Waliduj definicje warstwy wspolnej (schema + invarianty i
 	python3 tests/validation/validate-platform.py $(PLATFORM_DIR)/platform.yml platform/schema/platform.schema.json $(PLATFORM_DIR)/inventory.yml
 	ansible-playbook playbooks/platform_preflight.yml $(PLATFORM_OPTS)
 
+# Adresy bierzemy z `ansible-inventory` (jak cluster-trust-hosts), a nie z grepa
+# po `ansible_host:` — host dziedziczacy adres z group_vars nie ma tej linii
+# w pliku i cichaczem wypadal ze skanu. Pusta lista to blad: `0/0` bylo
+# raportowane jako sukces i przepuszczalo `platform-build` bez znanych kluczy.
+platform_trust_targets = $(shell ansible-inventory -i $(PLATFORM_DIR)/inventory.yml --list | python3 -c 'import json,sys; d=json.load(sys.stdin); h=d.get("_meta",{}).get("hostvars",{}); names={n for g,v in d.items() if g != "_meta" for n in (v.get("hosts") or [])}; print(" ".join(sorted({h.get(n,{}).get("ansible_host",n) for n in names | set(h)})))')
 platform-trust-hosts:  ## Re-skanuj klucze hostow warstwy wspolnej do known_hosts
 	$(platform_guard)
 	@ok=0; total=0; \
-	for ip in $$(grep -oE 'ansible_host:[[:space:]]+"?[0-9.]+"?' $(PLATFORM_DIR)/inventory.yml | grep -oE '[0-9.]+' | sort -u); do \
-		total=$$((total+1)); good=0; \
-		for try in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+	for ip in $(platform_trust_targets); do \
+		total=$$((total+1)); good=0; try=0; \
+		while [ "$$try" -lt "$(TRUST_KEY_RETRIES)" ]; do \
+			try=$$((try+1)); \
 			ssh-keygen -R $$ip -f $(PLATFORM_DIR)/known_hosts >/dev/null 2>&1 || true; \
-			if ssh-keyscan -T 5 -H $$ip 2>/dev/null | grep -q .; then \
-				ssh-keyscan -T 5 -H $$ip 2>/dev/null >> $(PLATFORM_DIR)/known_hosts; good=1; break; \
+			if ssh-keyscan -T "$(TRUST_KEYSCAN_TIMEOUT)" -H $$ip 2>/dev/null | grep -q .; then \
+				ssh-keyscan -T "$(TRUST_KEYSCAN_TIMEOUT)" -H $$ip 2>/dev/null >> $(PLATFORM_DIR)/known_hosts; good=1; break; \
 			fi; \
 			sleep 5; \
 		done; \
-		[ $$good -eq 1 ] && ok=$$((ok+1)) || echo "UWAGA: $$ip nie odpowiada po 12 probach"; \
+		[ $$good -eq 1 ] && ok=$$((ok+1)) || echo "UWAGA: $$ip nie odpowiada po $(TRUST_KEY_RETRIES) probach"; \
 	done; \
+	if [ "$$total" -eq 0 ]; then \
+		echo "brak hostow: ansible-inventory nie zwrocilo zadnego hosta dla $(PLATFORM_DIR)/inventory.yml" >&2; \
+		exit 1; \
+	fi; \
 	echo "known_hosts: $$ok/$$total hostow zweryfikowanych (ssh OK)"; \
 	test $$ok -eq $$total
 
@@ -669,6 +679,10 @@ lab-hardening-verify:  ## Zweryfikuj hardening MariaDB (ISC-40/41/42)
 	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-hardening.py
 
+lab-selinux-verify:  ## Zweryfikuj SELinux Enforcing na hostach klastra (ISC-4)
+	$(cluster_guard)
+	$(TARGET_ENV) tests/lab/probe-selinux.py
+
 # Najemca rejestruje WYLACZNIE wlasne wezly. Eksportery ProxySQL (fcp1/fcp2)
 # rejestruje `make platform-monitoring` — nalezą do warstwy wspolnej, a gdy
 # robil to najemca, deregistracja tego klastra zabierala monitoring calej pary.
@@ -820,6 +834,7 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 	$(TARGET_ENV) tests/lab/probe-proxysql.py
 	$(TARGET_ENV) tests/lab/probe-endpoint.py
 	$(TARGET_ENV) tests/lab/probe-hardening.py
+	$(TARGET_ENV) tests/lab/probe-selinux.py
 	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" tests/lab/probe-app-conformance.py
 	$(TARGET_ENV) tests/lab/probe-backup.py
 	$(TARGET_ENV) tests/lab/probe-restore.py

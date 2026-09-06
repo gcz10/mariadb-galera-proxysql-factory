@@ -16,6 +16,14 @@
 # Wymagania konta wg dokumentacji ProxySQL (backend-monitoring): USAGE do
 # connect/ping/read_only, REPLICATION CLIENT do monitorowania opoznienia.
 # Repo nadaje PROCESS + REPLICATION CLIENT (nadzbior) — bez zmian.
+#
+# ZRODLO PRAWDY O TOZSAMOSCI AKTYWNEJ — CALA PARA, DWIE WARSTWY. Monitor korzysta
+# z wartosci z warstwy RUNTIME (`runtime_global_variables`), a restart wezla
+# wczytuje warstwe DISK (`disk.global_variables`; dokumentacja ProxySQL
+# "multi-layer-configuration": startup DISK -> MEMORY -> RUNTIME). Warstwa MAIN
+# (`global_variables`) to tylko staging, ktory restart kasuje — odczyt wylacznie
+# z MAIN i z jednego wezla pary pozwolil skasowac konto, ktorego drugi wezel
+# wlasnie uzywal. Kasowanie wymaga zgody OBU wezlow w OBIE warstwy.
 
 - name: "Rotacja monitora — faza na backendach najemcy"
   hosts: galera[0]
@@ -26,6 +34,16 @@
     monitor_user_b: "proxysql_monitor_b"
     monitor_next_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_PASSWORD_NEXT') }}"
     proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+    # To samo wywolanie co platform_monitor_switch.yml: tozsamosc admina z pliku,
+    # nigdy z argv (sekret nie moze trafic do listy procesow).
+    proxysql_admin_cli:
+      - mariadb
+      - --defaults-extra-file=/etc/proxysql/admin-check.cnf
+      - -h127.0.0.1
+      - -P6032
+      - -uadmin
+      - -N
+      - -B
   pre_tasks:
     - name: "Wymagaj jawnej fazy rotacji"
       ansible.builtin.assert:
@@ -39,23 +57,32 @@
           - monitor_next_password | length > 0
         fail_msg: "Ustaw PROXYSQL_MONITOR_PASSWORD_NEXT poza repozytorium."
 
-    # Zrodlem prawdy o AKTUALNEJ tozsamosci jest sam ProxySQL, nie plik stanu
-    # w repo: dzieki temu przerwana rotacja da sie wznowic bez zgadywania.
-    - name: "Odczytaj aktualna tozsamosc monitora z ProxySQL"
+    # Zrodlem prawdy o AKTUALNEJ tozsamosci jest sama para ProxySQL, nie plik
+    # stanu w repo: dzieki temu przerwana rotacja da sie wznowic bez zgadywania.
+    # Czytamy OBA wezly i OBIE warstwy: rozjazd pary albo warstw = odmowa, zanim
+    # cokolwiek powstanie albo zniknie.
+    - name: "Odczytaj tozsamosc monitora z warstwy RUNTIME kazdego proxy"
       ansible.builtin.command:
-        argv:
-          - mariadb
-          - --defaults-extra-file=/etc/proxysql/admin-check.cnf
-          - -h127.0.0.1
-          - -P6032
-          - -uadmin
-          - -N
-          - -B
-          - -e
-          - "SELECT variable_value FROM global_variables WHERE variable_name='mysql-monitor_username'"
-      register: monitor_current_raw
+        argv: "{{ proxysql_admin_cli + ['-e', \"SELECT variable_value FROM runtime_global_variables WHERE variable_name='mysql-monitor_username'\"] }}"
+      register: monitor_runtime_reads
       changed_when: false
-      delegate_to: "{{ groups['proxysql'][0] }}"
+      check_mode: false
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['proxysql'] }}"
+
+    - name: "Odczytaj tozsamosc monitora z konfiguracji DISK kazdego proxy (ta przetrwa restart)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli + ['-e', \"SELECT variable_value FROM disk.global_variables WHERE variable_name='mysql-monitor_username'\"] }}"
+      register: monitor_disk_reads
+      changed_when: false
+      check_mode: false
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['proxysql'] }}"
+
+    - name: "Zbierz odczyty calej pary"
+      ansible.builtin.set_fact:
+        monitor_runtime_ids: "{{ monitor_runtime_reads.results | map(attribute='stdout', default='') | map('trim') | list }}"
+        monitor_disk_ids: "{{ monitor_disk_reads.results | map(attribute='stdout', default='') | map('trim') | list }}"
 
     - name: "Wyznacz tozsamosc aktywna i bezczynna"
       # NAZEWNICTWO JEST TU BEZPIECZNIKIEM. Kuszace `current`/`target` znaczyloby
@@ -65,18 +92,24 @@
       # nietykalna) i BEZCZYNNA (ta druga). `expand` tworzy bezczynna,
       # `contract` kasuje bezczynna — ta sama regula w obu fazach.
       ansible.builtin.set_fact:
-        monitor_active_user: "{{ monitor_current_raw.stdout | trim }}"
-        monitor_idle_user: >-
-          {{ monitor_user_b if (monitor_current_raw.stdout | trim) == monitor_user_a else monitor_user_a }}
+        monitor_active_user: "{{ monitor_runtime_ids | first | default('') }}"
+        monitor_idle_user: "{{ monitor_user_b if (monitor_runtime_ids | first | default('')) == monitor_user_a else monitor_user_a }}"
 
-    - name: "Odrzuc nieznana tozsamosc monitora"
+    - name: "Odrzuc rotacje bez jednej znanej tozsamosci aktywnej calej pary"
       ansible.builtin.assert:
         that:
+          - monitor_runtime_ids | unique | length == 1
+          - monitor_disk_ids | unique | length == 1
+          - monitor_active_user == (monitor_disk_ids | first | default(''))
           - monitor_active_user in [monitor_user_a, monitor_user_b]
         fail_msg: >-
-          ProxySQL uzywa monitora '{{ monitor_active_user }}', ktory nie nalezy do
-          pary rotacyjnej ({{ monitor_user_a }}/{{ monitor_user_b }}). Rotacja
-          przerwana, zeby nie skasowac konta spoza tej procedury.
+          Para ProxySQL nie potwierdza jednej znanej tozsamosci monitora
+          (runtime: {{ monitor_runtime_ids }}, disk: {{ monitor_disk_ids }}).
+          Wezly rozjechane, odpowiedz pusta albo tozsamosc spoza pary rotacyjnej
+          ({{ monitor_user_a }}/{{ monitor_user_b }}). Rotacja przerwana, zanim
+          cokolwiek zostanie utworzone albo skasowane. Procedura jest wznowialna:
+          po przywroceniu zgodnosci pary (expand i switch sa idempotentne)
+          uruchom ja ponownie.
 
   tasks:
     # EXPAND: obie tozsamosci dzialaja rownoczesnie. Konto zaklada sie na
@@ -114,16 +147,47 @@
       changed_when: false
       when: rotation_phase == 'expand'
 
-    # CONTRACT: uruchamiane PO switchu, wiec "bezczynna" to juz konto stare.
-    # Regula jest ta sama co w expand — kasujemy wylacznie to, z ktorego
-    # ProxySQL NIE korzysta.
-    - name: "Contract — odmow kasowania konta, ktorego ProxySQL uzywa"
+    # CONTRACT. Wybor kandydata zapadl w pre_tasks, ale miedzy nim a kasowaniem
+    # mija faza switch calej floty. Dlatego TUZ PRZED kasowaniem zadna pamiec
+    # nie jest wiarygodna: kazdy wezel pary pyta sie PONOWNIE o runtime i disk
+    # jednym zapytaniem (UNION ALL = dwa wiersze na wezel), a bramka ponizej
+    # przepuszcza wylacznie wybor, w ktorym KAZDY odczyt wskazuje ta sama
+    # AKTYWNA tozsamosc. Kandydat w uzyciu, wezel niedostepny, pusta albo
+    # ucieta odpowiedz, rozjazd pary — cokolwiek z tego blokuje kasowanie.
+    - name: "Contract — przeczytaj ponownie runtime i disk OBU proxy tuz przed kasowaniem"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli + ['-e', monitor_contract_sql] }}"
+      vars:
+        monitor_contract_sql: >-
+          SELECT variable_value FROM runtime_global_variables WHERE
+          variable_name='mysql-monitor_username' UNION ALL SELECT
+          variable_value FROM disk.global_variables WHERE
+          variable_name='mysql-monitor_username'
+      register: monitor_contract_reads
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['proxysql'] }}"
+      when: rotation_phase == 'contract'
+
+    - name: "Contract — odmow kasowania, jesli ktorekolwiek proxy uzywa kandydata albo nie potwierdza aktywnej"
+      vars:
+        monitor_contract_rcs: "{{ monitor_contract_reads.results | map(attribute='rc', default=1) | list }}"
+        monitor_contract_lines: "{{ monitor_contract_reads.results | map(attribute='stdout_lines', default=[]) | flatten | map('trim') | select | list }}"
       ansible.builtin.assert:
         that:
-          - monitor_idle_user != monitor_active_user
+          - monitor_contract_rcs == [0] * (groups['proxysql'] | length)
+          - monitor_contract_lines | length == (groups['proxysql'] | length * 2)
+          - monitor_contract_lines | unique | length == 1
+          - monitor_contract_lines | first == monitor_active_user
         fail_msg: >-
-          Konto bezczynne i aktywne sa tym samym ('{{ monitor_active_user }}') —
-          kasowanie shunneloby cala flote.
+          Ponowny odczyt tuz przed kasowaniem nie potwierdza, ze OBA proxy uzywaja
+          wylacznie tozsamosci aktywnej '{{ monitor_active_user }}': ktorys wezel
+          uzywa kandydata ({{ monitor_idle_user }}), jest niedostepny, odpowiada
+          niepoprawnie albo para sie rozjechala (odczyt: {{ monitor_contract_lines }}).
+          NIC nie skasowano. Przywroc zgodnosc pary i uruchom rotacje ponownie —
+          konto zniknie dopiero, gdy oba wezly potwierdza tozsamosc aktywna.
       when: rotation_phase == 'contract'
 
     - name: "Contract — usun bezczynne (poprzednie) konto monitora"

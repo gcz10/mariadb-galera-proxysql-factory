@@ -3,8 +3,9 @@
 
 Runs the numbered workload through the VIP (real write load on the writer) and
 triggers a full backup concurrently, then proves:
-  - the cluster-wide Galera flow-control pause during the backup stays below
-    threshold (the writer is not throttled),
+  - the worst-node Galera flow-control pause induced during the backup stays
+    below threshold (per-node after-before delta; a dominant baseline on one
+    node must not mask a real pause on another),
   - the workload keeps committing during the backup (no long write stall).
 
 Lab-only (writes to isa_test); refuses on production.
@@ -26,7 +27,7 @@ INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/example-cluster/invent
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
 APP_PW = os.environ.get("APP_DB_PASSWORD", "")
 
-FLOW_THRESHOLD_NS = 2_000_000_000     # 2s cumulative flow-control pause
+FLOW_THRESHOLD_NS = 2_000_000_000     # 2s worst-node cumulative flow-control pause
 COMMIT_GAP_THRESHOLD = 8.0            # max seconds writer may stall
 WORKLOAD_LOCAL = "tests/lab/workload-numbered.sh"
 # Klient obciazenia: preferuj dedykowany host aplikacyjny (grupa `app`), zeby
@@ -65,17 +66,90 @@ def body(node, out):
     return out[m.end():].strip() if m else out.strip()
 
 
-def flow_control_max():
-    """Max wsrep_flow_control_paused_ns across all Galera nodes (cluster-wide)."""
-    vals = []
-    for n in GALERA:
-        r = sh(n, "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "
-                  "\"SHOW STATUS LIKE 'wsrep_flow_control_paused_ns'\" | awk '{print $2}'")
+class MeasurementError(RuntimeError):
+    """Zla probka pomiaru — bramka fail-closed, nigdy nie domysla sie zera."""
+
+
+FLOW_ROW_RE = re.compile(r"wsrep_flow_control_paused_ns\s+(\d+)")
+
+
+def parse_flow_counter(node, result):
+    """Parsuje SUROWY wynik SHOW STATUS dla jednego wezla (bez awka).
+
+    Poprzednio `| awk '{print $2}'` maskowal blad mariadb: puste wyjscie
+    dawalo int("" or 0) -> 0 i bramka przechodzila. Teraz kazda zla probka
+    (rc != 0, puste/malformed wyjscie, ujemny licznik) jest jawnym bledem.
+    """
+    if result.returncode != 0:
+        detail = ((result.stdout or "") + (result.stderr or "")).strip()[-200:]
+        raise MeasurementError(
+            f"flow control: SHOW STATUS failed on {node} (rc={result.returncode}): {detail}")
+    payload = body(node, result.stdout).strip()
+    if not payload:
+        raise MeasurementError(
+            f"flow control: empty wsrep_flow_control_paused_ns output on {node}")
+    rows = [line.strip() for line in payload.splitlines() if line.strip()]
+    if len(rows) != 1:
+        raise MeasurementError(
+            f"flow control: expected one status row on {node}, got {len(rows)}: {payload[:200]!r}")
+    match = FLOW_ROW_RE.fullmatch(rows[0])
+    if not match:
+        raise MeasurementError(
+            f"flow control: malformed wsrep_flow_control_paused_ns row on {node}: {rows[0]!r}")
+    return int(match.group(1))
+
+
+def sample_flow_counters():
+    """Node -> wsrep_flow_control_paused_ns dla KAZDEGO oczekiwanego wezla.
+
+    Zwraca (counters, errors): counters zawiera tylko poprawne probki,
+    errors to czytelne opisy kazdej zlej (rc, puste wyjscie, malformed).
+    """
+    counters, errors = {}, []
+    for node in GALERA:
+        result = sh(node, "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "
+                          "\"SHOW STATUS LIKE 'wsrep_flow_control_paused_ns'\"")
         try:
-            vals.append(int(body(n, r.stdout).strip() or 0))
-        except ValueError:
-            vals.append(0)
-    return max(vals) if vals else 0
+            counters[node] = parse_flow_counter(node, result)
+        except MeasurementError as exc:
+            errors.append(str(exc))
+    return counters, errors
+
+
+def flow_gate_failures(before, after, threshold=FLOW_THRESHOLD_NS):
+    """ISC-39 bramka flow control: najgorszy wezel, fail-closed.
+
+    Delta liczona PER WEZEL (after - before) — dominujaca wartosc bazowa na
+    jednym wezle nie moze zamaskowac wzrostu na innym. Zanik probki lub reset
+    licznika (after < before) konczy sie bledem, nigdy delta = 0.
+    Zwraca (failures, deltas): failures z nazwa wezla i liczbami, deltas to
+    pelna mapa per-node do czytelnego wydruku.
+    """
+    if not GALERA:
+        return ["flow control: no expected Galera nodes in inventory"], {}
+    failures, deltas = [], {}
+    for node in GALERA:
+        base = before.get(node)
+        post = after.get(node)
+        if base is None or post is None:
+            missing = "/".join(name for name, sample in
+                               (("baseline", base), ("post-backup", post))
+                               if sample is None)
+            failures.append(f"flow control: missing {missing} sample for {node}")
+        elif post < base:
+            failures.append(
+                f"flow control: counter on {node} decreased {base} -> {post} "
+                "(reset; backup window unusable)")
+        else:
+            deltas[node] = post - base
+    if deltas:
+        worst_node, worst = max(deltas.items(), key=lambda item: item[1])
+        if worst >= threshold:
+            failures.append(
+                f"ISC-39 — flow control {worst} ns on {worst_node} during backup "
+                f"(>= {threshold} ns threshold); per-node deltas: "
+                + ", ".join(f"{node}={delta}" for node, delta in sorted(deltas.items())))
+    return failures, deltas
 
 
 def committed_times():
@@ -148,10 +222,10 @@ def main():
            f"{CNF_REMOTE} {LOG_REMOTE} >/tmp/workload.out 2>&1 & echo launched", check=True)
         time.sleep(5)  # establish write load
 
-        fc_before = flow_control_max()
+        fc_before, fc_before_errors = sample_flow_counters()
         success_before = last_backup_success_unixtime()
         backup_start = time.time()
-        print(f"running backup under load (flow_control baseline={fc_before} ns)…")
+        print(f"running backup under load (flow_control baseline={fc_before})…")
         # `galera_backup_action=run` jest OBOWIAZKOWE. f10_backup.yml defaultuje
         # akcje na `configure` (linia 11), a play wykonujacy backup ma bramke
         # `when: galera_backup_action == 'run'` (linia 137). Bez tego przelacznika
@@ -164,7 +238,7 @@ def main():
              "-e", f"@{CONFIG_PATH}", "-e", "galera_backup_action=run"],
             capture_output=True, text=True, timeout=900)
         backup_end = time.time()
-        fc_after = flow_control_max()
+        fc_after, fc_after_errors = sample_flow_counters()
         success_after = last_backup_success_unixtime()
 
         if bkp.returncode != 0:
@@ -174,15 +248,16 @@ def main():
         sh(WORKLOAD_HOST, "rm -f /tmp/workload.run", check=True)
         time.sleep(1)
 
-        # Flow control induced during the backup window.
-        fc_delta = fc_after - fc_before
+        # Flow control induced during the backup window — najgorszy wezel:
+        # per-node delta; dominujaca baseline na innym wezle nie maskuje wzrostu.
+        failures.extend(fc_before_errors)
+        failures.extend(fc_after_errors)
+        fc_failures, fc_deltas = flow_gate_failures(fc_before, fc_after)
+        failures.extend(fc_failures)
         # Largest write stall that overlapped the backup window.
         times = [t for t in committed_times() if backup_start - 1 <= t <= backup_end + 1]
         gap = max((b - a for a, b in zip(times, times[1:])), default=0.0)
 
-        if fc_delta >= FLOW_THRESHOLD_NS:
-            failures.append(f"ISC-39 — flow control {fc_delta} ns during backup "
-                            f"(>= {FLOW_THRESHOLD_NS} ns threshold)")
         if gap >= COMMIT_GAP_THRESHOLD:
             failures.append(f"ISC-39 — writer stalled {gap:.1f}s during backup "
                             f"(>= {COMMIT_GAP_THRESHOLD}s threshold)")
@@ -205,9 +280,11 @@ def main():
             print(f"  - {f}")
         return 1
 
+    worst_node, worst_delta = max(fc_deltas.items(), key=lambda item: item[1])
     print(
-        f"PASS: backup did not degrade writer — flow control {fc_delta} ns "
-        f"(< {FLOW_THRESHOLD_NS} ns), max write stall {gap:.2f}s "
+        f"PASS: backup did not degrade writer — worst-node flow control "
+        f"{worst_delta} ns on {worst_node} (per-node {fc_deltas}; "
+        f"< {FLOW_THRESHOLD_NS} ns), max write stall {gap:.2f}s "
         f"(< {COMMIT_GAP_THRESHOLD}s) across {len(times)} commits during backup; "
         f"kopia wykonana w oknie (last_success {success_before} -> {success_after})")
     return 0
