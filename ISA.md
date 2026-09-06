@@ -106,7 +106,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 - [x] ISC-19: Węzeł non-Primary, non-Synced, not Ready lub przekraczający zatwierdzony lag jest wyłączony z ruchu ProxySQL.
 - [x] ISC-20: Monitorowanie Galery w ProxySQL osiąga poprawny stan w określonym progu czasu po deploy.
 - [x] ISC-21: Konfiguracja runtime i disk ProxySQL jest zgodna z repo (brak driftu po converge).
-- [ ] ISC-22: Admin port ProxySQL (6032) nie jest osiągalny z application CIDR. NIEWYKONALNE przy obecnej adresacji — 16/16 definicji floty deklaruje `application_cidrs == administration_cidrs` (płaska /24), więc reguła „6032 tylko dla administracji" wpuszcza też aplikację; zmierzone 2026-09-06 (Verification). Wymaga decyzji operatora o rozdzieleniu sieci, nie zmiany kodu.
+- [ ] ISC-22: Admin port ProxySQL (6032) nie jest osiągalny z application CIDR. Mierzy `tests/lab/probe-admin-isolation.py` (generyczna: czyta wyłącznie deklaracje i inwentarz, działa na dowolnej adresacji). OTWARTE na bieżącej flocie — 16/16 definicji deklaruje `application_cidrs == administration_cidrs`, więc kryterium jest niewyrażalne; domyka je zawężenie `administration_cidrs` do adresów stacji administracyjnych (pole jest listą, może ich być wiele), nie zmiana kodu.
 - [x] ISC-23: Anti: Read/write splitting pozostaje wyłączony, dopóki osobna analiza aplikacji go nie zatwierdzi.
 
 ### Endpoint HA
@@ -542,6 +542,28 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
   (zawężenie `administration_cidrs` do stacji administracyjnych), nie zmiany
   kodu; playbook ma bramkę chroniącą sesję SSH przed odcięciem
   (`firewall.yml:112-142`), ale zakres adresów musi podać operator.
+  Kryterium ma teraz WYKONYWALNĄ, generyczną sondę: `tests/lab/probe-admin-isolation.py`
+  (`make lab-admin-isolation-verify`). Nie zna żadnego adresu ani instalacji —
+  bierze `network.application_cidrs`/`administration_cidrs` z deklaracji i grupy
+  `app`/`proxysql` z inwentarza, więc działa na dowolnej infrastrukturze; kod ma
+  trafić także na inne sieci. Rozstrzyga trzy stany: deklaracje rozróżniają obie
+  role → mierzy (6032 musi być odrzucony, 6033 otwarty jako kontrola osiągalności);
+  cała sieć aplikacyjna mieści się w administracyjnej → UNDETERMINED z przyczyną;
+  host aplikacyjny sam należy do `administration_cidrs` → UNDETERMINED, bo z niego
+  izolacji zmierzyć się nie da. Świadomie NIE w `lab-post-build-gate`: bramka po
+  budowie ma padać na awariach, nie na wyborze adresacji.
+  Pierwsza wersja reguły odrzucała też układ odwrotny (`administration_cidrs`
+  węższe niż aplikacyjne) — a to jest właśnie docelowa, tania droga do domknięcia:
+  administracja z kilku adresów `/32` wewnątrz tej samej podsieci daje realną
+  izolację pozostałym. Błąd złapał test jednostkowy przed pomiarem.
+  Dowód: `tests/unit/test_admin_isolation_contract.py` (8 testów, adresacje IPv4
+  i IPv6, wiele źródeł administracji) oraz przebiegi na żywo 2026-09-06 na
+  `orionv15-r10` i `cassiopeiav14-r9` — oba UNDETERMINED exit 2 z nazwaną przyczyną.
+  Pomiar źródeł administracji (`last -i` na 16 hostach dwóch klastrów): 100%
+  logowań z jednego adresu `192.168.1.190`, przydzielonego przez DHCP z dzierżawą
+  3 dni. Zawężenie do `/32` bez rezerwacji DHCP grozi odcięciem SSH od całej floty
+  po zmianie dzierżawy — bramka `firewall.yml:112-142` sprawdza tylko stan w chwili
+  wdrożenia. Warunek wejścia: rezerwacja DHCP albo adres statyczny stacji.
 
 - ISC-1: PASS — lab2-cluster wdrożony na czystych kontenerach (f2_install + site.yml + bootstrap + f5_join, wszystkie taski PASS, failed=0). 2026-07-24.
 

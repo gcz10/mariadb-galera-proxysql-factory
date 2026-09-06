@@ -14,7 +14,7 @@
         cluster-app-host lab-app-verify lab-app-bench lab-app-degradation-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-selinux-verify lab-tls-expired-verify lab-monitoring-verify lab-rolling-restart-verify \
-        lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-post-build-gate \
+        lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-admin-isolation-verify lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code verify-inventory-tf \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify fleet-state \
         platform-validate platform-trust-hosts platform-deploy platform-firewall platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
@@ -690,6 +690,16 @@ lab-selinux-verify:  ## Zweryfikuj SELinux Enforcing na hostach klastra (ISC-4)
 lab-tls-expired-verify:  ## Zweryfikuj odrzucenie WYGASLEGO certyfikatu serwera (ISC-44)
 	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-tls-expired-cert.py
+
+# ISC-22 jest kryterium DEKLARACJI, nie kodu: mierzy sie tylko tam, gdzie
+# `administration_cidrs` faktycznie odroznia stacje administracyjne od sieci
+# aplikacyjnej. Na plaskiej podsieci sonda konczy sie UNDETERMINED (exit 2)
+# i nazywa przyczyne. Dlatego celowo NIE wchodzi do `lab-post-build-gate`:
+# bramka po budowie ma padac na awariach, nie na wyborze adresacji, ktorego
+# repozytorium nie kontroluje.
+lab-admin-isolation-verify:  ## Zweryfikuj izolacje portu admina ProxySQL od sieci aplikacyjnej (ISC-22)
+	$(cluster_guard)
+	$(TARGET_ENV) tests/lab/probe-admin-isolation.py
 
 # Najemca rejestruje WYLACZNIE wlasne wezly. Eksportery ProxySQL (fcp1/fcp2)
 # rejestruje `make platform-monitoring` — nalezą do warstwy wspolnej, a gdy
