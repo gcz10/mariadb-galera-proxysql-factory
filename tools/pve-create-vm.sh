@@ -86,23 +86,42 @@ done
 [ -n "$IP_INPUT" ] || { echo "BŁĄD: --ip jest wymagany" >&2; exit 2; }
 [ -n "$CLUSTER" ] || { echo "BŁĄD: --cluster jest wymagany" >&2; exit 2; }
 
+# AUDIT 2026-09-07: VMID leci do zapytań PVE i do pythona — musi być liczbą,
+# zanim cokolwiek go zinterpoleuje.
+[[ "$VMID" =~ ^[0-9]+$ ]] || { echo "BŁĄD: --vmid musi być liczbą (podano: '$VMID')" >&2; exit 2; }
+[ "$VMID" -ge 100 ] && [ "$VMID" -le 999999999 ] || { echo "BŁĄD: --vmid poza zakresem PVE (100-999999999)" >&2; exit 2; }
+
+octet_ok() { local o="$1"; [ "$o" -ge 1 ] && [ "$o" -le 254 ]; }
+
 # Normalizacja adresu IP
 if [[ "$IP_INPUT" =~ ^[0-9]+$ ]]; then
+  octet_ok "$IP_INPUT" || { echo "BŁĄD: oktet poza zakresem 1-254 (podano: '$IP_INPUT')" >&2; exit 2; }
   IP_FULL="192.168.1.$IP_INPUT"
-elif [[ "$IP_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+elif [[ "$IP_INPUT" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+  for o in "${BASH_REMATCH[@]:1}"; do
+    [ "$o" -ge 1 ] && [ "$o" -le 254 ] || { echo "BŁĄD: oktet poza zakresem 1-254 w '$IP_INPUT'" >&2; exit 2; }
+  done
   IP_FULL="$IP_INPUT"
 else
   echo "BŁĄD: Niepoprawny format IP: '$IP_INPUT'" >&2
   exit 2
 fi
 
+case "$ROLE" in
+  galera|restore|proxysql|app) ;;
+  *) echo "BŁĄD: --role musi być jednym z: galera, restore, proxysql, app (podano: '$ROLE')" >&2; exit 2 ;;
+esac
+
+for num_var in CORES RAM DISK; do
+  eval "val=\${$num_var}"
+  [[ "$val" =~ ^[0-9]+$ ]] && [ "$val" -gt 0 ] || { echo "BŁĄD: --$(echo "$num_var" | tr 'A-Z' 'a-z') musi być dodatnią liczbą (podano: '$val')" >&2; exit 2; }
+done
+[[ "$GATEWAY" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "BŁĄD: --gateway musi być adresem IPv4 (podano: '$GATEWAY')" >&2; exit 2; }
+
 # Walidacja poświadczeń PVE
 : "${PROXMOX_VE_ENDPOINT:?BŁĄD: Ustaw zmienną środowiskową PROXMOX_VE_ENDPOINT}"
 : "${PROXMOX_VE_API_TOKEN:?BŁĄD: Ustaw zmienną środowiskową PROXMOX_VE_API_TOKEN}"
-
-[ -f "$KEY_FILE" ] || { echo "BŁĄD: Brak pliku klucza SSH: $KEY_FILE" >&2; exit 2; }
-
-# Walidacja zmiennych konfiguracyjnych pętli SSH przed wywołaniami PVE (fail-closed)
+EP="${PROXMOX_VE_ENDPOINT%/}"
 WAIT_RETRIES="${PVE_SSH_WAIT_RETRIES:-90}"
 WAIT_SLEEP="${PVE_SSH_WAIT_SLEEP:-3}"
 
@@ -116,16 +135,23 @@ if ! [[ "$WAIT_SLEEP" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
-EP="${PROXMOX_VE_ENDPOINT%/}"
+[ -f "$KEY_FILE" ] || { echo "BŁĄD: Brak pliku klucza SSH: $KEY_FILE" >&2; exit 2; }
 
 # Bezpieczne przekazanie tokenu API do curl przez plik tymczasowy 0600 (zapobiega wyciekowi do argv / ps)
 AUTH_HEADER_FILE=$(mktemp "${TMPDIR:-/tmp}/pve-auth.XXXXXX")
 chmod 0600 "$AUTH_HEADER_FILE"
 trap 'rm -f "$AUTH_HEADER_FILE"' EXIT
 printf 'Authorization: PVEAPIToken=%s\n' "$PROXMOX_VE_API_TOKEN" > "$AUTH_HEADER_FILE"
-H=@"$AUTH_HEADER_FILE"
+
+# AUDIT 2026-09-07: `-sk` bez `--fail` zwraca rc=0 przy HTTP 500/403 (HTML idzie
+# do parsera i wywala go tracebackiem), a bez `--max-time` czarny endpoint
+# wiesza skrypt. Wspolne flagi dla KAZDEGO wywolania.
+api() {
+  curl -sS --fail -k --max-time 30 -H @"$AUTH_HEADER_FILE" "$@"
+}
+
 echo "=== [1/5] Pre-flight check: unikalność VMID $VMID na węźle $NODE ==="
-vm_exists=$(curl -sk -H "$H" "$EP/api2/json/nodes/$NODE/qemu" \
+vm_exists=$(api "$EP/api2/json/nodes/$NODE/qemu" \
   | python3 -c "import json,sys; print(any(int(v.get('vmid',0))==$VMID for v in (json.load(sys.stdin).get('data') or [])))")
 
 if [ "$vm_exists" = "True" ]; then
@@ -133,9 +159,8 @@ if [ "$vm_exists" = "True" ]; then
   exit 1
 fi
 
-vol_exists=$(curl -sk -H "$H" "$EP/api2/json/nodes/$NODE/storage/local-zfs/content" \
+vol_exists=$(api "$EP/api2/json/nodes/$NODE/storage/local-zfs/content" \
   | python3 -c "import json,sys; print([c.get('volid') for c in (json.load(sys.stdin).get('data') or []) if str(c.get('vmid'))=='$VMID'])")
-
 if [ "$vol_exists" != "[]" ]; then
   echo "BŁĄD: Znaleziono osierocone wolumeny dla VMID $VMID: $vol_exists" >&2
   echo "      Usuń je przed utworzeniem maszyny, aby uniknąć kolizji ZFS." >&2
@@ -152,11 +177,10 @@ wait_task() {
 
   for i in $(seq 1 120); do
     local res
-    res=$(curl -sk -H "$H" "$EP/api2/json/nodes/$NODE/tasks/$enc/status" \
+    res=$(api "$EP/api2/json/nodes/$NODE/tasks/$enc/status" \
       | python3 -c "import json,sys
 d=json.load(sys.stdin).get('data') or {}
 print(d.get('status',''), d.get('exitstatus',''))")
-
     case "$res" in
       "stopped OK")
         echo "  -> $step_name: OK"
@@ -180,8 +204,7 @@ KEY_ENC=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(open(sys
 
 echo "=== [2/5] Tworzenie maszyny VM $NAME (VMID $VMID, IP: $IP_FULL) ==="
 TAGS="rocky,$ROLE,$CLUSTER"
-CREATE_RESP=$(curl -sk -H "$H" -X POST "$EP/api2/json/nodes/$NODE/qemu" \
-  --data-urlencode "vmid=$VMID" \
+CREATE_RESP=$(api -X POST "$EP/api2/json/nodes/$NODE/qemu" \
   --data-urlencode "name=$NAME" \
   --data-urlencode "pool=$POOL" \
   --data-urlencode "cores=$CORES" \
@@ -208,24 +231,28 @@ fi
 wait_task "$CREATE_UPID" "Tworzenie i import obrazu ($IMAGE)"
 
 echo "=== [3/5] Rozszerzenie dysku virtio0 do ${DISK}G ==="
-RESIZE_RESP=$(curl -sk -H "$H" -X PUT "$EP/api2/json/nodes/$NODE/qemu/$VMID/resize" \
-  --data-urlencode "disk=virtio0" \
+RESIZE_RESP=$(api -X PUT "$EP/api2/json/nodes/$NODE/qemu/$VMID/resize" \
   --data-urlencode "size=${DISK}G")
 
 RESIZE_UPID=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('data') or '')" "$RESIZE_RESP")
 if [ -n "$RESIZE_UPID" ]; then
   wait_task "$RESIZE_UPID" "Resize dysku virtio0 do ${DISK}G"
+elif [ "$RESIZE_RESP" = "" ] || echo "$RESIZE_RESP" | grep -q '"errors"'; then
+  echo "BŁĄD: Nie udało się zlecić resize: $RESIZE_RESP" >&2
+  exit 1
 else
-  # Czasami resize jest synchroniczny lub zwraca puste data przy natychmiastowym sukcesie
-  echo "  -> Resize zlecony."
+  # Puste data przy natychmiastowym sukcesie resize (synchroniczna ścieżka PVE)
+  echo "  -> Resize zlecony (synchronicznie)."
 fi
 
 echo "=== [4/5] Uruchomienie VM $NAME ==="
-START_RESP=$(curl -sk -H "$H" -X POST "$EP/api2/json/nodes/$NODE/qemu/$VMID/status/start")
+START_RESP=$(api -X POST "$EP/api2/json/nodes/$NODE/qemu/$VMID/status/start")
 START_UPID=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('data') or '')" "$START_RESP")
-if [ -n "$START_UPID" ]; then
-  wait_task "$START_UPID" "Start maszyny $NAME"
+if [ -z "$START_UPID" ]; then
+  echo "BŁĄD: Nie udało się uruchomić VM: $START_RESP" >&2
+  exit 1
 fi
+wait_task "$START_UPID" "Start maszyny $NAME"
 
 echo "Maszyna $NAME (VMID: $VMID) uruchomiona."
 

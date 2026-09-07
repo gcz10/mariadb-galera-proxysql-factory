@@ -124,9 +124,12 @@ galera-rebuild:  ## Przebuduj TYLKO wezly Galera+restore (zachowuje PMM i ProxyS
 fleet-orphans:  ## Raport: maszyny puli PVE spoza stanu terraform (nic nie kasuje)
 	tools/pve-pool-teardown.sh
 
-fleet-orphans-teardown:  ## Skasuj maszyny puli PVE spoza stanu terraform (wymaga CONFIRM=yes)
-	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje maszyny puli spoza stanu terraform)"; exit 1)
-	CONFIRM=yes tools/pve-pool-teardown.sh
+fleet-orphans-teardown:  ## Skasuj maszyny puli PVE spoza stanu terraform (wymaga CONFIRM_POOL=<pula>)
+	@pula="$${FLEET_POOL:-claude-isa}"; \
+	if [ "$${CONFIRM_POOL:-}" != "$$pula" ]; then \
+		echo "ERROR: wymaga CONFIRM_POOL=$$pula (powtorzenie nazwy puli — CONFIRM=yes przenosi sie przez export i kasowalo zla flote)" >&2; exit 1; \
+	fi; \
+	tools/pve-pool-teardown.sh
 
 infra-teardown:  ## Zniszcz VM klastra + posprzątaj sieroty ZFS (wymaga CONFIRM=yes)
 	$(cluster_guard)
@@ -274,27 +277,29 @@ platform-validate:  ## Waliduj definicje warstwy wspolnej (schema + invarianty i
 # po `ansible_host:` — host dziedziczacy adres z group_vars nie ma tej linii
 # w pliku i cichaczem wypadal ze skanu. Pusta lista to blad: `0/0` bylo
 # raportowane jako sukces i przepuszczalo `platform-build` bez znanych kluczy.
-platform_trust_targets = $(shell ansible-inventory -i $(PLATFORM_DIR)/inventory.yml --list | python3 -c 'import json,sys; d=json.load(sys.stdin); h=d.get("_meta",{}).get("hostvars",{}); names={n for g,v in d.items() if g != "_meta" for n in (v.get("hosts") or [])}; print(" ".join(sorted({h.get(n,{}).get("ansible_host",n) for n in names | set(h)})))')
+platform_trust_targets = $(shell ansible-inventory -i $(PLATFORM_DIR)/inventory.yml --list | python3 -c 'import json,sys,shlex; d=json.load(sys.stdin); h=d.get("_meta",{}).get("hostvars",{}); names={n for g,v in d.items() if g != "_meta" for n in (v.get("hosts") or [])}; print(" ".join(shlex.quote("{}|{}".format(h.get(n,{}).get("ansible_host",n), h.get(n,{}).get("ansible_port",22))) for n in sorted(names | set(h))))')
 platform-trust-hosts:  ## Re-skanuj klucze hostow warstwy wspolnej do known_hosts
 	$(platform_guard)
 	@ok=0; total=0; \
-	for ip in $(platform_trust_targets); do \
+	for target in $(platform_trust_targets); do \
+		ip=$${target%%|*}; port=$${target#*|}; \
+		lookup="$$ip"; if [ "$$port" != "22" ]; then lookup="[$$ip]:$$port"; fi; \
 		total=$$((total+1)); good=0; try=0; \
 		while [ "$$try" -lt "$(TRUST_KEY_RETRIES)" ]; do \
 			try=$$((try+1)); \
-			ssh-keygen -R $$ip -f $(PLATFORM_DIR)/known_hosts >/dev/null 2>&1 || true; \
-			if ssh-keyscan -T "$(TRUST_KEYSCAN_TIMEOUT)" -H $$ip 2>/dev/null | grep -q .; then \
-				ssh-keyscan -T "$(TRUST_KEYSCAN_TIMEOUT)" -H $$ip 2>/dev/null >> $(PLATFORM_DIR)/known_hosts; good=1; break; \
+			ssh-keygen -R "$$lookup" -f $(PLATFORM_DIR)/known_hosts >/dev/null 2>&1 || true; \
+			if ssh-keyscan -T "$(TRUST_KEYSCAN_TIMEOUT)" -p "$$port" -H "$$ip" 2>/dev/null | grep -q .; then \
+				ssh-keyscan -T "$(TRUST_KEYSCAN_TIMEOUT)" -p "$$port" -H "$$ip" 2>/dev/null >> $(PLATFORM_DIR)/known_hosts; good=1; break; \
 			fi; \
 			sleep 5; \
 		done; \
-		[ $$good -eq 1 ] && ok=$$((ok+1)) || echo "UWAGA: $$ip nie odpowiada po $(TRUST_KEY_RETRIES) probach"; \
+		if [ "$$good" -eq 1 ]; then ok=$$((ok+1)); else echo "UWAGA: $$lookup nie odpowiada po $(TRUST_KEY_RETRIES) probach"; fi; \
 	done; \
 	if [ "$$total" -eq 0 ]; then \
 		echo "brak hostow: ansible-inventory nie zwrocilo zadnego hosta dla $(PLATFORM_DIR)/inventory.yml" >&2; \
 		exit 1; \
 	fi; \
-	echo "known_hosts: $$ok/$$total hostow zweryfikowanych (ssh OK)"; \
+	echo "known_hosts: $$ok/$$total hostow zweryfikowanych (keyscan OK — weryfikacji SSH dokonuje pierwszy Ansible)"; \
 	test $$ok -eq $$total
 
 platform-deploy:  ## Instaluj pakiety warstwy wspolnej (ProxySQL wg lockfile EL10)
