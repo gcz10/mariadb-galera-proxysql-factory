@@ -277,12 +277,12 @@ platform-validate:  ## Waliduj definicje warstwy wspolnej (schema + invarianty i
 # po `ansible_host:` — host dziedziczacy adres z group_vars nie ma tej linii
 # w pliku i cichaczem wypadal ze skanu. Pusta lista to blad: `0/0` bylo
 # raportowane jako sukces i przepuszczalo `platform-build` bez znanych kluczy.
-platform_trust_targets = $(shell ansible-inventory -i $(PLATFORM_DIR)/inventory.yml --list | python3 -c 'import json,sys,shlex; d=json.load(sys.stdin); h=d.get("_meta",{}).get("hostvars",{}); names={n for g,v in d.items() if g != "_meta" for n in (v.get("hosts") or [])}; print(" ".join(shlex.quote("{}|{}".format(h.get(n,{}).get("ansible_host",n), h.get(n,{}).get("ansible_port",22))) for n in sorted(names | set(h))))')
+platform_trust_targets = $(shell ansible-inventory -i $(PLATFORM_DIR)/inventory.yml --list | python3 -c 'import json,sys; d=json.load(sys.stdin); h=d.get("_meta",{}).get("hostvars",{}); names={n for g,v in d.items() if g != "_meta" for n in (v.get("hosts") or [])}; print(" ".join(sorted({"{}:{}".format(h.get(n,{}).get("ansible_host",n), h.get(n,{}).get("ansible_port",22)) for n in names | set(h)})))')
 platform-trust-hosts:  ## Re-skanuj klucze hostow warstwy wspolnej do known_hosts
 	$(platform_guard)
 	@ok=0; total=0; \
 	for target in $(platform_trust_targets); do \
-		ip=$${target%%|*}; port=$${target#*|}; \
+		ip=$${target%%:*}; port=$${target##*:}; \
 		lookup="$$ip"; if [ "$$port" != "22" ]; then lookup="[$$ip]:$$port"; fi; \
 		total=$$((total+1)); good=0; try=0; \
 		while [ "$$try" -lt "$(TRUST_KEY_RETRIES)" ]; do \

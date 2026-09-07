@@ -205,6 +205,7 @@ KEY_ENC=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(open(sys
 echo "=== [2/5] Tworzenie maszyny VM $NAME (VMID $VMID, IP: $IP_FULL) ==="
 TAGS="rocky,$ROLE,$CLUSTER"
 CREATE_RESP=$(api -X POST "$EP/api2/json/nodes/$NODE/qemu" \
+  --data-urlencode "vmid=$VMID" \
   --data-urlencode "name=$NAME" \
   --data-urlencode "pool=$POOL" \
   --data-urlencode "cores=$CORES" \
