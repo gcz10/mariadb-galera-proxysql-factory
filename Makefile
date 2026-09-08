@@ -518,7 +518,7 @@ cluster-deploy:  ## F2+F3 — instaluj pakiety + konfiguruj (idempotentny conver
 cluster-firewall:  ## Wymuś minimalną politykę firewalld według roli hosta
 	$(cluster_guard)
 	ansible-playbook playbooks/firewall.yml $(CLUSTER_RUN) -e firewall_target_hosts=galera:restore $(ANSIBLE_OPTS)
-cluster-firewall-verify:  ## Zweryfikuj dokładną politykę firewalld i Docker ingress
+cluster-firewall-verify:  ## Zweryfikuj dokładną politykę firewalld najemcy (galera:restore)
 	$(cluster_guard)
 	CLUSTER_CONFIG=clusters/$(CLUSTER)/cluster.yml CLUSTER_INVENTORY=clusters/$(CLUSTER)/inventory.yml \
 		python3 tests/lab/probe-firewall.py
