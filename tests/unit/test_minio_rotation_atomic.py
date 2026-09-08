@@ -30,6 +30,8 @@ RECONCILE = REPO / "roles" / "galera_backup" / "tasks" / "reconcile_minio_accoun
 OWNED_KEYS = REPO / "roles" / "galera_backup" / "tasks" / "minio_owned_keys.yml"
 ROOT_ENV = REPO / "roles" / "galera_backup" / "tasks" / "minio_root_env.yml"
 ROLE_MAIN = REPO / "roles" / "galera_backup" / "tasks" / "main.yml"
+REVOKE = REPO / "roles" / "galera_backup" / "tasks" / "revoke_stale_minio.yml"
+BACKUP_PLAYBOOK = REPO / "playbooks" / "f10_backup.yml"
 
 FRAGMENT_INCLUDE = "Provision or converge scoped MinIO credentials"
 FRAGMENT_DEPLOY = "Deploy cluster secrets.env"
@@ -80,6 +82,10 @@ def reconcile_tasks():
 
 def main_tasks():
     return flatten_tasks(load_tasks(ROLE_MAIN))
+
+
+def revoke_tasks():
+    return flatten_tasks(load_tasks(REVOKE))
 
 
 def find_index(tasks, fragment):
@@ -296,23 +302,49 @@ class CreateIsConfirmedBeforeAnyRevoke(unittest.TestCase):
         self.assertNotIn("prune_keys_to_revoke", when)
 
 
-class RevokeRunsAfterSecretsDeploy(unittest.TestCase):
-    """Revoke zyje w main.yml po zapisaniu nowego secrets.env."""
+class RevokeRunsAfterEveryConsumerConverged(unittest.TestCase):
+    """Revoke zyje w osobnym pliku, wolanym PO konwergencji wszystkich hostow.
 
-    def test_revoke_after_provision_include_and_secrets_deploy(self):
-        tasks = main_tasks()
-        i_include = find_index(tasks, FRAGMENT_INCLUDE)
-        i_deploy = find_index(tasks, FRAGMENT_DEPLOY)
-        i_revoke = find_index(tasks, FRAGMENT_REVOKE)
-        self.assertIsNotNone(i_include, "brak include provision_minio.yml")
-        self.assertIsNotNone(i_deploy, "brak deploy secrets.env")
-        self.assertIsNotNone(i_revoke, "brak zadania revoke w main.yml")
-        self.assertLess(i_include, i_deploy)
-        self.assertLess(i_deploy, i_revoke)
+    Wczesniej blok revoke stal w main.yml, wiec wykonywal sie w tym samym
+    przebiegu roli co rotacja na koordynatorze — czyli w play 2 f10_backup.yml.
+    Kandydaci na donora dostaja nowy secrets.env dopiero w play 3, a cron stoi
+    na kazdym z nich i sam rozstrzyga elekcje. W tym oknie wybrany kandydat
+    trzymal klucz JUZ odwolany w MinIO i backup padal na uwierzytelnieniu.
+    """
 
-    def test_revoke_allocates_fresh_workspace_after_secrets_deploy(self):
-        tasks = main_tasks()
-        i_deploy = find_index(tasks, FRAGMENT_DEPLOY)
+    def test_main_no_longer_revokes_inline(self):
+        self.assertIsNone(
+            find_index(main_tasks(), FRAGMENT_REVOKE),
+            "revoke wrocil do main.yml — znowu wykona sie przed konwergencja kandydatow",
+        )
+
+    def test_revoke_play_runs_after_candidate_and_restore_plays(self):
+        plays = yaml.safe_load(BACKUP_PLAYBOOK.read_text(encoding="utf-8"))
+        names = [str(play.get("name", "")) for play in plays]
+        i_candidates = next(
+            i for i, n in enumerate(names) if "remaining Galera candidates" in n
+        )
+        i_restore = next(
+            i for i, n in enumerate(names) if "restore executable" in n
+        )
+        i_revoke = next(
+            i for i, n in enumerate(names) if "Revoke stale MinIO" in n
+        )
+        self.assertLess(i_candidates, i_revoke)
+        self.assertLess(i_restore, i_revoke)
+
+        revoke_play = plays[i_revoke]
+        self.assertIn("backup.scheduler.host", str(revoke_play.get("hosts", "")))
+        include = next(
+            task["ansible.builtin.include_role"]
+            for task in revoke_play["tasks"]
+            if "ansible.builtin.include_role" in task
+        )
+        self.assertEqual(include.get("name"), "galera_backup")
+        self.assertEqual(include.get("tasks_from"), "revoke_stale_minio")
+
+    def test_revoke_allocates_fresh_workspace_before_revoking(self):
+        tasks = revoke_tasks()
         i_root_env = find_index(tasks, FRAGMENT_REVOKE_ROOT_ENV)
         i_revoke = find_index(tasks, FRAGMENT_REVOKE)
         self.assertIsNotNone(i_root_env, "revoke nie tworzy swiezego root.env")
@@ -321,13 +353,12 @@ class RevokeRunsAfterSecretsDeploy(unittest.TestCase):
             root_env["ansible.builtin.include_tasks"].get("file"),
             "minio_root_env.yml",
         )
-        self.assertLess(i_deploy, i_root_env)
         self.assertLess(i_root_env, i_revoke)
 
     def test_revoke_fails_closed_when_workspace_is_missing(self):
         tasks = [
             task
-            for task in main_tasks()
+            for task in revoke_tasks()
             if "Revoke stale MinIO" in str(task.get("name", ""))
         ]
         self.assertEqual(len(tasks), 2)
@@ -345,7 +376,7 @@ class RevokeRunsAfterSecretsDeploy(unittest.TestCase):
 
 
     def test_revoke_delegated_gated_and_silent(self):
-        task = find_task(main_tasks(), FRAGMENT_REVOKE)
+        task = find_task(revoke_tasks(), FRAGMENT_REVOKE)
         self.assertIsNotNone(task)
         self.assertIn("groups['infra']", str(task.get("delegate_to", "")))
         when = task.get("when")
@@ -358,7 +389,7 @@ class RevokeRunsAfterSecretsDeploy(unittest.TestCase):
         self.assertEqual(task.get("changed_when"), True)
 
     def test_revoke_workspace_removed_after_revoke(self):
-        tasks = main_tasks()
+        tasks = revoke_tasks()
         i_revoke = find_index(tasks, FRAGMENT_REVOKE)
         i_removal = find_index(tasks, FRAGMENT_DIR_REMOVAL)
         self.assertIsNotNone(i_removal, "brak sprzatania workspace po revoke")
@@ -392,7 +423,7 @@ class RevokeRunsAfterSecretsDeploy(unittest.TestCase):
     def test_every_workspace_cleanup_runs_as_root(self):
         cleanups = [
             find_task(provision_tasks(), FRAGMENT_TMP_CLEANUP),
-            find_task(main_tasks(), FRAGMENT_DIR_REMOVAL),
+            find_task(revoke_tasks(), FRAGMENT_DIR_REMOVAL),
         ]
         for cleanup in cleanups:
             self.assertIsNotNone(cleanup)

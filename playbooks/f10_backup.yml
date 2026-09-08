@@ -164,3 +164,32 @@
         galera_backup_inherited_shared_secrets: >-
           {{ hostvars[backup.scheduler.host].galera_backup_shared_secrets | default({}) }}
       when: galera_backup_action == 'configure'
+
+# OSTATNI play calosci, celowo za konwergencja WSZYSTKICH konsumentow klucza
+# (kandydaci w play 3, host restore w play powyzej). Revoke wykonywany wczesniej
+# — razem z rotacja na koordynatorze — zostawial okno, w ktorym kandydat mial w
+# swoim secrets.env klucz juz odwolany w MinIO. Cron stoi na kazdym kandydacie i
+# sam rozstrzyga elekcje donora, wiec backup wybrany w tym oknie padal na
+# uwierzytelnieniu do MinIO, mimo ze rotacja "sie udala".
+#
+# Fakty z listami kluczy do odwolania i sciezka workspace powstaja podczas
+# przebiegu roli na koordynatorze i przezywaja miedzy play'ami w hostvars.
+- name: Revoke stale MinIO service accounts after every consumer converged
+  hosts: "{{ backup.scheduler.host | default('galera[0]') }}"
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/proxysql_hostgroups.yml
+  vars:
+    galera_backup_action: "{{ action | default('configure') }}"
+  pre_tasks:
+    - name: Load platform lockfile
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+  tasks:
+    - name: Revoke stale MinIO accounts owned by this cluster
+      ansible.builtin.include_role:
+        name: galera_backup
+        tasks_from: revoke_stale_minio
+      when: galera_backup_action == 'configure'

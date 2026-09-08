@@ -95,7 +95,7 @@
           isa_backup_monitoring_enabled{cluster="{{ cluster_label }}"} {{ backup.enabled | ternary(1, 0) }}
           # HELP isa_restore_test_monitoring_enabled Whether restore drill freshness is required.
           # TYPE isa_restore_test_monitoring_enabled gauge
-          isa_restore_test_monitoring_enabled{cluster="{{ cluster_label }}"} {{ ((backup.enabled | default(false)) and (backup.restore_test_schedule | default('') | length > 0) and (backup.restore_test_schedule != 'disabled')) | ternary(1, 0) }}
+          isa_restore_test_monitoring_enabled{cluster="{{ cluster_label }}"} {{ ((backup.enabled | default(false)) and (backup.restore_test_schedule | default('') | trim) not in ['', 'disabled']) | ternary(1, 0) }}
           # HELP isa_tls_monitoring_enabled Whether certificate expiry monitoring is required.
           # TYPE isa_tls_monitoring_enabled gauge
           isa_tls_monitoring_enabled{cluster="{{ cluster_label }}"} {{ (tls_full | bool) | ternary(1, 0) }}

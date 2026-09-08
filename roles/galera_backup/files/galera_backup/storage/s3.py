@@ -393,6 +393,27 @@ class S3Backend:
             meta_key = f"{b_prefix}/metadata.json"
             meta_objs = [o for o in obj_list if getattr(o, "object_name", "") == meta_key]
             if not meta_objs:
+                # Prefiks BEZ metadanych to niedokonczona publikacja: proces
+                # zginal miedzy wgraniem payloadu a metadanymi (SIGKILL, OOM,
+                # padniety host). Samo `continue` znaczylo "nigdy nie kasuj" —
+                # takie prefiksy rosly w buckecie bez konca, bo zaden pozniejszy
+                # przebieg juz ich nie dotykal. Kasujemy je po tym samym oknie
+                # retencji co kopie kompletne, liczonym od NAJMLODSZEGO obiektu,
+                # zeby nie ruszyc wgrywania trwajacego w tej chwili.
+                newest = max(
+                    (
+                        getattr(o, "last_modified", None).timestamp()
+                        for o in obj_list
+                        if getattr(o, "last_modified", None) is not None
+                    ),
+                    default=None,
+                )
+                if newest is None or newest >= cutoff_ts:
+                    continue
+                for item_name in (getattr(o, "object_name", "") for o in obj_list):
+                    if item_name:
+                        self.client.remove_object(self.bucket, item_name)
+                deleted_count += 1
                 continue
             try:
                 meta = self._get_json(meta_key)

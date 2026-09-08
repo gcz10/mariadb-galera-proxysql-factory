@@ -275,6 +275,10 @@ class GaleraBackupRestoreTests(unittest.TestCase):
             blocked_directory = datadir / "blocked"
             blocked_directory.mkdir(parents=True)
             (blocked_directory / "ibdata").write_text("data", encoding="utf-8")
+            # Znacznik na POZIOMIE datadir: bez niego katalog nie przechodzi
+            # bramki "to naprawde datadir" i test konczylby sie tym samym kodem
+            # bledu, nie dotykajac wcale sciezki kasowania.
+            (datadir / "ibdata1").write_text("data", encoding="utf-8")
 
             with patch.object(
                 pipeline.shutil,
@@ -285,7 +289,40 @@ class GaleraBackupRestoreTests(unittest.TestCase):
                     pipeline.clear_datadir(datadir)
 
             self.assertEqual(ctx.exception.code, "E_INTEGRITY")
+            self.assertIn("Failed to clear datadir entry", ctx.exception.public_message)
             self.assertTrue(blocked_directory.exists())
+
+    def test_clear_datadir_refuses_system_directory_one_level_deep(self):
+        """`/var/lib` przechodzilo: lista chronila tylko DOKLADNE korzenie."""
+        with tempfile.TemporaryDirectory() as td:
+            system_like = Path(td) / "var" / "lib"
+            (system_like / "rpm").mkdir(parents=True)
+            (system_like / "rpm" / "Packages").write_text("db", encoding="utf-8")
+
+            with self.assertRaises(pipeline.BackupError) as ctx:
+                pipeline.clear_datadir(system_like)
+
+            self.assertEqual(ctx.exception.code, "E_INTEGRITY")
+            self.assertTrue((system_like / "rpm" / "Packages").exists())
+
+    def test_clear_datadir_refuses_ancestor_of_protected_root(self):
+        with self.assertRaises(pipeline.BackupError) as ctx:
+            pipeline.clear_datadir(Path("/"))
+        self.assertEqual(ctx.exception.code, "E_INTEGRITY")
+
+    def test_clear_datadir_accepts_real_datadir_and_empty_dir(self):
+        with tempfile.TemporaryDirectory() as td:
+            datadir = Path(td) / "srv" / "mysql"
+            (datadir / "mysql").mkdir(parents=True)
+            (datadir / "ibdata1").write_text("x", encoding="utf-8")
+
+            pipeline.clear_datadir(datadir)
+            self.assertEqual(list(datadir.iterdir()), [])
+
+            empty = Path(td) / "srv" / "empty"
+            empty.mkdir()
+            pipeline.clear_datadir(empty)
+            self.assertTrue(empty.is_dir())
 
     # Regression: a restore drill hung for 50 minutes because the teardown asked
     # `mariadb-admin shutdown` to stop the mariadbd this process owns. That client

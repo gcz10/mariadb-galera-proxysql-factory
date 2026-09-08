@@ -81,6 +81,27 @@
           - openssl
         state: present
 
+    # Host restore jest poza klastrem (asercja wyzej), ale pakiet MariaDB-server
+    # instalujemy tu sami — a `galera-backup restore` kasuje katalog danych i
+    # robi `--copy-back`. Gdyby systemowy mariadbd akurat dzialal (recznie
+    # wystartowany, zostawiony przez poprzedni drill, wlaczony presetem), obie
+    # operacje szlyby po ZYWYM datadirze: to korupcja, nie odtworzenie.
+    #
+    # Maskujemy, nie tylko zatrzymujemy: sam `stop` wraca po reboocie i kolejny
+    # drill trafilby znowu na dzialajaca usluge. Weryfikacja nie potrzebuje tej
+    # jednostki — restore.py uruchamia wlasny, izolowany `mariadbd`
+    # (--skip-networking, --wsrep-provider=none) bezposrednio, poza systemd.
+    - name: "Zbierz stan usług hosta restore"
+      ansible.builtin.service_facts:
+
+    - name: "Zatrzymaj i zamaskuj systemowy mariadb.service przed czyszczeniem datadir"
+      ansible.builtin.systemd_service:
+        name: mariadb
+        state: stopped
+        enabled: false
+        masked: true
+      when: "'mariadb.service' in (ansible_facts.services | default({}))"
+
     - name: "Odtwórz i zweryfikuj backup za pomocą galera-backup runnera"
       ansible.builtin.command:
         argv:

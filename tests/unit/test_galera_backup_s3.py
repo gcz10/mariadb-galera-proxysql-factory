@@ -5,7 +5,7 @@ import sys
 import unittest
 import tempfile
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 REPO = Path(__file__).resolve().parents[2]
@@ -37,6 +37,10 @@ class FakeMinioClient:
         self._bucket_exists = bucket_exists
         self.objects: dict[str, bytes] = {}
         self.responses: list[FakeResponse] = []
+        # Retencja niedokonczonych publikacji (prefiks bez metadata.json) liczy
+        # wiek z `last_modified`, wiec atrapa musi umiec podac inny czas niz
+        # "teraz". Klucze bez wpisu zachowuja dotychczasowe zachowanie.
+        self.mtimes: dict[str, datetime] = {}
 
     def bucket_exists(self, bucket_name: str) -> bool:
         return self._bucket_exists
@@ -48,7 +52,7 @@ class FakeMinioClient:
                 obj = MagicMock()
                 obj.object_name = key
                 obj.size = len(self.objects[key])
-                obj.last_modified = datetime.now(timezone.utc)
+                obj.last_modified = self.mtimes.get(key, datetime.now(timezone.utc))
                 results.append(obj)
         return results
 
@@ -425,6 +429,32 @@ class GaleraBackupS3Tests(unittest.TestCase):
         self.assertIn(f"{prefix_new}metadata.json", self.client.objects)
         self.assertIn("galera-other-cluster-20260701-120000/metadata.json", self.client.objects)
 
+
+    def test_retention_prunes_expired_incomplete_prefix_but_spares_inflight(self):
+        """Prefiks bez metadata.json byl pomijany NA ZAWSZE i rosl w buckecie.
+
+        Powstaje, gdy proces zginie miedzy wgraniem payloadu a metadanymi
+        (SIGKILL, OOM, padniety host). Retencja go nie widziala, bo `prune`
+        wymagal metadanych, zeby ustalic wiek. Teraz wiek bierzemy z
+        najmlodszego obiektu prefiksu — ale wgrywanie trwajace w tej chwili
+        (swieze obiekty) musi przezyc.
+        """
+        now = datetime.fromtimestamp(1785240000, tz=timezone.utc)
+        stale = now - timedelta(days=30)
+
+        abandoned = "galera-claude-r10b-20260601-120000/"
+        self.client.objects[f"{abandoned}backup.tar.enc"] = b"orphaned-payload"
+        self.client.mtimes[f"{abandoned}backup.tar.enc"] = stale
+
+        inflight = "galera-claude-r10b-20260729-115900/"
+        self.client.objects[f"{inflight}backup.tar.enc"] = b"uploading-right-now"
+        self.client.mtimes[f"{inflight}backup.tar.enc"] = now
+
+        deleted_count = self.backend.prune(now, retention_days=14)
+
+        self.assertEqual(deleted_count, 1)
+        self.assertNotIn(f"{abandoned}backup.tar.enc", self.client.objects)
+        self.assertIn(f"{inflight}backup.tar.enc", self.client.objects)
 
     def test_retention_rejects_non_integer_metadata_timestamp(self):
         prefix = "galera-claude-r10b-20260701-120000/"

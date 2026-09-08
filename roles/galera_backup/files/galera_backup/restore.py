@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -122,6 +123,21 @@ def run_restore(
 
     backend = None
     work_dir: Optional[Path] = None
+
+    # Odtwarzanie kasuje katalog danych i uruchamia wlasny serwer. Bez obslugi
+    # sygnalu SIGTERM od systemd/crona (albo Ctrl-C operatora) zabijal proces w
+    # dowolnym punkcie: katalog roboczy z ODSZYFROWANA kopia zostawal na dysku,
+    # blokada nie byla zwalniana, a osierocony standalone mariadbd trzymal
+    # datadir. Zamiana sygnalu na BackupError wprowadza przerwanie w te sama
+    # sciezke `except`, ktora juz sprzata prace, zwalnia blokade i zapisuje
+    # porazke — wzorzec z backup.py. Serwer weryfikacyjny startuje z
+    # `start_new_session=True` i zatrzymuje go `stop_standalone_server`
+    # z wewnetrznego `finally`.
+    def _sig_handler(signum: int, frame: object) -> None:
+        raise BackupError("E_INTEGRITY", f"Restore process interrupted by signal {signum}")
+
+    old_term = signal.signal(signal.SIGTERM, _sig_handler)
+    old_int = signal.signal(signal.SIGINT, _sig_handler)
     try:
         state_mgr.read()
         backend = get_storage_backend(cfg, secrets, runner)
@@ -407,6 +423,8 @@ def run_restore(
             raise
         raise failure
     finally:
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGINT, old_int)
         try:
             if backend:
                 backend.close()

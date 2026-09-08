@@ -1,0 +1,101 @@
+---
+# Odwolanie STARYCH kont serwisowych MinIO tego klastra.
+#
+# DLACZEGO OSOBNY PLIK, A NIE CIAG DALSZY main.yml: revoke musi nastapic
+# dopiero wtedy, gdy NOWY klucz ma juz KAZDY kandydat na donora, nie tylko
+# koordynator. W f10_backup.yml koordynator zbiega sie w play 2, a pozostali
+# kandydaci dopiero w play 3 — revoke wykonany w play 2 zostawial okno, w
+# ktorym kandydat mial w secrets.env klucz JUZ odwolany. Cron stoi na kazdym
+# kandydacie i sam rozstrzyga elekcje, wiec backup wybrany w tym oknie padal
+# na uwierzytelnieniu do MinIO. Ten plik wlacza sie z ostatniego play'a,
+# po konwergencji calej trojki.
+#
+# Fakty `galera_backup_*_keys_to_revoke` i `galera_backup_minio_workspace`
+# pochodza z przebiegu roli na koordynatorze i przezywaja miedzy play'ami.
+# Rotacja poswiadczen MinIO jest atomowa wzgledem klastra: provision_minio.yml
+# utworzyl i SONDOWAL nowe poswiadczenie, opublikowal fakty i usunal swoj
+# prywatny workspace. Zadanie powyzej utrwalilo klucze w secrets.env; jezeli
+# stare konta czekaja na odwolanie, blok nizej tworzy swieze root.env i dopiero
+# wtedy je usuwa. Porazka create, sondy albo zapisu sekretow zatrzymuje play,
+# a klucz z aktualnego secrets.env nadal dziala.
+- name: Dopnij rotacje MinIO po wdrozeniu sekretow
+  block:
+    - name: Przygotuj swieze root-only srodowisko klienta MinIO do revoke
+      ansible.builtin.include_tasks:
+        file: minio_root_env.yml
+      when:
+        - galera_backup_managed_minio
+        - inventory_hostname == backup.scheduler.host
+        - >-
+          (galera_backup_access_keys_to_revoke | default([]) | length) > 0
+          or
+          (galera_backup_prune_keys_to_revoke | default([]) | length) > 0
+
+    - name: Revoke stale MinIO service accounts owned by this cluster
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - admin
+          - accesskey
+          - remove
+          - myminio
+          - "{{ item }}"
+      loop: "{{ galera_backup_access_keys_to_revoke | default([]) }}"
+      # Kazdy obrot petli usuwa konto serwisowe — mutacja stanu MinIO.
+      changed_when: true
+      no_log: true
+      delegate_to: "{{ groups['infra'][0] }}"
+      when:
+        - galera_backup_managed_minio
+        - inventory_hostname == backup.scheduler.host
+        - (galera_backup_access_keys_to_revoke | default([]) | length) > 0
+
+    - name: Revoke stale MinIO retention accounts owned by this cluster
+      # Osobna petla, bo osobne konto: aktywny klucz retencji jest juz w
+      # secrets.env koordynatora (zadanie wyzej), wiec dopiero teraz wolno
+      # skasowac poprzednie konta o tej nazwie.
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - admin
+          - accesskey
+          - remove
+          - myminio
+          - "{{ item }}"
+      loop: "{{ galera_backup_prune_keys_to_revoke | default([]) }}"
+      changed_when: true
+      no_log: true
+      delegate_to: "{{ groups['infra'][0] }}"
+      when:
+        - galera_backup_managed_minio
+        - inventory_hostname == backup.scheduler.host
+        - (galera_backup_prune_keys_to_revoke | default([]) | length) > 0
+  always:
+    - name: Usun katalog provisioningu MinIO po revoke
+      # To workspace utworzony bezposrednio przed revoke, nie katalog z fazy
+      # provisioningu. Znika takze wtedy, gdy samo odwolanie zwroci blad.
+      # Bramka to WYLACZNIE istnienie workspace: `state: absent` na juz
+      # usunietej sciezce jest darmowym no-opem, a kopia warunku include'u
+      # mogla przy dryfie zostawic root.env na wspoldzielonym hoscie infra.
+      ansible.builtin.file:
+        path: "{{ galera_backup_minio_workspace.path }}"
+        state: absent
+      become: true
+      delegate_to: "{{ groups['infra'][0] }}"
+      when:
+        - galera_backup_minio_workspace is defined
+        - galera_backup_minio_workspace.path is defined

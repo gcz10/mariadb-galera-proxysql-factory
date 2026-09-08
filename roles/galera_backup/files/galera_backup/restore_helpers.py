@@ -58,6 +58,17 @@ def is_safe_tar_member(member: Any) -> bool:
     return is_reg or is_dir
 
 
+# Pliki, ktore MariaDB trzyma bezposrednio w katalogu danych. Obecnosc
+# ktoregokolwiek jest dowodem, ze czyszczony katalog to naprawde datadir.
+DATADIR_MARKERS = (
+    "ibdata1",
+    "ib_logfile0",
+    "aria_log_control",
+    "mysql_upgrade_info",
+    "multi-master.info",
+)
+
+
 def clear_datadir(datadir: Path) -> None:
     resolved = datadir.resolve()
     protected_roots = {
@@ -67,23 +78,43 @@ def clear_datadir(datadir: Path) -> None:
         Path("/srv"), Path("/sys"), Path("/tmp"), Path("/usr"), Path("/var")
     }
 
-    if resolved in protected_roots or not resolved.is_absolute():
+    if not resolved.is_absolute():
+        raise BackupError("E_INTEGRITY", f"Datadir '{resolved}' is not an absolute path; clearing rejected")
+
+    # Rownosc z lista chronila DOKLADNE korzenie, wiec kazdy katalog systemowy
+    # o poziom glebiej — `/var/lib` na czele — przechodzil i zostalby
+    # wyczyszczony do zera. Sprawdzamy tez relacje PRZODKA: katalog, wewnatrz
+    # ktorego lezy chroniony korzen, obejmuje go razem z cala zawartoscia.
+    if any(resolved == root or resolved in root.parents for root in protected_roots):
         raise BackupError("E_INTEGRITY", f"Datadir '{resolved}' is a protected system directory; clearing rejected")
 
-    if resolved.exists():
-        for child in resolved.iterdir():
-            try:
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
-            except OSError as exc:
-                raise BackupError(
-                    "E_INTEGRITY",
-                    f"Failed to clear datadir entry '{child}': {exc}",
-                ) from exc
-    else:
+    if not resolved.exists():
         resolved.mkdir(parents=True, exist_ok=True)
+        return
+
+    # Ostatnia bramka: rowna glebokosc sciezki nie mowi jeszcze, CO kasujemy.
+    # Niepusty katalog bez ani jednego znacznika MariaDB nie jest katalogiem
+    # danych — moze byc czyimkolwiek katalogiem wskazanym przez literowke w
+    # `datadir`. Pusty katalog przechodzi: to normalny stan hosta restore.
+    children = list(resolved.iterdir())
+    if children and not any((resolved / marker).exists() for marker in DATADIR_MARKERS):
+        raise BackupError(
+            "E_INTEGRITY",
+            f"Datadir '{resolved}' is not empty and carries no MariaDB datadir marker "
+            f"({', '.join(DATADIR_MARKERS)}); clearing rejected",
+        )
+
+    for child in children:
+        try:
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        except OSError as exc:
+            raise BackupError(
+                "E_INTEGRITY",
+                f"Failed to clear datadir entry '{child}': {exc}",
+            ) from exc
 
 
 def verify_restored_database(socket_path: Path, runner: CommandRunner) -> tuple[int, int, int]:
