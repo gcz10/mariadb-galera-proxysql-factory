@@ -375,6 +375,7 @@
                   pmm_dereg_nodes.json.remote | default([])
                 ]
                 | flatten
+                | selectattr('custom_labels', 'defined')
                 | selectattr('custom_labels.cluster', 'defined')
                 | selectattr('custom_labels.cluster', 'equalto', cluster_label)
                 | map(attribute='node_id')

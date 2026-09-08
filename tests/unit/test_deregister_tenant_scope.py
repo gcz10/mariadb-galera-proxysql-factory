@@ -158,8 +158,12 @@ class DeregisterTenantScopeTests(unittest.TestCase):
                 {"node_id": "sibling-agent-node", "node_name": f"{SIBLING}-px1",
                  "custom_labels": {}},
             ],
-            "container": [],
-            "remote": [],
+            # PMM zwraca wezly bez klucza `custom_labels` (np. rejestrowane spoza
+            # naszej sciezki). Filtr zagniezdzony bez sprawdzenia rodzica wywalal
+            # tu caly fakt UndefinedError, wiec derejestracja padala zamiast
+            # cokolwiek sprzatnac — zamiast sasiada ginela cala operacja.
+            "container": [{"node_id": "foreign-container", "node_name": "pmm-server"}],
+            "remote": [{"node_id": "foreign-remote", "node_name": f"{SIBLING}-remote"}],
         }
         expression = self._fact_expression("pmm_cluster_node_ids")
         selected = eval(  # noqa: S307

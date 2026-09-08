@@ -392,11 +392,28 @@ TENANTS ?= $(shell python3 -c 'import glob, os, yaml; \
 	names = [os.path.basename(os.path.dirname(p)) for p in sorted(glob.glob("clusters/*/cluster.yml")) if (((yaml.safe_load(open(p, encoding="utf-8")) or {}).get("proxysql") or {}).get("endpoint") or {}).get("address") == endpoint]; \
 	print(" ".join(n for n in names if n != "example-cluster") if endpoint else "")')
 
-platform-monitor-rotate:  ## Rotuj globalne haslo monitora ProxySQL w calej flocie (expand->switch->contract; CONFIRM=yes)
+# Najemcy uzasadnieni endpointem rotowanej pary. Rozny od TENANTS wtedy i tylko
+# wtedy, gdy operator nadpisal liste recznie — bramka ponizej porownuje oba
+# zbiory, bo reczny override omijalby cale zawezenie i `contract` skasowalby
+# konto monitora najemcy INNEJ, nieprzelaczonej pary.
+TENANTS_FOR_PLATFORM = $(shell python3 -c 'import glob, os, yaml; \
+	platform_file = os.path.join("$(PLATFORM_DIR)", "platform.yml"); \
+	endpoint = ((yaml.safe_load(open(platform_file, encoding="utf-8")) or {}).get("proxysql") or {}).get("endpoint", {}).get("address") if os.path.isfile(platform_file) else None; \
+	names = [os.path.basename(os.path.dirname(p)) for p in sorted(glob.glob("clusters/*/cluster.yml")) if (((yaml.safe_load(open(p, encoding="utf-8")) or {}).get("proxysql") or {}).get("endpoint") or {}).get("address") == endpoint]; \
+	print(" ".join(n for n in names if n != "example-cluster") if endpoint else "")')
+
+platform-monitor-rotate:  ## Rotuj globalne haslo monitora ProxySQL rotowanej pary (expand->switch->contract; CONFIRM=yes)
 	$(platform_guard)
 	@: "$${PROXYSQL_MONITOR_PASSWORD_NEXT:?Ustaw PROXYSQL_MONITOR_PASSWORD_NEXT poza repozytorium}"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (zmienia poswiadczenie monitora calej floty)"; exit 1)
-	@test -n "$(TENANTS)" || (echo "ERROR: brak najemcow w clusters/*/cluster.yml"; exit 1)
+	@test -n "$(TENANTS_FOR_PLATFORM)" || (echo "ERROR: zaden klaster nie wskazuje endpointu $(PLATFORM_DIR) — sprawdz proxysql.endpoint.address w platform.yml i clusters/*/cluster.yml"; exit 1)
+	@test -n "$(TENANTS)" || (echo "ERROR: pusta lista najemcow"; exit 1)
+	@for c in $(TENANTS); do \
+		case " $(TENANTS_FOR_PLATFORM) " in \
+			*" $$c "*) ;; \
+			*) echo "ERROR: najemca '$$c' nie nalezy do rotowanej pary ($(PLATFORM_DIR)). Faza contract skasowalaby konto monitora, ktorego jego ProxySQL nadal uzywa. Najemcy tej pary: $(TENANTS_FOR_PLATFORM)" >&2; exit 1 ;; \
+		esac; \
+	done
 	@echo "== faza 1/3 expand: $(TENANTS) =="
 	@for c in $(TENANTS); do \
 		echo "-- expand $$c"; \
