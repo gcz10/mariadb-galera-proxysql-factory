@@ -237,12 +237,16 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
                 self.assertTrue(new_dir.exists())
 
 
-    def test_retention_prunes_expired_incomplete_dir_but_spares_inflight(self):
-        """Katalog bez metadata.json byl pomijany NA ZAWSZE i rosl na udziale.
+    def test_retention_prunes_abandoned_partial_dirs_but_spares_operator_data(self):
+        """Porzucone `.partial-*` rosly na udziale bez konca.
 
-        Parity z backendem S3: niedokonczona publikacja (proces zabity miedzy
-        payloadem a metadanymi) znika po oknie retencji, ale kopia wgrywana
-        w tej chwili — mlodsza niz cutoff — musi przezyc.
+        RÓZNICA WZGLEDEM S3, ktora kosztowala mnie jeden bledny fix: tutaj
+        publikacja jest atomowa (`os.replace` PO zapisaniu metadanych), wiec
+        katalog FINALNY bez metadata.json z tej sciezki powstac nie moze —
+        gdyby istnial, jest materialem operatora i retencja nie ma prawa go
+        ruszyc. Nieusuwalnym smieciem jest za to katalog `.partial-*` po
+        procesie zabitym w polowie: sprzatanie przy publikacji trafia tylko w
+        katalog o tej samej nazwie, a nazwa niesie znacznik czasu.
         """
         with tempfile.TemporaryDirectory() as td:
             mount_path = Path(td)
@@ -258,16 +262,23 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
             now = datetime.fromtimestamp(1785240000, tz=timezone.utc)
             stale_ts = now.timestamp() - 30 * 86400
 
-            abandoned = cluster_dir / "galera-claude-r10b-20260601-120000"
+            abandoned = cluster_dir / ".partial-galera-claude-r10b-20260601-120000"
             abandoned.mkdir()
             payload = abandoned / "backup.tar.enc"
-            payload.write_bytes(b"orphaned-payload")
+            payload.write_bytes(b"killed-mid-copy")
             os.utime(payload, (stale_ts, stale_ts))
             os.utime(abandoned, (stale_ts, stale_ts))
 
-            inflight = cluster_dir / "galera-claude-r10b-20260729-115900"
+            inflight = cluster_dir / ".partial-galera-claude-r10b-20260729-115900"
             inflight.mkdir()
-            (inflight / "backup.tar.enc").write_bytes(b"uploading-right-now")
+            (inflight / "backup.tar.enc").write_bytes(b"copying-right-now")
+
+            operator_dir = cluster_dir / "galera-claude-r10b-manual-copy"
+            operator_dir.mkdir()
+            keepsake = operator_dir / "notes.txt"
+            keepsake.write_text("recznie odlozona kopia", encoding="utf-8")
+            os.utime(keepsake, (stale_ts, stale_ts))
+            os.utime(operator_dir, (stale_ts, stale_ts))
 
             with patch.object(backend, "_get_mount_info", return_value=fake_mount):
                 count = backend.prune(now, retention_days=14)
@@ -275,6 +286,7 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
             self.assertEqual(count, 1)
             self.assertFalse(abandoned.exists())
             self.assertTrue(inflight.exists())
+            self.assertTrue(keepsake.exists(), "retencja skasowala material operatora")
 
     def test_retention_delete_failure_is_not_reported_as_success(self):
         with tempfile.TemporaryDirectory() as td:

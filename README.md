@@ -290,9 +290,12 @@ make lab-backup-impact CLUSTER=<nazwa>                  # ISC-39, lab-only
 # docs/runbooks/backup.md
 
 # F12 — patch w serii (canary+bramy), rolling restart, plan major upgrade, drift:
-make cluster-patch CLUSTER=<nazwa>                       # ISC-52/55/57; bez -e f12_galera_patch_* / f12_proxysql_patch_* (packages lub command) robi DRY-RUN
+make cluster-patch CLUSTER=<nazwa>                       # ISC-52/55/57; bez ANSIBLE_OPTS="-e f12_galera_patch_* / f12_proxysql_patch_*" (packages lub command) robi DRY-RUN
 make cluster-rolling-restart CLUSTER=<nazwa>             # ISC-50/51
-make cluster-upgrade-plan CLUSTER=<nazwa> -e f12_target=<seria>  # ISC-53/54/56 (read-only; regresja EOL: + f12_allow_eol_regression)
+# `-e` bezposrednio po `make` jest flaga MAKE (--environment-overrides), nie
+# dociera do Ansible: plan renderowal sie wtedy z domyslna seria, cicho
+# ignorujac zadana. Extra-vars ida przez ANSIBLE_OPTS.
+make cluster-upgrade-plan CLUSTER=<nazwa> ANSIBLE_OPTS="-e f12_target=<seria>"  # ISC-53/54/56 (read-only; regresja EOL: ANSIBLE_OPTS="-e f12_target=<seria> -e f12_allow_eol_regression=true")
 make cluster-drift CLUSTER=<nazwa>                       # ISC-21
 #
 # Ręczny major upgrade krok po kroku (wykonany: 11.4.12 → 11.8.9):
