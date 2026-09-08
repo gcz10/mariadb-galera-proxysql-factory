@@ -10,18 +10,21 @@ This probe MEASURES a write rate (a short write workload → wsrep_replicated_by
 delta), COMPUTES the required gcache for the target IST window, and verifies the
 DEPLOYED gcache.size (in server.cnf) covers the requirement (and the 128M floor).
 
-WHAT THE NUMBER IS, EXACTLY: a LOWER BOUND, not the cluster's production write
-rate. The workload runs 500 INSERTs, each through a SEPARATE `mariadb` client
-invocation, so most of the wall clock goes to connection setup rather than
-replication. Two consequences, both stated here because the direction matters:
+WHAT THE NUMBER IS, EXACTLY: the writer's SATURATION throughput for a synthetic
+1 KiB write stream — an UPPER bound, not the tenant's production write rate.
+Batches of 500 INSERTs share one client connection, so the window measures
+replication, not logins.
 
-  * the rate is quantised (fixed payload / whole-second ELAPSED), so identical
-    values across clusters are expected and are NOT evidence of a cached read;
-  * an understated rate understates the REQUIRED gcache, so this probe passing
-    is not proof that a busy cluster's gcache is large enough. It proves the
-    deployed size covers at least this floor. Real sizing for a loaded cluster
-    needs `write_rate` taken from production `wsrep_replicated_bytes` over an
-    hour (`tests/validation/calc-gcache.py --write-rate`).
+History worth keeping, because the earlier version looked green while proving
+nothing: it invoked the client ONCE PER INSERT, so connection setup consumed the
+window and the "write rate" came out at 77-87 kB/s — login speed. An understated
+rate understates the REQUIRED gcache, so the gate passed on an unmet criterion.
+Measured correctly on 2026-09-08: 2.1 MB/s, i.e. 3645M required against 512M
+deployed on both live tenants (FAIL, see ISA.md).
+
+Sizing a real workload still belongs to production data
+(`tests/validation/calc-gcache.py --write-rate` over an hour of
+`wsrep_replicated_bytes`); this probe answers the worst case, not the average.
 
 Falsifiable: if the deployed gcache is smaller than what the measured write rate
 requires for the IST window, the probe FAILS (a node down for the window would
@@ -99,10 +102,16 @@ OWNED=1
 
 mariadb --socket=$SOCK -e "CREATE TABLE \`$DB\`.w (id INT PRIMARY KEY AUTO_INCREMENT, payload TEXT) ENGINE=InnoDB"
 
+# JEDNO polaczenie na partie 500 zapisow, nie jedno na zapis. Wczesniejsza
+# wersja wolala klienta w petli, wiec wieksza czesc okna zjadalo nawiazywanie
+# polaczen: zmierzone 77-87 kB/s bylo predkoscia LOGOWANIA, nie replikacji, a
+# zanizona stawka zaniza WYMAGANY gcache — blad w strone niebezpieczna.
+BATCH=$(seq 1 500 | sed "s|.*|INSERT INTO \`$DB\`.w (payload) VALUES (RPAD('x',1024,'x'));|")
+
 T0=$(mariadb --socket=$SOCK -N -B -e "SHOW STATUS LIKE 'wsrep_replicated_bytes'" | awk '{{print $2}}')
 START=$(date +%s)
-for i in $(seq 1 500); do
-  mariadb --socket=$SOCK -e "INSERT INTO \`$DB\`.w (payload) VALUES (RPAD('x',1024,'x'))"
+while :; do
+  printf '%s\n' "$BATCH" | mariadb --socket=$SOCK
   now=$(date +%s); [ $((now-START)) -ge {workload_seconds} ] && break
 done
 END=$(date +%s)

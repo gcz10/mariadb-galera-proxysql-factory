@@ -76,12 +76,17 @@ fail_create_tbl = os.environ.get("FAIL_CREATE_TABLE") == "1"
 fail_insert = os.environ.get("FAIL_INSERT") == "1"
 fail_drop_db = os.environ.get("FAIL_DROP_DB") == "1"
 
-# Parse SQL command from -e argument
+# Klient MariaDB przyjmuje SQL na DWA sposoby: przez `-e` i przez stdin. Atrapa
+# czytala tylko argv, wiec po przejsciu obciazenia na jedno polaczenie z
+# potokiem przestala widziec inserty — i przestala umiec je zepsuc. Test, ktory
+# nie potrafi wywolac bledu, nie dowodzi sprzatania po bledzie.
 sql = ""
 for i, arg in enumerate(sys.argv):
     if arg == "-e" and i + 1 < len(sys.argv):
         sql = sys.argv[i + 1]
         break
+if not sql and not sys.stdin.isatty():
+    sql = sys.stdin.read()
 
 if "CREATE DATABASE" in sql:
     m = re.search(r"CREATE DATABASE `?([a-zA-Z0-9_]+)`?", sql)
