@@ -28,8 +28,13 @@ timeout 2 bash -c 'true </dev/tcp/127.0.0.1/6033' 2>/dev/null || exit 1
 #
 # Przy wspolnym ProxySQL nadal wystarczy JEDEN zdrowy najemca — awaria jednego
 # klastra nie zrzuca VIP-a drugiemu.
-if [ -f /etc/proxysql/admin-check.cnf ]; then
-  row=$(timeout 2 mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf \
+# Sciezka poswiadczen jest nadpisywalna WYLACZNIE po to, by testy mogly wykonac
+# te sama bramke, ktora uruchamia Keepalived (bez env dostaje ten sam domyslny
+# plik). Wczesniej zgodnosc bramki z sonda pilnowal test czytajacy TEKST obu
+# plikow — przechodzil takze wtedy, gdy liczyly rozne rzeczy.
+ADMIN_CNF=${PROXYSQL_ADMIN_CNF:-/etc/proxysql/admin-check.cnf}
+if [ -f "$ADMIN_CNF" ]; then
+  row=$(timeout 2 mariadb --defaults-extra-file="$ADMIN_CNF" \
     --connect-timeout=1 -h127.0.0.1 -P6032 -uadmin -N -B -e \
     "SELECT
        (SELECT COUNT(*) FROM runtime_mysql_galera_hostgroups WHERE active = 1),

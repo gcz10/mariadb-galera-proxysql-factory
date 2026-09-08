@@ -16,8 +16,12 @@ a kiedy pomiarem niemożliwym do rozstrzygnięcia.
 from __future__ import annotations
 
 import importlib.util
-import re
+import os
+import shutil
+import socket
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -42,7 +46,55 @@ def state(groups: int, writers: int, hosts=HOSTS) -> dict:
     return {host: {"GROUPS": str(groups), "WRITERS": str(writers)} for host in hosts}
 
 
+def install_timeout_shim(workdir: Path) -> None:
+    """`timeout` (coreutils) nie istnieje na macOS, a bramka mierzy nim port.
+
+    Bez niego skrypt konczy sie na kroku 1 NIEZALEZNIE od stanu pary, wiec
+    porownanie werdyktow nie mierzyloby niczego. Zastepnik odrzuca sam limit
+    czasu i uruchamia polecenie — reszta bramki wykonuje sie bez zmian.
+    """
+    if shutil.which("timeout"):
+        return
+    shim = workdir / "timeout"
+    shim.write_text('#!/bin/sh\nshift\nexec "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+
+
+
 class PlatformVipContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Bramka najpierw sprawdza port klienta 6033; bez nasluchu konczy sie
+        # na kroku 1 i nigdy nie doszlaby do liczenia writerow.
+        cls._listener = socket.socket()
+        cls._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        cls._listener.bind(("127.0.0.1", 6033))
+        cls._listener.listen(8)
+        cls.addClassCleanup(cls._listener.close)
+
+    def run_gate(self, groups: int, writers: int, admin_fails: bool = False) -> int:
+        """Uruchamia PRAWDZIWY skrypt bramki z klientem zwracajacym zadany stan."""
+        workdir = Path(tempfile.mkdtemp(prefix="vip-gate-"))
+        self.addCleanup(shutil.rmtree, workdir, ignore_errors=True)
+        (workdir / "admin-check.cnf").write_text("[client]\n", encoding="utf-8")
+        client = workdir / "mariadb"
+        client.write_text(
+            "#!/bin/sh\n"
+            + ("exit 1\n" if admin_fails else f"printf '{groups}\\t{writers}\\n'\n"),
+            encoding="utf-8",
+        )
+        client.chmod(0o755)
+        install_timeout_shim(workdir)
+        return subprocess.run(
+            ["bash", str(GATE)],
+            env={
+                **os.environ,
+                "PATH": f"{workdir}:{os.environ['PATH']}",
+                "PROXYSQL_ADMIN_CNF": str(workdir / "admin-check.cnf"),
+            },
+            capture_output=True,
+        ).returncode
+
     def test_stopped_tenants_make_the_missing_vip_unmeasurable(self):
         """Aktywne grupy + zero writerów = bramka zdjęła adres celowo."""
         self.assertTrue(probe.withdrawal_is_expected(state(groups=4, writers=0), HOSTS))
@@ -89,21 +141,27 @@ class PlatformVipContractTests(unittest.TestCase):
         self.assertFalse(probe.withdrawal_is_expected(partial, HOSTS))
         self.assertFalse(probe.withdrawal_is_expected({}, HOSTS))
 
-    def test_probe_and_gate_count_writers_the_same_way(self):
-        """Oba pliki muszą pytać o TO SAMO, inaczej rozjadą się ponownie.
+    def test_probe_and_gate_reach_the_same_verdict_on_the_same_state(self):
+        """Rozstrzyga WYKONANIE obu bramek, nie podobienstwo ich tekstu.
 
-        Nie porównujemy tekstu zapytań, tylko warunki, które o werdykcie
-        decydują: aktywna grupa, hostgroup writera i status ONLINE.
+        Poprzednia wersja tego testu szukala fragmentow SQL w obu plikach —
+        przechodzila takze wtedy, gdy sonda i bramka liczyly rozne rzeczy tymi
+        samymi slowami. Tutaj bramka Keepalived dostaje prawdziwe dane przez
+        klienta zwracajacego stan pary, a sonda te same liczby: brak VIP-a jest
+        niemierzalny DOKLADNIE wtedy, gdy bramka adres zdjela.
         """
-        gate = GATE.read_text(encoding="utf-8")
-        probe_src = PROBE.read_text(encoding="utf-8")
-        for fragment in ("runtime_mysql_galera_hostgroups", "writer_hostgroup", "ONLINE"):
-            self.assertIn(fragment, gate)
-            self.assertIn(fragment, probe_src)
-        # Bramka liczy writerów jako JOIN po hostgrupie writera aktywnych grup;
-        # sonda musi liczyć tak samo, inaczej jedna z nich zobaczy inny świat.
-        joins = re.findall(r"s\.hostgroup_id\s*=\s*g\.writer_hostgroup", probe_src)
-        self.assertEqual(len(joins), 1, "sonda nie liczy writerów tak jak bramka")
+        for groups, writers in ((0, 0), (2, 0), (2, 1), (2, 2)):
+            with self.subTest(groups=groups, writers=writers):
+                gate_withdraws = self.run_gate(groups, writers) != 0
+                self.assertEqual(
+                    gate_withdraws,
+                    probe.withdrawal_is_expected(state(groups, writers), HOSTS),
+                    "sonda i bramka rozstrzygaja ten sam stan inaczej",
+                )
+
+    def test_gate_withdraws_the_vip_when_the_admin_interface_fails(self):
+        """Nieczytelny stan pary = brak dowodu, ze jest komu obsluzyc ruch."""
+        self.assertNotEqual(self.run_gate(2, 2, admin_fails=True), 0)
 
 
 if __name__ == "__main__":
