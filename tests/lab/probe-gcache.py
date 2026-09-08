@@ -14,12 +14,12 @@ Falsifiable: if the deployed gcache is smaller than what the measured write rate
 requires for the IST window, the probe FAILS (a node down for the window would
 fall back to full SST instead of IST).
 """
-
 import math
 import os
 import re
+import secrets
 import sys
-
+import time
 from _probe_common import ProbeContext, finish, require_hosts, run_ansible
 
 CTX = ProbeContext()
@@ -27,6 +27,76 @@ GALERA = CTX.group_hosts("galera")
 PROXYSQL = CTX.group_hosts("proxysql")
 IST_WINDOW_MIN = int(os.environ.get("ISC68_IST_WINDOW_MIN", "30"))
 WORKLOAD_SECONDS = int(os.environ.get("ISC68_WORKLOAD_SECONDS", "20"))
+ALLOWED_ENVIRONMENTS = {"laboratory"}
+
+
+def validate_environment(config: dict) -> tuple[bool, str]:
+    env = (config.get("cluster") or {}).get("environment")
+    if not env:
+        return False, "missing cluster.environment (fail closed: requires documented lab environment)"
+    if env not in ALLOWED_ENVIRONMENTS:
+        return False, f"cluster.environment={env!r} is not an allowed lab environment (fail closed)"
+    return True, str(env)
+
+def generate_measurement_db_name() -> str:
+    """Generate a unique measurement DB name distinct from pre-existing gcache_meas.
+
+    MariaDB max database identifier length is 64 characters.
+    """
+    token = secrets.token_hex(6)
+    ts = int(time.time())
+    return f"gcache_meas_{ts}_{token}"
+
+
+def build_workload_script(db_name: str, workload_seconds: int) -> str:
+    """Build isolated workload script with exclusive DB creation and trap-based cleanup.
+
+    Contract:
+    - set -eo pipefail and traps EXIT TERM INT so errors cannot be hidden.
+    - Splits CREATE DATABASE and CREATE TABLE; sets OWNED=1 immediately after DB success
+      so table or insert failures trigger cleanup.
+    - Trap checks OWNED: never drops colliding or pre-existing unowned databases.
+    - Cleanup failure forces nonzero exit (no || true).
+    """
+    return rf'''
+set -eo pipefail
+
+SOCK=/var/lib/mysql/mysql.sock
+DB="{db_name}"
+OWNED=0
+
+cleanup() {{
+  local rc=$?
+  trap - EXIT TERM INT
+  if [ "$OWNED" -eq 1 ]; then
+    if ! mariadb --socket=$SOCK -e "DROP DATABASE IF EXISTS \`$DB\`;"; then
+      echo "ERROR: cleanup failed to drop measurement database $DB" >&2
+      exit 2
+    fi
+  fi
+  exit $rc
+}}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
+# Exclusively create unique measurement DB (fails if DB already exists)
+mariadb --socket=$SOCK -e "CREATE DATABASE \`$DB\`;"
+OWNED=1
+
+mariadb --socket=$SOCK -e "CREATE TABLE \`$DB\`.w (id INT PRIMARY KEY AUTO_INCREMENT, payload TEXT) ENGINE=InnoDB"
+
+T0=$(mariadb --socket=$SOCK -N -B -e "SHOW STATUS LIKE 'wsrep_replicated_bytes'" | awk '{{print $2}}')
+START=$(date +%s)
+for i in $(seq 1 500); do
+  mariadb --socket=$SOCK -e "INSERT INTO \`$DB\`.w (payload) VALUES (RPAD('x',1024,'x'))"
+  now=$(date +%s); [ $((now-START)) -ge {workload_seconds} ] && break
+done
+END=$(date +%s)
+T1=$(mariadb --socket=$SOCK -N -B -e "SHOW STATUS LIKE 'wsrep_replicated_bytes'" | awk '{{print $2}}')
+ELAPSED=$((END-START)); DELTA=$((T1-T0))
+echo "RATE_BPS=$(( (ELAPSED>0 ? DELTA/ELAPSED : 0) )) DELTA=$DELTA ELAPSED=${{ELAPSED}}s"
+'''
 
 
 def find_writer(failures, undetermined):
@@ -68,20 +138,13 @@ def measure_write_rate(writer, failures, undetermined):
     """Run a write workload on the writer; return bytes/sec from wsrep delta."""
     if writer is None:
         return None
-    script = f'''
-SOCK=/var/lib/mysql/mysql.sock
-mariadb --socket=$SOCK -e "CREATE DATABASE IF NOT EXISTS gcache_meas; CREATE TABLE IF NOT EXISTS gcache_meas.w (id INT PRIMARY KEY AUTO_INCREMENT, payload TEXT) ENGINE=InnoDB" 2>/dev/null
-T0=$(mariadb --socket=$SOCK -N -B -e "SHOW STATUS LIKE 'wsrep_replicated_bytes'" | awk '{{print $2}}')
-START=$(date +%s)
-for i in $(seq 1 500); do
-  mariadb --socket=$SOCK -e "INSERT INTO gcache_meas.w (payload) VALUES (RPAD('x',1024,'x'))" 2>/dev/null
-  now=$(date +%s); [ $((now-START)) -ge {WORKLOAD_SECONDS} ] && break
-done
-END=$(date +%s)
-T1=$(mariadb --socket=$SOCK -N -B -e "SHOW STATUS LIKE 'wsrep_replicated_bytes'" | awk '{{print $2}}')
-ELAPSED=$((END-START)); DELTA=$((T1-T0))
-echo "RATE_BPS=$(( (ELAPSED>0 ? DELTA/ELAPSED : 0) )) DELTA=$DELTA ELAPSED=${{ELAPSED}}s"
-'''
+    valid_env, env_msg = validate_environment(CTX.config)
+    if not valid_env:
+        failures.append(f"ISC-68 — probe-gcache writes synthetic workload and must not run: {env_msg}")
+        return None
+
+    db_name = generate_measurement_db_name()
+    script = build_workload_script(db_name, WORKLOAD_SECONDS)
     result = run_ansible(
         CTX,
         writer,
@@ -91,9 +154,11 @@ echo "RATE_BPS=$(( (ELAPSED>0 ? DELTA/ELAPSED : 0) )) DELTA=$DELTA ELAPSED=${{EL
     require_hosts(result, [writer], "write-rate", failures, undetermined)
     if writer not in result.bodies:
         return None
-    match = re.search(r"RATE_BPS=(\d+)", result.body(writer))
-    return int(match.group(1)) if match else 0
 
+    body = result.body(writer)
+
+    match = re.search(r"RATE_BPS=(\d+)", body)
+    return int(match.group(1)) if match else 0
 
 def deployed_gcache(failures, undetermined):
     if not GALERA:
@@ -117,6 +182,10 @@ def deployed_gcache(failures, undetermined):
 def main():
     failures = []
     undetermined = []
+    valid_env, env_msg = validate_environment(CTX.config)
+    if not valid_env:
+        print(f"REFUSED: probe-gcache writes synthetic workload and must not run: {env_msg}")
+        return 1
     writer = find_writer(failures, undetermined)
     rate = measure_write_rate(writer, failures, undetermined)
     if rate is None:

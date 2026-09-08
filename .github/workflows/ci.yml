@@ -93,14 +93,14 @@ jobs:
       # nie kazdy plik w versions/. candidate.lock.yml jest z zalozenia niedokonczony
       # (placeholdery to-confirm-F0 czekajace na F0) i nie jest przez nikogo wskazywany.
       # Efekt uboczny: wykrywa tez klaster wskazujacy na nieistniejacy lockfile.
-      - name: Lockfile validation (lockfiles referenced by clusters)
+      - name: Lockfile validation (lockfiles referenced by clusters and platforms)
         run: |
           set -e
           rc=0
           used=$(python3 - <<'PY'
           import glob, yaml
           out = set()
-          for path in sorted(glob.glob("clusters/*/cluster.yml")):
+          for path in sorted(glob.glob("clusters/*/cluster.yml") + glob.glob("platform/*/platform.yml")):
               with open(path, encoding="utf-8") as fh:
                   cfg = yaml.safe_load(fh) or {}
               lock = (cfg.get("versions") or {}).get("lock_file")
@@ -109,10 +109,10 @@ jobs:
           print("\n".join(sorted(out)))
           PY
           )
-          [ -n "$used" ] || { echo "FAIL: zaden klaster nie wskazuje lockfile"; exit 1; }
+          [ -n "$used" ] || { echo "FAIL: zaden klaster ani platforma nie wskazuje lockfile"; exit 1; }
           for lf in $used; do
             if [ ! -f "$lf" ]; then
-              echo "FAIL: $lf wskazany przez cluster.yml, ale nie istnieje"; rc=1; continue
+              echo "FAIL: $lf wskazany przez cluster/platform.yml, ale nie istnieje"; rc=1; continue
             fi
             python3 tests/validation/validate-lockfile.py "$lf" || rc=1
           done
@@ -178,12 +178,12 @@ jobs:
 
       # Jedno zrodlo prawdy: recepta bramki zyje w Makefile (selftest + sonda),
       # CI tylko ja wywoluje. Nowa sonda = nowy target, bez edycji tego pliku.
-      - name: Static guards (make verify-* — mass restart, double bootstrap, zero hardcode, role contract, conditional env, proxysql tenancy, inventory<->TF, secret leak, no state latest)
+      - name: Static guards (make verify-* — mass restart, double bootstrap, zero hardcode, role contract, conditional env, proxysql tenancy, inventory<->TF, lockfiles, secret leak, no state latest)
         run: |
           set -e
           for t in verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode \
                    verify-role-contract verify-no-conditional-env verify-proxysql-tenancy \
-                   verify-inventory-tf verify-no-secrets-leak verify-no-state-latest; do
+                   verify-inventory-tf verify-lockfiles verify-no-secrets-leak verify-no-state-latest; do
             echo "== make $t"; make "$t"
           done
 

@@ -7,9 +7,14 @@ Sprawdza:
   3. Obecne sa wszystkie klucze konsumowane przez playbooki (lista nizej).
   4. Spojnosc wewnetrzna: mariadb.repo_setup_args pasuje do serii wynikajacej
      z mariadb.version (asercja, ktora f2_preflight egzekwuje w runtime).
+  5. Proweniencja pinow (wskazanie zrodla dla kazdej wersji).
+  6. Zgodnosc rocky_linux_major: deklaracja w cluster.yml / platform.yml
+     musi zgadzac sie z rocky_linux.major w przypietym lockfile.
 
-Uzycie: validate-lockfile.py <lockfile.yml> [<lockfile.yml> ...]
-Kod wyjscia != 0, gdy ktorykolwiek lockfile nie przeszedl.
+Uzycie:
+  validate-lockfile.py [<lockfile.yml> ...]
+  validate-lockfile.py --declaration <cluster.yml|platform.yml> [...]
+Kod wyjscia != 0, gdy ktorykolwiek lockfile lub deklaracja nie przeszla.
 """
 from __future__ import annotations
 
@@ -76,29 +81,97 @@ PLACEHOLDER_MARKERS = ("to-confirm-f0", "to-verify", "todo:", "fixme:", "xxx:")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def declaration_references(repo_root: Path = REPO_ROOT) -> list[tuple[Path, int | None, Path, str]]:
+    """Zwraca (decl_path, decl_major, resolved_lock_path, rel_lock_path) ze wszystkich definicji."""
+    decls = []
+    for pattern in ("clusters/*/cluster.yml", "platform/*/platform.yml"):
+        for decl_path in sorted(repo_root.glob(pattern)):
+            try:
+                cfg = yaml.safe_load(decl_path.read_text(encoding="utf-8")) or {}
+            except (yaml.YAMLError, OSError):
+                continue
+            if not isinstance(cfg, dict):
+                continue
+            lock_rel = ((cfg.get("versions") or {}) if isinstance(cfg.get("versions"), dict) else {}).get("lock_file")
+            if not lock_rel:
+                continue
+            platform_block = cfg.get("platform") or {}
+            decl_major = platform_block.get("rocky_linux_major") if isinstance(platform_block, dict) else None
+            try:
+                decl_major_int = int(decl_major) if decl_major is not None else None
+            except (ValueError, TypeError):
+                decl_major_int = None
+            decls.append((decl_path, decl_major_int, (repo_root / str(lock_rel)).resolve(), str(lock_rel)))
+    return decls
+
+
 def referenced_lockfiles(repo_root: Path = REPO_ROOT) -> set[Path]:
-    """Lockfile'e WSKAZANE przez definicje klastrow (`versions.lock_file`).
-
-    Wskazanie jest deklaracja "tym plikiem buduje sie klaster", wiec to ono —
-    a nie stopka `# Status:` w samym pliku — decyduje o rygorze. Wczesniej
-    plik ze stopka `candidate` przechodzil sciezka lagodna NAWET gdy wskazywal
-    go `cluster.yml`: bez bramki ISC-63, bez kompletu kluczy, bez proweniencji.
-    CI swiecilo zielono, a fail-closed przychodzil dopiero na hoscie.
-    """
-    referenced: set[Path] = set()
-    for cluster in sorted(repo_root.glob("clusters/*/cluster.yml")):
-        try:
-            cfg = yaml.safe_load(cluster.read_text(encoding="utf-8")) or {}
-        except (yaml.YAMLError, OSError):
-            # Zepsuta definicja jest bledem WALIDATORA KLASTRA, nie tego pliku.
-            continue
-        lock = ((cfg.get("versions") or {}) if isinstance(cfg, dict) else {}).get("lock_file")
-        if lock:
-            referenced.add((repo_root / str(lock)).resolve())
-    return referenced
+    """Lockfile'e WSKAZANE przez definicje klastrow i platformy (`versions.lock_file`)."""
+    return {lock_resolved for _, _, lock_resolved, _ in declaration_references(repo_root)}
 
 
-def validate(path: Path, referenced: set[Path] | None = None) -> list[str]:
+def compare_major_agreement(decl_path: Path, decl_major: int | None, lock_path: Path, lock_data: dict) -> list[str]:
+    """Weryfikuje, czy decl_major jest zgodny z rocky_linux.major w lock_data."""
+    if decl_major is None:
+        return []
+    rl_block = lock_data.get("rocky_linux") or {}
+    if not isinstance(rl_block, dict):
+        return []
+    lock_major = rl_block.get("major")
+    if lock_major is None:
+        return []
+    try:
+        lock_major_int = int(lock_major)
+    except (ValueError, TypeError):
+        return []
+    if decl_major != lock_major_int:
+        return [
+            f"{decl_path}: platform.rocky_linux_major ({decl_major}) "
+            f"nie zgadza sie z rocky_linux.major ({lock_major_int}) w lockfile '{lock_path}'"
+        ]
+    return []
+
+
+def validate_declaration(decl_path: Path, repo_root: Path = REPO_ROOT) -> list[str]:
+    """Weryfikuje wskazywany lockfile i zgodnosc rocky_linux_major dla pojedynczej deklaracji."""
+    if not decl_path.is_file():
+        return [f"{decl_path}: plik nie istnieje"]
+    try:
+        cfg = yaml.safe_load(decl_path.read_text(encoding="utf-8")) or {}
+    except (yaml.YAMLError, OSError) as exc:
+        return [f"{decl_path}: nie da sie wczytac ({exc})"]
+    if not isinstance(cfg, dict):
+        return [f"{decl_path}: korzen nie jest slownikiem"]
+
+    lock_rel = ((cfg.get("versions") or {}) if isinstance(cfg.get("versions"), dict) else {}).get("lock_file")
+    if not lock_rel:
+        return [f"{decl_path}: brak versions.lock_file"]
+
+    lock_path = (repo_root / str(lock_rel)).resolve()
+    if not lock_path.is_file():
+        return [f"{decl_path}: lock_file '{lock_rel}' nie istnieje"]
+
+    referenced = referenced_lockfiles(repo_root) | {lock_path}
+    errors = [f"{decl_path} -> {e}" for e in validate(lock_path, referenced=referenced, repo_root=repo_root)]
+
+    platform_block = cfg.get("platform") or {}
+    decl_major = platform_block.get("rocky_linux_major") if isinstance(platform_block, dict) else None
+    try:
+        decl_major_int = int(decl_major) if decl_major is not None else None
+    except (ValueError, TypeError):
+        decl_major_int = None
+
+    try:
+        lock_data = yaml.safe_load(lock_path.read_text(encoding="utf-8")) or {}
+        if isinstance(lock_data, dict):
+            errors.extend(compare_major_agreement(decl_path, decl_major_int, lock_path, lock_data))
+    except (yaml.YAMLError, OSError) as exc:
+        errors.append(f"{decl_path}: blad odczytu lockfile '{lock_rel}': {exc}")
+
+    return errors
+
+
+def validate(path: Path, referenced: set[Path] | None = None, repo_root: Path | None = None) -> list[str]:
     """Zwraca liste bledow (pusta = OK)."""
     errors: list[str] = []
     text = path.read_text(encoding="utf-8")
@@ -207,13 +280,58 @@ def validate(path: Path, referenced: set[Path] | None = None) -> list[str]:
                 f"zaktualizowane po podniesieniu wersji"
             )
 
+    # 6. Zgodnosc rocky_linux_major z deklaracjami klastrow i platformy
+    root = repo_root
+    if root is None:
+        if (path.parent.parent / "clusters").is_dir() or (path.parent.parent / "platform").is_dir():
+            root = path.parent.parent
+        else:
+            root = REPO_ROOT
+    resolved_path = path.resolve()
+    for decl_path, decl_major, lock_resolved, _ in declaration_references(root):
+        if lock_resolved == resolved_path:
+            errors.extend(compare_major_agreement(decl_path, decl_major, path, data))
+
     return errors
 
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        print(__doc__, file=sys.stderr)
-        return 2
+        rc = 0
+        referenced = referenced_lockfiles()
+        if not referenced:
+            print("FAIL: zaden klaster ani platforma nie wskazuje lockfile")
+            return 1
+        for path in sorted(referenced):
+            if not path.is_file():
+                print(f"FAIL: {path}: nie istnieje")
+                rc = 1
+                continue
+            errs = validate(path, referenced)
+            if errs:
+                for e in errs:
+                    print(f"FAIL: {e}")
+                rc = 1
+            else:
+                print(f"OK: {path}")
+        return rc
+
+    if argv[1] == "--declaration":
+        if len(argv) < 3:
+            print(f"Uzycie: {argv[0]} --declaration <cluster.yml|platform.yml> [...]", file=sys.stderr)
+            return 2
+        rc = 0
+        for decl_arg in argv[2:]:
+            decl_path = Path(decl_arg)
+            errs = validate_declaration(decl_path)
+            if errs:
+                for e in errs:
+                    print(f"FAIL: {e}")
+                rc = 1
+            else:
+                print(f"OK: {decl_path} (lockfile & rocky_linux_major)")
+        return rc
+
     rc = 0
     referenced = referenced_lockfiles()
     for arg in argv[1:]:
@@ -230,7 +348,6 @@ def main(argv: list[str]) -> int:
         else:
             print(f"OK: {path}")
     return rc
-
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))

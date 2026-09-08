@@ -16,11 +16,94 @@ mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SHOW STATUS LIKE 'wsrep_clu
 # wsrep_ready=OFF = zapisy zablokowane (ISC-17)
 ```
 
-## Scenariusz A: Utrata większości (2/3 węzłów down)
+## Scenariusz A: Utrata większości (2/3 węzłów down / utrata quorum)
 
-1. Sprawdź `grastate.dat` i `safe_to_bootstrap` na ostatnim węźle
-2. Jeśli `safe_to_bootstrap: 1` → bootstrap na tym węźle (`ansible-playbook playbooks/bootstrap.yml -i clusters/<name>/inventory.yml -e @clusters/<name>/cluster.yml -e bootstrap_node=<node> -e confirm=yes`)
-3. Dołącz pozostałe węzły po odzyskaniu
+Gdy klaster traci większość (2 z 3 węzłów), ocalały węzeł przechodzi w stan `wsrep_cluster_status = non-Primary`
+i blokuje operacje (`wsrep_ready = OFF`). To zamierzone zachowanie Galery (fail-closed fencing), chroniące
+przed split-brain (ISC-17, ISC-30).
+
+### Warunki bezpieczeństwa i rozróżnienie strażników
+
+1. **Wymóg zewnętrznego sfencowania (fencing wykluczający aktywny Primary):**
+   Samo odcięcie ocalałego węzła od replikacji nie odcina ruchu klientów ani ProxySQL od pozostałych maszyn.
+   Gdyby odcięte 2 węzły nadal komunikowały się ze sobą, posiadałyby większość (2/3) i tworzyły działający
+   Primary Component. Zanim podejmiesz próbę bootstrapu na ocalałym węźle, MUSISZ niezawodnie zatrzymać
+   pozostałe hosty (np. wyłączenie VM w hypervisorze, fencing IPMI/PDU), aby wykluczyć istnienie aktywnego
+   Primary Component przyjmującego zapisy.
+
+2. **Weryfikacja najświeższego stanu (latest-state verification):**
+   Ocalały węzeł NIE jest automatycznie węzłem o najświeższym stanie — pozostałe węzły mogły zatwierdzić
+   nowsze transakcje tuż przed awarią lub ocalały węzeł mógł wypaść z synchronizacji wcześniej. Jeśli dyski
+   pozostałych węzłów są dostępne, zweryfikuj i porównaj pozycje (jak w Scenariuszu B krok 1–2).
+   Jeśli nie można potwierdzić najświeższego stanu, zatrzymaj tę procedurę; odzyskiwanie z możliwą
+   utratą transakcji wymaga osobnej, jawnej decyzji o akceptacji utraty danych.
+
+3. **Rozróżnienie klasyfikacji sondy a potwierdzenia operatora:**
+   - **Sonda wykrywa brak usługi (`galera_state_down_verified`):** Gdy hosty odpowiadają po SSH, a sonda
+     `tasks/galera_state_probe.yml` zwraca `ERROR 2002` (błąd połączenia z lokalnym gniazdem MariaDB),
+     węzły trafiają do `galera_state_down_verified`. Wówczas zbiór `galera_state_unreachable` jest pusty
+     i strażnik `Audit#2` w `playbooks/bootstrap.yml` przechodzi bez flagi potwierdzenia.
+   - **Węzły nieosiągalne po SSH (`galera_state_unreachable`):** Gdy hosty nie odpowiadają na SSH,
+     strażnik `Audit#2` bezwzględnie wymaga jawnej flagi operatora: `-e bootstrap_confirm_all_down=true`.
+     Flagę wolno przekazać WYŁĄCZNIE po uprzednim, wiarygodnym sfencowaniu maszyn wykluczającym aktywny Primary.
+   - **Stan nieznany (`galera_state_unknown`):** Żadna flaga nie zdejmuje blokady przy niejednoznacznej
+     odpowiedzi bazy (np. błąd uprawnień). Sytuację na takim węźle należy zbadać przed jakimkolwiek bootstrapem.
+
+### Procedura
+
+1. **Sfencuj wyłączone węzły i zatrzymaj bazę na węźle bootstrap:**
+   - Potwierdź out-of-band (hypervisor/IPMI), że pozostałe węzły są definitywnie zatrzymane.
+   - Jeśli MariaDB na ocalałym węźle nadal działa w non-Primary, zatrzymaj usługę przez systemd:
+     ```bash
+     ansible <node> -i clusters/<name>/inventory.yml -b -m systemd -a "name=mariadb state=stopped"
+     ```
+
+2. **Sprawdź `grastate.dat` i odblokuj bootstrap:**
+   ```bash
+   ansible <node> -i clusters/<name>/inventory.yml -b -m command -a "cat /var/lib/mysql/grastate.dat"
+   ```
+   Jeśli `safe_to_bootstrap: 0`, a węzeł został zweryfikowany jako posiadający najświeższy stan:
+   ```bash
+   ansible <node> -i clusters/<name>/inventory.yml -b -m shell \
+     -a "sed -i 's/^safe_to_bootstrap: 0/safe_to_bootstrap: 1/' /var/lib/mysql/grastate.dat"
+   ```
+
+3. **Bootstrap ocalałego węzła:**
+   ```bash
+   # Wymagane SST_PASSWORD w środowisku (strażnik bootstrap.yml):
+   export SST_PASSWORD="<haslo_sst>"
+
+   # Bezpośrednie wywołanie playbooka (z flagą potwierdzenia wymaganą przy nieosiągalnych SSH węzłach):
+   ansible-playbook playbooks/bootstrap.yml -i clusters/<name>/inventory.yml \
+     -e @clusters/<name>/cluster.yml \
+     -e bootstrap_node=<node> \
+     -e confirm=yes \
+     -e bootstrap_confirm_all_down=true
+
+   # LUB równoważne wywołanie przez cel Makefile:
+   make cluster-bootstrap CLUSTER=<name> CONFIRM=yes \
+     ANSIBLE_OPTS="-e bootstrap_node=<node> -e bootstrap_confirm_all_down=true"
+   ```
+
+4. **Weryfikacja jednoelementowego Primary Component:**
+   ```bash
+   ansible <node> -i clusters/<name>/inventory.yml -b -m shell \
+     -a "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e \"SHOW STATUS WHERE Variable_name IN ('wsrep_cluster_status','wsrep_cluster_size','wsrep_ready')\""
+   # Oczekiwane: wsrep_cluster_status=Primary, wsrep_cluster_size=1, wsrep_ready=ON
+   ```
+
+5. **Dołącz pozostałe węzły po naprawie i zachowaj topologię:**
+   - Po usunięciu awarii pozostałych węzłów przywróć je do klastra:
+     ```bash
+     make cluster-join CLUSTER=<name>
+     make cluster-proxysql CLUSTER=<name>
+     make cluster-monitoring CLUSTER=<name>
+     make lab-galera-verify CLUSTER=<name>
+     ```
+   - **Ograniczenie topologii:** Stan 1- lub 2-węzłowy jest STANEM AWARII PRZEJŚCIOWEJ. Klaster 2-węzłowy
+     bez arbitra (`garbd`) nie zapewnia HA. Sam ADR nie legalizuje pracy w zredukowanej topologii bez arbitra
+     — repozytorium wymaga 3 węzłów (`galera.nodes_expected: 3`), a bramy zdrowia będą słusznie alertować
+     brak węzła do momentu pełnego dołączenia lub wymiany zgodnie z `docs/runbooks/node-replacement.md`.
 
 ## Scenariusz B: Wszystkie węzły down
 
@@ -63,8 +146,10 @@ odzyskane z journala po nieczystym zamknięciu).
    ansible <node> -i clusters/<name>/inventory.yml -b -m shell \
      -a "sed -i 's/^safe_to_bootstrap: 0/safe_to_bootstrap: 1/' /var/lib/mysql/grastate.dat"
    ansible-playbook playbooks/bootstrap.yml -i clusters/<name>/inventory.yml \
-     -e @clusters/<name>/cluster.yml -e bootstrap_node=<node> -e confirm=yes
-   ```
+     -e @clusters/<name>/cluster.yml -e bootstrap_node=<node> -e confirm=yes \
+     -e bootstrap_confirm_all_down=true
+   # (Flaga bootstrap_confirm_all_down=true jest wymagana przez Audit#2, gdy pozostałe węzły
+   # są nieosiągalne po SSH; automat make cluster-recover przekazuje ją zawsze).
 5. **Dołącz pozostałe:** `make cluster-join CLUSTER=<name>`.
 6. **Odtwórz warstwy zależne.** `cluster-join` przywraca węzły do Galery, ale NIE do
    ProxySQL ani PMM. Po recovery uruchom `make cluster-proxysql CLUSTER=<name>` i
@@ -77,6 +162,9 @@ odzyskane z journala po nieczystym zamknięciu).
 - ISC-30: Split-brain nie powstaje — nigdy nie bootstrapuj dwóch węzłów jako niezależne Primary
 - ISC-65: Drugi bootstrap przy istniejącym Primary jest blokowany
 - `bootstrap.yml` odpytuje wszystkie osiągalne węzły i odmawia startu, jeśli którykolwiek już raportuje `Primary`.
+- Audit#2: Nieosiągalne węzły (`galera_state_unreachable`) wymagają jawnego `-e bootstrap_confirm_all_down=true` po uprzednim fencingu out-of-band.
+- Fail-closed: Węzły w stanie nieznanym (`galera_state_unknown`) bezwzględnie blokują bootstrap i cold recovery — żadna flaga nie znosi tej blokady.
+- Brak redukcji topologii bez arbitra: Sam ADR nie pozwala na stałą pracę w topologii 2-węzłowej bez `garbd`; wymagane jest odtworzenie 3 węzłów.
 
 ## Weryfikacja po recovery
 

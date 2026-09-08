@@ -42,14 +42,30 @@ def write_candidate(root: Path) -> Path:
     return path
 
 
-def write_cluster(root: Path, name: str, lock_file: str | None) -> None:
+def write_cluster(root: Path, name: str, lock_file: str | None, rocky_linux_major: int | None = None) -> Path:
     cluster_dir = root / "clusters" / name
     cluster_dir.mkdir(parents=True, exist_ok=True)
     body: dict = {"cluster": {"name": name}}
+    if rocky_linux_major is not None:
+        body["platform"] = {"rocky_linux_major": rocky_linux_major}
     if lock_file is not None:
         body["versions"] = {"lock_file": lock_file}
-    (cluster_dir / "cluster.yml").write_text(yaml.safe_dump(body), encoding="utf-8")
+    path = cluster_dir / "cluster.yml"
+    path.write_text(yaml.safe_dump(body), encoding="utf-8")
+    return path
 
+
+def write_platform(root: Path, name: str, lock_file: str | None, rocky_linux_major: int | None = None) -> Path:
+    platform_dir = root / "platform" / name
+    platform_dir.mkdir(parents=True, exist_ok=True)
+    body: dict = {"platform": {"name": name}}
+    if rocky_linux_major is not None:
+        body["platform"]["rocky_linux_major"] = rocky_linux_major
+    if lock_file is not None:
+        body["versions"] = {"lock_file": lock_file}
+    path = platform_dir / "platform.yml"
+    path.write_text(yaml.safe_dump(body), encoding="utf-8")
+    return path
 
 class LockfileStrictnessTests(unittest.TestCase):
     def setUp(self):
@@ -116,6 +132,88 @@ class LockfileStrictnessTests(unittest.TestCase):
             validator.referenced_lockfiles(self.root),
         )
 
+
+
+class LockfileRockyAgreementTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="lockfile-rocky-")
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        (self.root / "versions").mkdir(parents=True, exist_ok=True)
+        self.lock_el9 = self.root / "versions" / "versions-el9.lock.yml"
+        el9_content = yaml.safe_load((REPO / "versions" / "versions.lock.yml").read_text(encoding="utf-8"))
+        self.lock_el9.write_text("# Status: LOCKED\n" + yaml.safe_dump(el9_content), encoding="utf-8")
+        self.lock_el10 = self.root / "versions" / "versions-el10.lock.yml"
+        el10_content = yaml.safe_load((REPO / "versions" / "versions-el10.lock.yml").read_text(encoding="utf-8"))
+        self.lock_el10.write_text("# Status: LOCKED\n" + yaml.safe_dump(el10_content), encoding="utf-8")
+
+    def test_cluster_rocky_major_agreement_passes(self):
+        write_cluster(self.root, "c9", "versions/versions-el9.lock.yml", rocky_linux_major=9)
+        referenced = validator.referenced_lockfiles(self.root)
+        errs = validator.validate(self.lock_el9, referenced, repo_root=self.root)
+        self.assertEqual(errs, [])
+
+    def test_cluster_rocky_major_mismatch_fails(self):
+        # Klaster deklaruje Rocky 10, ale wskazuje lockfile EL9
+        write_cluster(self.root, "mismatch-cluster", "versions/versions-el9.lock.yml", rocky_linux_major=10)
+        referenced = validator.referenced_lockfiles(self.root)
+        errs = validator.validate(self.lock_el9, referenced, repo_root=self.root)
+        self.assertTrue(
+            any("platform.rocky_linux_major (10) nie zgadza sie z rocky_linux.major (9)" in e for e in errs),
+            f"Nie wykryto bledu niezgodnosci rocky_linux_major: {errs}",
+        )
+
+    def test_platform_rocky_major_agreement_passes(self):
+        write_platform(self.root, "p10", "versions/versions-el10.lock.yml", rocky_linux_major=10)
+        referenced = validator.referenced_lockfiles(self.root)
+        errs = validator.validate(self.lock_el10, referenced, repo_root=self.root)
+        self.assertEqual(errs, [])
+
+    def test_platform_rocky_major_mismatch_fails(self):
+        # Platforma deklaruje Rocky 9, ale wskazuje lockfile EL10
+        write_platform(self.root, "mismatch-plat", "versions/versions-el10.lock.yml", rocky_linux_major=9)
+        referenced = validator.referenced_lockfiles(self.root)
+        errs = validator.validate(self.lock_el10, referenced, repo_root=self.root)
+        self.assertTrue(
+            any("platform.rocky_linux_major (9) nie zgadza sie z rocky_linux.major (10)" in e for e in errs),
+            f"Nie wykryto bledu niezgodnosci rocky_linux_major: {errs}",
+        )
+
+    def test_referenced_lockfiles_discovers_platform(self):
+        write_platform(self.root, "plat", "versions/versions-el10.lock.yml", rocky_linux_major=10)
+        referenced = validator.referenced_lockfiles(self.root)
+        self.assertIn(self.lock_el10.resolve(), referenced)
+
+    def test_validate_declaration_reports_mismatch(self):
+        c_path = write_cluster(self.root, "bad-cluster", "versions/versions-el9.lock.yml", rocky_linux_major=10)
+        errs = validator.validate_declaration(c_path, repo_root=self.root)
+        self.assertTrue(
+            any("nie zgadza sie z rocky_linux.major" in e for e in errs),
+            f"Nie wykryto bledu niezgodnosci w validate_declaration: {errs}",
+        )
+
+    def test_validate_declaration_passes_when_matching(self):
+        c_path = write_cluster(self.root, "good-cluster", "versions/versions-el9.lock.yml", rocky_linux_major=9)
+        errs = validator.validate_declaration(c_path, repo_root=self.root)
+        self.assertEqual(errs, [])
+
+    def test_validate_declaration_fails_when_lock_file_missing(self):
+        c_path = write_cluster(self.root, "no-lock-cluster", None, rocky_linux_major=9)
+        errs = validator.validate_declaration(c_path, repo_root=self.root)
+        self.assertTrue(
+            any("brak versions.lock_file" in e for e in errs),
+            f"Nie zgloszono bledu braku versions.lock_file: {errs}",
+        )
+
+    def test_validate_declaration_enforces_full_rigour_on_candidate(self):
+        write_candidate(self.root)
+        c_path = write_cluster(self.root, "cand-cluster", "versions/candidate.lock.yml", rocky_linux_major=9)
+        errs = validator.validate_declaration(c_path, repo_root=self.root)
+        # Jawne wskazanie w deklaracji musi wymusic rygor pelny (ISC-63 placeholdery)
+        self.assertTrue(
+            any("to-confirm-f0" in e for e in errs),
+            f"Kandydat nie zostal objety pelnym rygorem: {errs}",
+        )
 
 if __name__ == "__main__":
     unittest.main()

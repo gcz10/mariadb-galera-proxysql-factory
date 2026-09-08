@@ -163,7 +163,11 @@ pustej liście host usług może być zewnętrzny i zachowany poza tym inventory
 - `mariadb_tuning.gcache_size` — bufor, z którego wracający węzeł dostaje IST
   zamiast pełnego SST. **Wymagane statycznie** w `cluster.yml` — playbook nie ma
   fallbacku. Sugerowaną wartość policz `tests/validation/calc-gcache.py
-  --write-rate <B/s> --window 30`; pomiar zrob `make lab-gcache-verify`.
+  --write-rate <B/s> --window 30`; pomiar zrób `make lab-gcache-verify CLUSTER=<name>`.
+  Sonda wykonuje syntetyczne zapisy i wymaga `cluster.environment: laboratory`.
+  Tworzy osobną bazę pomiarową i sprząta ją po zakończeniu lub obsługiwanym błędzie;
+  nie używa istniejącej `gcache_meas`. Awaria hosta lub `SIGKILL` może pozostawić
+  bazę `gcache_meas_*` — przed ręcznym usunięciem potwierdź, że pomiar już nie działa.
   Za mała wartość nie psuje działania — kosztuje pełny SST przy każdym powrocie
   węzła i jest odrzucana przez bramkę po budowie;
 

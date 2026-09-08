@@ -88,8 +88,8 @@ def run_command(pattern: str, command: str, timeout: int = 120) -> dict[str, str
     # FAILED niesie wyjscie polecenia tak samo jak SUCCESS — dla `is-enabled`
     # to wlasnie wynik pomiaru ("disabled"), wiec musimy je sparsowac, nie
     # odrzucic. UNREACHABLE wyjscia nie ma: to porazka lacznosci.
-    header = re.compile(r"^(\S+)\s+\|\s+(?:CHANGED|SUCCESS|FAILED)\s+\|\s+rc=\d+\s+>>\s*$")
-    unreachable = re.compile(r"^(\S+)\s+\|\s+UNREACHABLE!")
+    header = re.compile(r"^(\S+)\s+\|\s+(?:CHANGED|SUCCESS|FAILED)\s+\|\s+rc=-?\d+\s+>>\s*$")
+    failed = re.compile(r"^(\S+)\s+\|\s+(UNREACHABLE|FAILED)!")
     for line in result.stdout.splitlines():
         match = header.match(line)
         if match:
@@ -98,13 +98,14 @@ def run_command(pattern: str, command: str, timeout: int = 120) -> dict[str, str
             current_host = match.group(1)
             current_lines = []
             continue
-        gone = unreachable.match(line)
+        gone = failed.match(line)
         if gone:
             if current_host is not None:
                 output[current_host] = "\n".join(current_lines).strip()
                 current_host = None
                 current_lines = []
-            COMMAND_FAILURES.append(f"{gone.group(1)}: nieosiagalny przy '{command}'")
+            reason = "nieosiagalny" if gone.group(2) == "UNREACHABLE" else "blad modulu"
+            COMMAND_FAILURES.append(f"{gone.group(1)}: {reason} przy '{command}'")
             continue
         if current_host is not None:
             current_lines.append(line)
@@ -233,7 +234,19 @@ def reach_targets(groups: dict, owned: tuple[str, ...]) -> tuple[str | None, str
     return first("galera"), first("proxysql"), first("infra")
 
 
+def report(failures: list[str], summary: str = "") -> int:
+    """Report policy and command failures, including on early exits."""
+    everything = failures + COMMAND_FAILURES
+    if everything:
+        for failure in everything:
+            print(f"FAIL: {failure}")
+        return 1
+    print(summary or "PASS: firewalld policy verified")
+    return 0
+
+
 def main() -> int:
+    COMMAND_FAILURES.clear()
     failures: list[str] = []
     owned_hosts = set().union(*(hosts(group) for group in OWNED_GROUPS))
     inventory_hosts = {
@@ -277,9 +290,9 @@ def main() -> int:
     first_galera, first_proxy, infra_host = reach_targets(GROUPS, OWNED_GROUPS)
     reach_reference = first_galera or first_proxy or infra_host
     if reach_reference is None:
-        print("FAIL: inwentarz nie ma zadnego hosta w grupach wlasciciela "
-              f"({', '.join(OWNED_GROUPS)}) — nie ma czego zmierzyc")
-        return 1
+        failures.append("inwentarz nie ma zadnego hosta w grupach wlasciciela "
+                        f"({', '.join(OWNED_GROUPS)}) — nie ma czego zmierzyc")
+        return report(failures)
     controller_ip = source_address(reach_reference)
 
     check(reachable(reach_reference, 22), "controller cannot reach SSH after policy", failures)
@@ -322,9 +335,7 @@ def main() -> int:
     # Zapytania o chain padaja na hostach bez xtables (chain nie istnieje), wiec
     # odpytujemy wylacznie hosty, na ktorych filtr moze w ogole dzialac.
     if xtables_missing:
-        for failure in failures:
-            print(f"FAIL: {failure}")
-        return 1
+        return report(failures)
 
     docker_chain = run_command("infra", "iptables -S ISA-INFRA")
     docker_hook = run_command("infra", "iptables -S DOCKER-USER")
@@ -387,23 +398,12 @@ def main() -> int:
             check(f"{inventory_hosts[host]}:{port}" in bound, f"{host}: Docker port {port} not bound to inventory address", failures)
         check("0.0.0.0:443" not in bound and "[::]:443" not in bound, f"{host}: PMM published on a wildcard address", failures)
 
-    # Hosty, ktorych nie udalo sie odpytac, sa PORAZKA pomiaru: bez tego
-    # nieosiagalny wezel po prostu znikalby z wynikow i sonda konczylaby sie
-    # zielono, nie zmierzywszy jego polityki (fail-open — gorzej niz dawny
-    # RuntimeError, ktory przynajmniej krzyczal).
-    failures.extend(COMMAND_FAILURES)
-
-    if failures:
-        for failure in failures:
-            print(f"FAIL: {failure}")
-        return 1
-
-    print(
+    return report(
+        failures,
         f"PASS: firewalld exact role policy on {len(owned_hosts)} owned hosts "
         f"({OWNED_PATTERN}); unexpected listeners blocked; "
-        "Docker ingress filter and address binding verified"
+        "Docker ingress filter and address binding verified",
     )
-    return 0
 
 
 if __name__ == "__main__":

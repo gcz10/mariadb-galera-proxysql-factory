@@ -134,6 +134,37 @@ class ProbePartialFailureTests(unittest.TestCase):
         self.assertEqual(output, {})
         self.assertEqual(len(module.COMMAND_FAILURES), 1)
 
+    def test_module_failure_does_not_contaminate_previous_host_output(self):
+        module, output = self.run_probe_command(
+            'g1 | SUCCESS | rc=0 >>\nenabled\n'
+            'g2 | FAILED! => {"msg": "module failed"}\n', 2
+        )
+        self.assertEqual(output, {"g1": "enabled"})
+        self.assertTrue(any("g2" in failure for failure in module.COMMAND_FAILURES))
+
+    def test_missing_xtables_still_reports_connectivity_failures(self):
+        module = load_probe(TENANT_INVENTORY, CONFIG)
+        fake = mock.Mock(returncode=4, stdout="g1 | UNREACHABLE! => {}\n", stderr="")
+        with (
+            mock.patch.object(module.subprocess, "run", return_value=fake),
+            mock.patch.object(module, "source_address", return_value="192.0.2.70"),
+            mock.patch.object(module, "reachable", return_value=False),
+            mock.patch("builtins.print") as printed,
+        ):
+            code = module.main()
+        self.assertEqual(code, 1)
+        messages = "\n".join(str(call) for call in printed.call_args_list)
+        self.assertIn("xtables", messages)
+        self.assertIn("g1: nieosiagalny", messages)
+
+    def test_clean_run_passes_with_summary(self):
+        module = load_probe(TENANT_INVENTORY, CONFIG)
+        module.COMMAND_FAILURES.clear()
+        with mock.patch("builtins.print") as printed:
+            code = module.report([], "PASS: wszystko zmierzone")
+        self.assertEqual(code, 0)
+        printed.assert_called_once_with("PASS: wszystko zmierzone")
+
 
 if __name__ == "__main__":
     unittest.main()

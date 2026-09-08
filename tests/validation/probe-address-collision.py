@@ -80,24 +80,30 @@ def hypervisor_address():
 RESERVED_PATH = "clusters/reserved-addresses.yml"
 
 
-def reserved_addresses():
+def reserved_addresses(path: str | Path = RESERVED_PATH):
     """{adres: powod} z rejestru, z rozwinieciem blokow CIDR.
 
     Brak pliku jest BLEDEM, nie cichym pominieciem: sonda bez rejestru
     przepuszcza dokladnie te klase kolizji, dla ktorej rejestr powstal.
     """
-    if not Path(RESERVED_PATH).exists():
+    target_path = Path(path)
+    if not target_path.exists():
         return None
-    data = load_yaml(RESERVED_PATH)
+    data = load_yaml(target_path)
     out = {}
-    for item in data.get("reserved") or []:
-        addr = str(item.get("address", "")).strip()
-        if addr:
-            out[addr] = " ".join(str(item.get("reason", "")).split())
-    for item in data.get("reserved_ranges") or []:
-        cidr = str(item.get("cidr", "")).strip()
+    for idx, item in enumerate(data.get("reserved") or []):
+        if not isinstance(item, dict) or "address" not in item:
+            raise ValueError(f"{target_path}: wpis #{idx} w 'reserved' musi zawierac pole 'address'")
+        addr = str(item["address"]).strip()
+        if not addr:
+            raise ValueError(f"{target_path}: wpis #{idx} w 'reserved' ma puste pole 'address'")
+        out[addr] = " ".join(str(item.get("reason", "")).split())
+    for idx, item in enumerate(data.get("reserved_ranges") or []):
+        if not isinstance(item, dict) or "cidr" not in item:
+            raise ValueError(f"{target_path}: wpis #{idx} w 'reserved_ranges' musi zawierac pole 'cidr'")
+        cidr = str(item["cidr"]).strip()
         if not cidr:
-            continue
+            raise ValueError(f"{target_path}: wpis #{idx} w 'reserved_ranges' ma puste pole 'cidr'")
         reason = " ".join(str(item.get("reason", "")).split())
         for ip in ipaddress.ip_network(cidr, strict=False):
             out.setdefault(str(ip), f"blok {cidr}: {reason}")
@@ -157,7 +163,11 @@ def main():
                 errors.append(f"{name}: wezel {host} ma adres VIP-a {addr} klastra")
 
     # --- 4. Kolizja z rejestrem adresow zajetych POZA repozytorium ---
-    reserved = reserved_addresses()
+    try:
+        reserved = reserved_addresses()
+    except (ValueError, yaml.YAMLError) as exc:
+        print(f"FAIL: blad rejestru {RESERVED_PATH}: {exc}")
+        return 1
     if reserved is None:
         print(f"FAIL: brak {RESERVED_PATH} — sonda bez rejestru nie wykryje kolizji "
               f"z zywym hostem spoza repo, czyli tej klasy bledu, dla ktorej powstala")

@@ -15,7 +15,7 @@
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-selinux-verify lab-tls-expired-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-admin-isolation-verify lab-post-build-gate \
-        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code verify-inventory-tf \
+        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code verify-inventory-tf verify-lockfiles \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify fleet-state \
         platform-validate platform-trust-hosts platform-deploy platform-firewall platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
 
@@ -271,6 +271,7 @@ platform-provision:  ## Utwórz VM warstwy wspolnej (parallelism=1 — równoleg
 platform-validate:  ## Waliduj definicje warstwy wspolnej (schema + invarianty inwentarza + preflight)
 	$(platform_guard)
 	python3 tests/validation/validate-platform.py $(PLATFORM_DIR)/platform.yml platform/schema/platform.schema.json $(PLATFORM_DIR)/inventory.yml
+	python3 tests/validation/validate-lockfile.py --declaration $(PLATFORM_DIR)/platform.yml
 	ansible-playbook playbooks/platform_preflight.yml $(PLATFORM_OPTS)
 
 # Adresy bierzemy z `ansible-inventory` (jak cluster-trust-hosts), a nie z grepa
@@ -495,6 +496,7 @@ cluster-validate:  ## Waliduj konfigurację klastra (schema + invariants invento
 	@# wezlow z inwentarza, a infra-teardown sprzata wylacznie to, co widzi
 	@# `terraform output`. Rozjezd = blad po CONFIRM albo wieczna sierota ZFS.
 	python3 tests/validation/probe-inventory-tf-consistency.py
+	python3 tests/validation/validate-lockfile.py --declaration clusters/$(CLUSTER)/cluster.yml
 	ansible-playbook playbooks/f2_preflight.yml $(CLUSTER_RUN) $(ANSIBLE_OPTS)
 
 cluster-deploy:  ## F2+F3 — instaluj pakiety + konfiguruj (idempotentny converge)
@@ -672,6 +674,9 @@ verify-role-contract:  ## Statyczny guard: katalog w roles/ to rola albo assety,
 # lokalnie; kolizje miedzy klastrami i z VIP-em sa sprawdzane zawsze, takze w CI.
 verify-address-collision:  ## Statyczny guard: adresy wezlow nie kolidują z hypervisorem, innym klastrem ani VIP-em
 	python3 tests/validation/probe-address-collision.py
+
+verify-lockfiles:  ## Statyczny guard: zgodność lockfile'i (ISC-63, dual-platform, rocky_linux_major)
+	python3 tests/validation/validate-lockfile.py
 
 verify-no-secrets-leak:  ## Statyczny guard: brak sekretów w repo i argv procesów
 	bash tests/validation/probe-no-secrets-leak.sh

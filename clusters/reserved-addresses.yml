@@ -86,6 +86,13 @@ reserved:
       Host spoza zarzadzanej floty odpowiadal na aktywny skan ping
       2026-08-29 przed budowa v10; nie wystepuje w inventory PVE.
 
+  - address: "192.168.1.100"
+    reason: >-
+      Zywy host spoza zarzadzanej floty (odpowiada na ping). Wykryty aktywnym
+      skanem puli 10-100 dnia 2026-08-30 przed rotacja na klastry 11.4
+      (orionv13-r10 .30-.33, cassiopeiav12-r9 .40-.43). Nie wystepuje w
+      inventory PVE ani w zadnym najemcy.
+
 # Bloki adresow. Zapis CIDR; kazdy adres w bloku jest zabroniony.
 reserved_ranges:
   - cidr: "192.168.1.180/30"
@@ -96,10 +103,3 @@ reserved_ranges:
       konkurowaly w ARP z wlasnie tworzona maszyna. Caly blok jest zabroniony,
       nie tylko .181 — sasiedztwo tego adresu nie ma dla nas zadnej wartosci,
       a pomylka o jeden kosztuje przerwany provisioning.
-
-  - address: "192.168.1.100"
-    reason: >-
-      Zywy host spoza zarzadzanej floty (odpowiada na ping). Wykryty aktywnym
-      skanem puli 10-100 dnia 2026-08-30 przed rotacja na klastry 11.4
-      (orionv13-r10 .30-.33, cassiopeiav12-r9 .40-.43). Nie wystepuje w
-      inventory PVE ani w zadnym najemcy.
