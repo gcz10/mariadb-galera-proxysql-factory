@@ -312,6 +312,14 @@ def main() -> int:
         if first_proxy:
             check(not reachable(first_proxy, 6070), "ProxySQL metrics reachable outside monitoring CIDRs", failures)
 
+    summary = (
+        f"PASS: firewalld exact role policy on {len(owned_hosts)} owned hosts "
+        f"({OWNED_PATTERN}); unexpected listeners blocked"
+    )
+    # Docker ingress belongs to the platform, not tenants sharing its inventory.
+    if "infra" not in OWNED_GROUPS:
+        return report(failures, summary)
+
     # Filtr ingress Dockera opiera sie na module xt_conntrack (match --ctorigdst).
     # Kernele bez modulow xtables (np. Rocky 10 / 6.12) nie moga go zrealizowac —
     # wtedy zamiast lawiny krypticznych bledow iptables raportujemy jedna,
@@ -400,9 +408,7 @@ def main() -> int:
 
     return report(
         failures,
-        f"PASS: firewalld exact role policy on {len(owned_hosts)} owned hosts "
-        f"({OWNED_PATTERN}); unexpected listeners blocked; "
-        "Docker ingress filter and address binding verified",
+        summary + "; Docker ingress filter and address binding verified",
     )
 
 

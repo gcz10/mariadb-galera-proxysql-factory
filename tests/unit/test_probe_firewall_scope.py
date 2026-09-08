@@ -40,6 +40,7 @@ CONFIG = {
         "administration_cidrs": ["192.0.2.0/24"],
         "database_cluster_cidrs": ["192.0.2.0/24"],
         "monitoring_cidrs": ["192.0.2.70/32"],
+        "application_cidrs": ["192.0.2.0/24"],
     },
 }
 
@@ -86,6 +87,72 @@ class ProbeFirewallScopeTests(unittest.TestCase):
             module.reach_targets(module.GROUPS, module.OWNED_GROUPS),
             (None, None, None),
         )
+
+    def run_main(self, module, broken_docker=False):
+        queried = []
+
+        def command(pattern, command, timeout=120):
+            queried.append(pattern)
+            owned = set().union(*(module.hosts(group) for group in module.OWNED_GROUPS))
+            if command == "firewall-cmd --list-all":
+                return {
+                    host: "public (active)\n  target: default\n  ports:\n  sources:\n"
+                    "  services: dhcpv6-client\n"
+                    + "\n".join("  " + rule for rule in module.expected_rules(host))
+                    for host in owned
+                }
+            if command == "systemctl is-enabled firewalld":
+                return dict.fromkeys(owned, "enabled")
+            if command == "firewall-cmd --get-active-zones":
+                return dict.fromkeys(owned, "public\n  interfaces: eth0")
+            if pattern != "infra":
+                raise AssertionError(f"unexpected target {pattern}: {command}")
+            if command.startswith("find /lib/modules"):
+                return {"i1": "/lib/modules/test/xt_conntrack.ko"}
+            if command == "iptables -S ISA-INFRA":
+                rules = [f"-A ISA-INFRA --ctorigdstport {p} -j DROP"
+                         for p in (80, 443, 9000, 9001, 8025)]
+                if not broken_docker:
+                    rules.append("-A ISA-INFRA -j DROP")
+                return {"i1": "\n".join(rules)}
+            if command == "iptables -S DOCKER-USER":
+                return {"i1": "-A DOCKER-USER --ctorigdst 192.0.2.31 -j ISA-INFRA"}
+            if command == "iptables -S":
+                return {"i1": "-N ISA-INFRA"}
+            if command == "systemctl is-enabled isa-docker-firewall.service":
+                return {"i1": "enabled"}
+            if command.startswith("systemctl show docker.service"):
+                return {"i1": "Requires=isa-docker-firewall.service\nAfter=isa-docker-firewall.service"}
+            if command == "ss -ltnH":
+                return {"i1": "\n".join(f"LISTEN 0 128 192.0.2.31:{p}"
+                                       for p in (80, 443, 9000, 9001, 8025))}
+            raise AssertionError(command)
+
+        with (
+            mock.patch.object(module, "run_command", side_effect=command),
+            mock.patch.object(module, "source_address", return_value="192.0.2.70"),
+            mock.patch.object(module, "reachable", side_effect=lambda host, port: port in (22, 3306, 6033, 443)),
+            mock.patch("builtins.print") as printed,
+        ):
+            code = module.main()
+        return code, "\n".join(str(call) for call in printed.call_args_list), queried
+
+    def test_tenant_main_does_not_query_or_certify_shared_docker_policy(self):
+        module = load_probe(TENANT_INVENTORY, CONFIG)
+        code, output, queried = self.run_main(module, broken_docker=True)
+        self.assertEqual(code, 0, output)
+        self.assertNotIn("infra", queried)
+        self.assertNotIn("Docker ingress filter and address binding verified", output)
+
+    def test_platform_main_measures_docker_and_rejects_missing_drop(self):
+        module = load_probe(PLATFORM_INVENTORY, dict(CONFIG, platform={"name": "probe-platform"}))
+        for broken, expected in ((False, 0), (True, 1)):
+            with self.subTest(broken_docker=broken):
+                code, output, queried = self.run_main(module, broken_docker=broken)
+                self.assertEqual(code, expected, output)
+                self.assertIn("infra", queried)
+                self.assertIn("Docker chain has no final fail-closed rule" if broken
+                              else "Docker ingress filter and address binding verified", output)
 
 
 class ProbePartialFailureTests(unittest.TestCase):
@@ -143,7 +210,7 @@ class ProbePartialFailureTests(unittest.TestCase):
         self.assertTrue(any("g2" in failure for failure in module.COMMAND_FAILURES))
 
     def test_missing_xtables_still_reports_connectivity_failures(self):
-        module = load_probe(TENANT_INVENTORY, CONFIG)
+        module = load_probe(PLATFORM_INVENTORY, dict(CONFIG, platform={"name": "probe-platform"}))
         fake = mock.Mock(returncode=4, stdout="g1 | UNREACHABLE! => {}\n", stderr="")
         with (
             mock.patch.object(module.subprocess, "run", return_value=fake),
