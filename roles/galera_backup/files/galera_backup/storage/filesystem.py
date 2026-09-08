@@ -291,6 +291,26 @@ class FilesystemBackend:
             if child.is_dir() and child.name.startswith(f"galera-{self.cluster_name}-") and not child.name.startswith(".partial-"):
                 metadata = child / "metadata.json"
                 if not metadata.exists():
+                    # Katalog bez metadanych to niedokonczona publikacja: proces
+                    # zginal miedzy wgraniem payloadu a metadanymi. Samo
+                    # `continue` znaczylo "nigdy nie kasuj", wiec takie katalogi
+                    # rosly na udziale bez konca. Ta sama regula co w backendzie
+                    # S3: kasujemy po oknie retencji, wiek liczony z NAJMLODSZEGO
+                    # pliku, zeby nie ruszyc kopii wgrywanej w tej chwili.
+                    mtimes = [
+                        entry.stat().st_mtime
+                        for entry in child.rglob("*")
+                        if entry.is_file()
+                    ]
+                    mtimes.append(child.stat().st_mtime)
+                    if max(mtimes) >= cutoff_ts:
+                        continue
+                    remove_tree_or_raise(
+                        child,
+                        "E_STORAGE",
+                        "abandoned incomplete backup directory",
+                    )
+                    deleted_count += 1
                     continue
                 try:
                     meta = json.loads(metadata.read_text(encoding="utf-8"))

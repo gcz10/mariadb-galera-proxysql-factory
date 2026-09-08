@@ -236,6 +236,46 @@ class GaleraBackupFilesystemsTests(unittest.TestCase):
                 self.assertFalse(old_dir.exists())
                 self.assertTrue(new_dir.exists())
 
+
+    def test_retention_prunes_expired_incomplete_dir_but_spares_inflight(self):
+        """Katalog bez metadata.json byl pomijany NA ZAWSZE i rosl na udziale.
+
+        Parity z backendem S3: niedokonczona publikacja (proces zabity miedzy
+        payloadem a metadanymi) znika po oknie retencji, ale kopia wgrywana
+        w tej chwili — mlodsza niz cutoff — musi przezyc.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            mount_path = Path(td)
+            backend = pipeline.FilesystemBackend(
+                mount_point=mount_path,
+                expected_fstype="nfs4",
+                cluster_name="claude-r10b",
+            )
+            fake_mount = self.make_fake_findmnt_info(str(mount_path))
+
+            cluster_dir = mount_path / "claude-r10b"
+            cluster_dir.mkdir(parents=True)
+            now = datetime.fromtimestamp(1785240000, tz=timezone.utc)
+            stale_ts = now.timestamp() - 30 * 86400
+
+            abandoned = cluster_dir / "galera-claude-r10b-20260601-120000"
+            abandoned.mkdir()
+            payload = abandoned / "backup.tar.enc"
+            payload.write_bytes(b"orphaned-payload")
+            os.utime(payload, (stale_ts, stale_ts))
+            os.utime(abandoned, (stale_ts, stale_ts))
+
+            inflight = cluster_dir / "galera-claude-r10b-20260729-115900"
+            inflight.mkdir()
+            (inflight / "backup.tar.enc").write_bytes(b"uploading-right-now")
+
+            with patch.object(backend, "_get_mount_info", return_value=fake_mount):
+                count = backend.prune(now, retention_days=14)
+
+            self.assertEqual(count, 1)
+            self.assertFalse(abandoned.exists())
+            self.assertTrue(inflight.exists())
+
     def test_retention_delete_failure_is_not_reported_as_success(self):
         with tempfile.TemporaryDirectory() as td:
             mount_path = Path(td)
