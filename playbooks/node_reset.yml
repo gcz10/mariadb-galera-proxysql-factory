@@ -165,5 +165,7 @@
       ansible.builtin.debug:
         msg: >-
           {{ node }}: datadir i konfiguracja tozsamosci usuniete. Wykonaj teraz
-          `make cluster-build CLUSTER={{ cluster.name }} CONFIRM=yes` — wezel
-          dolaczy przez SST od zywego dawcy.
+          `make cluster-node-rejoin CLUSTER={{ cluster.name }} NODE={{ node }}`
+          — wezel dolaczy przez SST od zywego dawcy. NIE `cluster-build`: brama
+          zdrowia na sasiadach zada pelnego rozmiaru klastra, ktorego brakuje
+          wlasnie z powodu tego wezla.
