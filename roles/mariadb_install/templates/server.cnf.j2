@@ -68,6 +68,10 @@ ssl_key = {{ tls_key_path | default('/etc/mysql/tls/server-key.pem') }}
 {% if (tls | default({})).require_secure_transport | default(false) %}
 require_secure_transport = ON
 {% endif %}
+{% else %}
+# Disable automatic TLS as well as explicitly configured certificates.
+# https://mariadb.com/docs/server/security/encryption/data-in-transit-encryption/zero-configuration-ssl
+disable-ssl
 {% endif %}
 
 # === gcache (+ szyfrowanie replikacji Galera gdy tls.mode=full) ===
@@ -83,6 +87,14 @@ require_secure_transport = ON
 wsrep_provider_options = "gcache.size={{ gcache_size }};gcache.page_size={{ (mariadb_tuning | default({})).gcache_page_size | default('128M') }}{% if (tls | default({})).socket_dynamic | default(false) %};socket.dynamic=true{% endif %}{% if _tls_full %};socket.ssl_ca={{ tls_ca_path | default('/etc/mysql/tls/ca.pem') }};socket.ssl_cert={{ tls_cert_path | default('/etc/mysql/tls/server-cert.pem') }};socket.ssl_key={{ tls_key_path | default('/etc/mysql/tls/server-key.pem') }}{% endif %}{% if _wsrep_extra | length > 0 %};{{ _wsrep_extra }}{% endif %}"
 [client]
 socket = /var/lib/mysql/mysql.sock
+{% if not _tls_full %}
+# Serwer bez TLS to za malo: klient 11.4 zada szyfrowania SAM Z SIEBIE i odbija
+# nawet polaczenie po gniezdzie bledem "SSL is required, but the server does not
+# support it". Zmierzone na c14db1 (2026-09-08): domyslny klient FAIL, ten sam
+# klient z --disable-ssl OK. Bez tej linii kazde narzedzie lokalne (sondy,
+# backup, mariadb-check, healthcheck systemd) pada na klastrze bez TLS.
+disable-ssl
+{% endif %}
 
 [sst]
 streamfmt = mbstream

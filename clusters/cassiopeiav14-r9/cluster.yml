@@ -26,10 +26,7 @@ proxysql:
     port: 6033
 
 tls:
-  mode: "full"
-  ca_reference: "pki/c14/ca.pem"
-  certificate_reference: "pki/c14/server-cert.pem"
-  private_key_reference: "pki/c14/server-key.pem"
+  mode: "disabled"
   require_secure_transport: false
 
 network:
