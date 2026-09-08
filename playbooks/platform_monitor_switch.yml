@@ -57,9 +57,17 @@
     # `run_once` + brak `serial`: jedno odczytanie, jedna decyzja, ta sama dla
     # obu wezlow pary. Dokumentacja Ansible: "with run_once, the results are
     # applied to all the hosts" — zarowno wynik `register`, jak i `set_fact`.
+    # Zrodlem prawdy jest tabela RUNTIME, nie staging. Dokumentacja ProxySQL
+    # (main-runtime/configuration-tables, "Runtime tables"): tabele `runtime_*`
+    # "represent the configuration currently in use by the ProxySQL threads",
+    # podczas gdy `global_variables` to warstwa konfiguracyjna, ktora moze byc
+    # zmieniona bez `LOAD ... TO RUNTIME`. Przerwana albo reczna edycja
+    # zostawia staging rozjechany z runtime, a decyzja "kto jest aktywny"
+    # podjeta ze stagingu przelaczylaby pare na konto JUZ uzywane — monitor
+    # zostalby wtedy ze starym haslem i cala flota straciłaby monitoring.
     - name: "Odczytaj aktywna tozsamosc monitora (raz dla calej pary)"  # noqa: run-once[task]
       ansible.builtin.command:
-        argv: "{{ proxysql_admin_cli + ['-e', \"SELECT variable_value FROM global_variables WHERE variable_name='mysql-monitor_username'\"] }}"
+        argv: "{{ proxysql_admin_cli + ['-e', \"SELECT variable_value FROM runtime_global_variables WHERE variable_name='mysql-monitor_username'\"] }}"
       register: monitor_active_raw
       changed_when: false
       run_once: true

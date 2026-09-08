@@ -89,7 +89,6 @@
   become: false
   gather_facts: false
   vars_files:
-    - vars/alert_identity.yml
     - vars/pmm_tls.yml
   module_defaults:
     ansible.builtin.uri:
@@ -107,14 +106,20 @@
     # jest fail-closed dla definicji bez tego pola (schema go wymaga).
     pmm_validate_certs: "{{ (monitoring | default({})).get('pmm', {}).get('validate_certs', true) | bool }}"
     f15_folder_uid: "{{ (monitoring | default({})).get('alerts', {}).get('folder_uid', 'isa-alerts-' ~ cluster_label) }}"
-    # Najemca kasuje wyłącznie własne prefiksy UID. Dla krótkich nazw pozostaje
-    # czytelne `isa-<cluster_label>-`; długie nazwy używają deterministycznego
-    # skrótu z vars/alert_identity.yml. Stary prefiks pozostaje sprzątany po
-    # migracji, aby nie zostawić osieroconych reguł.
-    f15_dereg_pattern: >-
-      {{ '^(' ~ f15_uid_prefix ~ '|' ~ f15_uid_prefix_legacy ~ ')-' }}
     f15_contact_uid: "email-isa-{{ cluster_label }}"
     f15_contact_name: "ISA Email Alerts ({{ cluster_label }})"
+    # Dokladne nazwy, jakie ten najemca rejestruje w PMM (roles/pmm/defaults).
+    # Sluza jako drugie, rownosciowe kryterium obok etykiety `cluster` —
+    # dopasowanie prefiksowe nie odroznia `tenant` od `tenant-2`.
+    pmm_dereg_hosts: >-
+      {{ (groups['galera'] | default([])) + (groups['proxysql'] | default([])) }}
+    pmm_dereg_node_names: >-
+      {{ pmm_dereg_hosts | map('regex_replace', '^', cluster_label ~ '-') | list }}
+    pmm_dereg_service_names: >-
+      {{ pmm_dereg_node_names
+         | product(['-mysql', '-mysql-agent', '-proxysql', '-node-exporter'])
+         | map('join', '')
+         | list }}
 
   tasks:
     - name: "Pomin jesli PMM_ADMIN_PASSWORD lub PMM_SERVER_URL nie jest ustawione"
@@ -151,19 +156,34 @@
       # zgasilaby alerty endpointu dla calej floty — wlasciwym wlascicielem
       # jest platforma, nie "kto odchodzi ostatni".
       #
-      # Wzorzec jest budowany w JEDNYM miejscu (`f15_dereg_pattern` w varsach),
-      # a nie sklejany w wyrazeniu `loop`. Poprzednia wersja skladala nawiasy
-      # warunkowo i produkowala regexp niezbalansowany w OBU wariantach:
-      #   konsument -> ^isa-(n11-galera))-      owner -> ^isa-(fc10-galera)|(shared))-
-      # Zadanie padalo z no_log, wiec komunikat byl ocenzurowany, a jedynym
-      # objawem bylo `failed=1` w PLAY RECAP. Skutek: derejestracja nie kasowala
-      # NICZEGO, a operator niszczyl VM-y przekonany, ze posprzatal — reguly
-      # alertowe zostawaly w Grafanie jako sieroty (zmierzone na n11: 9 sztuk).
+      # Dopasowanie po PREFIKSIE UID bylo dziurawe: `^isa-tenant-` lapie takze
+      # `isa-tenant-2-...`, wiec derejestracja najemcy `tenant` kasowala reguly
+      # sasiada `tenant-2` (odtworzone playbookiem testowym 2026-09-07).
+      # Nazwy najemcow sa dowolnym tekstem, wiec zaden wzorzec prefiksowy tego
+      # nie rozstrzygnie — potrzebne jest dopasowanie DOKLADNE. Reguly nosza
+      # `labels.cluster` (f15_alerts.yml nadaje je kazdej regule i sam po nim
+      # rekoncyliuje), a folder alertow ma UID unikalny per najemca. Oba
+      # kryteria sa rownosciowe, wiec sasiad z dluzsza nazwa nie moze pasowac.
       loop: >-
-        {{ (f15_dereg_rules.json | default([]))
-           | selectattr('uid', 'defined')
-           | selectattr('uid', 'search', f15_dereg_pattern)
-           | list }}
+        {{ ((f15_dereg_rules.json | default([]))
+            | selectattr('uid', 'defined')
+            | selectattr('labels', 'defined')
+            | selectattr('labels.cluster', 'defined')
+            | selectattr('labels.cluster', 'equalto', cluster_label)
+            | list)
+           + ((f15_dereg_rules.json | default([]))
+              | selectattr('uid', 'defined')
+              | rejectattr('labels', 'defined')
+              | selectattr('folderUID', 'defined')
+              | selectattr('folderUID', 'equalto', f15_folder_uid)
+              | list)
+           + ((f15_dereg_rules.json | default([]))
+              | selectattr('uid', 'defined')
+              | selectattr('labels', 'defined')
+              | rejectattr('labels.cluster', 'defined')
+              | selectattr('folderUID', 'defined')
+              | selectattr('folderUID', 'equalto', f15_folder_uid)
+              | list) }}
       loop_control:
         label: "{{ item.uid }}"
       no_log: true
@@ -268,6 +288,12 @@
       register: pmm_dereg_services
       no_log: true
 
+    # Ten sam defekt prefiksu co przy regulach: `^tenant-` lapie `tenant-2-g1-mysql`,
+    # wiec najemca `tenant` wyrejestrowywal uslugi sasiada z tego samego PMM.
+    # Kryteria sa teraz rownosciowe: pole `cluster` nadawane przy rejestracji
+    # (roles/pmm/tasks/agentless_register.yml i agent_register.yml) albo dokladna
+    # nazwa uslugi z inwentarza tego klastra — nazwa dluzsza o kolejny czlon
+    # nalezy do innego najemcy i nie moze przejsc.
     - name: "Wyznacz liste ID uslug nalezacych do klastra"
       ansible.builtin.set_fact:
         pmm_cluster_service_ids: >-
@@ -280,9 +306,22 @@
             ]
             | flatten
             | selectattr('service_name', 'defined')
-            | selectattr('service_name', 'search', '^' ~ cluster_label ~ '-')
+            | selectattr('service_name', 'in', pmm_dereg_service_names)
             | map(attribute='service_id')
             | list
+            | union(
+                [
+                  pmm_dereg_services.json.mysql | default([]),
+                  pmm_dereg_services.json.proxysql | default([]),
+                  pmm_dereg_services.json.external | default([]),
+                  pmm_dereg_services.json.postgresql | default([])
+                ]
+                | flatten
+                | selectattr('cluster', 'defined')
+                | selectattr('cluster', 'equalto', cluster_label)
+                | map(attribute='service_id')
+                | list
+              )
           }}
 
     - name: "Usun uslugi klastra z PMM Inventory (Management API / kaskada)"
@@ -312,6 +351,9 @@
       register: pmm_dereg_nodes
       no_log: true
 
+    # Wezly agentless nosza `custom_labels.cluster`, wezly z lokalnym agentem
+    # rejestruje `pmm-admin config` pod dokladna nazwa `<label>-<host>` — obie
+    # sciezki dopasowujemy rownosciowo, zadna prefiksem.
     - name: "Wyznacz liste ID wezlow nalezacych do klastra"
       ansible.builtin.set_fact:
         pmm_cluster_node_ids: >-
@@ -323,9 +365,21 @@
             ]
             | flatten
             | selectattr('node_name', 'defined')
-            | selectattr('node_name', 'search', '^' ~ cluster_label ~ '-')
+            | selectattr('node_name', 'in', pmm_dereg_node_names)
             | map(attribute='node_id')
             | list
+            | union(
+                [
+                  pmm_dereg_nodes.json.generic | default([]),
+                  pmm_dereg_nodes.json.container | default([]),
+                  pmm_dereg_nodes.json.remote | default([])
+                ]
+                | flatten
+                | selectattr('custom_labels.cluster', 'defined')
+                | selectattr('custom_labels.cluster', 'equalto', cluster_label)
+                | map(attribute='node_id')
+                | list
+              )
           }}
 
     - name: "Usun wezly klastra z PMM Inventory (force=true)"

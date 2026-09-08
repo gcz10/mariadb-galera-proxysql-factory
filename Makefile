@@ -372,15 +372,25 @@ platform-adopt:  ## Przejmij rejestracje PMM zrobione przez bylego ownera (CONFI
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (usuwa wezly z PMM Inventory)"; exit 1)
 	ansible-playbook playbooks/platform_adopt.yml $(PLATFORM_OPTS) -e confirm=yes
 
-# Rotacja globalnego poswiadczenia monitora ProxySQL (P1-5). Wejsciem jest CALA
-# flota, nie pojedynczy CLUSTER=: para `mysql-monitor_username`/`password` jest
-# globalna dla instancji, a konto backendu zaklada kazdy najemca osobno.
+# Rotacja globalnego poswiadczenia monitora ProxySQL (P1-5). Wejsciem sa NAJEMCY
+# ROTOWANEJ PARY, nie kazdy katalog w `clusters/`: para
+# `mysql-monitor_username`/`password` jest globalna dla INSTANCJI ProxySQL, a
+# repo obsluguje wiele warstw wspolnych naraz. Faza `switch` przelacza wylacznie
+# pare wskazana przez PLATFORM=, wiec `contract` puszczony na najemcach INNEJ
+# platformy skasowalby konto, ktorego ich (nieprzelaczony) ProxySQL nadal uzywa
+# — monitoring tamtej floty padlby po cichu.
+# Przynaleznosc czytamy z deklaracji: `cluster.proxysql.endpoint.address`
+# rowny `proxysql.vip.address` rotowanej platformy.
 # Kolejnosc faz JEST kontraktem — zamiana ich miejscami otwiera okno, w ktorym
 # ProxySQL shunuje zdrowe backendy calej floty:
 #   expand   -> na kazdym najemcy powstaje bezczynne konto i loguje sie na kazdym backendzie
 #   switch   -> pojedyncza zmiana pary w ProxySQL + bramka na logu monitora
 #   contract -> dopiero teraz znika konto, ktorego ProxySQL juz nie uzywa
-TENANTS ?= $(filter-out example-cluster,$(notdir $(patsubst %/,%,$(dir $(wildcard clusters/*/cluster.yml)))))
+TENANTS ?= $(shell python3 -c 'import glob, os, yaml; \
+	platform_file = os.path.join("$(PLATFORM_DIR)", "platform.yml"); \
+	endpoint = ((yaml.safe_load(open(platform_file, encoding="utf-8")) or {}).get("proxysql") or {}).get("endpoint", {}).get("address") if os.path.isfile(platform_file) else None; \
+	names = [os.path.basename(os.path.dirname(p)) for p in sorted(glob.glob("clusters/*/cluster.yml")) if (((yaml.safe_load(open(p, encoding="utf-8")) or {}).get("proxysql") or {}).get("endpoint") or {}).get("address") == endpoint]; \
+	print(" ".join(n for n in names if n != "example-cluster") if endpoint else "")')
 
 platform-monitor-rotate:  ## Rotuj globalne haslo monitora ProxySQL w calej flocie (expand->switch->contract; CONFIRM=yes)
 	$(platform_guard)

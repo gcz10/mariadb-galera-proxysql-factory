@@ -21,6 +21,14 @@ make cluster-remove-node CLUSTER=<name> NODE=<old_node> CONFIRM=yes \
   ANSIBLE_OPTS="-e accept_topology_change=yes"
 
 # 3. Przygotuj nowy host (Rocky 9, F2 preflight), dodaj do inventory.yml
+#    Wymiana jest przypadkiem, w ktorym galera.nodes_expected ZOSTAJE na 3:
+#    stan 2-wezlowy jest przejsciowy i konczy sie w kroku 4. Do tego czasu
+#    bramy zdrowia i alert `node-loss` slusznie raportuja brak wezla.
+#    Gdyby dolaczenie wezla zastepczego mialo NIE nastapic, zejscie do 2
+#    wezlow nie jest zwykla edycja pliku: validate-cluster-schema.py odrzuca
+#    `nodes_expected: 2` ("v1 scope requires 3 — 2+garbd/5/multi-DC needs
+#    ADR"), wiec wymaga ADR i arbitra garbd (docs/runbooks/decommission.md,
+#    krok 4).
 
 # 4. Dołącz nowy węzeł (SST mariabackup lub IST w zależności od okna gcache)
 make cluster-join CLUSTER=<name>
