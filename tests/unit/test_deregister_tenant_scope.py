@@ -52,6 +52,16 @@ class _Response:
         self.json = json
 
 
+class _AnsibleLikeEnvironment(jinja2.Environment):
+    """Jinja z permisywnym `getitem`, tak jak srodowisko szablonow Ansible."""
+
+    def getitem(self, obj, argument):
+        try:
+            return super().getitem(obj, argument)
+        except (TypeError, LookupError, jinja2.exceptions.UndefinedError):
+            return self.undefined(obj=obj, name=argument)
+
+
 class DeregisterTenantScopeTests(unittest.TestCase):
     """Sasiad o dluzszej nazwie i warstwa wspolna musza przezyc derejestracje."""
 
@@ -63,7 +73,13 @@ class DeregisterTenantScopeTests(unittest.TestCase):
             for play in cls.doc
             if "usun reguly alertow" in play.get("name", "")
         )
-        cls.env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        # Ansible NIE jest tu goła Jinja: brakujacy klucz posrednii (np. wezel
+        # bez `custom_labels`) daje Undefined, a nie wyjatek, wiec zagniezdzone
+        # `selectattr('custom_labels.cluster', 'defined')` po prostu go odrzuca.
+        # Test ze `StrictUndefined` i domyslnym `getitem` wywalalby sie tam,
+        # gdzie playbook dziala poprawnie — pinowalby artefakt srodowiska
+        # testowego zamiast kontraktu. Odwzorowujemy wiec zachowanie Ansible.
+        cls.env = _AnsibleLikeEnvironment(undefined=jinja2.StrictUndefined)
         cls.env.filters["flatten"] = _flatten
         cls.env.filters["union"] = _union
 

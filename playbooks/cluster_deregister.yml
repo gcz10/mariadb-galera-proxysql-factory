@@ -167,19 +167,11 @@
       loop: >-
         {{ ((f15_dereg_rules.json | default([]))
             | selectattr('uid', 'defined')
-            | selectattr('labels', 'defined')
             | selectattr('labels.cluster', 'defined')
             | selectattr('labels.cluster', 'equalto', cluster_label)
             | list)
            + ((f15_dereg_rules.json | default([]))
               | selectattr('uid', 'defined')
-              | rejectattr('labels', 'defined')
-              | selectattr('folderUID', 'defined')
-              | selectattr('folderUID', 'equalto', f15_folder_uid)
-              | list)
-           + ((f15_dereg_rules.json | default([]))
-              | selectattr('uid', 'defined')
-              | selectattr('labels', 'defined')
               | rejectattr('labels.cluster', 'defined')
               | selectattr('folderUID', 'defined')
               | selectattr('folderUID', 'equalto', f15_folder_uid)
@@ -375,7 +367,6 @@
                   pmm_dereg_nodes.json.remote | default([])
                 ]
                 | flatten
-                | selectattr('custom_labels', 'defined')
                 | selectattr('custom_labels.cluster', 'defined')
                 | selectattr('custom_labels.cluster', 'equalto', cluster_label)
                 | map(attribute='node_id')
