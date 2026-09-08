@@ -39,9 +39,15 @@ class SecretProbeTests(unittest.TestCase):
             self.assertIn(f"{fixture.relative_to(WORKSPACE_ROOT)}:1", result.stdout)
             self.assertIn(f"{fixture.relative_to(WORKSPACE_ROOT)}:2", result.stdout)
             self.assertIn(f"{fixture.relative_to(WORKSPACE_ROOT)}:3", result.stdout)
-            self.assertIn("my_password_1", result.stdout)
-            self.assertIn("AKIA5EXAMPLEKEYX9", result.stdout)
-            self.assertIn("s3cr3tvalue", result.stdout)
+            # Bramka orzekajaca "sekret nie ma prawa wyciec" nie moze go sama
+            # wypisac: ta sonda biegnie w CI, a log CI jest trwalym artefaktem.
+            # Wczesniejszy kontrakt wymagal DOKLADNIE odwrotnie — wartosci w
+            # stdout — wiec kazdy przebieg z prawdziwym znaleziskiem publikowal
+            # sekret. Operator ma plik i numer linii.
+            combined_output = result.stdout + result.stderr
+            self.assertNotIn("my_password_1", combined_output)
+            self.assertNotIn("AKIA5EXAMPLEKEYX9", combined_output)
+            self.assertNotIn("s3cr3tvalue", combined_output)
         finally:
             if fixture is not None:
                 fixture.unlink(missing_ok=True)

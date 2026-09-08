@@ -91,11 +91,16 @@ for name in filter(None, paths):
                 )
             ):
                 continue
-            findings.append(f"{path}:{line_number}:{line.strip()}")
+            # SAM KOMUNIKAT NIE MOZE BYC WYCIEKIEM. Wczesniej dopisywalismy tu
+            # `line.strip()`, wiec wykryty sekret ladowal w logu CI — trwalym
+            # artefakcie widocznym dla kazdego z dostepem do repozytorium, i to
+            # w przebiegu, ktory wlasnie ORZEKA, ze sekret nie ma prawa wyciec.
+            # Operator ma plik i numer linii; tresc czyta u siebie.
+            findings.append(f"{path}:{line_number}:assignment to a secret-like key")
         if private_key.search(line):
             findings.append(f"{path}:{line_number}:private key marker")
-        for m in password_in_argv.finditer(line):
-            findings.append(f"{path}:{line_number}:password passed to shell -p/-W via Jinja (argv leak; use MYSQL_PWD env): {line.strip()}")
+        for _ in password_in_argv.finditer(line):
+            findings.append(f"{path}:{line_number}:password passed to shell -p/-W via Jinja (argv leak; use MYSQL_PWD env)")
 
 for finding in findings:
     print(f"FAIL: ISC-43 — potential secret in {finding}")
@@ -109,7 +114,12 @@ fi
 echo "--- Checking running process argv ---"
 if ps -eo args 2>/dev/null | grep -iE 'ansible.*-e.*password|ansible.*--extra-vars.*pass' | grep -v grep | grep -q .; then
   echo "FAIL: ISC-43 — password detected in running Ansible process argv"
-  ps -eo args | grep -iE 'ansible.*-e.*password|ansible.*--extra-vars.*pass' | grep -v grep | head -5
+  # Drukujemy PID i nazwe procesu, NIGDY argv: to argv wlasnie niesie haslo,
+  # ktore ta bramka wykryla. Operator dojrzy tresc przez `ps -p <pid> -o args`
+  # na swoim terminalu, poza logiem CI.
+  ps -eo pid=,comm=,args= 2>/dev/null \
+    | grep -iE 'ansible.*-e.*password|ansible.*--extra-vars.*pass' \
+    | grep -v grep | head -5 | awk '{print "  podejrzany proces: pid=" $1 " comm=" $2}'
   FAIL=1
 fi
 

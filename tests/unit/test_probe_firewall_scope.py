@@ -88,5 +88,52 @@ class ProbeFirewallScopeTests(unittest.TestCase):
         )
 
 
+class ProbePartialFailureTests(unittest.TestCase):
+    """Jeden potykajacy sie host nie moze skasowac pomiaru calej floty.
+
+    `run_command` rzucalo `RuntimeError` na kazdym niezerowym rc `ansible`.
+    Dwa najczestsze niezerowe rc to nie awaria narzedzia, tylko WYNIK pomiaru
+    albo czesciowa niedostepnosc: `systemctl is-enabled firewalld` zwraca rc=1
+    dokladnie wtedy, gdy firewalld jest wylaczony (czyli w sytuacji, ktora ta
+    sonda ma raportowac), a jeden nieosiagalny wezel zabieral wyniki wszystkich
+    pozostalych.
+    """
+
+    SAMPLE = (
+        "g1 | SUCCESS | rc=0 >>\n"
+        "enabled\n"
+        "g2 | UNREACHABLE! => {\"changed\": false, \"msg\": \"timed out\"}\n"
+        "g3 | FAILED | rc=1 >>\n"
+        "disabled"
+    )
+
+    def run_probe_command(self, stdout, returncode):
+        module = load_probe(TENANT_INVENTORY, CONFIG)
+        module.COMMAND_FAILURES.clear()
+        fake = mock.Mock(returncode=returncode, stdout=stdout, stderr="")
+        with mock.patch.object(module.subprocess, "run", return_value=fake):
+            return module, module.run_command("galera", "systemctl is-enabled firewalld")
+
+    def test_nonzero_rc_still_yields_the_measurement(self):
+        module, output = self.run_probe_command(self.SAMPLE, 2)
+        self.assertEqual(output.get("g1"), "enabled")
+        # rc=1 z `is-enabled` NIESIE wynik: firewalld jest wylaczony. Sonda ma
+        # go zmierzyc i zglosic, a nie wywrocic sie na kodzie wyjscia.
+        self.assertEqual(output.get("g3"), "disabled")
+
+    def test_unreachable_host_is_recorded_as_failure_not_silence(self):
+        module, output = self.run_probe_command(self.SAMPLE, 2)
+        self.assertNotIn("g2", output)
+        self.assertTrue(
+            any("g2" in failure for failure in module.COMMAND_FAILURES),
+            "nieosiagalny host zniknal bez sladu — sonda skonczylaby sie zielono",
+        )
+
+    def test_call_returning_nothing_at_all_is_reported(self):
+        module, output = self.run_probe_command("", 4)
+        self.assertEqual(output, {})
+        self.assertEqual(len(module.COMMAND_FAILURES), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -44,7 +44,25 @@ OWNED_GROUPS = owned_groups(CONFIG)
 OWNED_PATTERN = ":".join(OWNED_GROUPS)
 
 
+# Hosty, ktorych nie udalo sie odpytac. Modul zbiera je tutaj, a `main()`
+# dopisuje do `failures` razem z reszta wynikow.
+COMMAND_FAILURES: list[str] = []
+
+
 def run_command(pattern: str, command: str, timeout: int = 120) -> dict[str, str]:
+    """Uruchom polecenie na hostach i zwroc wyjscie per host.
+
+    NIE PRZERYWA PRZEBIEGU na niezerowym rc. Wczesniej kazdy niezerowy rc
+    `ansible` konczyl sie `RuntimeError`, czyli sonda calej floty umierala na
+    pierwszym potknieciu — a dwa najczestsze potkniecia to normalne wyniki
+    pomiaru, nie awaria narzedzia:
+      * `systemctl is-enabled firewalld` zwraca rc=1, gdy firewalld jest
+        WYLACZONY. To jest dokladnie defekt, ktory ta sonda ma raportowac,
+        a zamiast tego wywracala sie z komunikatem narzedziowym.
+      * jeden nieosiagalny host kasowal wyniki wszystkich pozostalych.
+    Fail-closed nie znaczy tu "rzuc wyjatkiem", tylko "zapisz porazke i policz
+    ja na koncu" — wzorzec `check()` uzywany w calej reszcie tej sondy.
+    """
     result = subprocess.run(
         [
             ANSIBLE,
@@ -62,13 +80,16 @@ def run_command(pattern: str, command: str, timeout: int = 120) -> dict[str, str
         text=True,
         timeout=timeout,
     )
-    if result.returncode != 0:
-        raise RuntimeError(result.stdout + result.stderr)
 
+    failures_before = len(COMMAND_FAILURES)
     output: dict[str, str] = {}
     current_host: str | None = None
     current_lines: list[str] = []
-    header = re.compile(r"^(\S+)\s+\|\s+(?:CHANGED|SUCCESS)\s+\|\s+rc=\d+\s+>>\s*$")
+    # FAILED niesie wyjscie polecenia tak samo jak SUCCESS — dla `is-enabled`
+    # to wlasnie wynik pomiaru ("disabled"), wiec musimy je sparsowac, nie
+    # odrzucic. UNREACHABLE wyjscia nie ma: to porazka lacznosci.
+    header = re.compile(r"^(\S+)\s+\|\s+(?:CHANGED|SUCCESS|FAILED)\s+\|\s+rc=\d+\s+>>\s*$")
+    unreachable = re.compile(r"^(\S+)\s+\|\s+UNREACHABLE!")
     for line in result.stdout.splitlines():
         match = header.match(line)
         if match:
@@ -76,10 +97,29 @@ def run_command(pattern: str, command: str, timeout: int = 120) -> dict[str, str
                 output[current_host] = "\n".join(current_lines).strip()
             current_host = match.group(1)
             current_lines = []
-        elif current_host is not None:
+            continue
+        gone = unreachable.match(line)
+        if gone:
+            if current_host is not None:
+                output[current_host] = "\n".join(current_lines).strip()
+                current_host = None
+                current_lines = []
+            COMMAND_FAILURES.append(f"{gone.group(1)}: nieosiagalny przy '{command}'")
+            continue
+        if current_host is not None:
             current_lines.append(line)
     if current_host is not None:
         output[current_host] = "\n".join(current_lines).strip()
+
+    # Niezerowy rc bez ani jednego rozpoznanego hosta to awaria samego wywolania
+    # (zly wzorzec, brak inwentarza, blad skladni) — wtedy nie ma czego mierzyc.
+    # Licznik jest LOKALNY dla wywolania: gdyby patrzyl na pustke calej listy,
+    # pierwszy nieosiagalny host wyciszylby te diagnostyke do konca przebiegu.
+    if result.returncode != 0 and not output and len(COMMAND_FAILURES) == failures_before:
+        COMMAND_FAILURES.append(
+            f"'{command}' nie zwrocilo wyniku dla zadnego hosta wzorca '{pattern}': "
+            f"{(result.stderr or result.stdout).strip()[:200]}"
+        )
     return output
 
 
@@ -346,6 +386,12 @@ def main() -> int:
             check(f"--ctorigdstport {port} -j DROP" in chain, f"{host}: Docker port {port} has no deny fallback", failures)
             check(f"{inventory_hosts[host]}:{port}" in bound, f"{host}: Docker port {port} not bound to inventory address", failures)
         check("0.0.0.0:443" not in bound and "[::]:443" not in bound, f"{host}: PMM published on a wildcard address", failures)
+
+    # Hosty, ktorych nie udalo sie odpytac, sa PORAZKA pomiaru: bez tego
+    # nieosiagalny wezel po prostu znikalby z wynikow i sonda konczylaby sie
+    # zielono, nie zmierzywszy jego polityki (fail-open — gorzej niz dawny
+    # RuntimeError, ktory przynajmniej krzyczal).
+    failures.extend(COMMAND_FAILURES)
 
     if failures:
         for failure in failures:
