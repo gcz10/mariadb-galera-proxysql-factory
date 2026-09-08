@@ -953,6 +953,9 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 	$(TARGET_ENV) tests/lab/probe-upgrade-plan.py
 	$(TARGET_ENV) tests/lab/probe-patch.py
 	$(TARGET_ENV) tests/lab/probe-drift.py
+# UWAGA 2026-09-08: ta sonda pada na obu najemcach (512M < ~3,7G wymagane), więc
+# cała brama kończy się RC=2. To DECYZJA operatora, nie usterka — nie wypisuj jej
+# stąd i nie dodawaj wyjątku. Powód i warunki zamknięcia: ISA.md, wpisy ISC-68.
 	$(TARGET_ENV) tests/lab/probe-gcache.py
 	$(TARGET_ENV) PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
 	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone"
