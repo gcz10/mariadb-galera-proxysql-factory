@@ -5,7 +5,7 @@
 # galera-rebuild) nie moze startowac domyslnie.
 .DEFAULT_GOAL := help
 
-.PHONY: galera-rebuild cluster-build cluster-recover help cluster-discover cluster-validate cluster-deploy \
+.PHONY: galera-rebuild cluster-build cluster-recover help cluster-discover cluster-validate cluster-deploy cluster-config-identity \
         cluster-bootstrap cluster-health cluster-join cluster-proxysql \
         cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan cluster-upgrade-node \
@@ -507,6 +507,18 @@ cluster-validate:  ## Waliduj konfigurację klastra (schema + invariants invento
 	python3 tests/validation/probe-inventory-tf-consistency.py
 	python3 tests/validation/validate-lockfile.py --declaration clusters/$(CLUSTER)/cluster.yml
 	ansible-playbook playbooks/f2_preflight.yml $(CLUSTER_RUN) $(ANSIBLE_OPTS)
+
+# Wyjscie z zakleszczenia opisanego w ISA 2026-09-08: host ma pakiety i datadir,
+# ale nie ma `server.cnf`, wiec `f2_preflight` odmawia (nie da sie dowiesc
+# tozsamosci bez ryzyka wipe), a `cluster-node-reset` nie wchodzi, bo wymaga
+# zywego dawcy. Ten cel wypycha SAM plik tozsamosci — jeden otagowany task z
+# site.yml, ta sama konfiguracja co pelny converge, zero bootstrapu i zero
+# kasowania danych. Restart NIE nastepuje: handlery zaleza od faktu zbieranego
+# w pre_tasks, ktore tag pomija. Po tym celu normalne `cluster-build` przechodzi.
+cluster-config-identity:  ## Wypchnij sam server.cnf (odblokowuje preflight po utracie pliku tozsamosci)
+	$(cluster_guard)
+	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
+	ansible-playbook playbooks/site.yml $(CLUSTER_RUN) --tags identity $(ANSIBLE_OPTS)
 
 cluster-deploy:  ## F2+F3 — instaluj pakiety + konfiguruj (idempotentny converge)
 	$(cluster_guard)

@@ -95,7 +95,12 @@
       tags: [selinux]
 
   tasks:
+    # Tag `identity`: ten JEDEN task wystarcza, by host z pakietami i datadirem,
+    # ale bez `server.cnf`, odzyskal tozsamosc — patrz ISA 2026-09-08 (bramka
+    # f2_preflight slusznie odmawia bez tego pliku, a wczesniej jedynym wyjsciem
+    # bylo odtworzenie maszyny). Cel: `make cluster-config-identity`.
     - name: "Konfiguruj Galera server.cnf"
+      tags: [identity]
       ansible.builtin.template:
         src: ../roles/mariadb_install/templates/server.cnf.j2
         dest: "{{ mariadb_config_dir }}/server.cnf"
@@ -220,6 +225,7 @@
       ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/mariadb.conf
       changed_when: true
     - name: "Restart MariaDB (systemd, on config change)"
+      tags: [identity]
       ansible.builtin.systemd:
         name: mariadb
         state: restarted
@@ -232,6 +238,7 @@
     # jest warta rewalidacji sciezki restartu. Pozostale 11 bram tej samej klasy
     # (f12_patch x6, f12_rolling_restart x4, site pre-restart x1) korzysta z helpera.
     - name: "Verify MariaDB health after config restart"
+      tags: [identity]
       ansible.builtin.command:
         argv:
           - mariadb
