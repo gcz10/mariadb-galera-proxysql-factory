@@ -6,9 +6,22 @@ Galera's gcache stores recent write-sets so a returning node can rejoin via IST
 
     gcache.size = write_rate_bytes_per_sec × ist_window_minutes × 60
 
-This probe MEASURES the real write rate (a short write workload → wsrep_replicated_bytes
+This probe MEASURES a write rate (a short write workload → wsrep_replicated_bytes
 delta), COMPUTES the required gcache for the target IST window, and verifies the
 DEPLOYED gcache.size (in server.cnf) covers the requirement (and the 128M floor).
+
+WHAT THE NUMBER IS, EXACTLY: a LOWER BOUND, not the cluster's production write
+rate. The workload runs 500 INSERTs, each through a SEPARATE `mariadb` client
+invocation, so most of the wall clock goes to connection setup rather than
+replication. Two consequences, both stated here because the direction matters:
+
+  * the rate is quantised (fixed payload / whole-second ELAPSED), so identical
+    values across clusters are expected and are NOT evidence of a cached read;
+  * an understated rate understates the REQUIRED gcache, so this probe passing
+    is not proof that a busy cluster's gcache is large enough. It proves the
+    deployed size covers at least this floor. Real sizing for a loaded cluster
+    needs `write_rate` taken from production `wsrep_replicated_bytes` over an
+    hour (`tests/validation/calc-gcache.py --write-rate`).
 
 Falsifiable: if the deployed gcache is smaller than what the measured write rate
 requires for the IST window, the probe FAILS (a node down for the window would
