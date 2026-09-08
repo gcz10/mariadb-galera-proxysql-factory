@@ -91,6 +91,15 @@ class TlsMechanismsTests(unittest.TestCase):
         value = value.split("=", 1)[1] if "=" in value else value
         return " ".join(value.split())
 
+    def x509_extension(self, pem, ext_name):
+        out = self.openssl("x509", "-in", str(pem), "-noout", "-text")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        lines = out.stdout.splitlines()
+        for idx, line in enumerate(lines):
+            if ext_name in line and idx + 1 < len(lines):
+                return lines[idx + 1].strip()
+        return ""
+
     def node_cert(self, host):
         return self.dir / f"node-{host}-cert.pem"
 
@@ -254,6 +263,128 @@ class TlsMechanismsTests(unittest.TestCase):
         self.assertEqual(self.cert_count(ca), 1)
         self.assertTrue(self.verify(ca, shared / "server-cert.pem"))
         self.assertFalse(list(shared.glob("node-*-cert.pem")))
+
+    def test_generate_refuses_to_overwrite_existing_ca_without_flag(self):
+        ca_pem_before = (self.dir / "ca.pem").read_bytes()
+        ca_key_before = (self.dir / "ca-key.pem").read_bytes()
+        res = self.run_script("generate.sh", CN, "nlabg1,nlabg2,10.0.0.1,10.0.0.2")
+        self.assertNotEqual(res.returncode, 0, "rerun generate.sh bez flagi ma zakonczyc sie bledem")
+        self.assertIn("juz istnieje", res.stderr)
+        self.assertEqual((self.dir / "ca.pem").read_bytes(), ca_pem_before, "ca.pem nie moze zostac po cichu nadpisany")
+        self.assertEqual((self.dir / "ca-key.pem").read_bytes(), ca_key_before, "ca-key.pem nie moze zostac po cichu nadpisany")
+
+        # REUSE_CA=1 pozwala odnowic lisc pod istniejacym CA
+        res_reuse = self.run_script(
+            "generate.sh", CN, "nlabg1,nlabg2,10.0.0.1,10.0.0.2",
+            env_extra={"REUSE_CA": "1"},
+        )
+        self.assertEqual(res_reuse.returncode, 0, res_reuse.stderr + res_reuse.stdout)
+        self.assertEqual((self.dir / "ca.pem").read_bytes(), ca_pem_before, "REUSE_CA=1 zachowuje CA")
+
+        # FORCE_NEW_CA=1 pozwala celowo zastapic CA
+        res_force = self.run_script(
+            "generate.sh", CN, "nlabg1,nlabg2,10.0.0.1,10.0.0.2",
+            env_extra={"FORCE_NEW_CA": "1"},
+        )
+        self.assertEqual(res_force.returncode, 0, res_force.stderr + res_force.stdout)
+        self.assertNotEqual((self.dir / "ca.pem").read_bytes(), ca_pem_before, "FORCE_NEW_CA=1 generuje nowe CA")
+    def test_rotate_ca_trust_both_emits_ski_and_reissue_emits_matching_akid(self):
+        res = self.rotate("trust-both")
+        self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
+        ca_next = self.dir / "ca-next.pem"
+        ca_ski = self.x509_extension(ca_next, "Subject Key Identifier")
+        self.assertTrue(ca_ski, "ca-next.pem musi miec Subject Key Identifier (RFC 5280)")
+
+        res = self.rotate("reissue")
+        self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
+        server_cert = self.dir / "server-cert.pem"
+        server_akid = self.x509_extension(server_cert, "Authority Key Identifier")
+        server_ski = self.x509_extension(server_cert, "Subject Key Identifier")
+        self.assertTrue(server_akid, "server-cert.pem musi miec Authority Key Identifier")
+        self.assertTrue(server_ski, "server-cert.pem musi miec Subject Key Identifier")
+        self.assertIn(ca_ski, server_akid, "AKID liscia serwera musi wskazywac na SKI ca-next.pem")
+
+    def test_rotate_ca_trust_both_resumability_preserves_ca_next(self):
+        res1 = self.rotate("trust-both")
+        self.assertEqual(res1.returncode, 0, res1.stderr + res1.stdout)
+        ca_next_bytes = (self.dir / "ca-next.pem").read_bytes()
+        ca_next_key_bytes = (self.dir / "ca-next-key.pem").read_bytes()
+
+        # Drugie wywolanie trust-both (wznowienie fazy)
+        res2 = self.rotate("trust-both")
+        self.assertEqual(res2.returncode, 0, res2.stderr + res2.stdout)
+        self.assertEqual(
+            (self.dir / "ca-next.pem").read_bytes(),
+            ca_next_bytes,
+            "wznowienie trust-both nie moze wygenerowac nowego CA (musi zachowac ca-next)",
+        )
+        self.assertEqual(
+            (self.dir / "ca-next-key.pem").read_bytes(),
+            ca_next_key_bytes,
+            "wznowienie trust-both musi zachowac istniejacy klucz ca-next-key",
+        )
+        self.assertEqual(
+            self.cert_count(self.dir / "ca.pem"),
+            2,
+            "ca.pem nadal musi byc bundlem dokladnie dwoch CA",
+        )
+
+    def test_rotate_ca_trust_both_rejects_stale_or_orphaned_ca_next(self):
+        # 1. ca-next istnieje, ale brakuje klucza
+        (self.dir / "ca-next.pem").write_text((self.dir / "ca.pem").read_text())
+        (self.dir / "ca-next-key.pem").unlink(missing_ok=True)
+        res = self.rotate("trust-both")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("brakuje klucza", res.stderr)
+
+        # 2. ca-next jest identyczny z ca.pem (stara/zakonczona rotacja)
+        shutil.copy2(self.dir / "ca.pem", self.dir / "ca-next.pem")
+        shutil.copy2(self.dir / "ca-key.pem", self.dir / "ca-next-key.pem")
+        res_ident = self.rotate("trust-both")
+        self.assertNotEqual(res_ident.returncode, 0)
+        self.assertIn("identyczny", res_ident.stderr)
+
+    def test_rotate_ca_trust_both_refuses_ca_next_lacking_ski_without_force(self):
+        # Generujemy ca-next celowo bez SKI (jak sprzed poprawki)
+        csr = self.dir / "legacy-next.csr"
+        subprocess.check_call(
+            [
+                "openssl", "req", "-newkey", "rsa:2048", "-nodes",
+                "-keyout", str(self.dir / "ca-next-key.pem"),
+                "-out", str(csr), "-subj", f"/CN={CN} CA next",
+            ],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        ext = self.dir / "legacy-next.ext"
+        ext.write_text("basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n")
+        subprocess.check_call(
+            [
+                "openssl", "x509", "-req", "-in", str(csr), "-sha256",
+                "-days", "30", "-signkey", str(self.dir / "ca-next-key.pem"),
+                "-out", str(self.dir / "ca-next.pem"), "-extfile", str(ext),
+            ],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        csr.unlink()
+        ext.unlink()
+        self.assertFalse(self.x509_extension(self.dir / "ca-next.pem", "Subject Key Identifier"))
+
+        # trust-both bez FORCE_NEW_CA odmawia cichego rozjazdu z wezlami (fail-closed)
+        res = self.rotate("trust-both")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("subjectKeyIdentifier", res.stderr)
+        self.assertIn("FORCE_NEW_CA=1", res.stderr)
+
+        # trust-both z FORCE_NEW_CA=1 restartuje rotacje ze swiezym CA posiadajacym SKI
+        res_force = self.run_script(
+            "rotate-ca.sh", CN, "nlabg1,nlabg2,10.0.0.1,10.0.0.2", "trust-both",
+            env_extra={"FORCE_NEW_CA": "1"},
+        )
+        self.assertEqual(res_force.returncode, 0, res_force.stderr + res_force.stdout)
+        self.assertTrue(
+            self.x509_extension(self.dir / "ca-next.pem", "Subject Key Identifier"),
+            "FORCE_NEW_CA=1 musi wystawic nowe ca-next z rozszerzeniem SKI",
+        )
 
 
 class TlsDeploymentContractTests(unittest.TestCase):

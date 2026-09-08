@@ -61,19 +61,67 @@ san_list="${san_list#,}"
 case "$PHASE" in
   trust-both)
     [ -r "$DIR/ca.pem" ] || { echo "FAIL: brak $DIR/ca.pem" >&2; exit 1; }
+    if [ "${FORCE_NEW_CA:-0}" = "1" ]; then
+      echo "== FORCE_NEW_CA=1: usuwam stary ca-next przed wygenerowaniem nowego CA"
+      rm -f "$DIR/ca-next.pem" "$DIR/ca-next-key.pem"
+    fi
+    ca_count="$(grep -c 'BEGIN CERTIFICATE' "$DIR/ca.pem" || true)"
     if [ -r "$DIR/ca-next.pem" ]; then
-      echo "== Nowe CA juz istnieje ($DIR/ca-next.pem) — nie nadpisuje"
+      if [ ! -r "$DIR/ca-next-key.pem" ]; then
+        echo "FAIL: $DIR/ca-next.pem istnieje, ale brakuje klucza $DIR/ca-next-key.pem — uszkodzony lub osierocony material" >&2
+        exit 1
+      fi
+      pub_cert="$(openssl x509 -in "$DIR/ca-next.pem" -noout -pubkey 2>/dev/null || true)"
+      pub_key="$(openssl pkey -in "$DIR/ca-next-key.pem" -pubout 2>/dev/null || true)"
+      if [ -z "$pub_cert" ] || [ "$pub_cert" != "$pub_key" ]; then
+        echo "FAIL: klucz $DIR/ca-next-key.pem nie pasuje do certyfikatu $DIR/ca-next.pem" >&2
+        exit 1
+      fi
+      if ! openssl x509 -in "$DIR/ca-next.pem" -checkend 0 -noout 2>/dev/null; then
+        echo "FAIL: $DIR/ca-next.pem wygasl — nie moze byc uzyty jako nowe CA" >&2
+        exit 1
+      fi
+      if [ "$ca_count" -eq 1 ]; then
+        pub_ca="$(openssl x509 -in "$DIR/ca.pem" -noout -pubkey 2>/dev/null || true)"
+        if [ "$pub_cert" = "$pub_ca" ]; then
+          echo "FAIL: $DIR/ca-next.pem jest identyczny z biezacym $DIR/ca.pem (pozostalosc po wczesniejszej rotacji)." >&2
+          echo "      Usun $DIR/ca-next.pem i $DIR/ca-next-key.pem (lub uzyj FORCE_NEW_CA=1), aby rozpoczac nowa rotacje." >&2
+          exit 1
+        fi
+      fi
+      # CA wystawione przed dodaniem subjectKeyIdentifier: fail-closed zamiast
+      # cichego odswiezania w miejscu. Prze-podpisanie w miejscu zmieniloby serial
+      # i waznosc, powodujac cichy rozjazd z wezlami majacymi wdrozone poprzednie wydanie.
+      if ! openssl x509 -in "$DIR/ca-next.pem" -noout -text | grep -q "Subject Key Identifier"; then
+        echo "FAIL: $DIR/ca-next.pem nie posiada rozszerzenia subjectKeyIdentifier (RFC 5280)." >&2
+        echo "      Wymiana CA w miejscu po cichu rozjechalaby sie z wezlami majacymi wdrozone poprzednie wydanie." >&2
+        echo "      Uzyj FORCE_NEW_CA=1 $0 ... trust-both, aby zrestartowac rotacje ze swiezym CA." >&2
+        exit 1
+      fi
+      echo "== Nowe CA juz istnieje ($DIR/ca-next.pem) — nie nadpisuje (wznawianie fazy trust-both)"
     else
       echo "== Tworze NOWE CA: CN=${CN} CA (next)"
       openssl req -x509 -newkey rsa:4096 -sha256 -days 1095 -nodes \
         -keyout "$DIR/ca-next-key.pem" -out "$DIR/ca-next.pem" \
         -subj "/CN=${CN} CA next" \
         -addext "basicConstraints=critical,CA:TRUE" \
-        -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+        -addext "keyUsage=critical,keyCertSign,cRLSign" \
+        -addext "subjectKeyIdentifier=hash" 2>/dev/null
     fi
     # Zachowujemy stare CA osobno: faza retire-old musi wiedziec, co usuwa,
     # a audyt musi umiec odtworzyc, czemu ufal klaster w oknie przejsciowym.
-    [ -r "$DIR/ca-previous.pem" ] || cp "$DIR/ca.pem" "$DIR/ca-previous.pem"
+    if [ "$ca_count" -eq 1 ]; then
+      [ -r "$DIR/ca-previous.pem" ] || cp "$DIR/ca.pem" "$DIR/ca-previous.pem"
+    elif [ "$ca_count" -eq 2 ]; then
+      if [ ! -r "$DIR/ca-previous.pem" ]; then
+        # Jesli ca.pem jest juz bundlem, a brakuje ca-previous.pem,
+        # wyodrebnij pierwsze CA jako ca-previous.pem zamiast kopiowac caly bundle.
+        sed -n '1,/-----END CERTIFICATE-----/p' "$DIR/ca.pem" > "$DIR/ca-previous.pem"
+      fi
+    else
+      echo "FAIL: nieoczekiwana liczba certyfikatow w $DIR/ca.pem (${ca_count}) — oczekiwano 1 lub 2" >&2
+      exit 1
+    fi
     cat "$DIR/ca-previous.pem" "$DIR/ca-next.pem" > "$DIR/ca.pem"
     echo "== ca.pem = bundle (stare + nowe): $(grep -c 'BEGIN CERTIFICATE' "$DIR/ca.pem") certyfikaty"
     ;;
@@ -94,7 +142,8 @@ case "$PHASE" in
     openssl x509 -req -in "$DIR/server.csr" -sha256 -days 1095 \
       -CA "$DIR/ca-next.pem" -CAkey "$DIR/ca-next-key.pem" -CAcreateserial \
       -out "$DIR/server-cert.pem" \
-      -extfile <(printf 'subjectAltName=%s\nextendedKeyUsage=serverAuth,clientAuth\nbasicConstraints=CA:FALSE\n' "$san_list")
+      -extfile <(printf 'subjectAltName=%s\nextendedKeyUsage=serverAuth,clientAuth\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' "$san_list") \
+      2>/dev/null
     rm -f "$DIR/server.csr" "$DIR/ca-next.srl"
     # Liscie PER WEZEL wdrazane sa z tego katalogu (tls_certs.yml wyprowadza
     # node-<host>-cert.pem z inventory_hostname), wiec NOWE CA musi podpisac

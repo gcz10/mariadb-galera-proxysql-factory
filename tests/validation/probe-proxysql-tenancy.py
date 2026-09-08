@@ -310,20 +310,26 @@ def check_tenant_disjointness(clusters, root, violations):
                 )
                 continue
             f7_src = f7_path.read_text(encoding="utf-8")
-            if "mysql_servers_ssl_params" not in f7_src:
+            trust_task_path = root / "playbooks" / "tasks" / "proxysql_ca_trust.yml"
+            ca_sources = [f7_src]
+            if trust_task_path.exists():
+                ca_sources.append(trust_task_path.read_text(encoding="utf-8"))
+            combined_src = "\n".join(ca_sources)
+
+            if "mysql_servers_ssl_params" not in combined_src:
                 violations.append(
                     f"{endpoint}: {len(tls_clusters)} klastry maja tls.mode=full "
-                    f"({', '.join(sorted(tls_clusters))}), a f7_proxysql.yml nie uzywa "
+                    f"({', '.join(sorted(tls_clusters))}), a f7_proxysql.yml / tasks/proxysql_ca_trust.yml nie uzywa "
                     f"mysql_servers_ssl_params — CA idzie do globalnej zmiennej i drugi "
                     f"klaster nadpisze CA pierwszego."
                 )
-            if re.search(r"UPDATE\s+global_variables[^;]*mysql-ssl_p2s_ca", f7_src, re.S | re.I):
+            if re.search(r"UPDATE\s+global_variables[^;]*mysql-ssl_p2s_ca", combined_src, re.S | re.I):
                 violations.append(
                     f"{endpoint}: f7_proxysql.yml nadal zapisuje globalne "
                     f"`mysql-ssl_p2s_ca`. Przy {len(tls_clusters)} klastrach TLS ta zmienna "
                     f"jest pulapka: nadpisuje ja ostatni przebieg."
                 )
-            if "proxysql_cluster_tls_dir" not in f7_src or "cluster.name" not in f7_src:
+            if "proxysql_cluster_tls_dir" not in combined_src or "cluster.name" not in combined_src:
                 violations.append(
                     f"{endpoint}: CA backendu nie ma sciezki per klaster. Wiersze "
                     f"mysql_servers_ssl_params wskazujace na TEN SAM plik kolidowaly by "

@@ -231,10 +231,10 @@
     - name: "Instaluj pakiety docelowej serii (piny z lockfile; ISC-56: allow_downgrade=false)"
       ansible.builtin.dnf:
         name:
-          - "MariaDB-server-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
-          - "MariaDB-client-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
-          - "MariaDB-backup-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
-          - "galera-4-{{ lock.galera_provider_version }}-{{ lock.galera_provider_rpm_release }}"
+          - "{{ lock.mariadb.server_package | default('MariaDB-server') }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+          - "{{ lock.mariadb.client_package | default('MariaDB-client') }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+          - "{{ lock.mariadb.mariadb_backup_package | default('MariaDB-backup') }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+          - "{{ lock.mariadb.galera_provider | default('galera-4') }}-{{ lock.mariadb.galera_provider_version }}-{{ lock.mariadb.galera_provider_rpm_release }}"
         state: present
         disablerepo: "*"
         enablerepo: "mariadb-main"

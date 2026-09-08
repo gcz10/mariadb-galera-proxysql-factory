@@ -1,0 +1,102 @@
+---
+# tasks/proxysql_ca_trust.yml — dystrybucja CA i konfiguracja zaufania backendów w ProxySQL.
+#
+# Zarządza wpisami mysql_servers_ssl_params oraz plikiem CA najemcy pod ścieżką
+# zależną od treści: /etc/mysql/tls/<klaster>/ca-<skrot>.pem.
+#
+# ProxySQL buforuje kontekst TLS pod ścieżką — podmiana pod tą samą nazwą nie
+# tworzy nowego kontekstu (proces ufa CA wczytanemu przy starcie). Skrót z treści
+# gwarantuje, że każde nowe CA to nowa nazwa pliku i nowy kontekst.
+#
+# Wymagane zmienne w kontekście:
+#   tls_full: czy TLS jest włączony (tryb 'full')
+#   proxysql_cluster_tls_dir: katalog docelowy CA (/etc/mysql/tls/{{ cluster.name }})
+#   proxysql_admin_cli: wywołanie CLI admina ProxySQL (mariadb --defaults-extra-file=...)
+#   galera_backends: lista adresów węzłów bazy (hostnames)
+#   cluster.name: nazwa klastra
+#   tls.ca_reference: ścieżka do pliku CA
+
+- name: "TLS: policz skrót CA najemcy (nazwa pliku = treść)"
+  ansible.builtin.set_fact:
+    proxysql_ca_src: "{{ tls.ca_reference if tls.ca_reference.startswith('/') else (playbook_dir | dirname) ~ '/' ~ tls.ca_reference }}"
+    proxysql_ca_basename: "ca-{{ lookup('ansible.builtin.file', tls.ca_reference if tls.ca_reference.startswith('/') else (playbook_dir | dirname) ~ '/' ~ tls.ca_reference) | hash('sha256') | truncate(12, true, '') }}.pem"
+  when: tls_full | bool
+
+- name: "TLS: rozprowadź CA na węzeł ProxySQL (walidacja backendu; gdy tls.mode=full)"
+  ansible.builtin.include_tasks: ../tls_certs.yml
+  vars:
+    tls_file_owner: proxysql
+    tls_deploy_key: false
+    tls_dir: "{{ proxysql_cluster_tls_dir }}"
+  when: tls_full | bool
+
+- name: "TLS: zapisz CA pod nazwą zależną od treści"
+  ansible.builtin.copy:
+    src: "{{ proxysql_ca_src }}"
+    dest: "{{ proxysql_cluster_tls_dir }}/{{ proxysql_ca_basename }}"
+    owner: proxysql
+    group: proxysql
+    mode: "0644"
+  register: proxysql_backend_ca
+  notify: "proxysql-ca-reload"
+  when: tls_full | bool
+
+# Stare odciski tego najemcy są śmieciem, ale kasujemy je DOPIERO po tym, jak
+# nowa ścieżka trafi do konfiguracji — inaczej ProxySQL zostałby bez pliku,
+# do którego wciąż się odwołuje.
+- name: "TLS: znajdź nieaktualne CA tego najemcy"
+  ansible.builtin.find:
+    paths: "{{ proxysql_cluster_tls_dir }}"
+    patterns: "ca-*.pem"
+    excludes: "{{ proxysql_ca_basename }}"
+  register: proxysql_stale_ca
+  when: tls_full | bool
+
+# Lista hostów budowana JAWNĄ PĘTLĄ, nie `regex_replace` z backreferencją.
+# W bloku YAML `|`/`>-` zapis "'\\1'" nie dociera do Jinja jako odwołanie do
+# grupy — renderował się jako '' i cała klauzula wychodziła `IN ('','')`.
+# Skutek był cichy: DELETE nie pasował do niczego, licznik poniżej zawsze
+# zwracał 0, więc zadanie NIGDY nie było idempotentne, a przy drugim
+# przebiegu INSERT wywalał się na UNIQUE constraint.
+- name: "TLS: sprawdź CA per backend (mysql_servers_ssl_params)"
+  ansible.builtin.command:
+    argv: "{{ proxysql_admin_cli }}"
+    stdin: >-
+      SELECT COUNT(*) FROM mysql_servers_ssl_params
+      WHERE ssl_ca='{{ proxysql_cluster_tls_dir }}/{{ proxysql_ca_basename }}'
+      AND hostname IN ({% for b in galera_backends %}'{{ b }}'{% if not loop.last %},{% endif %}{% endfor %});
+  register: proxysql_tls_ca_rows
+  changed_when: false
+  no_log: true
+  when: tls_full | bool
+
+# DELETE jest skopowany do nazw hostów TEGO klastra. Tabela nie ma kolumny
+# hostgroup, więc czyszczenie "wszystkiego" skasowałoby wpisy sąsiada.
+- name: "TLS: ustaw CA per backend (rozłącznie między klastrami)"
+  ansible.builtin.command:
+    argv: "{{ proxysql_admin_cli }}"
+    stdin: |
+      DELETE FROM mysql_servers_ssl_params
+      WHERE hostname IN ({% for b in galera_backends %}'{{ b }}'{% if not loop.last %},{% endif %}{% endfor %});
+      {% for backend in galera_backends %}
+      INSERT INTO mysql_servers_ssl_params (hostname, port, username, ssl_ca)
+      VALUES ('{{ backend }}', 3306, '', '{{ proxysql_cluster_tls_dir }}/{{ proxysql_ca_basename }}');
+      {% endfor %}
+      LOAD MYSQL SERVERS TO RUNTIME;
+      SAVE MYSQL SERVERS TO DISK;
+  no_log: true
+  changed_when: true
+  notify: "proxysql-ca-reload"
+  when:
+    - tls_full | bool
+    - (proxysql_tls_ca_rows.stdout | default('0') | trim | int) != (galera_backends | length)
+
+# Dopiero teraz: konfiguracja wskazuje już nowy plik i została przeładowana.
+- name: "TLS: usuń nieaktualne CA tego najemcy"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ proxysql_stale_ca.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: tls_full | bool

@@ -31,6 +31,7 @@ import unittest
 from pathlib import Path
 
 import yaml
+import jinja2
 
 REPO = Path(__file__).resolve().parents[2]
 PLAYBOOK = REPO / "playbooks" / "cluster_upgrade_node.yml"
@@ -324,6 +325,47 @@ class GcacheReplaceTests(unittest.TestCase):
         self.assertEqual(upgraded.count("gcache.size=2G"), 1)
         self.assertIn("datadir = /var/lib/mysql\n", upgraded)
         self.assertIn("[sst]\nstreamfmt = mbstream\n", upgraded)
+
+
+class PackageResolutionTests(unittest.TestCase):
+    """Pakiety w cluster_upgrade_node.yml muszą rozwiązywać się z lockfile."""
+
+    def setUp(self):
+        upgrade_play = next(
+            play for play in load_plays() if "upgrade pakietów" in play.get("name", "")
+        )
+        self.install_task = None
+        for task in upgrade_play["tasks"]:
+            dnf = task.get("ansible.builtin.dnf")
+            if dnf and "name" in dnf:
+                self.install_task = dnf
+                break
+        self.assertIsNotNone(self.install_task, "brak zadania dnf instalacji pakietów")
+        self.jinja_env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+
+    def test_packages_resolve_for_all_locked_lockfiles(self):
+        """Żaden szablon pakietu nie może odwoływać się do nieistniejącego pola."""
+        lockfiles = [
+            REPO / "versions" / "versions.lock.yml",
+            REPO / "versions" / "versions-el10.lock.yml",
+            REPO / "versions" / "versions-el9-118.lock.yml",
+            REPO / "versions" / "versions-el10-118.lock.yml",
+        ]
+        for lock_path in lockfiles:
+            with self.subTest(lockfile=lock_path.name):
+                lock = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
+                resolved = [
+                    self.jinja_env.from_string(pkg).render(lock=lock)
+                    for pkg in self.install_task["name"]
+                ]
+                mariadb_ver = lock["mariadb"]["version"]
+                mariadb_rel = lock["mariadb"]["rpm_release"]
+                galera_ver = lock["mariadb"]["galera_provider_version"]
+                galera_rel = lock["mariadb"]["galera_provider_rpm_release"]
+                self.assertIn(f"MariaDB-server-{mariadb_ver}-{mariadb_rel}", resolved)
+                self.assertIn(f"MariaDB-client-{mariadb_ver}-{mariadb_rel}", resolved)
+                self.assertIn(f"MariaDB-backup-{mariadb_ver}-{mariadb_rel}", resolved)
+                self.assertIn(f"galera-4-{galera_ver}-{galera_rel}", resolved)
 
 
 @unittest.skipIf(ANSIBLE_PLAYBOOK is None, "ansible-playbook niedostępny w PATH")

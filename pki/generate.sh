@@ -105,6 +105,21 @@ if [ "${REUSE_CA:-0}" = "1" ]; then
     mv "$OUT_DIR/ca.refreshed.pem" "$OUT_DIR/ca.pem"
   fi
   echo "== CA: uzywam istniejacego $OUT_DIR/ca.pem (rotacja liscia)"
+elif [ -e "$OUT_DIR/ca.pem" ] || [ -e "$OUT_DIR/ca-key.pem" ]; then
+  if [ "${FORCE_NEW_CA:-0}" = "1" ]; then
+    echo "== CA: FORCE_NEW_CA=1 — nadpisuje istniejacy CA w $OUT_DIR"
+    openssl req -x509 -newkey rsa:4096 -sha256 -days 1095 -nodes \
+      -keyout "$OUT_DIR/ca-key.pem" -out "$OUT_DIR/ca.pem" \
+      -subj "/CN=${CN} CA" \
+      -addext "basicConstraints=critical,CA:TRUE" \
+      -addext "keyUsage=critical,keyCertSign,cRLSign" \
+      -addext "subjectKeyIdentifier=hash" 2>/dev/null
+  else
+    echo "FAIL: $OUT_DIR/ca.pem lub ca-key.pem juz istnieje. Rerun generate.sh nie moze po cichu nadpisac istniejacego CA." >&2
+    echo "      Uzyj REUSE_CA=1 (wystawienie nowego liscia '${LEAF}' pod istniejacym CA)" >&2
+    echo "      lub FORCE_NEW_CA=1 (celowe wygenerowanie nowego CA i uniewaznienie dotychczasowego zaufania)." >&2
+    exit 1
+  fi
 else
   echo "== CA: CN=${CN} CA"
   openssl req -x509 -newkey rsa:4096 -sha256 -days 1095 -nodes \

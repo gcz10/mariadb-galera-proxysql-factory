@@ -110,37 +110,108 @@
           po={{ (tls_served_after.stdout | trim)[:17] }}...
 
 # ProxySQL trzyma WLASNA kopie naszego CA i weryfikuje nia certyfikaty backendow
-# (f7_proxysql.yml: mysql_servers_ssl_params.ssl_ca = /etc/mysql/tls/<klaster>/ca.pem).
+# (f7_proxysql.yml: mysql_servers_ssl_params.ssl_ca = /etc/mysql/tls/<klaster>/ca-<skrot>.pem).
 # Przy rotacji SAMEGO LISCIA pod tym samym CA ten play jest no-opem, ale przy
 # rotacji CA jest obowiazkowy: gdyby ProxySQL zostal ze starym CA, przestalby
 # weryfikowac backendy prezentujace nowy certyfikat i zSHUNNowalby caly klaster.
 #
-# Reload nie jest potrzebny. Dokumentacja ProxySQL (ssl-support, "Backend
-# certificates renewal") mowi, ze wystarczy podmienic pliki wskazywane przez
-# konfiguracje, pod warunkiem ze operacja jest ATOMOWA — "since ProxySQL will be
-# accessing these paths when creating new backend connections". `ansible.builtin.copy`
-# pisze do pliku tymczasowego i robi rename, wiec ten warunek jest spelniony.
-# (`PROXYSQL RELOAD TLS` dotyczy certyfikatow FRONTENDU, nie zaufania do backendow.)
+# Zaufanie opiera sie na sciezce ze skrotem tresci CA (`ca-<skrot>.pem`) w tabeli
+# `mysql_servers_ssl_params`. ProxySQL buforuje kontekst TLS pod sciezka — podmiana
+# pod ta sama nazwa nie tworzy nowego kontekstu.
+#
+# Procedura jest sekwencyjna (serial: 1, max_fail_percentage: 0):
+# 1. Zapis nowego CA pod sciezka zalezna od tresci i aktualizacja mysql_servers_ssl_params
+#    poprzez wspolne zadania tasks/proxysql_ca_trust.yml.
+# 2. Przeladowanie uslugi ProxySQL (restart) i oczekiwanie na powrot portu admina (6032).
+# 3. Potwierdzenie konwergencji monitora (jeden aktywny writer w runtime_mysql_servers).
+# serial: 1 zapewnia uporzadkowane wykonanie kroczace (aktualizacja i restart
+# jednego wezla ProxySQL naraz zamiast masowego restartu obu instancji).
 - name: "TLS — zaktualizuj zaufanie ProxySQL do backendow"
   hosts: proxysql
   become: true
   gather_facts: false
+  serial: 1
+  max_fail_percentage: 0
+  vars_files:
+    - vars/proxysql_hostgroups.yml
   vars:
+    galera_backends: "{{ groups['galera'] | map('extract', hostvars, 'galera_node_address') | list }}"
     tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
+    proxysql_cluster_tls_dir: "/etc/mysql/tls/{{ cluster.name }}"
+    proxysql_admin_cli:
+      - mariadb
+      - --defaults-extra-file=/etc/proxysql/admin-check.cnf
+      - -h127.0.0.1
+      - -P6032
+      - -uadmin
+      - -N
+      - -B
+  pre_tasks:
+    - name: "Sprawdź profil administracyjny wdrozony przez platforme"
+      ansible.builtin.stat:
+        path: /etc/proxysql/admin-check.cnf
+      register: proxysql_admin_profile
+      when: tls_full | bool
+
+    - name: "Wymagaj tozsamosci administratora z warstwy wspolnej"
+      ansible.builtin.assert:
+        that:
+          - proxysql_admin_profile.stat.exists
+        fail_msg: >-
+          Brak /etc/proxysql/admin-check.cnf — tozsamosc administratora pary
+          ProxySQL wdraza warstwa wspolna, nie najemca. Uruchom:
+          make platform-proxysql
+      when: tls_full | bool
+
+    - name: "Czekaj na admin port ProxySQL (6032)"
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6032
+        timeout: 20
+      when: tls_full | bool
+
   tasks:
-    - name: "Podmień CA klastra na węźle ProxySQL (atomowo)"
-      ansible.builtin.include_tasks: tls_certs.yml
-      vars:
-        tls_file_owner: proxysql
-        tls_deploy_key: false
-        tls_dir: "/etc/mysql/tls/{{ cluster.name }}"
+    - name: "TLS: skonfiguruj zaufanie CA backendu w ProxySQL (mysql_servers_ssl_params)"
+      ansible.builtin.include_tasks: tasks/proxysql_ca_trust.yml
+      when: tls_full | bool
+
+    - name: "TLS: zastosuj przeładowanie zaufania ProxySQL"
+      ansible.builtin.meta: flush_handlers
+      when: tls_full | bool
+
+    - name: "ISC-20: czekaj na konwergencję Galera monitora (jeden aktywny writer)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: "SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id={{ galera_writer_hg }} AND status='ONLINE';"
+      register: writer_count
+      until: writer_count.stdout | trim == '1'
+      retries: 15
+      delay: 3
+      changed_when: false
+      no_log: true
       when: tls_full | bool
 
     - name: "Raport zaufania ProxySQL"
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }}: CA klastra {{ cluster.name }}
-          {{ 'zaktualizowane' if (tls_files_changed | default(false)) | bool else 'bez zmian' }}
+          {{ 'zaktualizowane (' ~ (proxysql_ca_basename | default('')) ~ ')' if ((proxysql_backend_ca.changed | default(false)) or (((proxysql_tls_ca_rows.stdout | default('0')) | trim | int) != (galera_backends | length))) else 'bez zmian' }}
+      when: tls_full | bool
+
+  handlers:
+    - name: "Przeładuj ProxySQL po zmianie CA backendu"
+      ansible.builtin.systemd_service:
+        name: proxysql
+        state: restarted
+      listen: "proxysql-ca-reload"
+
+    - name: "Czekaj na admin port ProxySQL po przeładowaniu"
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6032
+        state: started
+        timeout: 30
+      listen: "proxysql-ca-reload"
 
 # Host aplikacyjny utrzymuje wlasna kopie CA klastra. Samo zrotowanie Galery i
 # ProxySQL zostawia klienta ze starym zaufaniem: po fazie reissue polaczenie
