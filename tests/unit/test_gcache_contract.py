@@ -73,22 +73,47 @@ class GcacheFormulaTests(unittest.TestCase):
         self.assertIn("write_rate_bytes_s * ist_window_min * 60", _spec_src)
         self.assertIn("max(math.ceil(needed / (1024 * 1024)), floor_mb)", _spec_src)
 
-    def test_template_default_has_headroom_over_measured_lab_rates(self):
+    def test_template_default_covers_reference_traffic_not_saturation(self):
         """Default szablonu nie moze siedziec na podlodze formuly.
 
-        Najwyzszy pomiar w tym laboratorium to 83500 B/s. Domyslna wartosc ma
-        pokrywac go z zapasem, zeby budowa wg README nie ginela na ostatniej
-        bramce przy zwyklym wahnieciu obciazenia.
+        ZMIENIONE 2026-09-08. Poprzednia wersja nazywala 83500 B/s "najwyzszym
+        pomiarem w tym laboratorium" i zadala od defaultu dwukrotnego zapasu nad
+        nim. To zdanie przestalo byc prawdziwe: sonda mierzyla wtedy predkosc
+        LOGOWANIA (klient wolany osobno dla kazdego zapisu), a po naprawie ten
+        sam lab daje 2,19 MB/s. Test przechodzil na 26-krotnie zanizonej
+        przeslance, czyli nie mierzyl tego, co obiecywal w nazwie.
+
+        Kontrakt po korekcie: default pokrywa z zapasem RUCH REFERENCYJNY
+        (100 kB/s - rzad wielkosci malego najemcy), a NIE przepustowosc
+        nasycenia. Nasycenia default swiadomie nie pokrywa - to jest wlasnie
+        czerwone ISC-68 z decyzji operatora (ISA.md, 2026-09-08), a nie luka w
+        tym tescie. Sizing pod realny ruch: `calc-gcache.py --write-rate` z
+        produkcyjnego `wsrep_replicated_bytes`.
         """
         match = re.search(r'gcache_size:\s*"(\d+)([MG])"', TEMPLATE.read_text(encoding="utf-8"))
         self.assertIsNotNone(match, "szablon nie deklaruje gcache_size")
         mb = int(match.group(1)) * (1024 if match.group(2) == "G" else 1)
-        highest_measured = 83500
-        required = int(_calc_cli(highest_measured).rstrip("M"))
+        reference_rate = 100_000
+        required = int(_calc_cli(reference_rate).rstrip("M"))
         self.assertGreaterEqual(
             mb, required * 2,
-            f"default {mb}M ma zbyt maly zapas wobec zmierzonych {highest_measured} B/s "
-            f"(wymog {required}M) - brama bedzie loteria",
+            f"default {mb}M ma zbyt maly zapas wobec ruchu referencyjnego "
+            f"{reference_rate} B/s (wymog {required}M) - brama bedzie loteria",
+        )
+
+    def test_saturation_measurement_is_not_covered_by_the_default(self):
+        """Jawny zapis stanu, ktory bramka pokazuje na czerwono.
+
+        Gdyby default kiedys urosl tak, ze pokrywa 2,19 MB/s, ten test padnie i
+        kaze zamknac ISC-68 w ISA zamiast zostawiac wpis o "znanym braku".
+        """
+        match = re.search(r'gcache_size:\s*"(\d+)([MG])"', TEMPLATE.read_text(encoding="utf-8"))
+        mb = int(match.group(1)) * (1024 if match.group(2) == "G" else 1)
+        saturation_required = int(_calc_cli(2_192_400).rstrip("M"))
+        self.assertLess(
+            mb, saturation_required,
+            "default pokrywa juz przepustowosc nasycenia - ISC-68 przestal byc "
+            "znanym brakiem, zaktualizuj ISA.md",
         )
 
 
