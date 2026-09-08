@@ -19,6 +19,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
+import datetime
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -345,28 +350,41 @@ class TlsMechanismsTests(unittest.TestCase):
         self.assertIn("identyczny", res_ident.stderr)
 
     def test_rotate_ca_trust_both_refuses_ca_next_lacking_ski_without_force(self):
-        # Generujemy ca-next celowo bez SKI (jak sprzed poprawki)
-        csr = self.dir / "legacy-next.csr"
-        subprocess.check_call(
-            [
-                "openssl", "req", "-newkey", "rsa:2048", "-nodes",
-                "-keyout", str(self.dir / "ca-next-key.pem"),
-                "-out", str(csr), "-subj", f"/CN={CN} CA next",
-            ],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        # Generujemy ca-next celowo bez SKI (jak sprzed poprawki). `openssl x509
+        # -signkey` nie nadaje sie na te atrape: OpenSSL 3 dokłada SKI do
+        # certyfikatow samopodpisanych z automatu (LibreSSL nie), wiec fixture
+        # rozjezdzal sie miedzy macOS a CI. Budujemy cert wprost, bez rozszerzenia.
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"{CN} CA next")])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        legacy = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=30))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=False, content_commitment=False,
+                    key_encipherment=False, data_encipherment=False,
+                    key_agreement=False, key_cert_sign=True, crl_sign=True,
+                    encipher_only=False, decipher_only=False,
+                ),
+                critical=True,
+            )
+            .sign(key, hashes.SHA256())
         )
-        ext = self.dir / "legacy-next.ext"
-        ext.write_text("basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n")
-        subprocess.check_call(
-            [
-                "openssl", "x509", "-req", "-in", str(csr), "-sha256",
-                "-days", "30", "-signkey", str(self.dir / "ca-next-key.pem"),
-                "-out", str(self.dir / "ca-next.pem"), "-extfile", str(ext),
-            ],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        (self.dir / "ca-next-key.pem").write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.NoEncryption(),
+            )
         )
-        csr.unlink()
-        ext.unlink()
+        (self.dir / "ca-next.pem").write_bytes(legacy.public_bytes(serialization.Encoding.PEM))
         self.assertFalse(self.x509_extension(self.dir / "ca-next.pem", "Subject Key Identifier"))
 
         # trust-both bez FORCE_NEW_CA odmawia cichego rozjazdu z wezlami (fail-closed)
