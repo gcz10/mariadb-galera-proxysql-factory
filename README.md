@@ -353,6 +353,7 @@ istnieje; jego powrotu pilnuje `make verify-proxysql-tenancy`.
 | `make platform-endpoint` | Keepalived VIP — **wylacznie tutaj**, nigdy z klastra |
 | `make platform-monitoring` | rejestracja wezlow i eksporterow w PMM |
 | `make platform-alerts` | reguly `isa-shared-*` |
+| `make platform-firewall-verify` | polityka firewalld warstwy + filtr ingress Dockera (ISC-5) — mierzy je wlasciciel hostow, nie najemca |
 | `make platform-verify` | sonda warstwy jako calosci |
 | `make platform-build` | wszystko powyzej jednym poleceniem |
 | `make platform-adopt CONFIRM=yes` | migracja: przejmuje wpisy PMM po bylym ownerze |

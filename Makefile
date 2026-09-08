@@ -17,7 +17,7 @@
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-admin-isolation-verify lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code verify-inventory-tf verify-lockfiles \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify fleet-state \
-        platform-validate platform-trust-hosts platform-deploy platform-firewall platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
+        platform-validate platform-trust-hosts platform-deploy platform-firewall platform-firewall-verify platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
 
 CLUSTER ?= example-cluster
 ANSIBLE_OPTS ?=
@@ -448,6 +448,14 @@ platform-verify:  ## Sondy warstwy wspolnej: para ProxySQL, VIP, TLS endpointu, 
 	CLUSTER=$(PLATFORM) CLUSTER_CONFIG=$(PLATFORM_DIR)/platform.yml CLUSTER_INVENTORY=$(PLATFORM_DIR)/inventory.yml \
 	  PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-platform.py
 
+# Polityke firewalla hosta mierzy jego WLASCICIEL. Filtr ingress Dockera
+# (ISA-INFRA) stoi na hoscie infra warstwy wspolnej, wiec sonda najemcy go nie
+# dotyka — bez tego celu ISC-5 nie mialaby zadnego wykonawcy.
+platform-firewall-verify:  ## Zweryfikuj politykę firewalld i filtr ingress Dockera warstwy wspólnej (ISC-5)
+	$(platform_guard)
+	CLUSTER=$(PLATFORM) CLUSTER_CONFIG=$(PLATFORM_DIR)/platform.yml CLUSTER_INVENTORY=$(PLATFORM_DIR)/inventory.yml \
+	  python3 tests/lab/probe-firewall.py
+
 # Stan floty NIE jest dokumentem. Recznie wpisywany snapshot ogloszil kiedys
 # jako aktywny stack, ktorego maszyn nie bylo od dwoch dni. Zamiar mieszka
 # w `clusters/<nazwa>/` i `platform/<nazwa>/`, rzeczywistosc na hypervisorze,
@@ -466,6 +474,7 @@ platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→
 	$(MAKE) platform-endpoint PLATFORM=$(PLATFORM)
 	$(MAKE) platform-monitoring PLATFORM=$(PLATFORM)
 	$(MAKE) platform-alerts PLATFORM=$(PLATFORM)
+	$(MAKE) platform-firewall-verify PLATFORM=$(PLATFORM)
 	$(MAKE) platform-verify PLATFORM=$(PLATFORM)
 
 cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap→join→proxysql→monitoring→harden→warunkowe→bramka (CLUSTER+CONFIRM=yes)
