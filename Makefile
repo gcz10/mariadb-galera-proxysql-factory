@@ -513,8 +513,12 @@ cluster-validate:  ## Waliduj konfigurację klastra (schema + invariants invento
 # tozsamosci bez ryzyka wipe), a `cluster-node-reset` nie wchodzi, bo wymaga
 # zywego dawcy. Ten cel wypycha SAM plik tozsamosci — jeden otagowany task z
 # site.yml, ta sama konfiguracja co pelny converge, zero bootstrapu i zero
-# kasowania danych. Restart NIE nastepuje: handlery zaleza od faktu zbieranego
-# w pre_tasks, ktore tag pomija. Po tym celu normalne `cluster-build` przechodzi.
+# kasowania danych. Restart NIE nastepuje, ale NIE dlatego, ze tag pomija
+# handlery — handlery MAJA tag `identity` i zostaja wywolane. Pomija je wlasny
+# `when`: fakt `mariadb_active` rejestruje NIEotagowany task (site.yml:161),
+# wiec przy `--tags identity` register zostaje niezdefiniowany, `default({}).rc`
+# nie istnieje, `default(1)` daje 1 i warunek jest falszywy. Zmierzone:
+# `RUNNING HANDLER ... skipping`. Po tym celu normalne `cluster-build` przechodzi.
 cluster-config-identity:  ## Wypchnij sam server.cnf (odblokowuje preflight po utracie pliku tozsamosci)
 	$(cluster_guard)
 	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
