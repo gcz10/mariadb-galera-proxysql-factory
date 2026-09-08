@@ -104,8 +104,13 @@ class GcacheFormulaTests(unittest.TestCase):
     def test_saturation_measurement_is_not_covered_by_the_default(self):
         """Jawny zapis stanu, ktory bramka pokazuje na czerwono.
 
-        Gdyby default kiedys urosl tak, ze pokrywa 2,19 MB/s, ten test padnie i
-        kaze zamknac ISC-68 w ISA zamiast zostawiac wpis o "znanym braku".
+        2_192_400 to POJEDYNCZA PROBKA nasycenia zmierzona 2026-09-08 na
+        orionv15-r10, nie stala fizyczna - rozrzut miedzy przebiegami siega 3%.
+        Ten test pilnuje ZGODNOSCI Z WPISEM W ISA, nie stanu floty: padnie, gdy
+        default urosnie na tyle, ze pokryje te probke, i kaze wtedy zamknac
+        ISC-68 zamiast trzymac wpis o "znanym braku". Nie wykryje sytuacji
+        odwrotnej - realny ruch najemcy rosnacy ponad ta probke przy nietknietym
+        defaulcie zostawi wpis nieaktualny, a test zielony.
         """
         match = re.search(r'gcache_size:\s*"(\d+)([MG])"', TEMPLATE.read_text(encoding="utf-8"))
         mb = int(match.group(1)) * (1024 if match.group(2) == "G" else 1)
