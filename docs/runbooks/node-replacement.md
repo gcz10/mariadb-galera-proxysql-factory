@@ -48,6 +48,37 @@ make lab-galera-verify CLUSTER=<name>
 # Jeśli poza oknem → SST przez mariadb-backup (ISC-14)
 ```
 
+## Procedura — węzeł Galera po nieudanym buildzie (bez kasowania maszyny)
+
+Nieudany `cluster-build` (np. przerwany SST) zostawia host z pakietami
+i `datadir`, ale bez tożsamości w `server.cnf`. Preflight słusznie odmawia —
+nie zgaduje, czyj jest `datadir` — więc kanoniczna ścieżka nie wstaje:
+
+```
+Datadir istnieje, ale /etc/my.cnf.d/server.cnf nie istnieje albo nie jest
+plikiem. Odmowa: nie da sie dowiesc tozsamosci bez ryzyka wipe.
+```
+
+Do 2026-09-08 jedynym wyjściem był `infra-teardown` + `infra-provision`, czyli
+skasowanie MASZYNY. Teraz kasuje się wyłącznie DANE jednego węzła:
+
+```bash
+# 1. Reset: kasuje datadir i tożsamość TEGO węzła.
+#    Odmawia, gdy: brak innego węzła w grupie (nie ma skąd odtworzyć danych),
+#    dawca nie jest zsynchronizowanym Primary, datadir deklaruje INNY klaster,
+#    albo na hoście nadal działa mariadbd.
+make cluster-node-reset CLUSTER=<name> NODE=<node> CONFIRM=yes
+
+# 2. Powrót: konfiguruje TYLKO ten węzeł i dołącza go przez SST od żywego dawcy.
+#    Pełny `cluster-deploy` tu nie przejdzie — brama zdrowia na sąsiadach żąda
+#    pełnego rozmiaru klastra, którego brakuje właśnie z powodu tego węzła.
+make cluster-node-rejoin CLUSTER=<name> NODE=<node>
+```
+
+Czego ta ścieżka NIE robi: nie kasuje `datadir` należącego do innego klastra.
+Ten przypadek rozstrzyga człowiek, po sprawdzeniu, czyje są dane.
+
+
 ## Procedura — ProxySQL node
 
 ```bash

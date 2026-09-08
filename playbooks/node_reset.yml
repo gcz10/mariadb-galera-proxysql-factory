@@ -1,0 +1,169 @@
+---
+# Powrot wezla, ktorego nie da sie juz doprowadzic kanoniczna sciezka.
+#
+# POWOD ISTNIENIA (zmierzone 2026-09-06 przy odbudowie floty od zera): nieudany
+# `cluster-build` zostawia host z pakietami i `datadir`, ale bez tozsamosci w
+# `server.cnf`. Preflight slusznie odmawia — nie zgaduje, czyj jest datadir —
+# wiec jedynym wyjsciem bylo skasowanie MASZYNY (`infra-teardown` +
+# `infra-provision`). Dla laboratorium to minuta, dla produkcji sciezka bez
+# powrotu. Ten playbook kasuje DANE jednego wezla, nigdy maszyne, i tylko
+# wtedy, gdy da sie DOWIESC, ze te dane istnieja gdzie indziej.
+#
+# Uzycie: make cluster-node-reset CLUSTER=<nazwa> NODE=<host> CONFIRM=yes
+# Po nim: make cluster-build — wezel wraca przez SST od zywego dawcy.
+#
+# CZEGO TU NIE MA, swiadomie: kasowania datadiru nalezacego do INNEGO klastra.
+# To dokladnie ten przypadek, ktory preflight odrzuca, i automat nie ma prawa
+# go rozstrzygac — cudze dane kasuje czlowiek, po sprawdzeniu, czyje sa.
+
+- name: "Reset wezla — bramki bezpieczenstwa"
+  hosts: localhost
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    ansible_become: false
+
+  tasks:
+    - name: "Wymagaj confirm=yes + node= z grupy galera"
+      ansible.builtin.assert:
+        that:
+          - confirm is defined and confirm | bool
+          - node is defined and node | length > 0
+          - node in groups['galera']
+        fail_msg: >-
+          Reset wezla wymaga -e confirm=yes -e node=<host> nalezacego do grupy
+          galera. Operacja kasuje datadir tego wezla.
+
+    - name: "Pozostali czlonkowie klastra"
+      ansible.builtin.set_fact:
+        reset_survivors: "{{ groups['galera'] | reject('equalto', node) | list }}"
+
+    - name: "Reset wymaga zywego dawcy — inaczej nie ma skad odtworzyc danych"
+      ansible.builtin.assert:
+        that:
+          - reset_survivors | length >= 1
+        fail_msg: >-
+          ODRZUCONE: {{ node }} jest jedynym wezlem grupy galera. Kasowanie jego
+          datadiru to utrata danych klastra, nie reset. Sciezka odzyskania to
+          odtworzenie kopii (make cluster-restore-drill), nie ten playbook.
+
+# Dowod, ze dane przetrwaja operacje, bierzemy z INNEGO wezla — resetowany
+# wlasnie dlatego jest resetowany, ze jego stanowi nie ufamy.
+- name: "Reset wezla — dowod, ze dane sa gdzie indziej"
+  hosts: "{{ (groups.get('galera', []) | reject('equalto', node | default('')) | list | first) | default('localhost') }}"
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+
+  tasks:
+    - name: "Odczytaj stan ocalalego wezla"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SHOW STATUS WHERE Variable_name IN ('wsrep_cluster_status','wsrep_local_state','wsrep_cluster_size')"
+      register: reset_donor_state
+      changed_when: false
+      failed_when: false
+
+    - name: "Dawca musi byc w Primary Component i zsynchronizowany"
+      ansible.builtin.assert:
+        that:
+          - reset_donor_state.rc == 0
+          - reset_donor_state.stdout is search('wsrep_cluster_status\tPrimary')
+          - reset_donor_state.stdout is search('wsrep_local_state\t4')
+        fail_msg: >-
+          ODRZUCONE: {{ inventory_hostname }} nie jest zsynchronizowanym wezlem
+          Primary Component, wiec nie ma dowodu, ze dane {{ node }} istnieja
+          gdziekolwiek indziej. Napraw najpierw klaster albo odtworz kopie.
+
+- name: "Reset wezla — kasowanie stanu"
+  hosts: "{{ node | default('localhost') }}"
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    reset_datadir: /var/lib/mysql
+    reset_config: /etc/my.cnf.d/server.cnf
+
+  tasks:
+    - name: "Odczytaj tozsamosc zapisana w konfiguracji resetowanego wezla"
+      ansible.builtin.shell: |
+        set -o pipefail
+        awk -F= '
+          /^[[:space:]]*wsrep_cluster_name[[:space:]]*=/ {
+            v=$2; gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", v); print v; exit
+          }' {{ reset_config }} 2>/dev/null
+      args:
+        executable: /bin/bash
+      register: reset_identity
+      changed_when: false
+      failed_when: false
+
+    # Pusta tozsamosc to wlasnie stan po nieudanym buildzie: nasze pakiety,
+    # nasz datadir, nierozstrzygnieta przynaleznosc. Cudza nazwa to inny
+    # najemca — i tego automat nie kasuje.
+    - name: "Odmow kasowania datadiru nalezacego do innego klastra"
+      ansible.builtin.assert:
+        that:
+          - (reset_identity.stdout | trim) in ['', galera.cluster_name]
+        fail_msg: >-
+          ODRZUCONE: {{ node }} deklaruje klaster
+          '{{ reset_identity.stdout | trim }}', a reset dotyczy
+          '{{ galera.cluster_name }}'. Kasowanie cudzych danych wymaga decyzji
+          czlowieka, nie flagi.
+
+    # `state: stopped` z ignorowanym bledem bylo bledem projektowym: usluga bez
+    # jednostki systemd konczy sie porazka, ale mariadbd uruchomiony recznie
+    # dziala dalej — i kasowalibysmy datadir spod zywego procesu. Dlatego
+    # zatrzymanie jest tylko PROBA, a o kasowaniu decyduje POMIAR procesu.
+    - name: "Zatrzymaj mariadb.service przed kasowaniem danych"
+      ansible.builtin.systemd_service:
+        name: mariadb
+        state: stopped
+      failed_when: false
+
+    - name: "Sprawdz, czy jakikolwiek proces bazy nadal dziala"
+      ansible.builtin.command:
+        argv: [pgrep, -x, mariadbd]
+      register: reset_running
+      changed_when: false
+      failed_when: false
+
+    - name: "Odmow kasowania datadiru pod dzialajacym procesem"
+      ansible.builtin.assert:
+        that:
+          - reset_running.rc != 0
+        fail_msg: >-
+          ODRZUCONE: na {{ node }} nadal dziala mariadbd (PID
+          {{ reset_running.stdout_lines | join(', ') }}). Kasowanie datadiru pod
+          zywym procesem to uszkodzenie danych, nie reset — zatrzymaj baze
+          recznie i sprawdz, dlaczego systemd tego nie zrobil.
+
+    - name: "Skasuj datadir resetowanego wezla"
+      ansible.builtin.file:
+        path: "{{ reset_datadir }}"
+        state: absent
+
+    # Katalog NIE jest tu odtwarzany: `cluster-build` po resecie idzie sciezka
+    # converge bez datadiru, a `site.yml` inicjalizuje go i przywraca etykiete
+    # SELinux. Wczesniejsza wersja tworzyla tu pusty katalog i sama zapalala
+    # bramke preflightu (datadir jest, tozsamosci nie ma).
+
+    # Bez tego preflight nadal widzialby datadir-a-nie-widzial tozsamosci przy
+    # nastepnym przebiegu; usuniecie konfiguracji wraca hosta do stanu, ktory
+    # `cluster-build` umie doprowadzic (converge bez datadiru).
+    - name: "Skasuj konfiguracje tozsamosci"
+      ansible.builtin.file:
+        path: "{{ reset_config }}"
+        state: absent
+
+    - name: "Raport"
+      ansible.builtin.debug:
+        msg: >-
+          {{ node }}: datadir i konfiguracja tozsamosci usuniete. Wykonaj teraz
+          `make cluster-build CLUSTER={{ cluster.name }} CONFIRM=yes` — wezel
+          dolaczy przez SST od zywego dawcy.

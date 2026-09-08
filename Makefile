@@ -9,7 +9,7 @@
         cluster-bootstrap cluster-health cluster-join cluster-proxysql \
         cluster-firewall cluster-firewall-verify cluster-harden cluster-monitoring cluster-monitoring-refresh cluster-backup cluster-backup-configure \
         cluster-restore-drill cluster-rolling-restart cluster-patch cluster-upgrade-plan cluster-upgrade-node \
-        cluster-drift cluster-remove-node-plan cluster-remove-node cluster-alerts \
+        cluster-drift cluster-remove-node-plan cluster-remove-node cluster-node-reset cluster-node-rejoin cluster-alerts \
         lab-galera-verify lab-proxysql-verify lab-endpoint-verify lab-failover-test lab-failover-hard-test cluster-tls-rotate \
         cluster-app-host lab-app-verify lab-app-bench lab-app-degradation-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
@@ -889,6 +889,30 @@ cluster-remove-node:  ## F13 — usuń węzeł Galera (confirm-gated, wymaga NOD
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (destrukcyjne)"; exit 1)
 	@test -n "$(NODE)" || (echo "Ustaw NODE=<nazwa_wezla>"; exit 1)
 	ansible-playbook playbooks/f13_remove_node.yml $(CLUSTER_RUN) -e node=$(NODE) -e confirm=yes $(ANSIBLE_OPTS)
+
+# Powrot po nieudanym buildzie BEZ kasowania maszyny: `cluster-build` odmawia
+# hostowi z datadirem bez tozsamosci (slusznie — nie zgaduje, czyj jest), a do
+# 2026-09-08 jedynym wyjsciem byl `infra-teardown`. Ten cel kasuje DANE jednego
+# wezla i tylko wtedy, gdy inny wezel klastra jest zsynchronizowanym Primary.
+cluster-node-reset:  ## Skasuj datadir jednego wezla po nieudanym buildzie i pozwol mu wrocic przez SST (NODE= CONFIRM=yes)
+	$(cluster_guard)
+	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (kasuje datadir wezla $(NODE))"; exit 1)
+	@test -n "$(NODE)" || (echo "Ustaw NODE=<nazwa_wezla>"; exit 1)
+	ansible-playbook playbooks/node_reset.yml $(CLUSTER_RUN) -e node=$(NODE) -e confirm=yes $(ANSIBLE_OPTS)
+
+# Druga polowa powrotu, zmierzona 2026-09-08: `cluster-deploy` NIE przejdzie,
+# dopoki resetowany wezel nie wroci (brama zdrowia zada `size` rownego liczbie
+# wezlow na SASIADACH), a `f5_join` pomija `groups['galera'][0]` jako wezel
+# zasiewajacy — czyli dokladnie ten host, gdy to on padl. Ten cel konwerguje
+# tylko resetowany wezel i wskazuje SST zywego dawce.
+galera_rejoin_donor = $(shell python3 -c "import yaml; h=list((yaml.safe_load(open('clusters/$(CLUSTER)/inventory.yml'))['all']['children'].get('galera') or {}).get('hosts', {})); print(next((n for n in h if n != '$(NODE)'), ''))" 2>/dev/null)
+cluster-node-rejoin:  ## Skonfiguruj i dolacz JEDEN wezel po resecie (SST od zywego dawcy; NODE=)
+	$(cluster_guard)
+	@: "$${SST_PASSWORD:?Ustaw SST_PASSWORD poza repozytorium}"
+	@test -n "$(NODE)" || (echo "Ustaw NODE=<nazwa_wezla>"; exit 1)
+	@test -n "$(galera_rejoin_donor)" || (echo "ERROR: brak innego wezla galera w clusters/$(CLUSTER)/inventory.yml — nie ma dawcy SST" >&2; exit 1)
+	ansible-playbook playbooks/site.yml $(CLUSTER_RUN) --limit $(NODE) $(ANSIBLE_OPTS)
+	ansible-playbook playbooks/f5_join.yml $(CLUSTER_RUN) --limit $(NODE) -e join_bootstrap_node=$(galera_rejoin_donor) $(ANSIBLE_OPTS)
 
 cluster-alerts:  ## F15 — reguly alertowe ISC-47 (gdy monitoring.enabled)
 	$(cluster_guard)

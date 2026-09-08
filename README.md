@@ -293,6 +293,12 @@ make lab-backup-impact CLUSTER=<nazwa>                  # ISC-39, lab-only
 # Backend, scheduler, sekrety, rotacja i diagnostyka:
 # docs/runbooks/backup.md
 
+# Powrot wezla po nieudanym buildzie BEZ kasowania maszyny: preflight odmawia
+# hostowi z datadirem bez tozsamosci, wiec te dwa cele sa jedyna kanoniczna
+# droga (szczegoly i bramki: docs/runbooks/node-replacement.md)
+make cluster-node-reset CLUSTER=<nazwa> NODE=<wezel> CONFIRM=yes
+make cluster-node-rejoin CLUSTER=<nazwa> NODE=<wezel>
+
 # F12 — patch w serii (canary+bramy), rolling restart, plan major upgrade, drift:
 make cluster-patch CLUSTER=<nazwa>                       # ISC-52/55/57; bez ANSIBLE_OPTS="-e f12_galera_patch_* / f12_proxysql_patch_*" (packages lub command) robi DRY-RUN
 make cluster-rolling-restart CLUSTER=<nazwa>             # ISC-50/51

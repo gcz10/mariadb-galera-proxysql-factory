@@ -130,6 +130,19 @@
       args:
         creates: /var/lib/mysql/mysql
 
+    # ZMIERZONE 2026-09-08 na o15db1: pakiet zaklada `/var/lib/mysql` z etykieta
+    # `mysqld_db_t`, ale katalog ODTWORZONY (mariadb-install-db po skasowaniu
+    # datadiru) dziedziczy `var_lib_t` po `/var/lib`. mariadbd w domenie
+    # `mysqld_t` dostaje wtedy "Permission denied" na wlasnym `ibdata1` i konczy
+    # `Aborting` — zanim SST w ogole ruszy. Na sciezce swiezej budowy defekt byl
+    # niewidoczny, bo katalog zakladal RPM. `restorecon` jest tani i idempotentny.
+    - name: "SELinux — przywroc etykiete datadiru (odtworzony katalog dziedziczy var_lib_t)"
+      ansible.builtin.command:
+        argv: [restorecon, -Rv, /var/lib/mysql]
+      register: mariadb_datadir_restorecon
+      changed_when: mariadb_datadir_restorecon.stdout | length > 0
+      when: ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
     - name: "Włącz mariadb.service na starcie (start przez bootstrap/join, NIE converge)"
       ansible.builtin.systemd:
         name: mariadb
