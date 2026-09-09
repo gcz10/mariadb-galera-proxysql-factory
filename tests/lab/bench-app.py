@@ -106,7 +106,15 @@ def slap(host, port, query, extra=""):
     return (QUERIES / secs if secs > 0 else 0.0), secs
 
 
+# Writer, na ktorym FAKTYCZNIE powstaly tabele tego przebiegu. Sprzatanie musi
+# isc za tym, co bylo tworzone, a nie pytac ProxySQL drugi raz: przy porazce
+# drugiego zapytania cleanup zostalby pominiety i tabele wyciekłyby dokladnie w
+# tej sciezce, ktora ta poprawka zamyka.
+ACTIVE_WRITER = None
+
+
 def main():
+    global ACTIVE_WRITER
     if not APP_PW:
         print("FAIL: brak APP_DB_PASSWORD w srodowisku")
         return 1
@@ -115,6 +123,7 @@ def main():
     if not writer:
         print(f"FAIL: nie udalo sie ustalic aktywnego writera przez VIP {VIP}:{VIP_PORT}")
         return 1
+    ACTIVE_WRITER = writer
 
     # Tabela odczytowa o STALEJ liczbie wierszy. Pierwsza wersja tego pomiaru
     # losowala id w warunku (`WHERE id=FLOOR(1+RAND()*N)`), przez co optymalizator
@@ -220,13 +229,14 @@ def report_foreign_leftovers(writer):
 
 
 if __name__ == "__main__":
-    _writer = None
     try:
-        _writer = active_writer_address()
         sys.exit(main())
     finally:
         # Sprzatanie takze przy bledzie i przerwaniu: to jedyna roznica miedzy
-        # narzedziem pomiarowym a zanieczyszczeniem bazy najemcy.
-        if _writer:
-            cleanup(_writer)
-            report_foreign_leftovers(_writer)
+        # narzedziem pomiarowym a zanieczyszczeniem bazy najemcy. Zrodlem adresu
+        # jest writer ZAPAMIETANY przez main() — drugie pytanie do ProxySQL
+        # mogloby paść albo wskazać inny wezel po failoverze, a sprzatac trzeba
+        # to, co sie utworzylo. `None` znaczy, ze zadne tabele nie powstaly.
+        if ACTIVE_WRITER:
+            cleanup(ACTIVE_WRITER)
+            report_foreign_leftovers(ACTIVE_WRITER)
