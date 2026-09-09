@@ -47,7 +47,7 @@ mariadb_tuning:
   innodb_log_file_size: "128M"
   max_connections: 50
   innodb_flush_log_at_trx_commit: 0
-  gcache_size: "512M"
+  gcache_size: "1G"
 
 availability:
   rto_node_failure: "2m"
