@@ -26,7 +26,9 @@ import base64
 import json
 import os
 import sys
-from urllib.parse import urlencode
+import http.client
+import socket
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from _probe_common import ProbeContext, check, finish, pmm_ssl_context, require_hosts, run_ansible
@@ -36,12 +38,50 @@ IFACE = os.environ.get("PROXYSQL_ENDPOINT_INTERFACE", "eth0")
 SHARED_CA = "/etc/mysql/app/shared/proxysql-ca.pem"
 
 
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Laczy sie POD JEDEN adres, a certyfikat weryfikuje POD INNA nazwe.
+
+    Potrzebne wylacznie dla PMM_SERVER_URL (patrz nizej): ruch idzie tunelem na
+    loopback, ale cert PMM ma SAN-y na nazwe i adres wezla infra, nie na
+    127.0.0.1. Bez tego rozdzielenia jedynym wyjsciem byloby wylaczenie
+    weryfikacji — czyli dokladnie to, czego `pmm_ssl_context` zabrania
+    srodowisku. Tu zaufanie zostaje nietkniete: zmienia sie punkt POLACZENIA,
+    nie to, czyj podpis akceptujemy.
+    """
+
+    def __init__(self, *args, tls_hostname: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._tls_hostname = tls_hostname
+
+    def connect(self):
+        sock = socket.create_connection((self.host, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self._tls_hostname)
+
+
 def pmm_json(base_url: str, user: str, password: str, path: str, pmm_config: dict):
     token = base64.b64encode(f"{user}:{password}".encode()).decode()
-    request = Request(f"{base_url}{path}", headers={"Authorization": f"Basic {token}"})
     context = pmm_ssl_context(pmm_config)
-    with urlopen(request, context=context, timeout=10) as response:
+    declared = urlsplit(pmm_config.get("server_url", "") or base_url)
+    target = urlsplit(base_url)
+    if target.hostname == declared.hostname:
+        request = Request(f"{base_url}{path}", headers={"Authorization": f"Basic {token}"})
+        with urlopen(request, context=context, timeout=10) as response:
+            return json.load(response)
+    conn = _PinnedHTTPSConnection(
+        target.hostname,
+        target.port or 443,
+        context=context,
+        timeout=10,
+        tls_hostname=declared.hostname,
+    )
+    try:
+        conn.request("GET", path, headers={"Authorization": f"Basic {token}"})
+        response = conn.getresponse()
+        if response.status != 200:
+            raise RuntimeError(f"PMM {path} zwrocilo HTTP {response.status}")
         return json.load(response)
+    finally:
+        conn.close()
 
 
 def pmm_query(base_url: str, user: str, password: str, expr: str, pmm_config: dict):
@@ -288,7 +328,17 @@ def main() -> int:
     # wlasnosci nikt juz nie sprzata. Regula jest adresowa, nie po nazwie,
     # bo nazwa jest wlasnie tym, co sie rozjechalo.
     pmm = ctx.config.get("monitoring", {}).get("pmm", {})
-    pmm_url = pmm.get("server_url", "").rstrip("/")
+    # PMM_SERVER_URL nadpisuje adres API TEJ SONDY — tak samo jak `pmm_api_url`
+    # w playbookach. Po co: host kontrolny bywa odciety od LAN (macOS 26 odmawia
+    # dostepu do sieci lokalnej binariom spoza systemu, patrz ISA 2026-09-09),
+    # a wtedy jedyna droga do API jest tunel na loopback.
+    #
+    # CENA, ktora trzeba znac: z override'em sonda przestaje mierzyc REALNA
+    # osiagalnosc PMM z hosta operatora i mierzy tylko tunel. Dlatego kazdy
+    # przebieg z nadpisanym adresem MOWI o tym w wyniku — zielone „PMM OK"
+    # uzyskane przez tunel nie jest tym samym dowodem co bez niego.
+    pmm_url_override = os.environ.get("PMM_SERVER_URL", "").strip().rstrip("/")
+    pmm_url = pmm_url_override or pmm.get("server_url", "").rstrip("/")
     expected_prefix = pmm.get("cluster_name", "")
     # Tylko para ProxySQL: `fcinfra` hostuje sam serwer PMM i figuruje tam jako
     # wezel `pmm-server`, a nie jako `shared-fcinfra` — warstwa go nie rejestruje.
@@ -364,6 +414,15 @@ def main() -> int:
         f"z hosta aplikacyjnego, po jednym wezle PMM na adres; "
         f"zero zaleznosci od klastra Galera"
     )
+    if pmm_url_override:
+        # Wynik MUSI mowic, ze osiagalnosc PMM nie byla mierzona realna droga.
+        # Bez tego zdania zielona sonda przez tunel czyta sie jak dowod, ze host
+        # operatora widzi PMM w sieci — a nie widzi.
+        summary += (
+            f"; UWAGA: PMM odpytany przez PMM_SERVER_URL={pmm_url_override} "
+            f"(zadeklarowany {pmm.get('server_url', '?')} NIE byl testowany — "
+            f"osiagalnosc z hosta kontrolnego pozostaje niezmierzona)"
+        )
     return finish(failures, undetermined, summary)
 
 
