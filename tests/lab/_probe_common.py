@@ -21,12 +21,18 @@ sie na wszystkie.
 """
 from __future__ import annotations
 
+import base64
+import http.client
+import json
 import os
 import re
+import socket
 import ssl
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -54,6 +60,60 @@ def pmm_ssl_context(pmm_config: dict) -> ssl.SSLContext:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     return context
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Laczy sie POD JEDEN adres, a certyfikat weryfikuje POD INNA nazwe."""
+
+    def __init__(self, *args, tls_hostname: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._tls_hostname = tls_hostname
+
+    def connect(self):
+        sock = socket.create_connection((self.host, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self._tls_hostname)
+
+
+def pmm_effective_url(pmm_config: dict) -> tuple[str, str]:
+    """Zwraca (adres do polaczenia, adres zadeklarowany).
+
+    `PMM_SERVER_URL` przestawia PUNKT POLACZENIA sondy — potrzebne, gdy host
+    kontrolny jest odciety od LAN (prywatnosc sieci lokalnej macOS, ISA
+    2026-09-09) i jedyna droga do API jest tunel na loopback. Zaufania to NIE
+    rusza: `pmm_get_json` weryfikuje certyfikat pod nazwa ZADEKLAROWANA.
+    Rozniace sie adresy sa sygnalem dla sondy, ze ma o tym powiedziec w wyniku.
+    """
+    declared = (pmm_config.get("server_url") or "").rstrip("/")
+    override = os.environ.get("PMM_SERVER_URL", "").strip().rstrip("/")
+    return (override or declared), declared
+
+
+def pmm_get_json(connect_url: str, declared_url: str, user: str, password: str,
+                 path: str, pmm_config: dict):
+    """GET do API PMM: polaczenie pod `connect_url`, weryfikacja pod `declared_url`."""
+    token = base64.b64encode(f"{user}:{password}".encode()).decode()
+    context = pmm_ssl_context(pmm_config)
+    target = urlsplit(connect_url)
+    declared = urlsplit(declared_url or connect_url)
+    if target.hostname == declared.hostname:
+        request = Request(f"{connect_url}{path}", headers={"Authorization": f"Basic {token}"})
+        with urlopen(request, context=context, timeout=10) as response:
+            return json.load(response)
+    conn = _PinnedHTTPSConnection(
+        target.hostname,
+        target.port or 443,
+        context=context,
+        timeout=10,
+        tls_hostname=declared.hostname,
+    )
+    try:
+        conn.request("GET", path, headers={"Authorization": f"Basic {token}"})
+        response = conn.getresponse()
+        if response.status != 200:
+            raise RuntimeError(f"PMM {path} zwrocilo HTTP {response.status}")
+        return json.load(response)
+    finally:
+        conn.close()
 
 
 class ProbeContext:

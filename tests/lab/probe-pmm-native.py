@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 """Verify that the lab cluster is registered in PMM's native inventory."""
 
-import base64
-import json
 import os
 import re
 import sys
 import time
 import yaml
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 from alert_identity import alert_uid_prefixes
-from _probe_common import pmm_ssl_context
+from _probe_common import pmm_get_json
 
 PMM_USER = os.environ.get("PMM_ADMIN_USER", "admin")
 PMM_PASSWORD = os.environ.get("PMM_ADMIN_PASSWORD")
@@ -27,7 +24,8 @@ INVENTORY_PATH = os.environ.get(
 with open(INVENTORY_PATH, encoding="utf-8") as inventory_file:
     INVENTORY = yaml.safe_load(inventory_file)
 PMM_CONFIG = CLUSTER_CONFIG["monitoring"]["pmm"]
-PMM_URL = os.environ.get("PMM_SERVER_URL", PMM_CONFIG["server_url"]).rstrip("/")
+PMM_DECLARED_URL = PMM_CONFIG["server_url"].rstrip("/")
+PMM_URL = os.environ.get("PMM_SERVER_URL", PMM_DECLARED_URL).rstrip("/")
 with open(CLUSTER_CONFIG["versions"]["lock_file"], encoding="utf-8") as lock_file:
     VERSION_LOCK = yaml.safe_load(lock_file)
 
@@ -157,11 +155,13 @@ ALL_STATE_METRICS = (
 
 
 def get_json(path):
-    token = base64.b64encode(f"{PMM_USER}:{PMM_PASSWORD}".encode()).decode()
-    request = Request(f"{PMM_URL}{path}", headers={"Authorization": f"Basic {token}"})
-    context = pmm_ssl_context(PMM_CONFIG)
-    with urlopen(request, context=context, timeout=10) as response:
-        return json.load(response)
+    """Polaczenie pod PMM_URL, weryfikacja certu pod adresem ZADEKLAROWANYM.
+
+    Sonda honorowala `PMM_SERVER_URL` juz wczesniej, ale weryfikowala cert pod
+    adresem POLACZENIA — przy tunelu na loopback konczylo sie to wyjatkiem TLS.
+    Rozdzielenie zyje w `_probe_common`, wspolne z `probe-platform.py`.
+    """
+    return pmm_get_json(PMM_URL, PMM_DECLARED_URL, PMM_USER, PMM_PASSWORD, path, PMM_CONFIG)
 
 
 def check(condition, message, failures):

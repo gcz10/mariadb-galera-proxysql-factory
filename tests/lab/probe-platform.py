@@ -22,66 +22,32 @@ Checks:
 
 from __future__ import annotations
 
-import base64
-import json
 import os
 import sys
-import http.client
-import socket
-from urllib.parse import urlencode, urlsplit
-from urllib.request import Request, urlopen
+from urllib.parse import urlencode
 
-from _probe_common import ProbeContext, check, finish, pmm_ssl_context, require_hosts, run_ansible
+from _probe_common import (
+    ProbeContext,
+    check,
+    finish,
+    pmm_get_json,
+    require_hosts,
+    run_ansible,
+)
 
 IFACE = os.environ.get("PROXYSQL_ENDPOINT_INTERFACE", "eth0")
 # Rozprowadza go platform_proxysql.yml — platforma jest wlascicielem CA frontendu.
 SHARED_CA = "/etc/mysql/app/shared/proxysql-ca.pem"
 
 
-class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    """Laczy sie POD JEDEN adres, a certyfikat weryfikuje POD INNA nazwe.
-
-    Potrzebne wylacznie dla PMM_SERVER_URL (patrz nizej): ruch idzie tunelem na
-    loopback, ale cert PMM ma SAN-y na nazwe i adres wezla infra, nie na
-    127.0.0.1. Bez tego rozdzielenia jedynym wyjsciem byloby wylaczenie
-    weryfikacji — czyli dokladnie to, czego `pmm_ssl_context` zabrania
-    srodowisku. Tu zaufanie zostaje nietkniete: zmienia sie punkt POLACZENIA,
-    nie to, czyj podpis akceptujemy.
-    """
-
-    def __init__(self, *args, tls_hostname: str, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._tls_hostname = tls_hostname
-
-    def connect(self):
-        sock = socket.create_connection((self.host, self.port), self.timeout)
-        self.sock = self._context.wrap_socket(sock, server_hostname=self._tls_hostname)
-
-
 def pmm_json(base_url: str, user: str, password: str, path: str, pmm_config: dict):
-    token = base64.b64encode(f"{user}:{password}".encode()).decode()
-    context = pmm_ssl_context(pmm_config)
-    declared = urlsplit(pmm_config.get("server_url", "") or base_url)
-    target = urlsplit(base_url)
-    if target.hostname == declared.hostname:
-        request = Request(f"{base_url}{path}", headers={"Authorization": f"Basic {token}"})
-        with urlopen(request, context=context, timeout=10) as response:
-            return json.load(response)
-    conn = _PinnedHTTPSConnection(
-        target.hostname,
-        target.port or 443,
-        context=context,
-        timeout=10,
-        tls_hostname=declared.hostname,
-    )
-    try:
-        conn.request("GET", path, headers={"Authorization": f"Basic {token}"})
-        response = conn.getresponse()
-        if response.status != 200:
-            raise RuntimeError(f"PMM {path} zwrocilo HTTP {response.status}")
-        return json.load(response)
-    finally:
-        conn.close()
+    """Adres polaczenia bierzemy z wywolania, tozsamosc do weryfikacji z deklaracji.
+
+    Rozdzielenie zyje w `_probe_common.pmm_get_json` — korzysta z niego takze
+    `probe-pmm-native.py`, wiec obejscie tunelowe ma JEDNA implementacje.
+    """
+    declared = (pmm_config.get("server_url") or base_url).rstrip("/")
+    return pmm_get_json(base_url, declared, user, password, path, pmm_config)
 
 
 def pmm_query(base_url: str, user: str, password: str, expr: str, pmm_config: dict):
