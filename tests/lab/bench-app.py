@@ -24,8 +24,10 @@ Wymaga APP_DB_PASSWORD. Parametry: BENCH_QUERIES, BENCH_CONCURRENCY, BENCH_ITERA
 
 import os
 import re
+import secrets
 import subprocess
 import sys
+
 import yaml
 
 CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/example-cluster/cluster.yml")
@@ -36,6 +38,16 @@ QUERIES = int(os.environ.get("BENCH_QUERIES", "2000"))
 CONCURRENCY = int(os.environ.get("BENCH_CONCURRENCY", "8"))
 ITERATIONS = int(os.environ.get("BENCH_ITERATIONS", "3"))
 ROWS = 5000
+# WLASNOSC TABEL POMIAROWYCH (poprawka 2026-09-08). Pierwsza wersja pracowala na
+# stalych nazwach `bench_w`/`bench_r` w bazie NAJEMCY: tabeli zapisu nie kasowala
+# nigdy, a tabele odczytu kasowala PRZED przebiegiem, nie po nim. Skutek zmierzony
+# na cassiopeiav14-r9: 24 270 wierszy `bench_w` zostawionych w `isa_test`, ktore
+# wliczyly sie do raportu drilla restore (30505 zamiast 1505) — narzedzie pomiarowe
+# falszowalo dowod innej sondy. Teraz kazdy przebieg tworzy WLASNE, unikalnie
+# nazwane tabele i kasuje wylacznie je, takze gdy pomiar padnie.
+BENCH_ID = secrets.token_hex(4)
+TABLE_W = f"bench_w_{BENCH_ID}"
+TABLE_R = f"bench_r_{BENCH_ID}"
 
 with open(CONFIG_PATH, encoding="utf-8") as fh:
     CLUSTER = yaml.safe_load(fh)
@@ -112,10 +124,9 @@ def main():
         f"MYSQL_PWD='{APP_PW}' mariadb -h {writer} -P 3306 -u {APP_USER} "
         f"--ssl-verify-server-cert=0 isa_test -e \""
         "SET SESSION max_recursive_iterations = 100000; "
-        "CREATE TABLE IF NOT EXISTS bench_w (id BIGINT AUTO_INCREMENT PRIMARY KEY, v INT NOT NULL); "
-        "DROP TABLE IF EXISTS bench_r; "
-        "CREATE TABLE bench_r (id INT PRIMARY KEY, v INT NOT NULL); "
-        "INSERT INTO bench_r (id, v) WITH RECURSIVE s AS "
+        f"CREATE TABLE {TABLE_W} (id BIGINT AUTO_INCREMENT PRIMARY KEY, v INT NOT NULL); "
+        f"CREATE TABLE {TABLE_R} (id INT PRIMARY KEY, v INT NOT NULL); "
+        f"INSERT INTO {TABLE_R} (id, v) WITH RECURSIVE s AS "
         f"(SELECT 1 AS n UNION ALL SELECT n + 1 FROM s WHERE n < {ROWS}) SELECT n, n * 7 FROM s;\" 2>&1"
     )
     rc, out = on_app(setup)
@@ -124,8 +135,8 @@ def main():
         return 1
 
     noverify = "--ssl-verify-server-cert=0"
-    write_q = "INSERT INTO bench_w (v) VALUES (1)"
-    read_q = f"SELECT v FROM bench_r WHERE id={ROWS // 2}"
+    write_q = f"INSERT INTO {TABLE_W} (v) VALUES (1)"
+    read_q = f"SELECT v FROM {TABLE_R} WHERE id={ROWS // 2}"
 
     paths = [
         ("direct (plaintext)", writer, 3306, noverify),
@@ -171,5 +182,51 @@ def main():
     return 0
 
 
+def cleanup(writer):
+    """Kasuje WYLACZNIE tabele tego przebiegu. Cudzych nie tyka."""
+    rc, out = on_app(
+        f"MYSQL_PWD='{APP_PW}' mariadb -h {writer} -P 3306 -u {APP_USER} "
+        f"--ssl-verify-server-cert=0 isa_test -e \""
+        f"DROP TABLE IF EXISTS {TABLE_W}; DROP TABLE IF EXISTS {TABLE_R};\" 2>&1",
+        timeout=120,
+    )
+    if rc != 0:
+        print(f"UWAGA: nie udalo sie sprzatnac tabel {TABLE_W}/{TABLE_R}: {out[:200]}")
+    return rc
+
+
+def report_foreign_leftovers(writer):
+    """Cudze tabele pomiarowe to decyzja operatora, nie automatu.
+
+    Ta sama zasada co przy `gcache_meas`: sonda usuwa tylko to, co sama
+    utworzyla. Stale nazwy `bench_w`/`bench_r` sprzed poprawki wlasnosci moga
+    lezec w bazie najemcy i zawyzac raport drilla — mowimy o nich glosno,
+    zamiast kasowac cudze dane.
+    """
+    rc, out = on_app(
+        f"MYSQL_PWD='{APP_PW}' mariadb -h {writer} -P 3306 -u {APP_USER} "
+        f"--ssl-verify-server-cert=0 -N -B isa_test -e \""
+        "SELECT GROUP_CONCAT(table_name) FROM information_schema.tables "
+        "WHERE table_schema='isa_test' AND table_name IN ('bench_w','bench_r');\" 2>&1",
+        timeout=120,
+    )
+    leftovers = (out or "").strip()
+    if rc == 0 and leftovers and leftovers != "NULL":
+        print(
+            f"UWAGA: w isa_test leza tabele sprzed poprawki wlasnosci: {leftovers}. "
+            "Sonda ich NIE kasuje (nie utworzyla ich) — wliczaja sie do raportu "
+            "drilla restore, wiec usun je swiadomie."
+        )
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    _writer = None
+    try:
+        _writer = active_writer_address()
+        sys.exit(main())
+    finally:
+        # Sprzatanie takze przy bledzie i przerwaniu: to jedyna roznica miedzy
+        # narzedziem pomiarowym a zanieczyszczeniem bazy najemcy.
+        if _writer:
+            cleanup(_writer)
+            report_foreign_leftovers(_writer)
