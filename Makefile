@@ -14,7 +14,7 @@
         cluster-app-host lab-app-verify lab-app-bench lab-app-degradation-test \
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-selinux-verify lab-tls-expired-verify lab-monitoring-verify lab-rolling-restart-verify \
-        lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-proxysql-failover-test lab-admin-isolation-verify lab-post-build-gate \
+        lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-seed-dataset lab-proxysql-failover-test lab-admin-isolation-verify lab-post-build-gate \
         verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code verify-inventory-tf verify-lockfiles \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify fleet-state \
         platform-validate platform-trust-hosts platform-deploy platform-firewall platform-firewall-verify platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
@@ -735,6 +735,15 @@ cluster-backup:  ## F10 — backup → destination storage via galera-backup run
 lab-seed-smoke:  ## LAB — zasiej minimalne dane user-space, bez których drill restore pada
 	$(cluster_guard)
 	ansible-playbook playbooks/lab_seed_smoke.yml $(CLUSTER_RUN) $(ANSIBLE_OPTS)
+
+# Osobny cel, NIE rozszerzenie smoke: smoke ma byc minimalny i taki zostaje.
+# Ten zasiewa ZNANA liczbe wierszy (SEED_ROWS, domyslnie 1000), zeby raport
+# drilla „N rows verified" porownywal sie z liczba ZADANA, a nie z resztkami po
+# sondach. Powod w ISA 2026-09-08: drill chwalil sie „5 rows verified" na danych,
+# ktorych nikt nie deklarowal. Idempotentny: dosiewa tylko brakujace wiersze.
+lab-seed-dataset:  ## LAB — zasiej ZNANA liczbe wierszy dla weryfikacji odtworzenia (SEED_ROWS=1000)
+	$(cluster_guard)
+	SEED_ROWS="$${SEED_ROWS:-1000}" ansible-playbook playbooks/lab_seed_dataset.yml $(CLUSTER_RUN) $(ANSIBLE_OPTS)
 
 cluster-restore-drill:  ## F10 — restore drill na czysty host + integralność (CONFIRM=yes, gdy backup.enabled)
 	$(cluster_guard)

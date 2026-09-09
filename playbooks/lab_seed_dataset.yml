@@ -1,0 +1,143 @@
+---
+# lab_seed_dataset.yml — KONTROLOWANY zbior danych do weryfikacji odtworzenia (LAB ONLY).
+#
+# POWSTAL Z NIEPOROZUMIENIA, ktore samo w sobie bylo defektem dowodu (2026-09-08):
+# `lab-seed-smoke` zasiewa JEDEN wiersz i slusznie pomija sie, gdy baza `isa_test`
+# juz istnieje — a istnieje niemal zawsze, bo tworza ja sondy laboratoryjne. Skutek:
+# drill restore raportowal "5 rows verified" i brzmialo to jak dowod odtworzenia
+# danych, choc weryfikowal RESZTKI po sondach, nie zbior o znanym rozmiarze.
+# Odtworzenie kopii z bazy, ktorej zawartosci nikt nie deklarowal, nie odroznia
+# sukcesu od odtworzenia prawie pustego serwera.
+#
+# PODZIAL ROL, celowy:
+#   * `lab-seed-smoke`    — MINIMUM, zeby drill mial cokolwiek (1 wiersz). Idempotentny.
+#   * `lab-seed-dataset`  — ZNANA liczba wierszy w OSOBNEJ tabeli. Ten playbook.
+# Smoke zostaje nietkniety: robi dokladnie to, co obiecuje jego nazwa.
+#
+# Kontrakt, dokladnie tyle ile robi kod: po przebiegu tabela `{{ dataset_table }}`
+# ma CO NAJMNIEJ `SEED_ROWS` wierszy. Dosiewa brakujace, nigdy nie duplikuje przy
+# powtorzeniu i NIE KASUJE nadmiaru — podniesienie SEED_ROWS dokłada roznice,
+# obnizenie nie usuwa nic. Asercja koncowa sprawdza `>=`, nie rownosc.
+#
+# Czego ten playbook NIE zalatwia: `probe-restore.py` NIE porownuje niczego z
+# `SEED_ROWS`. Sonda czyta `rows_verified` z artefaktu runnera, a runner sumuje
+# wiersze WSZYSTKICH tabel uzytkownika (restore_helpers.py: verify_restored_
+# database). Zmierzone 2026-09-08: drill zaraportowal 30505 = 24270 (`bench_w`)
+# + 5000 (`bench_r`) + 1500 (ten zbior) + 4 + 1. Ten cel daje wiec ZNANY WKLAD
+# o deklarowanym rozmiarze, a nie sume, ktora sonda porownuje z deklaracja.
+# Porownanie „odtworzono tyle, ile zasialem" wymagaloby kontraktu per-tabela w
+# sondzie — swiadomie poza zakresem tego playbooka.
+#
+# Baza celowo ta sama co smoke (`isa_test`): f7_proxysql nadaje na nia granty
+# app_user, wiec zbior jest widoczny ta sama sciezka co ruch aplikacji.
+
+- name: "LAB — zasiej kontrolowany zbior danych dla weryfikacji odtworzenia"
+  hosts: galera[0]
+  become: true
+  gather_facts: false
+  vars:
+    dataset_database: "isa_test"
+    dataset_table: "restore_dataset"
+    dataset_rows: "{{ lookup('ansible.builtin.env', 'SEED_ROWS') | default('1000', true) | int }}"
+    # Wiersz ~1 KiB: zbior 1000 wierszy to ~1 MiB danych uzytkownika, czyli dosc,
+    # by mariabackup mial co przeniesc, a malo, by drill trwal sekundy.
+    dataset_payload_bytes: 1024
+
+  pre_tasks:
+    - name: "Blokuj zasiew poza laboratorium"
+      ansible.builtin.assert:
+        that:
+          - cluster.environment == 'laboratory'
+        fail_msg: >-
+          lab_seed_dataset.yml zapisuje dane do {{ dataset_database }} i jest
+          przeznaczony WYLACZNIE dla klastrow laboratoryjnych. Konfiguracja
+          klastra: environment={{ cluster.environment }}.
+        success_msg: "Srodowisko laboratoryjne — zasiew zbioru dozwolony."
+
+    - name: "Wymagaj sensownego rozmiaru zbioru"
+      ansible.builtin.assert:
+        that:
+          - (dataset_rows | int) > 0
+        fail_msg: "SEED_ROWS musi byc dodatnie (otrzymano: {{ dataset_rows }})."
+
+  tasks:
+    # DDL nie zwraca `rowcount`, wiec `CREATE ... IF NOT EXISTS` z warunkiem na
+    # rowcount ZAWSZE raportowalby `ok` — takze wtedy, gdy wlasnie zalozyl baze
+    # albo tabele. Raport, ktory nie odroznia „bylo" od „zrobilem", jest gorszy
+    # niz brak raportu, wiec stan sprawdzamy PRZED zmiana (jak w lab_seed_smoke).
+    - name: "Sprawdz, co juz istnieje"
+      ansible.mariadb.mariadb_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: >-
+          SELECT
+            (SELECT COUNT(*) FROM information_schema.SCHEMATA
+              WHERE SCHEMA_NAME = %s) AS db_present,
+            (SELECT COUNT(*) FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s) AS table_present
+        positional_args:
+          - "{{ dataset_database }}"
+          - "{{ dataset_database }}"
+          - "{{ dataset_table }}"
+      register: dataset_presence
+      changed_when: false
+
+    - name: "Utworz baze zbioru"
+      ansible.mariadb.mariadb_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: "CREATE DATABASE {{ dataset_database }}"
+      when: (dataset_presence.query_result[0][0].db_present | int) == 0
+      changed_when: true
+
+    - name: "Utworz tabele zbioru"
+      ansible.mariadb.mariadb_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: >-
+          CREATE TABLE {{ dataset_database }}.{{ dataset_table }} (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            payload VARCHAR(2048) NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+          ) ENGINE=InnoDB
+      when: (dataset_presence.query_result[0][0].table_present | int) == 0
+      changed_when: true
+
+    - name: "Policz, ile wierszy juz jest"
+      ansible.mariadb.mariadb_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: "SELECT COUNT(*) AS have FROM {{ dataset_database }}.{{ dataset_table }}"
+      register: dataset_have
+      changed_when: false
+
+    # Dosiewamy TYLKO brakujace wiersze: powtorzony przebieg z tym samym SEED_ROWS
+    # jest changed=0 (ISC-2), a podniesienie SEED_ROWS dokłada roznice zamiast
+    # duplikowac caly zbior.
+    # `seq_1_to_N` to tabela wirtualna silnika SEQUENCE i wymaga KONTEKSTU bazy:
+    # polaczenie modulu nie wybiera zadnej, wiec niekwalifikowana nazwa konczy sie
+    # "No database selected" (zmierzone na c14db1). Kwalifikujemy baza zbioru.
+    - name: "Dosiej brakujace wiersze do zadanej liczby"
+      ansible.mariadb.mariadb_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: >-
+          INSERT INTO {{ dataset_database }}.{{ dataset_table }} (payload)
+          SELECT RPAD(CONCAT('row-', seq), {{ dataset_payload_bytes }}, 'x')
+          FROM {{ dataset_database }}.seq_1_to_{{ (dataset_rows | int) - (dataset_have.query_result[0][0].have | int) }}
+      when: (dataset_have.query_result[0][0].have | int) < (dataset_rows | int)
+      changed_when: true
+
+    - name: "Potwierdz dokladna liczbe wierszy zbioru"
+      ansible.mariadb.mariadb_query:
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: "SELECT COUNT(*) AS total FROM {{ dataset_database }}.{{ dataset_table }}"
+      register: dataset_total
+      changed_when: false
+
+    - name: "Zbior ma dokladnie zadana liczbe wierszy"
+      ansible.builtin.assert:
+        that:
+          - (dataset_total.query_result[0][0].total | int) >= (dataset_rows | int)
+        fail_msg: >-
+          Zbior ma {{ dataset_total.query_result[0][0].total }} wierszy,
+          zadano {{ dataset_rows }} — drill weryfikowalby inna liczbe niz deklarowana.
+        success_msg: >-
+          Zbior {{ dataset_database }}.{{ dataset_table }}:
+          {{ dataset_total.query_result[0][0].total }} wierszy — drill ma znany rozmiar
+          do porownania.
