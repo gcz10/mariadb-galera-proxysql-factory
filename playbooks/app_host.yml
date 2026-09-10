@@ -31,9 +31,15 @@
     # zgodnosc lock.rocky_linux.major z hostem. Branie lockfile'a KLASTRA konczy
     # sie "No package MariaDB-client-11.4.12-1.el9 available" na Rocky 10
     # (zmierzone). Wybieramy wiec lockfile platformy TEGO hosta.
+    # ZMIENIONE 2026-09-10: el9 wskazywalo `versions.lock.yml` (MariaDB 11.4.13),
+    # wiec po upgradzie najemcow host aplikacyjny mierzyl ich STARSZYM klientem
+    # niz ich wlasne serwery (11.8.9 i 12.3.3). Klient jest zgodny wstecz, wiec
+    # nic nie padalo — ale sondy i benchmark chodzily po innej wersji protokolu
+    # niz deklaruje flota, co jest cichym dlugiem, nie decyzja. Pin celowo
+    # NAJNOWSZY z zywych serii: obsluguje oba najemcow.
     app_lock_by_major:
-      "9": "../versions/versions.lock.yml"
-      "10": "../versions/versions-el10.lock.yml"
+      "9": "../versions/versions-el9-123.lock.yml"
+      "10": "../versions/versions-el10-123.lock.yml"
     tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
   pre_tasks:
     - name: "Wymagaj lockfile dla platformy hosta"

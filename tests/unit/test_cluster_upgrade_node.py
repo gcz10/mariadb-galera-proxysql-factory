@@ -358,13 +358,17 @@ class PackageResolutionTests(unittest.TestCase):
 
     def test_packages_resolve_for_all_locked_lockfiles(self):
         """Żaden szablon pakietu nie może odwoływać się do nieistniejącego pola."""
-        lockfiles = [
-            REPO / "versions" / "versions.lock.yml",
-            REPO / "versions" / "versions-el10.lock.yml",
-            REPO / "versions" / "versions-el9-118.lock.yml",
-            REPO / "versions" / "versions-el10-118.lock.yml",
-            REPO / "versions" / "versions-el10-123.lock.yml",
-        ]
+        # ZMIENIONE 2026-09-10: lista byla RECZNA, wiec `versions-el9-123.lock.yml`
+        # powstal poza pokryciem — dokladnie ten rodzaj pliku, ktory ma tu byc
+        # sprawdzany. Wyliczamy z katalogu: nowy lockfile jest objety od momentu
+        # dodania, bez pamietania o tescie.
+        # `candidate.lock.yml` z zalozenia niedokonczony (`rpm_release: to-confirm-F0`)
+        # — wykluczany tak samo jak w `test_lockfile_repo_pinning.py:36`.
+        lockfiles = sorted(
+            p for p in (REPO / "versions").glob("*.lock.yml")
+            if p.name != "candidate.lock.yml"
+        )
+        self.assertGreaterEqual(len(lockfiles), 5, "katalog lockfile'ow nie moze byc pusty")
         for lock_path in lockfiles:
             with self.subTest(lockfile=lock_path.name):
                 lock = yaml.safe_load(lock_path.read_text(encoding="utf-8"))

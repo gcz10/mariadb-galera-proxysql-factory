@@ -1,0 +1,148 @@
+---
+# versions-el9-118.lock.yml — historyczny lockfile klastrów EL9 na MariaDB 11.8.
+# Ostatni użytkownik: zarchiwizowane definicje orionv12-r9 i cassiopeiav11-r9
+# (docs/records/archives/). Żaden żywy klaster go nie używa — żywe staki EL9
+# są na serii 11.4 (versions.lock.yml), a Rocky 10 na versions-el10.lock.yml.
+#
+# Powstaje z versions.lock.yml przez zmianę WYŁĄCZNIE bloku mariadb (11.4.12 → 12.3.3);
+# pozostałe bloki identyczne (piny platformowe EL9 bez zmian).
+#
+# Powód istnienia: klastry wymagają dokładnie serii 11.8. Per-cluster `lock_file`
+# pozwala mieszać serie między klastrami bez mieszania ich w jednym klastrze.
+# Linia decyzyjna: docs/records/2026-08-29-mariadb-118-upgrade-orionv11.md
+# (pierwotny ADR: docs/records/2026-08-29-mariadb-118-upgrade-orion.md) oraz
+# docs/records/2026-08-29-mariadb-118-upgrade-cassiopeia.md.
+# Świadoma regresja okna wsparcia: EOL 11.8 = 2029-06 vs 11.4 = 2029-05 —
+# strażnik ISC-55 wymaga -e f12_allow_eol_regression=true.
+#
+# Weryfikacja 2026-08-29 (dnf probe na o12db1, enablerepo=mariadb-server/11.8/rhel9):
+# MariaDB-server/client/backup 12.3.3-1.el9 oraz galera-4 26.4.27-1.el9
+# (to samo wydanie galery co klaster 11.4 → wsrep API 26 → rolling zgodny).
+
+rocky_linux:
+  major: 9
+  allowed_minors:
+    - "9.8"
+  major_eol: "2032-05-31"
+
+mariadb:
+  version: "12.3.3"
+  series: "12.3"
+  type: "LTS"
+  eol: "2029-06"
+  rpm_release: "1.el9"           # zweryfikowane w dnf probe: MariaDB-server-12.3.3-1.el9
+  repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
+  repo_setup_args: "--mariadb-server-version=mariadb-12.3.3"
+  repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"
+  galera_provider: "galera-4"
+  galera_provider_version: "26.4.27"
+  galera_provider_rpm_release: "1.el9"
+  galera_provider_wsrep_api: 26
+  mariadb_backup_package: "MariaDB-backup"
+  server_package: "MariaDB-server"
+  client_package: "MariaDB-client"
+  # Od 12.3 wsparcie Galery jest w OSOBNYM pakiecie — bez niego serwer wstaje
+  # bez providera wsrep. Playbooki biora ta pozycje warunkowo, wiec serie 11.x
+  # (ktore go nie maja) pozostaja nietkniete.
+  server_galera_package: "MariaDB-server-galera"
+  # Wersjonowany katalog serii — odporny na dryf aliasu (lekcja z pułapki
+  # opisanej w versions.lock.yml:20-25; materializacja 2026-08-24).
+  verified_baseurl: "https://dlm.mariadb.com/repo/mariadb-server/12.3.3/yum/rhel/9/x86_64"
+  source: "https://mariadb.org/mariadb-server-12-3-11-8-11-4-and-10-11-q3-2026-maintenance-releases-and-goodbye-10-6/"
+  galera_provider_source: "https://github.com/codership/galera/releases/tag/release_26.4.27"
+
+proxysql:
+  version: "3.0.11"
+  series: "3.0"
+  tier: "Stable"
+  released: "2026-08-27"
+  rpm_release: "1"
+  repo_gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+  rpm_sha256:
+    x86_64: "41f0d7aebd93cf6a4ba9681074202b8b1495adec4e810beb5480d8ee3a689fff"  # proxysql-3.0.11-1-centos9.x86_64.rpm, 42484661B
+  cves_patched:
+    - "CVE-2026-48772"
+    - "CVE-2026-48773"
+    - "GHSA-fvch-fpgq-pwfx"
+  source: "https://github.com/sysown/proxysql/releases/tag/v3.0.11"
+
+pmm:
+  version: "3.9.1"
+  released: "2026-08-19"
+  image: "percona/pmm-server:3.9.1"
+  image_digest: "sha256:003f9c25f84256e53dccbd71975e3aaf98ca06e891bda86a35c262ef21ca58c1"
+  deployment: "docker-volume"
+  rpm_for_rocky_9: false
+  support_eol: "not-published-per-point-release"
+  source: "https://github.com/percona/pmm/releases/tag/v3.9.1"
+
+docker:
+  engine_version: "3:29.8.0-1.el9"
+  cli_version: "1:29.8.0-1.el9"
+  containerd_version: "2.3.4-2.el9"
+  buildx_version: "0.37.0-1.el9"
+  compose_version: "5.5.1-1.el9"
+  repo_baseurl: "https://download.docker.com/linux/centos/$releasever/$basearch/stable"
+  repo_gpgkey: "https://download.docker.com/linux/centos/gpg"
+
+backup_tools:
+  python_pip_package: "python3-pip"
+  encryption_package: "openssl"   # legacy decrypt format_version 1
+  crypto_package: "python3-cryptography"  # AES-GCM format_version 2
+  archive_package: "tar"
+  cron_package: "cronie"
+  cifs_userspace_package: "cifs-utils"
+
+minio:
+  image: "minio/minio:RELEASE.2025-09-07T16-13-09Z"
+  image_digest: "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+  sdk_version: "7.2.20"
+  mc_image: "minio/mc:RELEASE.2025-08-13T08-35-41Z"
+  mc_image_digest: "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
+
+maildev:
+  image: "maildev/maildev:2.2.1"
+
+node_exporter:
+  version: "1.12.1"
+  released: "2026-07-14"
+  rpm_for_rocky_9: false
+  source: "https://github.com/prometheus/node_exporter/releases/tag/v1.12.1"
+  linux_sha256:
+    amd64: "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
+    arm64: "ad35b605f9954b9f1ffddf5ba054bdc5a98d790b9eae5291e1eeb83f1ecbd0e7"
+
+repositories:
+  - name: "mariadb-official"
+    url: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
+    integrity_control: "sha256-pinned-repo-setup"
+  - name: "proxysql-official"
+    url: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/9/"
+    gpgkey: "https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg"
+    integrity_control: "sha256-pinned-rpm"
+
+pmm_client:
+  version: "3.9.1"
+  rpm_release: "1.el9"
+  package: "pmm-client-3.9.1-1.el9"
+  repo_component: "pmm3-client"
+  release_rpm_version: "1.0-34"
+  release_rpm: "https://repo.percona.com/yum/percona-release-1.0-34.noarch.rpm"
+  # integrity (P1-A): URL -latest byl mutowalny i instalowany z disable_gpg_check.
+  # Teraz pinned URL + sha256 z lockfile + klucz GPG importowany po odcisku palca,
+  # wiec dnf weryfikuje podpis release RPM. sha256/fingerprint zweryfikowane 2026-09-04.
+  release_rpm_sha256: "48d3a6d65a718c6fd15612df409764b70ac2764475a875fc264e118332ae9d8e"
+  gpg_key_url: "https://raw.githubusercontent.com/percona/percona-repositories/release-1.0-34/rpm/PERCONA-PACKAGING-KEY"
+  gpg_key_sha256: "55909a2d3869ed261f139fc5cae894673e0e8a1b300115f056ef4cf3976972a2"
+  gpg_fingerprint: "4D1BB29D63D98E422B2113B19334A25F8507EFA5"
+  metrics_mode: "push"
+  source: "https://docs.percona.com/percona-monitoring-and-management/3/install-pmm/install-pmm-client/package_manager.html"
+
+# Status: LOCKED — wskazywany przez definicje z `versions.policy: locked`
+# (cassiopeiav12-r9). Stopka nie jest ozdobą: validate-lockfile.py wybiera
+# po niej rygor (bramka placeholderów ISC-63, komplet kluczy REQUIRED,
+# format sum, wymóg `source`). Bez niej plik przechodził ścieżką łagodną
+# mimo że jest w użyciu — dopisane 2026-09-04 po pomiarze, który wykazał
+# brak stopki w obu lockfile'ach serii 11.8. Sam plik był kompletny
+# (0 brakujących kluczy, 0 placeholderów), więc to domknięcie kontroli,
+# nie naprawa treści.
