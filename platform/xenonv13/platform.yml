@@ -10,7 +10,7 @@ platform:
       - "maildev"
 versions:
   policy: "locked"
-  lock_file: "versions/versions.lock.yml"
+  lock_file: "versions/versions-el9-123.lock.yml"
 proxysql:
   nodes_expected: 2
   frontend_tls:

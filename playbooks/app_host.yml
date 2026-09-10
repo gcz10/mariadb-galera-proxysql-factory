@@ -26,33 +26,37 @@
 
   vars:
     # Host aplikacyjny nalezy do warstwy WSPOLNEJ, a ta stoi na innej platformie
-    # niz czesc klastrow, ktore obsluguje (platforma na EL10, najemcy na EL9).
-    # Lockfile jest zwiazany z platforma — `f2_preflight.yml` wprost asertuje
-    # zgodnosc lock.rocky_linux.major z hostem. Branie lockfile'a KLASTRA konczy
-    # sie "No package MariaDB-client-11.4.12-1.el9 available" na Rocky 10
-    # (zmierzone). Wybieramy wiec lockfile platformy TEGO hosta.
-    # ZMIENIONE 2026-09-10: el9 wskazywalo `versions.lock.yml` (MariaDB 11.4.13),
-    # wiec po upgradzie najemcow host aplikacyjny mierzyl ich STARSZYM klientem
-    # niz ich wlasne serwery (11.8.9 i 12.3.3). Klient jest zgodny wstecz, wiec
-    # nic nie padalo — ale sondy i benchmark chodzily po innej wersji protokolu
-    # niz deklaruje flota, co jest cichym dlugiem, nie decyzja. Pin celowo
-    # NAJNOWSZY z zywych serii: obsluguje oba najemcow.
-    app_lock_by_major:
-      "9": "../versions/versions-el9-123.lock.yml"
-      "10": "../versions/versions-el10-123.lock.yml"
+    # niz czesc klastrow, ktore obsluguje (platforma na EL9, najemcy tez na EL10).
+    # Branie lockfile'a KLASTRA konczy sie "No package MariaDB-client-11.4.12-1.el9
+    # available" na Rocky 10 (zmierzone), wiec zrodlem musi byc platforma.
+    #
+    # ZMIENIONE 2026-09-10: bylo tu MAPOWANIE po `ansible_distribution_major_version`
+    # ze sciezkami lockfile'ow wpisanymi na sztywno. Skutek: `platform.yml` mogl
+    # deklarowac jeden lockfile, a host aplikacyjny dostawal inny — i wlasnie tak
+    # sie stalo (deklaracja 11.4.13 vs najemcy na 11.8.9 i 12.3.3). Teraz zrodlem
+    # jest DEKLARACJA platformy wskazanej przez inwentarz (`app_platform`), wiec
+    # zmiana `versions.lock_file` w `platform.yml` przenosi sie na klienta.
+    app_platform_declaration: "../platform/{{ app_platform }}/platform.yml"
     tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
   pre_tasks:
-    - name: "Wymagaj lockfile dla platformy hosta"
+    - name: "Wymagaj wskazania platformy wlasciciela w inwentarzu"
       ansible.builtin.assert:
         that:
-          - ansible_distribution_major_version in app_lock_by_major
+          - app_platform is defined
+          - app_platform | length > 0
         fail_msg: >-
-          Brak lockfile dla {{ ansible_distribution }} {{ ansible_distribution_major_version }};
-          znane platformy: {{ app_lock_by_major.keys() | list }}.
+          Host {{ inventory_hostname }} nie deklaruje `app_platform` w inwentarzu.
+          Bez tego nie wiadomo, ktora platforma jest wlascicielem hosta i z ktorej
+          deklaracji wziac lockfile.
 
-    - name: "Załaduj lockfile platformy hosta (reprodukowalne wersje)"
+    - name: "Załaduj deklaracje platformy wlasciciela"
       ansible.builtin.include_vars:
-        file: "{{ app_lock_by_major[ansible_distribution_major_version] }}"
+        file: "{{ app_platform_declaration }}"
+        name: owner_platform
+
+    - name: "Załaduj lockfile z deklaracji platformy (reprodukowalne wersje)"
+      ansible.builtin.include_vars:
+        file: "../{{ (owner_platform.versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
         name: lock
 
     # Ta sama brama co w f2_preflight: lockfile MUSI pasowac do systemu, inaczej
@@ -62,8 +66,9 @@
         that:
           - ansible_distribution_major_version | int == lock.rocky_linux.major | int
         fail_msg: >-
-          Lockfile deklaruje Rocky {{ lock.rocky_linux.major }}, a host to
-          {{ ansible_distribution }} {{ ansible_distribution_major_version }}.
+          Platforma {{ app_platform }} deklaruje lockfile dla Rocky
+          {{ lock.rocky_linux.major }}, a host to {{ ansible_distribution }}
+          {{ ansible_distribution_major_version }}.
 
   tasks:
     - name: "Ustaw hostname zgodny z inventory"
