@@ -8,7 +8,7 @@ platform:
 
 versions:
   policy: "locked"
-  lock_file: "versions/versions-el10.lock.yml"
+  lock_file: "versions/versions-el10-123.lock.yml"
 
 galera:
   cluster_name: "orionv16_galera"

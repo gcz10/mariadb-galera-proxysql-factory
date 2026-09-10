@@ -8,7 +8,7 @@ platform:
 
 versions:
   policy: "locked"
-  lock_file: "versions/versions.lock.yml"
+  lock_file: "versions/versions-el9-118.lock.yml"
 
 galera:
   cluster_name: "cassiopeiav15_galera"

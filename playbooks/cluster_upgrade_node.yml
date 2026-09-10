@@ -113,12 +113,27 @@
       changed_when: upgrade_drain_cfg_read[1] | int > 0
       no_log: true
 
+    # ZMIENIONE 2026-09-09: jednorazowy odczyt przegrywal WYSCIG z monitorem
+    # Galery w ProxySQL. Przy `mysql_galera_hostgroups` monitor sam przepisuje
+    # status wezla (ONLINE/SHUNNED wg stanu wsrep) i potrafi nadpisac swiezo
+    # zaladowany OFFLINE_SOFT, zanim sonda go zobaczy. Zmierzone dwa razy tego
+    # samego dnia: `c15db2` i `o16db1` — bramka slusznie odmawiala zatrzymania
+    # MariaDB, ale przyczyna byla przejsciowa, a nie realna.
+    # Dlatego: PONAWIAMY drain wraz z odczytem, zamiast czytac raz. Bramka
+    # ponizej pozostaje fail-closed — po wyczerpaniu prob nadal odmawia.
     - name: "Dowód w runtime: żaden wpis węzła nie przyjmie nowych połączeń"
       ansible.builtin.command:
         argv: "{{ proxysql_admin_cli }}"
-        stdin: "SELECT COUNT(*), COALESCE(SUM(status<>'OFFLINE_SOFT'),0) FROM runtime_mysql_servers WHERE hostname='{{ target_ip }}'"
+        stdin: >-
+          UPDATE mysql_servers SET status='OFFLINE_SOFT' WHERE hostname='{{ target_ip }}';
+          LOAD MYSQL SERVERS TO RUNTIME;
+          SELECT COUNT(*), COALESCE(SUM(status<>'OFFLINE_SOFT'),0) FROM runtime_mysql_servers WHERE hostname='{{ target_ip }}'
       register: upgrade_drain_rt
       changed_when: false
+      until: >-
+        (upgrade_drain_rt.stdout | trim | split('\t') | map('int') | list)[1] | int == 0
+      retries: 12
+      delay: 5
 
     - name: "Rozłóż odczyt runtime na liczby"
       ansible.builtin.set_fact:
@@ -159,6 +174,12 @@
   become: true
   gather_facts: false
   serial: 1
+  vars:
+    # Rozmiar gcache na czas i po upgrade. Domyslnie DEKLARACJA najemcy, zeby
+    # upgrade nie zmienial po cichu rozmiaru ustalonego przez operatora.
+    # Wieksze okno IST na czas migracji: `-e upgrade_gcache_size=2G`.
+    upgrade_gcache_size: >-
+      {{ (mariadb_tuning | default({})).gcache_size | default('512M', true) }}
   vars_files:
     - vars/secret_policy.yml
   tasks:
@@ -199,7 +220,14 @@
         regexp: "/repo/mariadb-server/{{ old_mariadb_version }}/"
         replace: "/repo/mariadb-server/{{ lock.mariadb.version }}/"
 
-    - name: "Gcache 512M -> 2G (okno IST zamiast SST, warunek #2 planu F12)"
+    # ZMIENIONE 2026-09-09: bylo `replace: "gcache.size=2G"` na sztywno, z
+    # dowodem grepujacym te sama stala. Upgrade po cichu uchylal wiec decyzje
+    # operatora o rozmiarze gcache (ISA: 512M -> 1G, swiadomie) i zostawial
+    # rozjazd `cluster.yml` (1G) vs wdrozone (2G) — czyli dokladnie ten rodzaj
+    # cichej zmiany stanu, ktora repo tepi gdzie indziej. Zrodlem jest teraz
+    # DEKLARACJA najemcy; wieksze okno IST na czas upgrade robi sie jawnie:
+    # `-e upgrade_gcache_size=2G`.
+    - name: "Wymus gcache z deklaracji najemcy (okno IST, warunek #2 planu F12)"
       ansible.builtin.replace:
         path: /etc/my.cnf.d/server.cnf
         # Wartość OGRANICZONA do ';', cudzysłowów i końca linii. Stare
@@ -207,14 +235,14 @@
         # socket.dynamic, socket.ssl_*) — między opcjami wsrep_provider_options
         # nie ma spacji, więc każda podmiana rozmiaru wycinała TLS z configu.
         regexp: "gcache\\.size=[^;\"'\\n]+"
-        replace: "gcache.size=2G"
+        replace: "gcache.size={{ upgrade_gcache_size }}"
 
     - name: "Dowód podmiany gcache (replace przy braku dopasowania przechodzi cicho)"
       ansible.builtin.command:
         argv:
           - grep
           - -q
-          - "gcache\\.size=2G"
+          - "gcache\\.size={{ upgrade_gcache_size }}"
           - /etc/my.cnf.d/server.cnf
       changed_when: false
 
@@ -228,6 +256,45 @@
           - --enablerepo=mariadb-main
       changed_when: false
 
+    # PRZEJSCIE MIEDZY RODZINAMI (11.x -> 12.x) NIE IDZIE PRZEZ `dnf upgrade`.
+    # Scriptlet pakietu odmawia wprost: "Upgrading directly from MariaDB or
+    # MySQL 11 to MariaDB 12 may not be safe... A manual upgrade is required...
+    # Remove the existing MariaDB packages". Zmierzone na `o16db1` przy 11.4.13
+    # i powtorzone przy 11.8.9 — to nie jest bledna konfiguracja, tylko kontrakt
+    # pakietu. Oficjalna procedura dla RHEL (mariadb.com/docs .../upgrading-from
+    # -mariadb-11-8-to-mariadb-12-3, krok 3: "yum remove MariaDB-server") kaze
+    # WYMIENIC pakiet serwera. Datadir zostaje nietkniety — usuwamy pakiety, nie
+    # dane, a `mariadb-upgrade` ponizej dokanca migracje tabel systemowych.
+    # `server.cnf` NALEZY DO PAKIETU `MariaDB-server`, wiec `dnf remove` zabiera
+    # go razem z pakietem, a nowy pakiet kladzie swoj domyslny — z ZAKOMENTOWANYM
+    # `wsrep_provider`. Zmierzone na `o16db1`: po wymianie serwer wstal, ale z
+    # `wsrep_cluster_size 0` i pusta nazwa providera, czyli POZA klastrem.
+    # Dlatego kopia przed wymiana i przywrocenie po niej; rpm zostawia wprawdzie
+    # `.rpmsave`, ale opieranie sie na jego nazewnictwie jest krucha umowa.
+    - name: "Wymiana rodziny: zachowaj konfiguracje najemcy przed usunieciem pakietu"
+      ansible.builtin.copy:
+        src: /etc/my.cnf.d/server.cnf
+        dest: /root/server.cnf.preupgrade
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      when: (old_mariadb_version | split('.'))[0] != (lock.mariadb.version | split('.'))[0]
+
+    - name: "Wymiana rodziny: usun stary pakiet serwera (tylko gdy zmienia sie major)"
+      ansible.builtin.dnf:
+        name:
+          - "{{ lock.mariadb.server_package | default('MariaDB-server') }}"
+          - "MariaDB-server-compat"
+        state: absent
+        autoremove: false
+      when: (old_mariadb_version | split('.'))[0] != (lock.mariadb.version | split('.'))[0]
+
+    # MariaDB 12.3 wydzielilo wsparcie Galery z `MariaDB-server` do OSOBNEGO
+    # pakietu `MariaDB-server-galera` — bez niego jednostka systemd startuje
+    # bez providera wsrep, wiec wezel nie wraca do klastra. Serie 11.x takiego
+    # pakietu NIE MAJA, dlatego pozycja jest warunkowa: wchodzi tylko wtedy,
+    # gdy lockfile ja deklaruje (`server_galera_package`).
     - name: "Instaluj pakiety docelowej serii (piny z lockfile; ISC-56: allow_downgrade=false)"
       ansible.builtin.dnf:
         name:
@@ -239,6 +306,36 @@
         disablerepo: "*"
         enablerepo: "mariadb-main"
         allow_downgrade: false
+
+    - name: "Instaluj pakiet Galery serwera (osobny pakiet dopiero od 12.3, wiec warunkowo)"
+      ansible.builtin.dnf:
+        name:
+          - "{{ lock.mariadb.server_galera_package | default('') }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+        state: present
+        disablerepo: "*"
+        enablerepo: "mariadb-main"
+        allow_downgrade: false
+      when: (lock.mariadb.server_galera_package | default('')) | length > 0
+
+    - name: "Wymiana rodziny: przywroc konfiguracje najemcy po instalacji"
+      ansible.builtin.copy:
+        src: /root/server.cnf.preupgrade
+        dest: /etc/my.cnf.d/server.cnf
+        remote_src: true
+        owner: root
+        group: mysql
+        mode: "0640"
+      when: (old_mariadb_version | split('.'))[0] != (lock.mariadb.version | split('.'))[0]
+
+    - name: "Dowod: przywrocona konfiguracja ma providera wsrep"
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -qE
+          - "^wsrep_provider *= *[^ ]+"
+          - /etc/my.cnf.d/server.cnf
+      changed_when: false
+      when: (old_mariadb_version | split('.'))[0] != (lock.mariadb.version | split('.'))[0]
 
     - name: "Start MariaDB"
       ansible.builtin.systemd:

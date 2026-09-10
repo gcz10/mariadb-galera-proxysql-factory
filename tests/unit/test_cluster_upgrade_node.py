@@ -264,7 +264,15 @@ class GcacheReplaceTests(unittest.TestCase):
                 break
         self.assertIsNotNone(self.spec, "brak zadania replace dla gcache")
         self.pattern = re.compile(self.spec["regexp"], re.MULTILINE)
-        self.replacement = self.spec["replace"]
+        # Rozmiar NIE jest juz stala w playbooku — pochodzi z deklaracji najemcy
+        # (`upgrade_gcache_size`, domyslnie `mariadb_tuning.gcache_size`), bo
+        # sztywne 2G po cichu uchylalo decyzje operatora. Ten test pilnuje
+        # OGRANICZENIA REGEXPU do wartosci opcji, wiec rendrujemy szablon
+        # dowolnym rozmiarem; asercje ponizej sprawdzaja granice dopasowania.
+        self.rendered_size = "2G"
+        self.replacement = self.spec["replace"].replace(
+            "{{ upgrade_gcache_size }}", self.rendered_size
+        )
 
     def apply(self, content):
         return self.pattern.sub(self.replacement, content)
@@ -335,9 +343,14 @@ class PackageResolutionTests(unittest.TestCase):
             play for play in load_plays() if "upgrade pakietów" in play.get("name", "")
         )
         self.install_task = None
+        # Play ma teraz WIECEJ niz jedno zadanie `dnf`: usuniecie starego pakietu
+        # przy zmianie rodziny (11.x -> 12.x) stoi PRZED instalacja, a pakiet
+        # Galery serwera doszedl jako osobne, warunkowe zadanie. Wybor „pierwsze
+        # dnf z name" wskazywal wiec na USUWANIE i test sprawdzal nie to, co
+        # obiecuje jego nazwa. Wybieramy po nazwie zadania.
         for task in upgrade_play["tasks"]:
             dnf = task.get("ansible.builtin.dnf")
-            if dnf and "name" in dnf:
+            if dnf and "name" in dnf and task.get("name", "").startswith("Instaluj pakiety docelowej serii"):
                 self.install_task = dnf
                 break
         self.assertIsNotNone(self.install_task, "brak zadania dnf instalacji pakietów")
@@ -350,6 +363,7 @@ class PackageResolutionTests(unittest.TestCase):
             REPO / "versions" / "versions-el10.lock.yml",
             REPO / "versions" / "versions-el9-118.lock.yml",
             REPO / "versions" / "versions-el10-118.lock.yml",
+            REPO / "versions" / "versions-el10-123.lock.yml",
         ]
         for lock_path in lockfiles:
             with self.subTest(lockfile=lock_path.name):
