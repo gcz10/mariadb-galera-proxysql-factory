@@ -84,6 +84,20 @@
           - checkpolicy
         state: present
       when: "'galera' in group_names"
+
+    # Od MariaDB 12.3 wsparcie Galery mieszka w OSOBNYM pakiecie
+    # `MariaDB-server-galera`; bez niego serwer wstaje bez providera wsrep i
+    # wezel nie dolacza do klastra (zmierzone na `o16db1` przy upgrade do
+    # 12.3.3). Serie 11.x takiego pakietu nie maja, wiec pozycja jest
+    # warunkowa — wchodzi tylko, gdy lockfile ja deklaruje.
+    - name: "Instaluj pakiet Galery serwera (osobny pakiet dopiero od 12.3)"
+      ansible.builtin.dnf:
+        name:
+          - "{{ lock.mariadb.server_galera_package | default('') }}-{{ lock.mariadb.version }}-{{ lock.mariadb.rpm_release }}"
+        state: present
+      when:
+        - "'galera' in group_names"
+        - (lock.mariadb.server_galera_package | default('')) | length > 0
     # serial:1 + brama PO mutacji pakietow czyni converge kontrolowanym
     # rollingiem: kolejny wezel nie rusza, dopoki ten nie wroci do
     # Synced/Primary/full size. Bez niej jedyna ochrona byla kolejnoscia,

@@ -70,6 +70,29 @@
       when: restore_repo_pinned.rc != 0
       changed_when: true
 
+    # Host restore przechodzi te sama pulapke co wezly klastra: scriptlet
+    # pakietu ODMAWIA przejscia 11.x -> 12.x przez `dnf upgrade` i kaze wymienic
+    # pakiet serwera (mariadb.com/docs .../upgrading-from-mariadb-11-8-to-
+    # mariadb-12-3, krok 3). Zmierzone na `o16r1`: drill po upgrade klastra do
+    # 12.3.3 padal, bo host mial jeszcze serwer 11.4.13. Tu wymiana jest TANSZA
+    # niz na wezle: host jest poza klastrem, a jego datadir i tak kasuje
+    # `galera-backup restore` przy kazdym drillu.
+    - name: "Odczytaj zainstalowane pakiety hosta restore"
+      ansible.builtin.package_facts:
+        manager: rpm
+
+    - name: "Wymiana rodziny: usun stary pakiet serwera na hoscie restore"
+      ansible.builtin.dnf:
+        name:
+          - "{{ lock.mariadb.server_package }}"
+          - "MariaDB-server-compat"
+        state: absent
+        autoremove: false
+      when:
+        - lock.mariadb.server_package in ansible_facts.packages
+        - (ansible_facts.packages[lock.mariadb.server_package][0].version | split('.'))[0]
+          != (lock.mariadb.version | split('.'))[0]
+
     - name: "Instaluj MariaDB server/backup/klienta (wersje PRZYPIETE z lockfile; audit#12)"
       ansible.builtin.dnf:
         name:
