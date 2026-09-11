@@ -1,0 +1,49 @@
+---
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: secrets/ssh_key
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=yes -o UserKnownHostsFile='{{ inventory_dir }}/known_hosts'"
+    ansible_python_interpreter: /usr/bin/python3
+  children:
+    galera:
+      hosts:
+        o17db1:
+          ansible_host: "192.168.1.80"
+          galera_node_address: "192.168.1.80"
+          galera_node_idx: 1
+        o17db2:
+          ansible_host: "192.168.1.81"
+          galera_node_address: "192.168.1.81"
+          galera_node_idx: 2
+        o17db3:
+          ansible_host: "192.168.1.82"
+          galera_node_address: "192.168.1.82"
+          galera_node_idx: 3
+    restore:
+      hosts:
+        o17r1:
+          ansible_host: "192.168.1.83"
+          restore_node_address: "192.168.1.83"
+    proxysql:
+      hosts:
+        x17p1:
+          ansible_host: "192.168.1.71"
+          proxysql_node_address: "192.168.1.71"
+          proxysql_node_idx: 1
+        x17p2:
+          ansible_host: "192.168.1.72"
+          proxysql_node_address: "192.168.1.72"
+          proxysql_node_idx: 2
+    app:
+      hosts:
+        x17app:
+          ansible_host: "192.168.1.73"
+          app_node_address: "192.168.1.73"
+          # Wlasciciel hosta: z tej deklaracji bierze sie lockfile klienta (app_host.yml).
+          app_platform: "xenonv17"
+    infra:
+      hosts:
+        x17mon:
+          ansible_host: "192.168.1.70"
+          infra_node_address: "192.168.1.70"

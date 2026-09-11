@@ -1,0 +1,79 @@
+---
+cluster:
+  name: "cassiopeiav17-r9"
+  environment: "laboratory"
+
+platform:
+  rocky_linux_major: 9
+
+versions:
+  policy: "locked"
+  lock_file: "versions/versions-el9-118.lock.yml"
+
+galera:
+  cluster_name: "cassiopeiav17_galera"
+  nodes_expected: 3
+
+proxysql:
+  nodes_expected: 2
+  hostgroup_base: 820
+  app_user: "app_user_cv17"
+  frontend_tls:
+    ca_reference: "pki/xenonv17/ca.pem"
+  endpoint:
+    type: "keepalived_vip"
+    address: "192.168.1.74"
+    port: 6033
+
+tls:
+  mode: "disabled"
+  require_secure_transport: false
+
+network:
+  application_cidrs: ["192.168.1.0/24"]
+  database_cluster_cidrs: ["192.168.1.0/24"]
+  administration_cidrs: ["192.168.1.0/24"]
+  monitoring_cidrs: ["192.168.1.70/32"]
+
+storage:
+  data_directory: "/var/lib/mysql"
+  expected_database_size_gb: "unknown"
+
+mariadb_tuning:
+  innodb_buffer_pool_size: "256M"
+  innodb_log_file_size: "128M"
+  max_connections: 50
+  innodb_flush_log_at_trx_commit: 0
+  gcache_size: "1G"
+
+availability:
+  rto_node_failure: "2m"
+
+backup:
+  enabled: true
+  destination: "s3"
+  full_backup_schedule: "30 2 * * *"
+  freshness_sla_hours: 26
+  retention_days: 14
+  encryption_enabled: true
+  restore_test_schedule: "0 15 * * 0"
+  scheduler:
+    mode: "cron"
+    host: "c17db1"
+    timezone: "UTC"
+  s3:
+    endpoint: "192.168.1.70:9000"
+    bucket: "cassiopeiav17-galera-backups"
+    secure: false
+
+monitoring:
+  pmm:
+    server_url: "https://192.168.1.70"
+    cluster_name: "cassiopeiav17-r9"
+    validate_certs: true
+    ca_reference: "pki/xenonv17/ca.pem"
+    credentials_revision: 1
+  alerts:
+    email: "ops@claude.local"
+    folder_uid: ""
+    datasource_uid: ""
