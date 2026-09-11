@@ -161,10 +161,11 @@ class ProbeFirewallScopeTests(unittest.TestCase):
 class ProbeMeasurementPathTests(unittest.TestCase):
     """„Nie zmierzono" i „zmierzono, jest zle" musza dawac rozne kody.
 
-    Host kontrolny bez dostepu do sieci laboratorium (macOS 26 blokuje gniazda
-    LAN binariom spoza systemu) dostawal FAIL „controller cannot reach SSH after
-    policy" — sonda oskarzala flote o defekt lezacy po stronie operatora, choc
-    Ansible w tej samej sekundzie wykonywal tam polecenia po SSH.
+    Sonda uruchomiona interpreterem bez uprawnienia do sieci lokalnej (macOS
+    przyznaje je KONKRETNEJ binarce — systemowy python3 ma, ten z venv nie)
+    raportowala FAIL „controller cannot reach SSH after policy": oskarzenie
+    floty o defekt lezacy w wyborze interpretera, i to w sekundzie, w ktorej
+    Ansible wykonywal na tym samym hoscie polecenia po SSH.
     """
 
     def test_dead_measurement_path_is_undetermined_not_failure(self):
@@ -174,7 +175,8 @@ class ProbeMeasurementPathTests(unittest.TestCase):
         )
         self.assertEqual(code, 2, output)
         self.assertIn("UNDETERMINED", output)
-        self.assertIn("FIREWALL_PROBE_VANTAGE", output)
+        self.assertIn("POZOSTAJE NIEZMIERZONA", output)
+
 
 
 class ProbePartialFailureTests(unittest.TestCase):

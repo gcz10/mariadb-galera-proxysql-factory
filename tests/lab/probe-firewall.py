@@ -6,7 +6,6 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
-import shlex
 import socket
 import subprocess
 import sys
@@ -186,33 +185,7 @@ def field(body: str, name: str) -> str:
     return match.group(1).strip() if match else "<missing>"
 
 
-# Punkt obserwacyjny sond osiagalnosci. Domyslnie host kontrolny; `VANTAGE`
-# przenosi pomiar na wskazany host z inwentarza.
-#
-# DLACZEGO ISTNIEJE: asercje ponizej mierza, co widzi KLIENT z konkretnej
-# pozycji w sieci — i same dostrajaja sie do jego adresu (`in_cidrs`). Gdy host
-# kontrolny nie ma dostepu do sieci laboratorium (macOS 26 blokuje gniazda LAN
-# binariom spoza systemu; zmierzone 2026-09-09), pomiaru NIE DA SIE wykonac
-# stad — i to nie jest wynik polityki firewalla, tylko martwa droga pomiarowa.
-# Tunel SSH bylby tu tautologia (mierzylby wlasny tunel), ale host w LAN-ie to
-# uczciwa, inna pozycja obserwacyjna: rowniez podlega tej samej polityce.
-VANTAGE = os.environ.get("FIREWALL_PROBE_VANTAGE", "").strip()
-
-
-def _remote_socket_probe(payload: str) -> str:
-    """Wykonaj jednorazowy skrypt gniazd na hoscie obserwacyjnym."""
-    output = run_command(VANTAGE, f"python3 -c {shlex.quote(payload)}")
-    return output.get(VANTAGE, "").strip()
-
-
 def source_address(target: str) -> str:
-    if VANTAGE:
-        return _remote_socket_probe(
-            "import socket\n"
-            "s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
-            f"s.connect(({target!r}, 22))\n"
-            "print(s.getsockname()[0])\n"
-        )
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.connect((target, 22))
         return probe.getsockname()[0]
@@ -224,16 +197,6 @@ def in_cidrs(address: str, cidrs: list[str]) -> bool:
 
 
 def reachable(host: str, port: int, timeout: float = 1.5) -> bool:
-    if VANTAGE:
-        answer = _remote_socket_probe(
-            "import socket\n"
-            f"s=socket.socket(); s.settimeout({timeout})\n"
-            "try:\n"
-            f"    s.connect(({host!r}, {port})); print('OPEN')\n"
-            "except OSError:\n"
-            "    print('SHUT')\n"
-        )
-        return answer == "OPEN"
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
@@ -340,27 +303,30 @@ def main() -> int:
                         f"({', '.join(OWNED_GROUPS)}) — nie ma czego zmierzyc")
         return report(failures)
     controller_ip = source_address(reach_reference)
-    vantage_label = VANTAGE or "host kontrolny"
 
     # Ansible wlasnie odpytal ten host po SSH z TEJ SAMEJ maszyny. Jesli gniazdo
-    # nie dochodzi na port 22, to nie polityka firewalla go zamknela, tylko
-    # droga pomiarowa jest martwa (zmierzone na macOS 26: gniazda LAN zablokowane
-    # binariom spoza systemu). Rozdzielenie stanow: bez niego sonda raportowala
-    # „controller cannot reach SSH after policy", czyli oskarzala flote o defekt
-    # lezacy po stronie hosta kontrolnego.
-    if not VANTAGE and not reachable(reach_reference, 22):
+    # nie dochodzi na port 22, to nie polityka firewalla go zamknela, tylko droga
+    # pomiarowa jest martwa. ZMIERZONY PRZYPADEK (2026-09-10): macOS przyznaje
+    # uprawnienie „Siec lokalna" KONKRETNEJ BINARCE — `/usr/bin/python3` (ten,
+    # ktorym Makefile uruchamia sondy) siega LAN bez przeszkod, a interpreter z
+    # venv/Homebrew dostaje EHOSTUNREACH na kazdy adres. Sonda uruchomiona tym
+    # drugim raportowala „controller cannot reach SSH after policy", czyli
+    # oskarzala flote o defekt lezacy w wyborze interpretera.
+    if not reachable(reach_reference, 22):
         return report(
             failures,
             undetermined=[
                 f"host kontrolny nie dosiega {reach_reference}:22, choc Ansible wlasnie "
-                "wykonal tam polecenie po SSH — pomiar osiagalnosci jest stad niemozliwy. "
-                "Wskaz punkt obserwacyjny w laboratorium: FIREWALL_PROBE_VANTAGE=<host z inwentarza>."
+                "wykonal tam polecenie po SSH — pomiar osiagalnosci jest stad niemozliwy, "
+                "a polityka firewalla POZOSTAJE NIEZMIERZONA. Najczestsza przyczyna: "
+                "interpreter bez uprawnienia do sieci lokalnej. Uruchom przez `make "
+                "cluster-firewall-verify` / `make platform-firewall-verify` (systemowy python3)."
             ],
         )
 
     check(
-        reachable(reach_reference, 22) == in_cidrs(controller_ip, NETWORK["administration_cidrs"]),
-        f"{vantage_label} ({controller_ip}): dostep SSH nie zgadza sie z administration_cidrs",
+        in_cidrs(controller_ip, NETWORK["administration_cidrs"]),
+        f"host kontrolny ({controller_ip}) siega SSH spoza administration_cidrs",
         failures,
     )
     if first_galera:
