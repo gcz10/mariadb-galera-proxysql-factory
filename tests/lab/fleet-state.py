@@ -27,6 +27,7 @@ Wymaga PROXMOX_VE_ENDPOINT i PROXMOX_VE_API_TOKEN. Pula wlasnosci: FLEET_POOL
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import socket
@@ -139,12 +140,20 @@ def definitions() -> list[dict]:
     return found
 
 
-def endpoint_reachable(address: str, port: int) -> bool:
+# „Nie odpowiada" to twierdzenie O FLOCIE, a „nie mam trasy" — o hoscie, z
+# ktorego mierze. Mieszanie ich raz juz wyprodukowalo falszywy alarm: VIP byl
+# zdrowy, a raport oglaszal awarie, bo interpreter bez uprawnienia do sieci
+# lokalnej (macOS przyznaje je konkretnej binarce) dostawal EHOSTUNREACH.
+UNREACHABLE_PATH = frozenset({errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EPERM, errno.EACCES})
+
+
+def endpoint_reachable(address: str, port: int) -> bool | None:
+    """True = odpowiada, False = nie odpowiada, None = nie da sie zmierzyc stad."""
     try:
         with socket.create_connection((address, int(port)), timeout=3):
             return True
-    except OSError:
-        return False
+    except OSError as exc:
+        return None if exc.errno in UNREACHABLE_PATH else False
 
 
 def main() -> int:
@@ -219,7 +228,12 @@ def main() -> int:
         print()
         print("# wspolne endpointy zywych definicji")
         for (address, port), users in sorted(endpoints.items()):
-            reach = "odpowiada" if endpoint_reachable(address, port) else "NIE odpowiada"
+            answer = endpoint_reachable(address, port)
+            reach = {
+                True: "odpowiada",
+                False: "NIE odpowiada",
+                None: "niezmierzone (brak trasy z tego hosta — uprawnienie do sieci lokalnej)",
+            }[answer]
             print(f"  {address}:{port}  {reach}  <- {', '.join(sorted(users))}")
 
     print()
