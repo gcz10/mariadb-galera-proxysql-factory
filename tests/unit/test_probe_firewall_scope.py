@@ -88,7 +88,7 @@ class ProbeFirewallScopeTests(unittest.TestCase):
             (None, None, None),
         )
 
-    def run_main(self, module, broken_docker=False):
+    def run_main(self, module, broken_docker=False, reachable=None):
         queried = []
 
         def command(pattern, command, timeout=120):
@@ -131,7 +131,10 @@ class ProbeFirewallScopeTests(unittest.TestCase):
         with (
             mock.patch.object(module, "run_command", side_effect=command),
             mock.patch.object(module, "source_address", return_value="192.0.2.70"),
-            mock.patch.object(module, "reachable", side_effect=lambda host, port: port in (22, 3306, 6033, 443)),
+            mock.patch.object(
+                module, "reachable",
+                side_effect=reachable or (lambda host, port: port in (22, 3306, 6033, 443)),
+            ),
             mock.patch("builtins.print") as printed,
         ):
             code = module.main()
@@ -153,6 +156,25 @@ class ProbeFirewallScopeTests(unittest.TestCase):
                 self.assertIn("infra", queried)
                 self.assertIn("Docker chain has no final fail-closed rule" if broken
                               else "Docker ingress filter and address binding verified", output)
+
+
+class ProbeMeasurementPathTests(unittest.TestCase):
+    """„Nie zmierzono" i „zmierzono, jest zle" musza dawac rozne kody.
+
+    Host kontrolny bez dostepu do sieci laboratorium (macOS 26 blokuje gniazda
+    LAN binariom spoza systemu) dostawal FAIL „controller cannot reach SSH after
+    policy" — sonda oskarzala flote o defekt lezacy po stronie operatora, choc
+    Ansible w tej samej sekundzie wykonywal tam polecenia po SSH.
+    """
+
+    def test_dead_measurement_path_is_undetermined_not_failure(self):
+        module = load_probe(TENANT_INVENTORY, CONFIG)
+        code, output, _ = ProbeFirewallScopeTests().run_main(
+            module, reachable=lambda host, port: False
+        )
+        self.assertEqual(code, 2, output)
+        self.assertIn("UNDETERMINED", output)
+        self.assertIn("FIREWALL_PROBE_VANTAGE", output)
 
 
 class ProbePartialFailureTests(unittest.TestCase):
@@ -209,7 +231,13 @@ class ProbePartialFailureTests(unittest.TestCase):
         self.assertEqual(output, {"g1": "enabled"})
         self.assertTrue(any("g2" in failure for failure in module.COMMAND_FAILURES))
 
-    def test_missing_xtables_still_reports_connectivity_failures(self):
+    def test_dead_ansible_path_reports_connectivity_not_invented_findings(self):
+        """Gdy zaden host nie odpowiada, wynikiem jest brak lacznosci — nic wiecej.
+
+        Wczesniej sonda dopisywala tu „brak modulu xt_conntrack": wniosek z
+        CISZY, nie z pomiaru. Kod pozostaje 1, bo porazki lacznosci sa realne,
+        ale zmyslone findingi o polityce Dockera znikaja z raportu.
+        """
         module = load_probe(PLATFORM_INVENTORY, dict(CONFIG, platform={"name": "probe-platform"}))
         fake = mock.Mock(returncode=4, stdout="g1 | UNREACHABLE! => {}\n", stderr="")
         with (
@@ -221,8 +249,8 @@ class ProbePartialFailureTests(unittest.TestCase):
             code = module.main()
         self.assertEqual(code, 1)
         messages = "\n".join(str(call) for call in printed.call_args_list)
-        self.assertIn("xtables", messages)
         self.assertIn("g1: nieosiagalny", messages)
+        self.assertNotIn("xtables", messages)
 
     def test_clean_run_passes_with_summary(self):
         module = load_probe(TENANT_INVENTORY, CONFIG)

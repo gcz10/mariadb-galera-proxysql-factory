@@ -451,6 +451,10 @@ platform-verify:  ## Sondy warstwy wspolnej: para ProxySQL, VIP, TLS endpointu, 
 # Polityke firewalla hosta mierzy jego WLASCICIEL. Filtr ingress Dockera
 # (ISA-INFRA) stoi na hoscie infra warstwy wspolnej, wiec sonda najemcy go nie
 # dotyka — bez tego celu ISC-5 nie mialaby zadnego wykonawcy.
+# FIREWALL_PROBE_VANTAGE=<host z inwentarza> przenosi sondy OSIAGALNOSCI na ten
+# host; inspekcja regul idzie jak zwykle po SSH. Bez tego pomiar robi host
+# kontrolny — a gdy jego system odcina gniazda do LAN-u (macOS 26), sonda konczy
+# sie UNDETERMINED (exit 2), nie falszywym FAIL-em na polityce floty.
 platform-firewall-verify:  ## Zweryfikuj politykę firewalld i filtr ingress Dockera warstwy wspólnej (ISC-5)
 	$(platform_guard)
 	CLUSTER=$(PLATFORM) CLUSTER_CONFIG=$(PLATFORM_DIR)/platform.yml CLUSTER_INVENTORY=$(PLATFORM_DIR)/inventory.yml \
@@ -534,6 +538,8 @@ cluster-deploy:  ## F2+F3 — instaluj pakiety + konfiguruj (idempotentny conver
 cluster-firewall:  ## Wymuś minimalną politykę firewalld według roli hosta
 	$(cluster_guard)
 	ansible-playbook playbooks/firewall.yml $(CLUSTER_RUN) -e firewall_target_hosts=galera:restore $(ANSIBLE_OPTS)
+# Jak wyzej: FIREWALL_PROBE_VANTAGE=<host> wykonuje sondy osiagalnosci z hosta
+# w laboratorium, gdy host kontrolny nie ma dostepu do tej sieci.
 cluster-firewall-verify:  ## Zweryfikuj dokładną politykę firewalld najemcy (galera:restore)
 	$(cluster_guard)
 	CLUSTER_CONFIG=clusters/$(CLUSTER)/cluster.yml CLUSTER_INVENTORY=clusters/$(CLUSTER)/inventory.yml \
