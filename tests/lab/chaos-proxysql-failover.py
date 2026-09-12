@@ -425,7 +425,30 @@ def main():
                 restored = True
             elif vmid:
                 pve(vmid, "start")
-                time.sleep(45)
+                # ZMIENIONE 2026-09-12: bylo `sleep(45)` i `restored = True` —
+                # sonda oglaszala przywrocenie, nie sprawdzajac, czy ProxySQL na
+                # wskrzeszonym wezle w ogole wstal. Gdy zostawal nieaktualny plik
+                # PID („Daemon already running on PID file"), wezel zostawal
+                # martwy, a kolejne przebiegi mierzyly zdegradowana warstwe.
+                # Maszyna dopiero sie podnosi, wiec najpierw SSH, potem USLUGA.
+                deadline_boot = time.time() + 180
+                while time.time() < deadline_boot:
+                    rc_p, _ = sh(victim, "echo up", timeout=30)
+                    if rc_p == 0:
+                        break
+                    time.sleep(5)
+                sh(victim, "systemctl start proxysql", timeout=180)
+                deadline_svc = time.time() + 120
+                while time.time() < deadline_svc:
+                    rc_a, out_a = sh(victim, "timeout 3 bash -c '</dev/tcp/127.0.0.1/6032' "
+                                             "&& echo ADMIN_OK || echo ADMIN_DOWN", timeout=60)
+                    if rc_a == 0 and "ADMIN_OK" in out_a:
+                        break
+                    sh(victim, "systemctl restart proxysql", timeout=180)
+                    time.sleep(5)
+                else:
+                    print(f"UWAGA: ProxySQL na {victim} nie odpowiada na 6032 po restarcie maszyny "
+                          "— warstwa zostaje zdegradowana dla kolejnych sond")
                 restored = True
         except Exception as exc:                                  # noqa: BLE001
             print(f"UWAGA: nie udalo sie przywrocic {victim}: {exc}")
