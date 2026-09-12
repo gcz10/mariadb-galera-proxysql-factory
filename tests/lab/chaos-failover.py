@@ -174,14 +174,28 @@ def missing_after_apply(seqs, exclude=None, timeout=240):
     ZNIKA — a nie brak zaobserwowany w dowolnie wybranej chwili.
     """
     live = [h for h in INV["all"]["children"]["galera"]["hosts"] if h != exclude]
+
+    def absent_everywhere():
+        """Sekwencje, ktorych nie ma na ZADNYM ocalalym wezle.
+
+        ISC-28 chroni dane, nie konkretny wezel: transakcja przetrwala, jesli
+        zyje gdziekolwiek w ocalalym klastrze. Wczesniejsza wersja pytala tylko
+        PIERWSZY ocalaly wezel i braki zglaszane przez ten jeden odczyt trafialy
+        do werdyktu — mimo ze diagnostyka sekundy pozniej znajdowala komplet na
+        tym samym hoscie (zmierzone 2026-09-12: `o17db1 9/9`, `o17db2 9/9`).
+        Suma po wezlach usuwa te zaleznosc od jednego, chwilowego odczytu.
+        """
+        seen = set()
+        for host in live:
+            seen |= present_seqs_on(host)
+        return sorted(s for s in seqs if s not in seen)
+
     deadline = time.time() + timeout
-    missing = sorted(s for s in seqs if s not in present_seqs(exclude))
+    missing = absent_everywhere()
     while missing and time.time() < deadline:
         time.sleep(3)
-        missing = sorted(s for s in seqs if s not in present_seqs(exclude))
+        missing = absent_everywhere()
     if missing:
-        # Rozjazd miedzy wezlami rozstrzyga, czy to strata, czy tylko ten jeden
-        # wezel nie nadrobil: jesli drugi ocalaly je ma, dane zyja w klastrze.
         for host in live:
             have = present_seqs_on(host)
             print(f"  diagnostyka po {timeout}s: {host} ma "
