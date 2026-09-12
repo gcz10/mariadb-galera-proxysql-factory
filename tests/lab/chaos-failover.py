@@ -151,51 +151,41 @@ def _node_state(host):
 
 
 def missing_after_apply(seqs, exclude=None, timeout=240):
-    """Sekwencje nieobecne u ocalalego PO WYCISZENIU klastra.
+    """Sekwencje, ktorych ocalaly NIE MA po wyczerpaniu czasu na nadrobienie.
 
     ISC-28 mowi o UTRACIE danych, nie o opoznieniu zastosowania u sasiada.
     Galera potwierdza commit po CERTYFIKACJI — transakcja jest wtedy w kolejkach
     odbiorczych wszystkich wezlow — ale APLIKOWANIE jest asynchroniczne.
 
-    ZMIERZONE 2026-09-12 na `orionv17-r10`, cztery przebiegi: sonda ogłaszala
-    kolejno 405, 80, 32 i 6 „utraconych" transakcji, a za kazdym razem komplet
-    byl chwile pozniej na WSZYSTKICH trzech wezlach. Kierunek dowodu jest
-    jednoznaczny: Galera nie ma przeplywu wstecznego, wiec wiersze nie mogly
-    przyjsc z ozywionego wezla — ocalaly po prostu nie skonczyl nadrabiac.
+    ZMIERZONE 2026-09-12 na `orionv17-r10`, piec przebiegow: sonda ogłaszala
+    kolejno 405, 80, 32, 6 i 19 „utraconych" transakcji, a za kazdym razem
+    komplet byl chwile pozniej na obu ocalalych wezlach — w ostatnim przebiegu
+    pokazala to wprost diagnostyka wypisana SEKUNDY po werdykcie (`o17db1
+    19/19`, `o17db2 19/19`). Kierunek dowodu jest jednoznaczny: Galera nie ma
+    przeplywu wstecznego, wiec wiersze nie przyszly z ozywionego wezla.
 
-    Odrzucone sygnaly (kazdy przepuscil falszywe naruszenie): sama pusta
-    `wsrep_local_recv_queue`; „zbior brakujacych nie zmienil sie przez N
-    odczytow" (nadrabianie jest skokowe); rownosc `wsrep_last_committed` miedzy
-    ocalalymi (moga nadrabiac w lockstepie).
+    Po kolei zawiodly wszystkie sygnaly posrednie: pusta `wsrep_local_recv_queue`,
+    stabilnosc zbioru brakujacych przez N odczytow, rownosc `wsrep_last_committed`
+    miedzy ocalalymi, zatrzymanie tego licznika przy `Synced` oraz karencja po
+    wyciszeniu. Kazdy z nich potrafi byc prawdziwy, gdy wezel wciaz nadrabia.
 
-    Warunek koncowy: obciazenie stoi, wiec licznik `wsrep_last_committed` MUSI
-    przestac rosnac — przy pustej kolejce i stanie `Synced`. Po tym jeszcze
-    karencja, bo liczniki wsrep opisuja replikacje, nie moment zejscia
-    ostatniego writesetu z watkow aplikujacych.
+    Dlatego jedynym uczciwym kryterium jest SAM WYNIK: ponawiaj odczyt, dopoki
+    brakujace nie znikna albo nie skonczy sie czas. Utrata to brak, ktory NIE
+    ZNIKA — a nie brak zaobserwowany w dowolnie wybranej chwili.
     """
-    survivor = survivor_host(exclude)
     live = [h for h in INV["all"]["children"]["galera"]["hosts"] if h != exclude]
     deadline = time.time() + timeout
-    quiet = False
-    previous = None
-    while time.time() < deadline:
-        seqno, state, queue = _node_state(survivor)
-        if state == "Synced" and queue == "0" and previous is not None and seqno == previous:
-            quiet = True
-            break
-        previous = seqno
-        time.sleep(3)
-    if quiet:
-        time.sleep(GRACE_SECONDS)
     missing = sorted(s for s in seqs if s not in present_seqs(exclude))
+    while missing and time.time() < deadline:
+        time.sleep(3)
+        missing = sorted(s for s in seqs if s not in present_seqs(exclude))
     if missing:
+        # Rozjazd miedzy wezlami rozstrzyga, czy to strata, czy tylko ten jeden
+        # wezel nie nadrobil: jesli drugi ocalaly je ma, dane zyja w klastrze.
         for host in live:
             have = present_seqs_on(host)
-            print(f"  diagnostyka: {host} ma {len([s for s in missing if s in have])}"
-                  f"/{len(missing)} rzekomo utraconych")
-        if not quiet:
-            print(f"UWAGA: klaster nie wyciszyl sie w {timeout}s — "
-                  f"brak moze byc zalegloscia, nie strata")
+            print(f"  diagnostyka po {timeout}s: {host} ma "
+                  f"{len([s for s in missing if s in have])}/{len(missing)} brakujacych")
     return missing
 
 
