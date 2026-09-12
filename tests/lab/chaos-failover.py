@@ -110,6 +110,13 @@ def active_writer_ip():
     r = sh(PROXYSQL_NODE, f'mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf -h127.0.0.1 -P6032 -uadmin -N -B -e "{q}"')
     return body(PROXYSQL_NODE, r).strip()
 
+def survivor_host(exclude=None):
+    return next(
+        (h for h in INV["all"]["children"]["galera"]["hosts"] if h != exclude),
+        WORKLOAD_HOST,
+    )
+
+
 def present_seqs(exclude=None):
     """Set of seqs present on a Galera node that SURVIVED the failover.
 
@@ -117,13 +124,39 @@ def present_seqs(exclude=None):
     claim: every client-committed transaction must be there without relying on
     the restarted node having finished re-syncing.
     """
-    survivor = next(
-        (h for h in INV["all"]["children"]["galera"]["hosts"] if h != exclude),
-        WORKLOAD_HOST,
-    )
+    survivor = survivor_host(exclude)
     q = "SELECT seq FROM isa_test.isa_failover"
     r = sh(survivor, f'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "{q}"')
     return {int(x) for x in body(survivor, r).split() if x.strip().isdigit()}
+
+
+def missing_after_apply(seqs, exclude=None, timeout=90):
+    """Sekwencje nieobecne u ocalalego PO opronieniu jego kolejki aplikacyjnej.
+
+    ISC-28 mowi o UTRACIE danych, a nie o opoznieniu zapisu na dysk sasiada.
+    Galera potwierdza commit po CERTYFIKACJI (transakcja jest juz w kolejkach
+    odbiorczych wszystkich wezlow), a samo zastosowanie jest asynchroniczne.
+    Odczyt wykonany w trakcie nadrabiania kolejki pokazuje wiec brak wierszy,
+    ktore nie sa utracone — i dokladnie tak sonda ogłosila kiedys 405 rzekomo
+    utraconych transakcji, choc minute pozniej wszystkie byly na miejscu
+    (zmierzone 2026-09-12 na `orionv17-r10`). Czekamy, az kolejka zejdzie do
+    zera i zbior przestanie sie kurczyc; dopiero to, co zostanie, jest strata.
+    """
+    survivor = survivor_host(exclude)
+    deadline = time.time() + timeout
+    missing = sorted(s for s in seqs if s not in present_seqs(exclude))
+    while missing and time.time() < deadline:
+        time.sleep(3)
+        r = sh(survivor,
+               'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e '
+               '"SHOW STATUS LIKE \'wsrep_local_recv_queue\'"')
+        queue = body(survivor, r).split()
+        drained = len(queue) >= 2 and queue[1] == "0"
+        still = sorted(s for s in seqs if s not in present_seqs(exclude))
+        if drained and still == missing:
+            return still  # kolejka pusta, a zbior sie nie zmienia — to realna strata
+        missing = still
+    return missing
 
 
 def committed_from_log():
@@ -281,9 +314,10 @@ def main():
             os.unlink(local_cnf)
         sh(WORKLOAD_HOST, f"rm -f {CNF_REMOTE} /tmp/workload.run", timeout=30)
 
-    # ISC-28: every committed seq must be present on a node that SURVIVED.
-    present = present_seqs(exclude=killed_host)
-    missing = sorted(s for s in seqs if s not in present)
+    # ISC-28: every committed seq must be present on a node that SURVIVED —
+    # sprawdzane PO opronieniu kolejki aplikacyjnej ocalalego, zeby opoznienie
+    # zastosowania nie udawalo utraty danych.
+    missing = missing_after_apply(seqs, exclude=killed_host)
     if missing:
         failures.append(
             f"{len(missing)} committed transactions lost after failover "
