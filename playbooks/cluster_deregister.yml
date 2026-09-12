@@ -416,6 +416,13 @@
     galera_backends: "{{ groups['galera'] | default([]) | map('extract', hostvars, 'galera_node_address') | select('defined') | list }}"
 
   tasks:
+    # UWAGA (audyt 2026-09-12): predykat CA NIE moze uzywac LIKE. ProxySQL
+    # admin to SQLite, a tam `_` jest wildcardem jednego znaku, a `%` dowolnego
+    # ciagu (https://www.sqlite.org/lang_expr.html): nazwa `tenant_a` kasowala
+    # takze wpisy sasiada `tenant-a`, ktory zostawal zarejestrowany na wspolnej
+    # parze ProxySQL, ale bez parametrow TLS backendu. Porownujemy wiec DOSLOWNY
+    # prefiks katalogu (`substr(...) = '<dir>/'`), gdzie `_`, `%` i `\` nie maja
+    # zadnego znaczenia; apostrof w nazwie escapujemy tak samo jak hasla.
     - name: "Wyczysc wpisy klastra w tabelach ProxySQL (scisle zakresowane)"
       ansible.builtin.command:
         argv: "{{ proxysql_admin_cli }}"
@@ -427,7 +434,7 @@
           {% if galera_backends | length > 0 %}
           DELETE FROM mysql_servers_ssl_params WHERE hostname IN ({% for b in galera_backends %}'{{ b }}'{% if not loop.last %},{% endif %}{% endfor %});
           {% endif %}
-          DELETE FROM mysql_servers_ssl_params WHERE ssl_ca LIKE '%/{{ cluster.name }}/%';
+          DELETE FROM mysql_servers_ssl_params WHERE substr(ssl_ca, 1, length('/etc/mysql/tls/{{ cluster.name | replace("'", "''") }}/')) = '/etc/mysql/tls/{{ cluster.name | replace("'", "''") }}/';
           LOAD MYSQL SERVERS TO RUNTIME;
           LOAD MYSQL USERS TO RUNTIME;
           LOAD MYSQL QUERY RULES TO RUNTIME;
