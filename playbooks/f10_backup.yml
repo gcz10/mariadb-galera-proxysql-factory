@@ -136,6 +136,23 @@
       changed_when: true
       when: galera_backup_action == 'run'
 
+    # Metryka kopii opisuje KLASTER, wiec moze miec dokladnie jednego
+    # producenta — hosta harmonogramu. Kandydat, ktory tylko sprawdzil elekcje,
+    # zostawial wlasny plik `.prom`; gdy elekcja padala (np. chwilowo
+    # nieosiagalny ProxySQL), byly to serie z zerami. PMM widzial wtedy trzy
+    # sprzeczne serie tej samej metryki i bramka slusznie odmawiala jej uznac
+    # (zmierzone 2026-09-12 na `orionv17-r10`: `last_success_unixtime` = 0 na
+    # o17db2 i o17db3 obok prawidlowej wartosci na o17db1).
+    - name: "Usun metryke kopii z wezlow, ktore nie sa harmonogramem"
+      ansible.builtin.file:
+        path: >-
+          /var/lib/node_exporter/textfile_collector/galera_backup-{{
+          cluster.name | regex_replace('[^A-Za-z0-9_-]', '_') }}.prom
+        state: absent
+      when:
+        - galera_backup_action == 'run'
+        - inventory_hostname != (backup.scheduler.host | default(groups['galera'][0]))
+
 - name: Pre-position restore executable and scoped secrets
   hosts: restore
   become: true
