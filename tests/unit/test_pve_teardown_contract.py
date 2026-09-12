@@ -121,7 +121,7 @@ class TeardownHarness:
         self.curl_log.write_text("", encoding="utf-8")
         self.content_body = self.sandbox / "content.json"
 
-    def run(self, body, env_extra=None, confirm=True):
+    def run(self, body, env_extra=None, confirm=True, nodes=()):
         self.content_body.write_text(body, encoding="utf-8")
         env = {
             key: value
@@ -141,7 +141,7 @@ class TeardownHarness:
             env["CONFIRM_DESTROY"] = str(self.workdir)
         env.update(env_extra or {})
         return subprocess.run(
-            ["bash", str(SCRIPT), str(self.workdir)],
+            ["bash", str(SCRIPT), str(self.workdir)] + list(nodes),
             capture_output=True,
             text=True,
             timeout=120,
@@ -336,5 +336,87 @@ exit 0
         logged = harness.requested_urls()
         self.assertNotIn("local-zfs:vm-10035-disk-0", logged)
         self.assertIn("local-zfs:vm-10035-cloudinit", logged)
+
+
+TWO_NODE_TERRAFORM = """#!/bin/sh
+case "$*" in
+  *output*) printf '{"target":{"vmid":991,"role":"galera"},"neighbor":{"vmid":992,"role":"galera"}}' ;;
+esac
+exit 0
+"""
+
+NEIGHBOR_ONLY_TERRAFORM = """#!/bin/sh
+case "$*" in
+  *output*) printf '{"neighbor":{"vmid":992,"role":"galera"}}' ;;
+esac
+exit 0
+"""
+
+TWO_NODE_VOLUMES = (
+    '{"data":[{"volid":"local-zfs:vm-991-cloudinit"},'
+    '{"volid":"local-zfs:vm-992-cloudinit"}]}'
+)
+
+
+class PveTeardownResumeScopeTests(unittest.TestCase):
+    """Wznowienie po przerwanym destroy nie moze wyjsc poza wskazany zakres.
+
+    ZMIERZONE 2026-09-12 na atrapach API: skrypt zapisywal liste VMID PRZED
+    bramka potwierdzenia, a wznowienie adoptowalo ja w CALOSCI, takze przy
+    wywolaniu per-node. Teardown jednej maszyny wysylal wtedy DELETE na
+    wolumeny sasiada, ktory nadal zyl i nadal byl w stanie terraform.
+    """
+
+    def setUp(self):
+        self.harness = TeardownHarness()
+        self.addCleanup(self.harness.cleanup)
+        _write_executable(self.harness.bindir / "terraform", TWO_NODE_TERRAFORM)
+        self.cache = self.harness.workdir / ".teardown-vmids"
+
+    def test_refused_run_leaves_no_resume_file(self):
+        result = self.harness.run(TWO_NODE_VOLUMES, confirm=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(CONFIRM_GATE, result.stderr)
+        self.assertFalse(
+            self.cache.exists(),
+            "odmowa potwierdzenia zostawila liste VMID do pozniejszego wznowienia",
+        )
+
+    def test_resume_skips_nodes_outside_the_requested_scope(self):
+        # Przerwany teardown calego roota: DELETE odrzucony, wiec skrypt konczy
+        # sie bledem i zostawia plik wznowienia z OBOMA wezlami.
+        interrupted = self.harness.run(
+            TWO_NODE_VOLUMES, env_extra={"DELETE_CODE": "403"}
+        )
+        self.assertNotEqual(interrupted.returncode, 0)
+        self.assertTrue(self.cache.exists())
+
+        # Wznowienie dotyczy JEDNEJ maszyny, a sasiad nadal jest w stanie.
+        _write_executable(self.harness.bindir / "terraform", NEIGHBOR_ONLY_TERRAFORM)
+        self.harness.curl_log.write_text("", encoding="utf-8")
+        resumed = self.harness.run(TWO_NODE_VOLUMES, nodes=["target"])
+
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        logged = self.harness.requested_urls()
+        self.assertIn("local-zfs:vm-991-cloudinit", logged)
+        self.assertNotIn(
+            "local-zfs:vm-992-cloudinit",
+            logged,
+            "wznowienie skasowalo wolumen maszyny spoza wskazanego zakresu",
+        )
+
+    def test_resume_refuses_cache_without_node_names(self):
+        """Plik sprzed poprawki nie wie, do ktorej maszyny naleza VMID."""
+        self.cache.write_text("991\n992\n", encoding="utf-8")
+        _write_executable(self.harness.bindir / "terraform", NEIGHBOR_ONLY_TERRAFORM)
+        result = self.harness.run(TWO_NODE_VOLUMES, nodes=["target"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("starym formacie", result.stderr)
+        logged = self.harness.requested_urls()
+        self.assertNotIn("local-zfs:vm-991-cloudinit", logged)
+        self.assertNotIn("local-zfs:vm-992-cloudinit", logged)
+
+
 if __name__ == "__main__":
     unittest.main()

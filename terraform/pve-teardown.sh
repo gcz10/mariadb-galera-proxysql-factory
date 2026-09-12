@@ -61,13 +61,25 @@ NODE_FILTER=""
 if [ "${#NODES[@]}" -gt 0 ]; then
   NODE_FILTER=$(printf '%s,' "${NODES[@]}")
 fi
+VMID_CACHE="$TF_DIR/.teardown-vmids"
+# Plik sprzed 2026-09-12: sama lista VMID bez nazw, trzymana obok. Nie jest juz
+# zapisywany (ochrona dyskow jedzie w jednym wpisie), a zostawiony przez starsza
+# wersje zostaje usuniety razem z zapisem nowego cache.
+LEGACY_PROTECTED_CACHE="$TF_DIR/.teardown-protected-vmids"
 VMIDS=()
 PROTECTED_DISK_VMIDS=()
-while IFS=':' read -r vmid role del_disks; do
-  [ -n "$vmid" ] && VMIDS+=("$vmid")
+CACHE_ENTRIES=()
+while IFS=':' read -r name vmid role del_disks; do
+  [ -n "$vmid" ] || continue
+  VMIDS+=("$vmid")
+  protected=no
   if [ "$role" = "infra" ] || [ "$del_disks" = "false" ]; then
     PROTECTED_DISK_VMIDS+=("$vmid")
+    protected=yes
   fi
+  # Wpis zna NAZWE wezla, nie tylko VMID: wznowienie musi umiec odrzucic
+  # maszyny, ktorych operator w danym wywolaniu nie wskazal.
+  CACHE_ENTRIES+=("$name:$vmid:$protected")
 done < <(
   cd "$TF_DIR" && terraform output -json vms 2>/dev/null |
     NODE_FILTER="$NODE_FILTER" python3 -c '
@@ -82,31 +94,53 @@ for name, v in data.items():
         vmid = str(v.get("vmid", ""))
         role = str(v.get("role", ""))
         del_disks = str(v.get("delete_unreferenced_disks_on_destroy", "")).lower()
-        print(vmid + ":" + role + ":" + del_disks)
+        print(name + ":" + vmid + ":" + role + ":" + del_disks)
 ' 2>/dev/null
 )
-if [ "${#VMIDS[@]}" -eq 0 ] && [ -f "$TF_DIR/.teardown-vmids" ]; then
+if [ "${#VMIDS[@]}" -eq 0 ] && [ -f "$VMID_CACHE" ]; then
   # Ponowny przebieg po destroy: stan terraform jest juz pusty, ale plik zna
-  # VMID-y z pierwszego podejscia — sprzatanie sierot moze sie odwrocic.
-  while IFS= read -r line; do
-    [ -n "$line" ] && VMIDS+=("$line")
-  done < "$TF_DIR/.teardown-vmids"
+  # wezly z pierwszego podejscia — sprzatanie sierot moze sie odwrocic.
+  #
+  # ZAKRES JEST WIAZACY. Wznowienie adoptowalo wczesniej CALA zapisana liste,
+  # takze przy wywolaniu per-node: teardown jednej maszyny wysylal wtedy DELETE
+  # na wolumeny sasiada, ktory nadal zyl i nadal byl w stanie terraform
+  # (zmierzone 2026-09-12 na atrapach API). Wpis spoza wskazanego zakresu albo
+  # w starym formacie (bez nazwy wezla) jest POMIJANY — sierota zostaje do
+  # recznego sprzatniecia, ale nic cudzego nie ginie.
+  skipped_foreign=0
+  skipped_legacy=0
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    # Stary format to sam VMID w linii — nie wiadomo, do ktorej maszyny
+    # nalezy, wiec nie ma jak sprawdzic, czy miesci sie w zakresie.
+    case "$entry" in
+      *:*:*) ;;
+      *) skipped_legacy=$((skipped_legacy + 1)); continue ;;
+    esac
+    name="${entry%%:*}"
+    entry_rest="${entry#*:}"
+    vmid="${entry_rest%%:*}"
+    protected="${entry_rest#*:}"
+    if [ -z "$name" ] || [ -z "$vmid" ]; then
+      skipped_legacy=$((skipped_legacy + 1))
+      continue
+    fi
+    if [ -n "$NODE_FILTER" ]; then
+      case ",$NODE_FILTER" in
+        *",$name,"*) ;;
+        *) skipped_foreign=$((skipped_foreign + 1)); continue ;;
+      esac
+    fi
+    VMIDS+=("$vmid")
+    CACHE_ENTRIES+=("$name:$vmid:$protected")
+    [ "$protected" = "yes" ] && PROTECTED_DISK_VMIDS+=("$vmid")
+  done < "$VMID_CACHE"
   [ "${#VMIDS[@]}" -gt 0 ] && echo "WZNOWIONO: VMID z poprzedniego przebiegu: ${VMIDS[*]}" >&2
-  if [ -f "$TF_DIR/.teardown-protected-vmids" ]; then
-    while IFS= read -r line; do
-      [ -n "$line" ] && PROTECTED_DISK_VMIDS+=("$line")
-    done < "$TF_DIR/.teardown-protected-vmids"
-  fi
+  [ "$skipped_foreign" -gt 0 ] && echo "POMINIETO $skipped_foreign wpisow spoza wskazanego zakresu (${NODES[*]}) — nie naleza do tego wywolania." >&2
+  [ "$skipped_legacy" -gt 0 ] && echo "POMINIETO $skipped_legacy wpisow w starym formacie (bez nazwy wezla) — sprzataj te sieroty recznie." >&2
 fi
 if [ "${#VMIDS[@]}" -eq 0 ]; then
   echo "UWAGA: nie odczytano VMID z terraform output — sprzatanie sierot pominiete." >&2
-else
-  printf '%s\n' "${VMIDS[@]}" > "$TF_DIR/.teardown-vmids"
-  if [ "${#PROTECTED_DISK_VMIDS[@]}" -gt 0 ]; then
-    printf '%s\n' "${PROTECTED_DISK_VMIDS[@]}" > "$TF_DIR/.teardown-protected-vmids"
-  else
-    rm -f "$TF_DIR/.teardown-protected-vmids"
-  fi
 fi
 
 # --- Zabezpieczenie 2: potwierdzenie musi POWTORZYC cel ---
@@ -158,6 +192,14 @@ Aby wykonac, powtorz cel w zmiennej:
 EOF
   exit 1
 fi
+
+# Plik wznowienia powstaje DOPIERO po potwierdzeniu celu. Zapis przed bramka
+# zostawial swieza liste VMID po KAZDEJ odmowie (literowka w celu, przebieg na
+# probe), a kolejne wywolanie adoptowalo ja jako "poprzedni przebieg".
+if [ "${#CACHE_ENTRIES[@]}" -gt 0 ]; then
+  printf '%s\n' "${CACHE_ENTRIES[@]}" > "$VMID_CACHE"
+fi
+rm -f "$LEGACY_PROTECTED_CACHE"
 # Terraform odrzuca -target pojedynczej VM, gdy blok moved jest jeszcze tylko
 # w konfiguracji, a state nadal ma adres rootowy. Nie wolno wtedy poszerzac
 # targetu do calego zasobu (zniszczyloby to pozostale wezly); bramka ponizej
@@ -343,5 +385,5 @@ if [ "$failed" -gt 0 ]; then
   echo "BLAD: nie usunieto $failed wolumenow — sprzataj recznie przed kolejnym apply." >&2
   exit 1
 fi
-rm -f "$TF_DIR/.teardown-vmids"
+rm -f "$VMID_CACHE"
 echo "=== teardown zakonczony (usunietych sierot: $removed) ==="
