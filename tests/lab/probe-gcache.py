@@ -29,6 +29,13 @@ Sizing a real workload still belongs to production data
 Falsifiable: if the deployed gcache is smaller than what the measured write rate
 requires for the IST window, the probe FAILS (a node down for the window would
 fall back to full SST instead of IST).
+
+History, second chapter (2026-09-12): the deployed value was read from GALERA[0]
+alone, yet the verdict printed and the PASS summary claimed the whole cluster. A
+single-node read is not a fleet claim: with g1=512M and g2=g3=128M the probe
+queried g1, saw 512M, and returned exit 0 while the two nodes that would fall back
+to full SST were never looked at. The deployed value is now read from EVERY galera
+host and judged by the SMALLEST of them; divergence names the lagging nodes.
 """
 import math
 import os
@@ -182,23 +189,44 @@ def measure_write_rate(writer, failures, undetermined):
     match = re.search(r"RATE_BPS=(\d+)", body)
     return int(match.group(1)) if match else 0
 
-def deployed_gcache(failures, undetermined):
-    if not GALERA:
-        undetermined.append("gcache-deployed: inwentarz nie definiuje hostow galera")
-        return None
-    result = run_ansible(
-        CTX,
-        GALERA[0],
-        "grep -ioE 'gcache.size=[0-9]+[MG]' /etc/my.cnf.d/server.cnf || true",
-    )
-    require_hosts(result, [GALERA[0]], "gcache-deployed", failures, undetermined)
-    if GALERA[0] not in result.bodies:
-        return None
-    match = re.search(r"gcache.size=(\d+)([MG])", result.body(GALERA[0]), re.I)
+def parse_gcache(body: str) -> int:
+    """Wartosc gcache.size z ciala odpowiedzi wezla; brak wpisu = 0.
+
+    Zero (a nie "nie wiem") jest celowe: wezel bez ustawionego gcache.size nie
+    zmiesci zadnego write-setu, wiec spada ponizej progu 128M i jest FAIL-em.
+    """
+    match = re.search(r"gcache.size=(\d+)([MG])", body, re.I)
     if not match:
         return 0
     val = int(match.group(1))
     return val * 1024 if match.group(2).upper() == "G" else val
+
+
+def deployed_gcache(failures, undetermined):
+    """Zwraca (najmniejsza wartosc w MB, {host: MB}) z CALEGO klastra Galery.
+
+    Pojedynczy odczyt nie jest twierdzeniem o flocie: o wyniku decyduje
+    NAJMNIEJSZA wartosc, bo od niej zalezy, czy kazdy wezel wroci po awarii
+    przez IST. Host bez odpowiedzi trafia do `undetermined` przez
+    `require_hosts` (exit 2), a nie do pomiaru na cichym podzbiorze.
+    """
+    if not GALERA:
+        undetermined.append("gcache-deployed: inwentarz nie definiuje hostow galera")
+        return None, {}
+    result = run_ansible(
+        CTX,
+        "galera",
+        "grep -ioE 'gcache.size=[0-9]+[MG]' /etc/my.cnf.d/server.cnf || true",
+    )
+    require_hosts(result, GALERA, "gcache-deployed", failures, undetermined)
+    per_host = {}
+    for host in GALERA:
+        if host not in result.bodies:
+            continue
+        per_host[host] = parse_gcache(result.body(host))
+    if not per_host:
+        return None, {}
+    return min(per_host.values()), per_host
 
 
 def main():
@@ -218,7 +246,11 @@ def main():
     else:
         gcache_bytes = rate * IST_WINDOW_MIN * 60
         required_mb = max(math.ceil(gcache_bytes / (1024 * 1024)), 128)
-    deployed_mb = deployed_gcache(failures, undetermined)
+    # O wyniku decyduje NAJMNIEJSZA wartosc we flocie: IST musi zmiescic sie na
+    # kazdym wezle, nie tylko na tym najhojniej skonfigurowanym. Komunikat FAIL
+    # wymienia wezly ponizej wymagania, zeby operator wiedzial, ktore poprawic.
+    min_deployed_mb, per_host = deployed_gcache(failures, undetermined)
+    deployed_note = ", ".join(f"{host}={per_host[host]}M" for host in sorted(per_host))
     print(
         f"writer={writer or 'unknown'} write_rate={rate if rate is not None else 'unknown'} "
         f"B/s  ist_window={IST_WINDOW_MIN}min"
@@ -226,23 +258,39 @@ def main():
     print(
         f"required gcache={required_mb if required_mb is not None else 'unknown'}M "
         f"(min 128M)  deployed gcache="
-        f"{deployed_mb if deployed_mb is not None else 'unknown'}M"
+        f"{min_deployed_mb if min_deployed_mb is not None else 'unknown'}M"
+        + (f" (min z {len(per_host)} wezlow galera; per host: {deployed_note})" if per_host else "")
     )
 
-    if deployed_mb is not None:
-        if deployed_mb < 128:
-            failures.append(f"ISC-68 — deployed gcache {deployed_mb}M below 128M floor")
-        if required_mb is not None and deployed_mb < required_mb:
+    if min_deployed_mb is not None:
+        if min_deployed_mb < 128:
             failures.append(
-                f"ISC-68 — deployed gcache {deployed_mb}M < required {required_mb}M "
-                f"(write_rate={rate}B/s × {IST_WINDOW_MIN}min): node would need full SST "
-                f"after the IST window"
+                f"ISC-68 — deployed gcache {min_deployed_mb}M below 128M floor "
+                f"(per host: {deployed_note})"
             )
+        if required_mb is not None and min_deployed_mb < required_mb:
+            lagging = sorted(host for host, mb in per_host.items() if mb < required_mb)
+            failures.append(
+                f"ISC-68 — deployed gcache {min_deployed_mb}M < required {required_mb}M "
+                f"(write_rate={rate}B/s × {IST_WINDOW_MIN}min); nodes below the requirement: "
+                f"{', '.join(lagging)} (per host: {deployed_note}): those nodes would need "
+                f"full SST after the IST window"
+            )
+
+    if min_deployed_mb is None:
+        certified = "unknownM"
+    elif min_deployed_mb == max(per_host.values()):
+        certified = f"{min_deployed_mb}M on all {len(per_host)} galera nodes"
+    else:
+        certified = (
+            f"min {min_deployed_mb}M of {max(per_host.values())}M across "
+            f"{len(per_host)} galera nodes ({deployed_note})"
+        )
 
     return finish(
         failures,
         undetermined,
-        f"ISC-68 — gcache.size={deployed_mb}M covers write_rate={rate}B/s "
+        f"ISC-68 — gcache.size={certified} covers write_rate={rate}B/s "
         f"for {IST_WINDOW_MIN}min IST window (required {required_mb}M)",
     )
 
