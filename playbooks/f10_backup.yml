@@ -84,6 +84,14 @@
   # asercja o dziedziczonych sekretach wypada wczesniej. Rozdzielenie na plays
   # daje te sama gwarancje kolejnosci, ktora od dawna dziala dla hosta restore.
   hosts: "galera:!{{ backup.scheduler.host | default('galera[0]') }}"
+  # Rotacja poswiadczen jest ATOMOWA WOBEC KLASTRA albo jej nie ma: ostatni play
+  # odwoluje stare konta MinIO i wolno mu to zrobic dopiero wtedy, gdy NOWY klucz
+  # ma juz KAZDY kandydat. Domyslnie Ansible usuwa tylko host, ktory zawiodl, i
+  # leci dalej — koordynator odwolywal wiec klucz, ktory kandydat wlasnie nie
+  # dostal (zmierzone 2026-09-12 lokalnym przebiegiem grafu play'ow). Cron stoi
+  # na tym kandydacie i sam rozstrzyga elekcje, wiec jego backup padalby na
+  # uwierzytelnieniu do MinIO az do nastepnego CZYSTEGO `configure`.
+  any_errors_fatal: true
   become: true
   vars_files:
     - vars/proxysql_hostgroups.yml
@@ -136,25 +144,11 @@
       changed_when: true
       when: galera_backup_action == 'run'
 
-    # Metryka kopii opisuje KLASTER, wiec moze miec dokladnie jednego
-    # producenta — hosta harmonogramu. Kandydat, ktory tylko sprawdzil elekcje,
-    # zostawial wlasny plik `.prom`; gdy elekcja padala (np. chwilowo
-    # nieosiagalny ProxySQL), byly to serie z zerami. PMM widzial wtedy trzy
-    # sprzeczne serie tej samej metryki i bramka slusznie odmawiala jej uznac
-    # (zmierzone 2026-09-12 na `orionv17-r10`: `last_success_unixtime` = 0 na
-    # o17db2 i o17db3 obok prawidlowej wartosci na o17db1).
-    - name: "Usun metryke kopii z wezlow, ktore nie sa harmonogramem"
-      ansible.builtin.file:
-        path: >-
-          /var/lib/node_exporter/textfile_collector/galera_backup-{{
-          cluster.name | regex_replace('[^A-Za-z0-9_-]', '_') }}.prom
-        state: absent
-      when:
-        - galera_backup_action == 'run'
-        - inventory_hostname != (backup.scheduler.host | default(groups['galera'][0]))
-
 - name: Pre-position restore executable and scoped secrets
   hosts: restore
+  # Host restore konsumuje ten sam klucz co kandydaci (patrz play wyzej):
+  # niepelna dystrybucja nie moze przepuscic revoke.
+  any_errors_fatal: true
   become: true
   vars_files:
     - vars/proxysql_hostgroups.yml

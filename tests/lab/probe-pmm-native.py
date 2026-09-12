@@ -168,6 +168,43 @@ def check(condition, message, failures):
     if not condition:
         failures.append(message)
 
+
+def backup_metric_valid(metric_name, results, value, now, probe_started):
+    """Czy seria metryki backupu jest wiarygodna dla CALEGO klastra.
+
+    WEZEL-PRODUCENT NIE JEST CZESCIA KONTRAKTU. Donora wybiera runner przy
+    starcie (backup hostgroup ProxySQL), wiec plik `.prom` powstaje na tym
+    wezle, ktory faktycznie wykonal kopie — niekoniecznie na pierwszym z
+    inwentarza. Przypiecie do FIRST_GALERA_NODE oblewalo zdrowy klaster za
+    kazdym razem, gdy host harmonogramu byl writerem i elekcja slusznie
+    przeniosla backup gdzie indziej (zmierzone 2026-09-12).
+
+    Zostaje mocniejsza czesc: DOKLADNIE JEDNA seria (dwie znacza porzucony plik
+    na bylym donorze), producent nalezy do wezlow TEGO klastra, etykiety zgadzaja
+    sie z deklaracja, a probka jest swiezsza niz start sondy.
+    """
+    if len(results) != 1:
+        return False
+    labels = results[0]["metric"]
+    if labels.get("node_name") not in EXPECTED_NODES:
+        return False
+    if labels.get("logical_cluster") != CLUSTER_CONFIG["cluster"]["name"]:
+        return False
+    if labels.get("backend") != CLUSTER_CONFIG["backup"]["destination"]:
+        return False
+    if float(results[0]["value"][0]) < probe_started:
+        return False
+    if metric_name == "galera_backup_last_success_unixtime":
+        return bool(
+            value and value > 0 and (now - value) <= BACKUP_FRESHNESS_SLA_HOURS * 3600
+        )
+    if metric_name == "galera_backup_last_run_success":
+        return value == 1
+    if metric_name == "galera_backup_last_size_bytes":
+        return bool(value and value > 0)
+    return value is not None and value >= 0
+
+
 def wait_for_fresh_metrics(queries, started_at, timeout=90):
     """Poll instant queries until every expected series was scraped after this probe.
 
@@ -892,30 +929,12 @@ def main():
             failures,
         )
 
-    # Backup runner metrics — one fresh series from the scheduler, with the
-    # logical-cluster and backend labels used by the managed alert rules.
+    # Backup runner metrics — one fresh series from whichever node was elected
+    # donor, with the logical-cluster and backend labels used by the alert rules.
     for metric_name in EXPECTED_GALERA_BACKUP_METRICS:
         results, value = state_value(metric_name)
-        labels = results[0]["metric"] if len(results) == 1 else {}
-        valid_value = value is not None and value >= 0
-        if metric_name == "galera_backup_last_success_unixtime":
-            valid_value = bool(
-                value
-                and value > 0
-                and (now - value) <= BACKUP_FRESHNESS_SLA_HOURS * 3600
-            )
-        elif metric_name == "galera_backup_last_run_success":
-            valid_value = value == 1
-        elif metric_name == "galera_backup_last_size_bytes":
-            valid_value = bool(value and value > 0)
         check(
-            len(results) == 1
-            and labels.get("node_name") == FIRST_GALERA_NODE
-            and labels.get("logical_cluster")
-            == CLUSTER_CONFIG["cluster"]["name"]
-            and labels.get("backend") == CLUSTER_CONFIG["backup"]["destination"]
-            and valid_value
-            and float(results[0]["value"][0]) >= probe_started,
+            backup_metric_valid(metric_name, results, value, now, probe_started),
             f"invalid Galera backup metric {metric_name}: {results}",
             failures,
         )

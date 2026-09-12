@@ -113,6 +113,26 @@ class MetricsManager:
         atomic_write(self.metric_path, content, mode=0o644)
         restore_default_context(self.metric_path)
 
+    def discard(self) -> None:
+        """Zabierz plik metryki tego klastra z TEGO wezla.
+
+        Metryka opisuje KLASTER, a jej producentem jest donor wybrany w danym
+        przebiegu. Cron stoi na kazdym kandydacie, wiec po przeniesieniu donora
+        stary plik zostawal na poprzednim wezle i node_exporter serwowal dwie
+        sprzeczne serie tej samej metryki: `min(last_run_success)` widzialo
+        porzucone zero i alert palil sie mimo zdrowych kopii (zmierzone
+        2026-09-12). Wezel, ktory nie zostal donorem, zabiera swoj plik ze soba.
+        """
+        try:
+            self.metric_path.unlink()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise BackupError(
+                "E_METRICS",
+                f"Failed to remove the stale metric file {self.metric_path}: {exc}",
+            ) from exc
+
 
 def publish_drill_freshness(
     metric_path: Path,

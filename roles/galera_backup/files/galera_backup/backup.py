@@ -499,6 +499,19 @@ def run_backup(
                 f"galera-backup: {curr_host} nie jest donorem w tym przebiegu "
                 f"(wybrany: {donor}) — pomijam"
             )
+            # Metryka kopii opisuje KLASTER i ma dokladnie jednego producenta:
+            # donora tego przebiegu. Wezel niewybrany zabiera swoj plik, inaczej
+            # po przeniesieniu donora zostaje po nim seria z poprzedniej doby
+            # (albo zero po nieudanej elekcji) i regula `min(last_run_success)`
+            # pali sie mimo zdrowych kopii. Porazka usuniecia jest zdarzeniem —
+            # nie zamienia poprawnego pominiecia w blad przebiegu.
+            try:
+                metrics_mgr.discard()
+            except BackupError as metrics_exc:
+                event_mgr.emit(
+                    "metrics.discard_failure",
+                    {"error_code": metrics_exc.code, "message": metrics_exc.public_message},
+                )
             # Retencja nalezy do KOORDYNATORA, nie do donora: gdyby biegla tylko
             # w sciezce backupu, kazde przejecie backupu przez inny wezel
             # zatrzymywaloby kasowanie wygaslych kopii az do powrotu preferencji.
