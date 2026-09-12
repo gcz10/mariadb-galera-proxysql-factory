@@ -349,11 +349,25 @@ def main():
                "systemctl start mariadb 2>/dev/null || true; sleep 10; echo restarted",
                timeout=180)
         elif killed_host:
-            sh(killed_host,
-               "rm -f /var/lib/mysql/aria_log_control /var/lib/mysql/aria_log.00000001; "
-               "mariadbd --user=mysql --datadir=/var/lib/mysql "
-               "--socket=/var/lib/mysql/mysql.sock >/var/log/mariadb/mariadb.log 2>&1 & "
-               "sleep 15; echo restarted", timeout=60)
+            # ZMIENIONE 2026-09-12: bylo tu surowe `mariadbd ... &` z pominieciem
+            # systemd. Taki proces wstaje POZA klastrem — zmierzone na
+            # `o17db3`: `wsrep_cluster_size 1`, `non-Primary`, 1 wiersz wobec
+            # 1010 u sasiadow. Kolejne przebiegi czytaly wtedy odlaczony wezel i
+            # zglaszaly „utracone transakcje", ktore nigdy nie zginely. Sonda
+            # ma oddawac klaster w stanie, w jakim go zastala.
+            sh(killed_host, "systemctl start mariadb; echo restarted", timeout=180)
+        if killed_host:
+            for _ in range(40):
+                probe = sh(killed_host,
+                           'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e '
+                           '"SHOW STATUS LIKE \'wsrep_local_state_comment\'"',
+                           check=False)
+                if "Synced" in body(killed_host, probe):
+                    break
+                time.sleep(5)
+            else:
+                print(f"UWAGA: {killed_host} nie wrocil do stanu Synced — "
+                      "klaster zostaje zdegradowany dla kolejnych sond")
         if local_cnf and os.path.exists(local_cnf):
             os.unlink(local_cnf)
         sh(WORKLOAD_HOST, f"rm -f {CNF_REMOTE} /tmp/workload.run", timeout=30)
