@@ -9,8 +9,9 @@ patrz `tests/validation/probe-role-contract.py`).
   `keepalived_connect_any` przy SELinux, auth ≤8 znaków — polityka
   `KEEPALIVED_AUTH_PASS`).
 - `files/check_proxysql.sh` — backend-aware health-check: przez
-  `/etc/proxysql/admin-check.cnf` (0600, admin bez argv); bez pliku degraduje
-  do sondy TCP-open.
+  `/etc/proxysql/admin-check.cnf` (0600, admin bez argv); **bez pliku kończy się
+  błędem** (fail-closed) — sonda TCP-open nie odróżnia pustej warstwy od
+  instancji ze wszystkimi backendami poza obsługą.
 
 ## Konsumenci
 

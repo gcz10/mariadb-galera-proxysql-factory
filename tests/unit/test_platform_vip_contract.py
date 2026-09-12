@@ -9,6 +9,13 @@ opisywała jako naruszenie: na warstwie z zatrzymanymi najemcami
 `platform-verify` padał zawsze i przestawał cokolwiek znaczyć (zmierzone
 2026-09-05 na xenonv11).
 
+Drugi rozróżniany stan to BRAK poswiadczen admina: bez
+`/etc/proxysql/admin-check.cnf` bramka nie może ustalić stanu backendów,
+a otwarty port 6033 wygląda identycznie na pustej platformie i na takiej,
+w której WSZYSTKIE backendy są SHUNNED. Bramka musi więc odmówić werdyktu
+(fail-closed), zamiast degradować się do sondy TCP i wpuszczać VIP-a na
+instancję odpowiadającą błędem na każde zapytanie.
+
 Testowana jest decyzja, nie tekst komunikatu: kiedy brak VIP-a jest awarią,
 a kiedy pomiarem niemożliwym do rozstrzygnięcia.
 """
@@ -72,11 +79,20 @@ class PlatformVipContractTests(unittest.TestCase):
         cls._listener.listen(8)
         cls.addClassCleanup(cls._listener.close)
 
-    def run_gate(self, groups: int, writers: int, admin_fails: bool = False) -> int:
-        """Uruchamia PRAWDZIWY skrypt bramki z klientem zwracajacym zadany stan."""
+    def run_gate_process(
+        self, groups: int, writers: int, admin_fails: bool = False, credentials: bool = True
+    ) -> "subprocess.CompletedProcess[str]":
+        """Uruchamia PRAWDZIWY skrypt bramki z klientem zwracajacym zadany stan.
+
+        `credentials=False` celowo NIE tworzy pliku poswiadczen: sciezka
+        wskazana przez PROXYSQL_ADMIN_CNF nie istnieje, wiec test mierzy
+        zachowanie bramki bez mozliwosci ustalenia stanu backendow.
+        """
         workdir = Path(tempfile.mkdtemp(prefix="vip-gate-"))
         self.addCleanup(shutil.rmtree, workdir, ignore_errors=True)
-        (workdir / "admin-check.cnf").write_text("[client]\n", encoding="utf-8")
+        cnf = workdir / "admin-check.cnf"
+        if credentials:
+            cnf.write_text("[client]\n", encoding="utf-8")
         client = workdir / "mariadb"
         client.write_text(
             "#!/bin/sh\n"
@@ -90,10 +106,14 @@ class PlatformVipContractTests(unittest.TestCase):
             env={
                 **os.environ,
                 "PATH": f"{workdir}:{os.environ['PATH']}",
-                "PROXYSQL_ADMIN_CNF": str(workdir / "admin-check.cnf"),
+                "PROXYSQL_ADMIN_CNF": str(cnf),
             },
             capture_output=True,
-        ).returncode
+            text=True,
+        )
+
+    def run_gate(self, groups: int, writers: int, admin_fails: bool = False) -> int:
+        return self.run_gate_process(groups, writers, admin_fails=admin_fails).returncode
 
     def test_stopped_tenants_make_the_missing_vip_unmeasurable(self):
         """Aktywne grupy + zero writerów = bramka zdjęła adres celowo."""
@@ -162,6 +182,19 @@ class PlatformVipContractTests(unittest.TestCase):
     def test_gate_withdraws_the_vip_when_the_admin_interface_fails(self):
         """Nieczytelny stan pary = brak dowodu, ze jest komu obsluzyc ruch."""
         self.assertNotEqual(self.run_gate(2, 2, admin_fails=True), 0)
+
+    def test_missing_credentials_fail_closed_instead_of_grading_a_port(self):
+        """Brak admin-check.cnf nie może zamienić bramki w sondę portu 6033.
+
+        Zmierzony defekt: przy otwartym porcie klienta i ZERO writerow ONLINE
+        bramka zwracała 1 z plikiem poswiadczen i 0 bez niego — Keepalived
+        trzymał VIP na instancji odpowiadającej błędem na każde zapytanie.
+        Port 6033 odpowiada tu celowo (nasluch z setUpClass): werdykt musi
+        pochodzić z braku tozsamosci admina, nie z zamknietego portu.
+        """
+        result = self.run_gate_process(2, 2, credentials=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("admin-check.cnf", result.stderr)
 
 
 if __name__ == "__main__":
