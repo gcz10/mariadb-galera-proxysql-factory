@@ -41,6 +41,11 @@ FAILOVER_MODE = os.environ.get("FAILOVER_MODE", "soft").lower()
 # liczniki wsrep opisuja replikacje, nie moment zejscia ostatniego
 # writesetu z watkow aplikujacych (zmierzone 2026-09-12).
 GRACE_SECONDS = int(os.environ.get("FAILOVER_GRACE_SECONDS", "20"))
+# Ile sekund wolno czekac, az ofiara trybu `hard` NAPRAWDE przestanie odpowiadac.
+# Bramka nie ufa samemu wyslaniu rozkazu: odrzucone zadanie (np. brak uprawnien
+# do sysrq) tez konczy sie sukcesem petli workloadu, wiec bez tego pomiaru
+# „utrata maszyny" byla tylko zalozeniem.
+HARD_DOWN_TIMEOUT = int(os.environ.get("FAILOVER_HARD_DOWN_TIMEOUT", "90"))
 if FAILOVER_MODE not in ("soft", "hard"):
     raise SystemExit(f"REFUSED: FAILOVER_MODE={FAILOVER_MODE!r} (dozwolone: soft, hard)")
 
@@ -203,8 +208,24 @@ def missing_after_apply(seqs, exclude=None, timeout=240):
     return missing
 
 
-def committed_from_log():
+def committed_from_log(strict=False):
+    """Read the committed-transaction log from the workload host.
+
+    `strict` is used only for the FINAL read (the verdict). The previous version
+    ignored the ansible return code, so a failed read (host unreachable, log
+    removed) turned into "zero transactions" -- and the ISC-28 assertion over an
+    empty set passed VACUOUSLY. A failed measurement must end red, not
+    masquerade as absence of data.
+
+    The in-loop RTO read stays tolerant (strict=False): the workload host may
+    itself be the node being killed, so a transient failure is expected there
+    and must not abort the run.
+    """
     r = sh(WORKLOAD_HOST, f"cat {LOG_REMOTE}")
+    if strict and r.returncode != 0:
+        raise RuntimeError(
+            f"read of committed-transaction log on {WORKLOAD_HOST} failed "
+            f"(rc={r.returncode}); no verdict possible: {r.stdout}")
     seqs, times = [], []
     for line in body(WORKLOAD_HOST, r).splitlines():
         parts = line.split()
@@ -235,6 +256,10 @@ def main():
     ip2host = galera_ip_to_host()
     killed_host = None
     local_cnf = None
+    # Stan werdyktu inicjowany PRZED `try`: sciezka wyjscia z `try` (np. brak
+    # mapowania IP writera) nie moze wywrocic sie na NameError w weryfikacji
+    # ISC-28 po `finally` — brak danych to FAIL, nie wyjatek.
+    seqs, times, gap = [], [], 0.0
 
     try:
         # Setup: workload table (Galera-replicated), creds file, workload script.
@@ -297,16 +322,50 @@ def main():
             # oddaje sterowanie zaraz po wystartowaniu zadania i nie czeka na
             # odpowiedz, ktora juz nie nadejdzie.
             try:
-                subprocess.run(
+                kill_launch = subprocess.run(
                     [ANSIBLE, killed_host, "-i", INVENTORY, "-m", "ansible.builtin.shell",
                      "-a", "echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger",
                      "-B", "5", "-P", "0"],
                     capture_output=True, text=True, timeout=30)
             except subprocess.TimeoutExpired:
-                pass  # maszyna zniknela szybciej, niz ansible zdazyl wrocic — cel osiagniety
+                # maszyna zniknela szybciej, niz ansible zdazyl wrocic — cel osiagniety
+                kill_launch = None
         else:
             sh(killed_host, "pkill -9 -x mariadbd; echo killed", check=True)
         print(f"killed writer {killed_host} at {kill_ts:.2f} (tryb {FAILOVER_MODE})")
+
+        if FAILOVER_MODE == "hard":
+            # BRAMKA: tryb `hard` dowodzi UTRATY MASZYNY, nie wyslania rozkazu.
+            # Wynik async-uruchomienia ansible byl wczesniej ignorowany, wiec
+            # ODRZUCONE zadanie (np. brak zapisu do sysrq) nadal dostawalo PASS,
+            # dopoki workload dalej commitowal — test nie testowal awarii.
+            # Czekamy, az ofiara przestanie odpowiadac na ping; jesli odpowiada
+            # do konca terminu, awarii nie bylo i nie ma czego zaliczac.
+            if kill_launch is not None and kill_launch.returncode != 0:
+                print(f"  async kill launch on {killed_host} returned rc={kill_launch.returncode} "
+                      "— i tak sprawdzam, czy maszyna faktycznie zginela")
+            down = False
+            down_deadline = time.time() + HARD_DOWN_TIMEOUT
+            while time.time() < down_deadline:
+                try:
+                    ping = subprocess.run(
+                        [ANSIBLE, killed_host, "-i", INVENTORY, "-m", "ansible.builtin.ping"],
+                        capture_output=True, text=True, timeout=30)
+                    still_up = ping.returncode == 0 and "SUCCESS" in ping.stdout
+                except subprocess.TimeoutExpired:
+                    still_up = False  # brak odpowiedzi w terminie = maszyna nie odpowiada
+                if not still_up:
+                    down = True
+                    break
+                time.sleep(2)
+            if not down:
+                failures.append(
+                    f"hard-mode kill did not take effect: {killed_host} still reachable "
+                    f"{HARD_DOWN_TIMEOUT}s after the sysrq command — machine never went "
+                    "down, so no failover was exercised")
+            else:
+                print(f"  confirmed {killed_host} unreachable "
+                      f"({time.time() - kill_ts:.1f}s after the kill command)")
 
         # Wait for the workload to resume committing AFTER the kill instant.
         # Detect by timestamp (a commit clearly after kill_ts), not by count —
@@ -325,8 +384,19 @@ def main():
         sh(WORKLOAD_HOST, "rm -f /tmp/workload.run", check=True)
         time.sleep(1)
 
-        seqs, times = committed_from_log()
-        gap = max_gap(times)
+        # Odczyt FINALNY jest surowy: nieudany odczyt to nieudany POMIAR, nigdy
+        # „zero transakcji" — inaczej ISC-28 przechodzi wakatyjnie na pustym
+        # zbiorze. Blad pomiaru trafia do `failures` (exit 1), a nie w traceback.
+        try:
+            seqs, times = committed_from_log(strict=True)
+        except RuntimeError as exc:
+            failures.append(str(exc))
+        else:
+            gap = max_gap(times)
+            if not seqs:
+                failures.append(
+                    "committed-transaction log is EMPTY — ISC-28 assertion not "
+                    "executable (cannot prove survival of zero transactions)")
 
         # ISC-27: workload resumed within RTO.
         if not resumed:
@@ -357,6 +427,9 @@ def main():
             # ma oddawac klaster w stanie, w jakim go zastala.
             sh(killed_host, "systemctl start mariadb; echo restarted", timeout=180)
         if killed_host:
+            # BRAMKA: sonda obiecuje oddac klaster w stanie, w jakim go zastala.
+            # Wczesniejsza wersja tylko PRINTS „UWAGA" i konczyla sie PASS —
+            # zdegradowany wezel szedl wiec do kolejnych sond jako zielony wynik.
             for _ in range(40):
                 probe = sh(killed_host,
                            'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e '
@@ -368,6 +441,9 @@ def main():
             else:
                 print(f"UWAGA: {killed_host} nie wrocil do stanu Synced — "
                       "klaster zostaje zdegradowany dla kolejnych sond")
+                failures.append(
+                    f"{killed_host} did not return to Synced within the restore window "
+                    "— cluster handed back degraded (probe must restore what it found)")
         if local_cnf and os.path.exists(local_cnf):
             os.unlink(local_cnf)
         sh(WORKLOAD_HOST, f"rm -f {CNF_REMOTE} /tmp/workload.run", timeout=30)

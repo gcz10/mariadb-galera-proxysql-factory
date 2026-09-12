@@ -88,6 +88,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib3
 import yaml
@@ -151,6 +152,31 @@ def sh(host, script, timeout=120, check=False):
     if check and rc != 0:
         raise RuntimeError(f"{host}: {body[:200]}")
     return rc, body
+
+
+ADMIN_PORT_PROBE = ("timeout 3 bash -c '</dev/tcp/127.0.0.1/6032' "
+                    "&& echo ADMIN_OK || echo ADMIN_DOWN")
+
+
+def wait_admin_port(host, seconds, retry_script=None):
+    """Czy ProxySQL na `host` znow ODPOWIADA na porcie administracyjnym (127.0.0.1:6032).
+
+    Jedyne wiarygodne kryterium "warstwa przywrocona": `systemctl start` moze
+    zwrocic 0 przy martwym procesie (nieaktualny plik PID), a VM moze wstac bez
+    uslugi. Do 2026-09-12 tryb `node` mial ta petle, ale wyczerpany deadline
+    konczyl sie tylko `UWAGA:` i `restored = True` — czyli falszywym PASS-em.
+    `retry_script` (tryb `node` i `service`: restart uslugi) jest wykonywany
+    miedzy probami.
+    """
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        rc_a, out_a = sh(host, ADMIN_PORT_PROBE, timeout=60)
+        if rc_a == 0 and "ADMIN_OK" in out_a:
+            return True
+        if retry_script:
+            sh(host, retry_script, timeout=180)
+        time.sleep(5)
+    return False
 
 
 def vip_holder():
@@ -260,11 +286,30 @@ def main():
             return 1
         vmid = mapping[victim]
 
+    # HASLO APLIKACJI NIE MOZE JECHAC ARGUMENTEM. Do 2026-09-12 profil klienta
+    # powstawal przez `sh(APP_HOST, "printf ... password={APP_PW} ... > CNF")`,
+    # czyli sekret byl argumentem `ansible -m ansible.builtin.shell -a` i przez
+    # cale wywolanie widnial w `ps` na hoscie kontrolnym. Wzorzec jak
+    # w chaos-failover.py: plik lokalny (mkstemp) i modul `copy` z mode=0600
+    # oraz owner=root.
+    local_cnf = None
     subprocess.run([ANSIBLE, APP_HOST, "-i", INVENTORY, "-m", "copy",
                     "-a", f"src=tests/lab/workload-numbered.sh dest={SCRIPT_REMOTE} mode=0755"],
                    capture_output=True, text=True, check=True)
-    sh(APP_HOST, f"printf '[client]\\nuser={APP_USER}\\npassword={APP_PW}\\n' > {CNF_REMOTE} "
-                 f"&& chmod 0600 {CNF_REMOTE}", check=True)
+    # Kopia lokalna zyje WYLACZNIE na czas transferu i ginie takze wtedy, gdy
+    # transfer padnie — inaczej nieudany przebieg zostawialby sekret w /tmp
+    # hosta kontrolnego, gdzie nikt go juz nie szuka.
+    fd, local_cnf = tempfile.mkstemp()
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(f"[client]\nuser={APP_USER}\npassword={APP_PW}\n")
+        subprocess.run([ANSIBLE, APP_HOST, "-i", INVENTORY, "-m", "copy",
+                        "-a", f"src={local_cnf} dest={CNF_REMOTE} mode=0600 owner=root"],
+                       capture_output=True, text=True, check=True)
+    finally:
+        if os.path.exists(local_cnf):
+            os.unlink(local_cnf)
+        local_cnf = None
     # TRUNCATE jest OBOWIAZKOWY, nie kosmetyczny. workload-numbered.sh numeruje
     # seq od 1, a `seq` to PRIMARY KEY — po wczesniejszym `lab-failover-test` na
     # tym samym klastrze tabela juz zawiera 1..N, wiec KAZDY insert wpada w
@@ -421,8 +466,18 @@ def main():
                 # Nie ma czego przywracac: angel juz to zrobil, a VIP sie nie ruszyl.
                 restored = True
             elif MODE == "service":
+                # ZMIENIONE 2026-09-12: bylo `sh(victim, "systemctl start proxysql")`
+                # i `restored = True` bez czytania wyniku. `systemctl start` zwraca 0
+                # takze wtedy, gdy proces nie wstal (nieaktualny plik PID), wiec sonda
+                # oglaszala przywrocenie martwego wezla. Teraz `restored` znaczy
+                # DOKLADNIE "ProxySQL znow odpowiada na porcie administracyjnym".
                 sh(victim, "systemctl start proxysql", timeout=180)
-                restored = True
+                restored = wait_admin_port(victim, 120, retry_script="systemctl restart proxysql")
+                if not restored:
+                    failures.append(
+                        f"ProxySQL na {victim} nie odpowiada na porcie administracyjnym "
+                        f"(127.0.0.1:6032) po przywroceniu w trybie 'service' — wezel "
+                        f"zostaje martwy, a warstwa zdegradowana dla kolejnych sond")
             elif vmid:
                 pve(vmid, "start")
                 # ZMIENIONE 2026-09-12: bylo `sleep(45)` i `restored = True` —
@@ -438,20 +493,23 @@ def main():
                         break
                     time.sleep(5)
                 sh(victim, "systemctl start proxysql", timeout=180)
-                deadline_svc = time.time() + 120
-                while time.time() < deadline_svc:
-                    rc_a, out_a = sh(victim, "timeout 3 bash -c '</dev/tcp/127.0.0.1/6032' "
-                                             "&& echo ADMIN_OK || echo ADMIN_DOWN", timeout=60)
-                    if rc_a == 0 and "ADMIN_OK" in out_a:
-                        break
-                    sh(victim, "systemctl restart proxysql", timeout=180)
-                    time.sleep(5)
-                else:
-                    print(f"UWAGA: ProxySQL na {victim} nie odpowiada na 6032 po restarcie maszyny "
-                          "— warstwa zostaje zdegradowana dla kolejnych sond")
-                restored = True
+                restored = wait_admin_port(victim, 120, retry_script="systemctl restart proxysql")
+                if not restored:
+                    # ZMIENIONE 2026-09-12: wyczerpany deadline konczyl sie samym
+                    # `UWAGA:` i `restored = True` obok — czyli PASS-em przy wezle,
+                    # ktory nie wrocil. Teraz brak portu administracyjnego to FAIL.
+                    failures.append(
+                        f"ProxySQL na {victim} nie odpowiada na porcie administracyjnym "
+                        f"(127.0.0.1:6032) po restarcie maszyny — wezel zostaje martwy, "
+                        f"a warstwa zdegradowana dla kolejnych sond")
         except Exception as exc:                                  # noqa: BLE001
             print(f"UWAGA: nie udalo sie przywrocic {victim}: {exc}")
+            # Wyjatek w przywracaniu to BRAK POTWIERDZENIA, nie "trudno": bez tego
+            # sonda wracalaby 0 z parametrem `przywrocony=False`, czyli zostawiala
+            # flote z martwym wezlem i oglaszala PASS — dokladnie ten sam falszywy
+            # wynik, ktory zamyka zmiana wyzej.
+            if MODE != "worker":
+                failures.append(f"nie udalo sie przywrocic {victim}: {exc}")
 
         # W trybie `worker` VIP sie nie ruszyl, wiec nie ma powrotu do mierzenia.
         if restored and MODE != "worker":
@@ -472,6 +530,10 @@ def main():
             time.sleep(5)
 
         sh(APP_HOST, "rm -f /tmp/workload.run", timeout=60)
+        # Lokalna kopia poswiadczen jest ZYWOTNA tylko do skopiowania na wezel —
+        # trzymanie jej po przebiegu zostawialoby sekret w /tmp hosta kontrolnego.
+        if local_cnf and os.path.exists(local_cnf):
+            os.unlink(local_cnf)
         time.sleep(2)
 
     # 3. BRAK UTRATY POTWIERDZONYCH TRANSAKCJI.
