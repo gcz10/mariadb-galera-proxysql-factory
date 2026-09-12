@@ -37,6 +37,10 @@ APP_PW = os.environ.get("APP_DB_PASSWORD", "")
 # utraty transakcji przy zniknieciu maszyny i przechodzi przez powrot wezla po
 # crashu, czego `soft` nie dotyka.
 FAILOVER_MODE = os.environ.get("FAILOVER_MODE", "soft").lower()
+# Karencja po wyciszeniu klastra, zanim brak wiersza uznamy za UTRATE:
+# liczniki wsrep opisuja replikacje, nie moment zejscia ostatniego
+# writesetu z watkow aplikujacych (zmierzone 2026-09-12).
+GRACE_SECONDS = int(os.environ.get("FAILOVER_GRACE_SECONDS", "20"))
 if FAILOVER_MODE not in ("soft", "hard"):
     raise SystemExit(f"REFUSED: FAILOVER_MODE={FAILOVER_MODE!r} (dozwolone: soft, hard)")
 
@@ -117,6 +121,13 @@ def survivor_host(exclude=None):
     )
 
 
+def present_seqs_on(host):
+    """Zbior seq widoczny na WSKAZANYM wezle."""
+    r = sh(host, 'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e '
+                 '"SELECT seq FROM isa_test.isa_failover"')
+    return {int(x) for x in body(host, r).split() if x.strip().isdigit()}
+
+
 def present_seqs(exclude=None):
     """Set of seqs present on a Galera node that SURVIVED the failover.
 
@@ -124,38 +135,67 @@ def present_seqs(exclude=None):
     claim: every client-committed transaction must be there without relying on
     the restarted node having finished re-syncing.
     """
-    survivor = survivor_host(exclude)
-    q = "SELECT seq FROM isa_test.isa_failover"
-    r = sh(survivor, f'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "{q}"')
-    return {int(x) for x in body(survivor, r).split() if x.strip().isdigit()}
+    return present_seqs_on(survivor_host(exclude))
 
 
-def missing_after_apply(seqs, exclude=None, timeout=90):
-    """Sekwencje nieobecne u ocalalego PO opronieniu jego kolejki aplikacyjnej.
+def _node_state(host):
+    r = sh(host,
+           'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e '
+           '"SHOW STATUS WHERE Variable_name IN (\'wsrep_last_committed\','
+           '\'wsrep_local_state_comment\',\'wsrep_local_recv_queue\')"')
+    out = body(host, r).split()
+    vals = dict(zip(out[::2], out[1::2]))
+    return (vals.get("wsrep_last_committed", ""),
+            vals.get("wsrep_local_state_comment", ""),
+            vals.get("wsrep_local_recv_queue", ""))
 
-    ISC-28 mowi o UTRACIE danych, a nie o opoznieniu zapisu na dysk sasiada.
-    Galera potwierdza commit po CERTYFIKACJI (transakcja jest juz w kolejkach
-    odbiorczych wszystkich wezlow), a samo zastosowanie jest asynchroniczne.
-    Odczyt wykonany w trakcie nadrabiania kolejki pokazuje wiec brak wierszy,
-    ktore nie sa utracone — i dokladnie tak sonda ogłosila kiedys 405 rzekomo
-    utraconych transakcji, choc minute pozniej wszystkie byly na miejscu
-    (zmierzone 2026-09-12 na `orionv17-r10`). Czekamy, az kolejka zejdzie do
-    zera i zbior przestanie sie kurczyc; dopiero to, co zostanie, jest strata.
+
+def missing_after_apply(seqs, exclude=None, timeout=240):
+    """Sekwencje nieobecne u ocalalego PO WYCISZENIU klastra.
+
+    ISC-28 mowi o UTRACIE danych, nie o opoznieniu zastosowania u sasiada.
+    Galera potwierdza commit po CERTYFIKACJI — transakcja jest wtedy w kolejkach
+    odbiorczych wszystkich wezlow — ale APLIKOWANIE jest asynchroniczne.
+
+    ZMIERZONE 2026-09-12 na `orionv17-r10`, cztery przebiegi: sonda ogłaszala
+    kolejno 405, 80, 32 i 6 „utraconych" transakcji, a za kazdym razem komplet
+    byl chwile pozniej na WSZYSTKICH trzech wezlach. Kierunek dowodu jest
+    jednoznaczny: Galera nie ma przeplywu wstecznego, wiec wiersze nie mogly
+    przyjsc z ozywionego wezla — ocalaly po prostu nie skonczyl nadrabiac.
+
+    Odrzucone sygnaly (kazdy przepuscil falszywe naruszenie): sama pusta
+    `wsrep_local_recv_queue`; „zbior brakujacych nie zmienil sie przez N
+    odczytow" (nadrabianie jest skokowe); rownosc `wsrep_last_committed` miedzy
+    ocalalymi (moga nadrabiac w lockstepie).
+
+    Warunek koncowy: obciazenie stoi, wiec licznik `wsrep_last_committed` MUSI
+    przestac rosnac — przy pustej kolejce i stanie `Synced`. Po tym jeszcze
+    karencja, bo liczniki wsrep opisuja replikacje, nie moment zejscia
+    ostatniego writesetu z watkow aplikujacych.
     """
     survivor = survivor_host(exclude)
+    live = [h for h in INV["all"]["children"]["galera"]["hosts"] if h != exclude]
     deadline = time.time() + timeout
-    missing = sorted(s for s in seqs if s not in present_seqs(exclude))
-    while missing and time.time() < deadline:
+    quiet = False
+    previous = None
+    while time.time() < deadline:
+        seqno, state, queue = _node_state(survivor)
+        if state == "Synced" and queue == "0" and previous is not None and seqno == previous:
+            quiet = True
+            break
+        previous = seqno
         time.sleep(3)
-        r = sh(survivor,
-               'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e '
-               '"SHOW STATUS LIKE \'wsrep_local_recv_queue\'"')
-        queue = body(survivor, r).split()
-        drained = len(queue) >= 2 and queue[1] == "0"
-        still = sorted(s for s in seqs if s not in present_seqs(exclude))
-        if drained and still == missing:
-            return still  # kolejka pusta, a zbior sie nie zmienia — to realna strata
-        missing = still
+    if quiet:
+        time.sleep(GRACE_SECONDS)
+    missing = sorted(s for s in seqs if s not in present_seqs(exclude))
+    if missing:
+        for host in live:
+            have = present_seqs_on(host)
+            print(f"  diagnostyka: {host} ma {len([s for s in missing if s in have])}"
+                  f"/{len(missing)} rzekomo utraconych")
+        if not quiet:
+            print(f"UWAGA: klaster nie wyciszyl sie w {timeout}s — "
+                  f"brak moze byc zalegloscia, nie strata")
     return missing
 
 
