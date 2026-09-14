@@ -35,6 +35,8 @@
     set -o pipefail
     stmts=$(mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e "SELECT CONCAT('DROP USER IF EXISTS ', QUOTE(user), '@', QUOTE(host), ';') FROM mysql.user WHERE user=''")
     if [ -n "$stmts" ]; then echo "$stmts" | mariadb --socket=/var/lib/mysql/mysql.sock && echo DROPPED; fi
+  args:
+    executable: /bin/bash
   register: pmm_anon_cleanup
   # Marker, nie tresc SQL: instrukcje DROP ida POTOKIEM do klienta, wiec stdout
   # zadania jest puste nawet gdy konta faktycznie znikaja. Warunek oparty na
