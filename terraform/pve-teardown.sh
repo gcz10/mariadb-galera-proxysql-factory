@@ -71,6 +71,9 @@ PROTECTED_DISK_VMIDS=()
 CACHE_ENTRIES=()
 # Wpisy pliku wznowienia spoza zakresu BIEZACEGO wywolania (patrz nizej).
 KEPT_ENTRIES=()
+# Wpisy wznowienia PRZYJETE w tym wywolaniu — osobno od calej listy VMID, bo
+# operator czyta ten komunikat, zeby wiedziec, skad przyszly cele (output vs plik).
+RESTORED_ENTRIES=()
 while IFS=':' read -r name vmid role del_disks; do
   [ -n "$vmid" ] || continue
   VMIDS+=("$vmid")
@@ -168,9 +171,12 @@ if [ -f "$VMID_CACHE" ]; then
     VMIDS+=("$vmid")
     CACHE_ENTRIES+=("$name:$vmid:$protected")
     [ "$protected" = "yes" ] && PROTECTED_DISK_VMIDS+=("$vmid")
+    RESTORED_ENTRIES+=("$name:$vmid:$protected")
     restored=$((restored + 1))
   done < "$VMID_CACHE"
-  [ "$restored" -gt 0 ] && echo "PRZYWRÓCONO niedokonczone cele poprzedniego przebiegu: ${VMIDS[*]}" >&2
+  # Tylko faktycznie przyjete wpisy: VMIDS moze zawierac tez cele z output,
+  # ktore z pliku wznowienia nie pochodza.
+  [ "$restored" -gt 0 ] && echo "PRZYWRÓCONO niedokonczone cele poprzedniego przebiegu: ${RESTORED_ENTRIES[*]}" >&2
   [ "$skipped_foreign" -gt 0 ] && echo "POMINIETO $skipped_foreign wpisow spoza wskazanego zakresu (${NODES[*]}) — nie naleza do tego wywolania." >&2
   [ "$skipped_legacy" -gt 0 ] && echo "POMINIETO $skipped_legacy wpisow w starym formacie (bez nazwy wezla) — sprzataj te sieroty recznie." >&2
 fi
