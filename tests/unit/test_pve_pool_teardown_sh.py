@@ -42,12 +42,41 @@ with open(os.environ["CURL_LOG"], "a") as log:
     log.write(json.dumps(argv) + "\\n")
 
 if any("/cluster/resources" in a for a in argv):
-    print(json.dumps({"data": [
-        {"vmid": 10040, "node": "pve", "name": "managed", "status": "stopped",
-         "pool": os.environ.get("POOL_NAME", "claude-isa")},
-        {"vmid": 9999, "node": "pve", "name": "orphan", "status": "stopped",
-         "pool": os.environ.get("POOL_NAME", "claude-isa")},
-    ]}))
+    # Odczyt #1 to RAPORT (widzi sierote), kolejne to REWALIDACJA przed akcja
+    # destrukcyjna. Rozdzielenie licznikiem pozwala zasymulowac swiat, ktory
+    # zmienil sie miedzy raportem a kasowaniem — inaczej atrapa zakladalaby
+    # z gory, ze nic sie nie zmienilo, i nie mierzylaby tego kontraktu.
+    counter = os.environ.get("RESOURCES_COUNTER")
+    seen = 0
+    if counter:
+        if os.path.exists(counter):
+            seen = int(open(counter).read().strip() or "0")
+        with open(counter, "w") as fh:
+            fh.write(str(seen + 1))
+
+    if seen >= 1 and os.environ.get("RESOURCES_BROKEN_AFTER_REPORT") == "1":
+        print("<html>500 Internal Server Error</html>")
+        sys.exit(0)
+
+    pool = os.environ.get("POOL_NAME", "claude-isa")
+    orphan = {"vmid": 9999, "node": "pve", "name": "orphan", "status": "stopped",
+              "pool": pool}
+    if seen >= 1:
+        mode = os.environ.get("DRIFT_MODE", "stable")
+        if mode == "gone":
+            orphan = None
+        elif mode == "renamed":
+            orphan = dict(orphan, name="nowa-maszyna")
+        elif mode == "other-pool":
+            orphan = dict(orphan, pool="inna-pula")
+        elif mode == "other-node":
+            orphan = dict(orphan, node="pve2")
+
+    data = [{"vmid": 10040, "node": "pve", "name": "managed", "status": "stopped",
+             "pool": pool}]
+    if orphan is not None:
+        data.append(orphan)
+    print(json.dumps({"data": data}))
     sys.exit(0)
 
 if any("/tasks/" in a and "/status" in a for a in argv):
@@ -93,6 +122,7 @@ class PoolTeardownHarness:
             "PROXMOX_VE_ENDPOINT": "https://never.invalid:8006",
             "PROXMOX_VE_API_TOKEN": "root@pam!test=secret",
             "CURL_LOG": str(self.curl_log),
+            "RESOURCES_COUNTER": str(self.curl_log) + ".resources",
         }
         env.update(env_extra or {})
         proc = subprocess.run(
@@ -147,6 +177,74 @@ class PoolTeardownContractTests(unittest.TestCase):
         })
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("zakonczone bledem", proc.stderr + proc.stdout)
+
+    def test_orphan_that_vanished_before_deletion_is_skipped_not_killed(self):
+        """Maszyna zniknela miedzy raportem a kasowaniem: nie ma czego usuwac,
+        wiec przebieg konczy sie sukcesem, ale bez zadnego DELETE na ten VMID."""
+        self.harness = PoolTeardownHarness(FAKE_TERRAFORM_OK)
+        proc, calls = self.harness.run({
+            "CONFIRM_POOL": "claude-isa",
+            "DRIFT_MODE": "gone",
+        })
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("juz nie istnieje", proc.stdout)
+        deletes = [c for c in calls if "DELETE" in c]
+        self.assertEqual(deletes, [], "DELETE na nieistniejaca maszyne")
+
+    def test_vmid_reused_by_another_machine_is_never_deleted(self):
+        """Vmid 9999 należy teraz do INNEJ maszyny. Kasowanie wolumenu pod tym
+        numerem zabralo by dane obcej maszyny — skrypt MUSI odmowic."""
+        self.harness = PoolTeardownHarness(FAKE_TERRAFORM_OK)
+        proc, calls = self.harness.run({
+            "CONFIRM_POOL": "claude-isa",
+            "DRIFT_MODE": "renamed",
+        })
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("NIE kasuje obcej maszyny", proc.stderr)
+        self.assertEqual([c for c in calls if "DELETE" in c], [])
+
+    def test_machine_moved_out_of_the_pool_is_not_deleted(self):
+        """Maszyna wypadla z puli (przejeta) — nie jest juz sierota tej puli."""
+        self.harness = PoolTeardownHarness(FAKE_TERRAFORM_OK)
+        proc, calls = self.harness.run({
+            "CONFIRM_POOL": "claude-isa",
+            "DRIFT_MODE": "other-pool",
+        })
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("NIE kasuje obcej maszyny", proc.stderr)
+        self.assertEqual([c for c in calls if "DELETE" in c], [])
+
+    def test_machine_migrated_to_another_node_is_not_deleted(self):
+        """Ten sam VMID, inny wezel: DELETE celowalby w inny obiekt."""
+        self.harness = PoolTeardownHarness(FAKE_TERRAFORM_OK)
+        proc, calls = self.harness.run({
+            "CONFIRM_POOL": "claude-isa",
+            "DRIFT_MODE": "other-node",
+        })
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("NIE kasuje obcej maszyny", proc.stderr)
+        self.assertEqual([c for c in calls if "DELETE" in c], [])
+
+    def test_stable_orphan_is_still_deleted(self):
+        """Kontrola pozytywna: bez zmiany tozsamosci kasowanie nadal dziala."""
+        self.harness = PoolTeardownHarness(FAKE_TERRAFORM_OK)
+        proc, calls = self.harness.run({"CONFIRM_POOL": "claude-isa"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("skasowana", proc.stdout)
+        deletes = [c for c in calls if "DELETE" in c]
+        self.assertEqual(len(deletes), 1, deletes)
+
+    def test_unreadable_revalidation_refuses_to_delete(self):
+        """Nieparsowalna odpowiedz API przy rewalidacji: nie wiemy, co kasujemy
+        — przebieg MUSI sie zatrzymac, zanim cokolwiek zniknie."""
+        self.harness = PoolTeardownHarness(FAKE_TERRAFORM_OK)
+        proc, calls = self.harness.run({
+            "CONFIRM_POOL": "claude-isa",
+            "RESOURCES_BROKEN_AFTER_REPORT": "1",
+        })
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("nie udalo sie ustalic tozsamosci", proc.stderr)
+        self.assertEqual([c for c in calls if "DELETE" in c], [])
 
     def test_report_mode_never_deletes(self):
         self.harness = PoolTeardownHarness(FAKE_TERRAFORM_OK)

@@ -23,6 +23,13 @@
 #      i "skasowana" drukowano dla zadania, ktore moglo wlasnie padnac.
 #   3. Bramka potwierdzenia powtorzeniem NAZWY PULY (CONFIRM_POOL), nie
 #      odruchowym CONFIRM=yes, ktory przeciekal przez export miedzy celami.
+#   4. Rewalidacja TOZSAMOSCI bezposrednio przed kazda akcja destrukcyjna.
+#      Raport powstawal w jednym odczycie `cluster/resources`, a petla kasuje
+#      pozniej, maszyna po maszynie (przy `running` dochodzi czekanie na
+#      zatrzymanie). VMID jest zasobem wielokrotnego uzytku, wiec w tym oknie
+#      pod tym numerem mogla stanac INNA maszyna. Kontrakt: kasujemy wylacznie
+#      to, co nadal jest TA SAMA sierota — ten sam wezel, ta sama nazwa, ta
+#      sama pula; przy zmianie tozsamosci skrypt odmawia i konczy sie bledem.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -128,18 +135,90 @@ print(d.get("status",""), d.get("exitstatus",""))') || return 1
   return 1
 }
 
+# Rewalidacja tozsamosci PRZED kazda akcja destrukcyjna.
+#
+# Wynik: `orphan` (tozsamosc sie zgadza — wolno kasowac), `gone` (maszyny juz
+# nie ma, raport byl nieaktualny), `drift:<co>` (pod tym VMID jest INNA maszyna
+# — NIE kasujemy). Blad API/nieparsowalna odpowiedz to kod 1: nierozstrzygniete
+# kasowanie jest nieodwracalne, wiec przebieg musi sie zatrzymac.
+revalidate_orphan() {
+  local vmid="$1" node="$2" name="$3"
+  api "${PROXMOX_VE_ENDPOINT%/}/api2/json/cluster/resources?type=vm" |
+    POOL="$POOL" VMID="$vmid" NODE="$node" NAME="$name" python3 -c '
+import json, os, sys
+
+try:
+    data = json.load(sys.stdin)["data"]
+except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+    raise SystemExit(3)
+
+vmid = int(os.environ["VMID"])
+match = next((vm for vm in data if vm.get("vmid") == vmid), None)
+if match is None:
+    print("gone")
+else:
+    drift = []
+    if match.get("node") != os.environ["NODE"]:
+        drift.append("node=" + str(match.get("node")))
+    if match.get("name") != os.environ["NAME"]:
+        drift.append("name=" + str(match.get("name")))
+    if match.get("pool") != os.environ["POOL"]:
+        drift.append("pool=" + str(match.get("pool")))
+    print("drift:" + ",".join(drift) if drift else "orphan")
+'
+}
+
 # Pętla biegnie w subshellu potoku (`while read`), wiec `exit 1` wewnatrz
 # ustawia tylko kod potoku — bez `pipefail`-swiadomego przekazania rc do
 # glownej powloki skrypt konczylby sukces mimo porazki taska (audit 2026-09-07).
 rc_delete=0
 while read -r vmid node name status; do
   echo "== $vmid ($name) na $node: $status"
+
+  # Rewalidacja PRZED pierwsza mutacja. `status` z raportu jest tak samo
+  # nieaktualny jak reszta wiersza — decyzja o zatrzymaniu opiera sie na
+  # stanie odczytanym teraz, nie na tym sprzed potwierdzenia.
+  check=$(revalidate_orphan "$vmid" "$node" "$name") || {
+    echo "FAIL: $vmid — nie udalo sie ustalic tozsamosci maszyny przed kasowaniem" >&2
+    rc_delete=1
+    break
+  }
+  case "$check" in
+    gone)
+      echo "   pominięta: $vmid juz nie istnieje (raport byl nieaktualny)"
+      continue
+      ;;
+    drift:*)
+      echo "FAIL: $vmid na $node nie jest juz sierota z raportu (${check#drift:}) — NIE kasuje obcej maszyny" >&2
+      rc_delete=1
+      continue
+      ;;
+    orphan) ;;
+    *)
+      echo "FAIL: $vmid — nieoczekiwana odpowiedz rewalidacji: $check" >&2
+      rc_delete=1
+      break
+      ;;
+  esac
+
   if [ "$status" = "running" ]; then
     stop_upid=$(api -X POST "${PROXMOX_VE_ENDPOINT%/}/api2/json/nodes/$node/qemu/$vmid/status/stop" |
       python3 -c 'import json,sys; print(json.load(sys.stdin).get("data") or "")') || true
     if [ -n "$stop_upid" ]; then
       wait_task "$stop_upid" "$node" "stop $vmid" || { echo "FAIL: $vmid — stop nieudany" >&2; rc_delete=1; break; }
     fi
+  fi
+  # Powtorka PO zatrzymaniu: `wait_task` moze trwac minuty, a to wlasnie
+  # najdluzsze okno na przejecie VMID przez nowa maszyne.
+  check=$(revalidate_orphan "$vmid" "$node" "$name") || {
+    echo "FAIL: $vmid — nie udalo sie potwierdzic tozsamosci maszyny przed DELETE" >&2
+    rc_delete=1
+    break
+  }
+  if [ "$check" != "orphan" ]; then
+    echo "FAIL: $vmid — po zatrzymaniu tozsamosc sie zmienila ($check) — NIE kasuje" >&2
+    rc_delete=1
+    continue
   fi
   # purge=1 zdejmuje wpisy z zadan zapasowych i replikacji, drugi parametr
   # kasuje wolumeny nieprzypisane do konfiguracji — bez tego zostaja sieroty ZFS
