@@ -51,8 +51,22 @@ if FAILOVER_MODE not in ("soft", "hard"):
 
 WORKLOAD_LOCAL = "tests/lab/workload-numbered.sh"
 _inv = yaml.safe_load(open(INVENTORY))
-WORKLOAD_HOST = list(_inv["all"]["children"]["galera"]["hosts"])[0]  # first galera node (portable)
+GALERA_HOSTS = list(_inv["all"]["children"]["galera"]["hosts"])
 PROXYSQL_NODE = list(_inv["all"]["children"]["proxysql"]["hosts"])[0]
+# Generator ruchu NIE MOZE stac na wezle, ktory ta sonda moze ubic. `soft` zabija
+# proces bazy na AKTYWNYM WRITERZE, a `hard` gasi CALA maszyne — a writerem jest
+# zawsze jeden z wezlow Galery. Do 2026-09-14 generator szedl na pierwszy wezel
+# Galery (L54), wiec gdy ten byl writerem, przebieg `hard` restartowal wlasne
+# narzedzie POMIARU razem z logiem: petla RTO nie widziala juz zadnego commitu
+# ("workload did not resume"), a surowy odczyt finalny wywalal sie na braku logu.
+# Czerwien byla wiec skutkiem utraty narzedzia, nie awarii — i ginela RAZEM z
+# dowodem, bo log lezal na ofierze. Host ProxySQL jest poza zbiorem ofiar, a ta
+# sonda juz go uzywa (zapytania administracyjne do pary), wiec ma i klienta, i
+# siec do VIP-a. Celu awarii to nie zmienia: nadal ginie rzeczywisty writer.
+WORKLOAD_HOST = PROXYSQL_NODE
+# DDL tabeli i odczyty stanu potrzebuja LOKALNEGO socketu MariaDB, ktorego host
+# ProxySQL nie ma — te kroki zostaja na wezle Galery (przed zabiciem).
+DB_NODE = GALERA_HOSTS[0]
 CNF_REMOTE = "/root/.workload.cnf"
 SCRIPT_REMOTE = "/tmp/workload-numbered.sh"
 LOG_REMOTE = "/tmp/workload.log"
@@ -120,10 +134,7 @@ def active_writer_ip():
     return body(PROXYSQL_NODE, r).strip()
 
 def survivor_host(exclude=None):
-    return next(
-        (h for h in INV["all"]["children"]["galera"]["hosts"] if h != exclude),
-        WORKLOAD_HOST,
-    )
+    return next((h for h in GALERA_HOSTS if h != exclude), GALERA_HOSTS[0])
 
 
 def present_seqs_on(host):
@@ -209,7 +220,7 @@ def missing_after_apply(seqs, exclude=None, timeout=240):
 
 
 def committed_from_log(strict=False):
-    """Read the committed-transaction log from the workload host.
+    """Read the committed-transaction log from the host running the generator.
 
     `strict` is used only for the FINAL read (the verdict). The previous version
     ignored the ansible return code, so a failed read (host unreachable, log
@@ -217,9 +228,11 @@ def committed_from_log(strict=False):
     empty set passed VACUOUSLY. A failed measurement must end red, not
     masquerade as absence of data.
 
-    The in-loop RTO read stays tolerant (strict=False): the workload host may
-    itself be the node being killed, so a transient failure is expected there
-    and must not abort the run.
+    The in-loop RTO read stays tolerant (strict=False): ansible may hiccup while
+    the cluster is failing over, and aborting the run there would replace the
+    measurement with a traceback. Since 2026-09-14 this host is NOT one of the
+    killable nodes (see WORKLOAD_HOST), so the log outlives the victim and the
+    final read is expected to succeed.
     """
     r = sh(WORKLOAD_HOST, f"cat {LOG_REMOTE}")
     if strict and r.returncode != 0:
@@ -263,13 +276,15 @@ def main():
 
     try:
         # Setup: workload table (Galera-replicated), creds file, workload script.
-        sh(WORKLOAD_HOST,
+        # DDL idzie po LOKALNYM sockecie, wiec wykonuje sie na wezle Galery —
+        # host generatora ruchu nie ma serwera bazy i nie moze tego zrobic.
+        sh(DB_NODE,
            'mariadb --socket=/var/lib/mysql/mysql.sock -e '
            '"CREATE DATABASE IF NOT EXISTS isa_test; '
            'CREATE TABLE IF NOT EXISTS isa_test.isa_failover '
            '(seq BIGINT PRIMARY KEY, ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"',
            check=True)
-        sh(WORKLOAD_HOST,
+        sh(DB_NODE,
            'mariadb --socket=/var/lib/mysql/mysql.sock -e "TRUNCATE isa_test.isa_failover"',
            check=True)
 
@@ -295,6 +310,21 @@ def main():
         # Baseline: let it commit for a while pre-failover.
         time.sleep(10)
         seqs_before, _ = committed_from_log()
+        # BRAMKA: brak JAKIEGOKOLWIEK commitu w oknie bazowym oznacza, ze
+        # generator nie dziala (np. host generatora nie ma trasy do VIP-a), a nie
+        # ze failover jest zepsuty. Bez tego rozstrzygniecia pozniejszy brak
+        # wznowienia opisywalby wlasne narzedzie pomiaru jako awarie klastra.
+        if not seqs_before:
+            message = (
+                f"generator ruchu nie potwierdzil ZADNEJ transakcji w oknie bazowym "
+                f"przez VIP {VIP}:{VIP_PORT} z {WORKLOAD_HOST} — pomiar nie jest "
+                "wykonalny, wiec werdykt o failoverze bylby bez wartosci"
+            )
+            # `return`, nie `raise`: to nierozstrzygniete POMIARU, wiec sonda ma
+            # wydac FAIL z kodem 1 (jak pozostale sondy), a nie traceback. `finally`
+            # i tak zatrzyma generator i usunie plik poswiadczen.
+            print(f"FAIL: {message}")
+            return 1
         writer_ip = active_writer_ip()
         killed_host = ip2host.get(writer_ip)
         print(f"active writer: {writer_ip} -> {killed_host}; "

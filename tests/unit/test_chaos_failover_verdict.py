@@ -99,7 +99,7 @@ class _VirtualClock:
     def sleep(self, seconds):
         target = self.now + seconds
         seq = self.state["seq"]
-        if self.state["running"]:
+        if self.state["running"] and self.state["commit_enabled"]:
             moment = float(int(self.now) + 1)
             while moment <= target:
                 seq += 1
@@ -223,6 +223,7 @@ class ChaosFailoverVerdictTests(unittest.TestCase):
             "commits": [],
             "seq": 0,
             "running": False,
+            "commit_enabled": True,
             "killed": False,
             "log_fail": False,
             "fail_final_log": False,
@@ -252,7 +253,9 @@ class ChaosFailoverVerdictTests(unittest.TestCase):
         self.mod.time = clock
         self.mod.sh = _make_sh(state)
         self.mod.subprocess = _FakeSubprocess(state)
-        self.mod.WORKLOAD_HOST = WORKLOAD_HOST
+        # WORKLOAD_HOST celowo NIE jest podmieniany: harness ma cwiczyc miejsce
+        # generatora wyliczone z inwentarza (Bramka 4), a nie wartosc wstrzyknieta
+        # przez test. Ofiara awarii jest sterowana osobno przez `galera_ip_to_host`.
         self.mod.active_writer_ip = lambda: WRITER_IP
         self.mod.galera_ip_to_host = lambda: {WRITER_IP: WORKLOAD_HOST}
         self.mod.present_seqs_on = lambda host: set(range(1, 100000))
@@ -342,6 +345,63 @@ class ChaosFailoverVerdictTests(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn("PASS: failover survived", out)
         self.assertTrue(state["transient_pending"] is False, "transient failure never injected")
+
+    # --- Bramka 4: generator ruchu nie moze stac na wezle, ktory sonda ubic ---
+
+    def test_module_places_the_traffic_generator_outside_the_galera_group(self):
+        # Defekt (potwierdzony 2026-09-14): WORKLOAD_HOST byl pierwszym wezlem
+        # Galery, wiec gdy writerem byl ten wezel, tryb `hard` restartowal razem
+        # z maszyna wlasny generator i jego log — werdykt powstawal z utraty
+        # narzedzia, nie z awarii, a dowod ginal razem z ofiara.
+        galera = set(INVENTORY_YML["all"]["children"]["galera"]["hosts"])
+        proxysql = set(INVENTORY_YML["all"]["children"]["proxysql"]["hosts"])
+
+        self.assertNotIn(self.mod.WORKLOAD_HOST, galera)
+        self.assertIn(self.mod.WORKLOAD_HOST, proxysql)
+        # DDL i odczyt stanu ida po lokalnym sockecie, wiec musza zostac na
+        # wezle z serwerem bazy — host ProxySQL go nie ma.
+        self.assertIn(self.mod.DB_NODE, galera)
+
+    def test_generator_and_measurement_log_never_land_on_a_killable_node(self):
+        rc, out, state = self._run_probe(mode="soft")
+
+        self.assertEqual(rc, 0, out)
+        galera = set(INVENTORY_YML["all"]["children"]["galera"]["hosts"])
+        generator_hosts = {
+            node
+            for node, script in state["sh"]
+            if "nohup bash" in script or script.startswith("cat /tmp/workload.log")
+        }
+        self.assertTrue(generator_hosts, "generator ruchu nie zostal uruchomiony")
+        self.assertFalse(
+            generator_hosts & galera,
+            "generator ruchu albo jego log pomiaru staly na wezle z grupy galera "
+            f"({sorted(generator_hosts & galera)}) — restart maszyny zabralby pomiar",
+        )
+
+        # Cel awarii pozostaje bez zmian: nadal ginie rzeczywisty writer z Galery.
+        killed = {node for node, script in state["sh"] if "pkill -9 -x mariadbd" in script}
+        self.assertTrue(killed, "sonda nie zabija zadnego wezla")
+        self.assertLessEqual(
+            killed, galera, f"cel awarii wyszedl poza grupe galera: {sorted(killed)}"
+        )
+
+    def test_silent_generator_is_reported_as_unmeasurable_not_as_failover_loss(self):
+        # Host generatora moze nie miec trasy do VIP-a (polityka firewalla warstwy
+        # wspolnej). Wtedy petla RTO donosilaby "workload did not resume", czyli
+        # opisywalaby wlasne narzedzie pomiaru jako awarie klastra — i to PRZED
+        # krokiem destrukcyjnym, ktory niczego by nie zmierzyl.
+        rc, out, state = self._run_probe(mode="soft", commit_enabled=False)
+
+        self.assertEqual(rc, 1, out)
+        self.assertIn("oknie bazowym", out)
+        self.assertNotIn("did not resume", out)
+        self.assertNotIn("PASS: failover survived", out)
+        self.assertEqual(
+            [node for node, script in state["sh"] if "pkill" in script],
+            [],
+            "pomiar bez zadnego commitu nie moze dojsc do kroku destrukcyjnego",
+        )
 
     # --- Zabezpieczenie przed nadmiarowa surowoscia ---
 
