@@ -30,6 +30,7 @@ from .common import (
     last_success_unixtime,
     publish_drill_freshness,
     record_state_failure,
+    record_state_locked,
     set_module_redactor,
 )
 from .crypto import ENCRYPTION_METHOD_V3, FORMAT_VERSION, encrypt_payload
@@ -466,7 +467,7 @@ def run_backup(
         # jest nieczytelny. Wczesniej `state_mgr.read()` w tej linii rzucalo
         # drugim `E_STATE`, wiec przy rownoczesnym uszkodzeniu stanu nie
         # powstawala ani metryka porazki, ani zdarzenie o blokadzie.
-        record_state_failure(state_mgr, event_mgr, "backup", now_ts, "E_LOCKED", "Locked")
+        record_state_locked(state_mgr, event_mgr, "backup", now_ts)
         metrics_mgr.update(
             last_success_unixtime=last_success_unixtime(state_mgr),
             last_failure_unixtime=now_ts,

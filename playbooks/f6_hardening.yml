@@ -11,15 +11,44 @@
     pmm_monitor_user: "pmm_monitor"
 
   pre_tasks:
+    # Sonda jest tolerancyjna (`failed_when: false`), bo chcemy WŁASNY komunikat,
+    # a nie surowy blad klienta; werdykt wydaje asercja ponizej.
+    #
+    # Bez przekierowania na /dev/null i bez `shell`: komunikat klienta
+    # ("ERROR 2002 ... can't connect to local server through socket") jest jedyna
+    # przyczyna, jaka operator zobaczy w `fail_msg`. Przekierowanie czynilo z niej
+    # puste nawiasy `()` — diagnoza bez tresci.
+    #
+    # ZMIERZONE 2026-09-14 (prawdziwy `ansible-playbook`, klient zwracajacy blad
+    # 2002): poprzednia wersja konczyla sie `meta: end_play`, wiec caly hardening
+    # byl POMIJANY, a przebieg raportowal `exit 0`/`failed=0`. Operator
+    # uruchamiajacy sam `make cluster-harden` na zatrzymanym wezle dostawal
+    # zielony wynik i zadnej z asercji ISC-40/41/42 nie wykonano. Playbook, ktory
+    # nie moze wykonac zadnej ze swoich kontroli, nie moze meldowac sukcesu:
+    # brak serwera to brak pomiaru, a nie brak naruszen.
     - name: "Wymagaj uruchomionej MariaDB"
-      ansible.builtin.shell: "mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e 'SELECT 1' 2>/dev/null"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SELECT 1"
       register: mariadb_check
       changed_when: false
       failed_when: false
 
-    - name: "Zatrzymaj jeśli MariaDB niedostępna"
-      ansible.builtin.meta: end_play
-      when: mariadb_check.rc != 0
+    - name: "Przerwij, gdy hardening nie ma czego zweryfikowac"
+      ansible.builtin.assert:
+        that:
+          - mariadb_check.rc == 0
+        fail_msg: >-
+          MariaDB na {{ inventory_hostname }} nie odpowiada po sockecie
+          ({{ mariadb_check.stderr | default('') | trim }}). Hardening NIE
+          zostal wykonany: anonimowe konta, baza test, zasieg roota i granty
+          SST/PMM pozostaja niezweryfikowane. Uruchom serwer i powtorz —
+          zielony wynik bez zadnej sprawdzonej asercji jest gorszy niz blad.
 
   tasks:
     # ISC-40: usuń anonimowe konta

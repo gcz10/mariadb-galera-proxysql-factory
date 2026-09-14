@@ -244,15 +244,8 @@ def last_success_unixtime(state_mgr: StateManager) -> int:
         return 0
 
 
-def record_state_failure(
-    state_mgr: StateManager,
-    event_mgr: EventManager,
-    command: str,
-    unixtime: int,
-    error_code: str,
-    error_message: str,
-) -> None:
-    """Best-effort zapis porazki do state.json.
+def _guarded_state_write(event_mgr: EventManager, write: Any) -> None:
+    """Wykonaj zapis stanu tak, by jego porazka nie zjadla reszty obslugi bledu.
 
     Zapis stanu jest sankiem, nie pomiarem: gdy plik jest nieczytelny albo
     niemodyfikowalny, jego porazka NIE MOZE (a) zastapic oryginalnej diagnostyki
@@ -261,7 +254,7 @@ def record_state_failure(
     dostaje wlasne zdarzenie, zeby nie znikla bez sladu.
     """
     try:
-        state_mgr.update_failure(command, unixtime, error_code, error_message)
+        write()
     except Exception as state_exc:
         try:
             event_mgr.emit(
@@ -273,6 +266,37 @@ def record_state_failure(
             )
         except Exception:
             pass
+
+
+def record_state_failure(
+    state_mgr: StateManager,
+    event_mgr: EventManager,
+    command: str,
+    unixtime: int,
+    error_code: str,
+    error_message: str,
+) -> None:
+    """Best-effort zapis PORAZKI do state.json (uses `update_failure`)."""
+    _guarded_state_write(
+        event_mgr,
+        lambda: state_mgr.update_failure(command, unixtime, error_code, error_message),
+    )
+
+
+def record_state_locked(
+    state_mgr: StateManager,
+    event_mgr: EventManager,
+    command: str,
+    unixtime: int,
+) -> None:
+    """Best-effort zapis BLOKADY do state.json.
+
+    Osobna funkcja, bo `status` jest czescia kontraktu stanu: blokada to
+    `"locked"`, nie `"failed"` (state.py:71-76, ten sam status zapisuje
+    `restore.py`). Zlanie obu zapisow w jeden zmieniloby status, po ktorym
+    konsument rozpoznaje blokade — przy zachowaniu identycznego sanku.
+    """
+    _guarded_state_write(event_mgr, lambda: state_mgr.update_locked(command, unixtime))
 
 
 def _record_pre_lock_failure(

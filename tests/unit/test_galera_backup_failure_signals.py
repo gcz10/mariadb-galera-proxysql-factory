@@ -171,6 +171,48 @@ class DesyncAlwaysClearedTests(unittest.TestCase):
         )
 
 
+class ContendedLockKeepsItsOwnStatusTests(unittest.TestCase):
+    """Blokada to `status="locked"`, nie `"failed"` — i metryka MUSI powstac.
+
+    Zmierzone przy okazji porzadkowania sankow: zlanie zapisu blokady z zapisem
+    porazki zmienilo `last_run.status`, po ktorym konsument rozpoznaje blokade
+    (ten sam status zapisuje `restore.py`). Sank ma chronic metryke, nie
+    przedefiniowywac kontrakt stanu.
+    """
+
+    def test_lock_contention_records_locked_and_publishes_the_metric(self):
+        with tempfile.TemporaryDirectory() as td:
+            fixture = _Fixture(td)
+            fixture.metric_file.write_text(
+                'galera_backup_last_run_success{cluster="r10-galera",'
+                'cluster_name="probe-r10",backend="s3"} 1\n',
+                encoding="utf-8",
+            )
+            # Ten sam plik blokady jest trzymany przez inny przebieg.
+            holder = pipeline.LockManager(pipeline.resolve_lock_path("probe-r10", fixture.cluster_dir))
+            holder.acquire()
+            try:
+                with self.assertRaises(pipeline.BackupError) as ctx:
+                    fixture.run()
+            finally:
+                holder.release()
+
+            self.assertEqual(ctx.exception.code, "E_LOCKED")
+
+            state = json.loads((fixture.cluster_dir / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                state["last_run"]["status"],
+                "locked",
+                "blokada zapisana jako inny status niz kontrakt (restore.py uzywa 'locked')",
+            )
+            metric = fixture.metric_file.read_text(encoding="utf-8")
+            self.assertRegex(
+                metric,
+                r"galera_backup_last_run_success\{[^}]*\} 0",
+                f"blokada nie zglosila porazki w metryce: {metric!r}",
+            )
+
+
 class UnreadableStateStillPublishesFailureMetricTests(unittest.TestCase):
     """Uszkodzony `state.json` nie moze zamrozic dashboardu na zielono."""
 
