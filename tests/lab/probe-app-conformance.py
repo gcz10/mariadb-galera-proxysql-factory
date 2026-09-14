@@ -35,9 +35,17 @@ Wymaga APP_DB_PASSWORD w srodowisku.
 
 import os
 import re
+import subprocess
 import sys
 
-from _probe_common import ProbeContext, finish, require_hosts, run_ansible
+from _probe_common import (
+    ProbeContext,
+    finish,
+    install_client_profile,
+    remove_client_profile,
+    require_hosts,
+    run_ansible,
+)
 
 CTX = ProbeContext()
 CLUSTER = CTX.config
@@ -65,6 +73,16 @@ if not _app:
     ))
 APP_HOST = _app[0]
 
+# Plik opcji klienta na hoscie aplikacyjnym. Nazwa per klaster, bo grupa `app`
+# jest wspoldzielona miedzy klastrami i dwa przebiegi na roznych klastrach nie
+# moga nadpisywac swoich poswiadczen. Haslo NIGDY nie trafia do argv: ani do
+# `ansible -a` (widoczne w `ps` kontrolera), ani do zdalnej linii polecenia.
+ANSIBLE_BIN = os.environ.get("ANSIBLE", "ansible")
+INVENTORY_PATH = os.environ.get(
+    "CLUSTER_INVENTORY", f"clusters/{CLUSTER_NAME}/inventory.yml"
+)
+APP_CNF = f"/run/isa-app-conformance-{re.sub(r'[^A-Za-z0-9._-]', '_', CLUSTER_NAME)}.cnf"
+
 
 def on_app(section, script, failures, undetermined, timeout=90):
     """Uruchom snippet na hoscie aplikacyjnym; zwroc (rc, tresc)."""
@@ -84,9 +102,14 @@ def on_app(section, script, failures, undetermined, timeout=90):
 
 
 def mariadb(sql, host, port, extra="", database="isa_test"):
-    """Polecenie klienta uruchamiane jako aplikacja (haslo przez MYSQL_PWD, nie argv)."""
+    """Polecenie klienta jako aplikacja: haslo z pliku opcji, nigdy z argv.
+
+    `--defaults-extra-file` stoi zaraz za nazwa programu (klient przetwarza
+    opcje plikow PRZED reszta argumentow), a `2>&1` zostaje — parsowanie
+    wyjscia w on_app zalezy od ksztaltu odpowiedzi, nie od transportu hasla.
+    """
     return (
-        f"MYSQL_PWD='{APP_PW}' mariadb -h {host} -P {port} -u {APP_USER} {extra} "
+        f"mariadb --defaults-extra-file={APP_CNF} -h {host} -P {port} {extra} "
         f"{database} -N -B -e \"{sql}\" 2>&1"
     )
 
@@ -102,6 +125,36 @@ def main():
             f"APP_VIP_VERIFIED_TLS={VIP_VERIFIED_TLS!r} (dozwolone: pass, fail)"
         )
         return finish(failures, undetermined, "")
+
+    try:
+        install_client_profile(
+            ANSIBLE_BIN, INVENTORY_PATH, APP_HOST, APP_CNF, APP_USER, APP_PW
+        )
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        failures.append(f"instalacja profilu klienta na {APP_HOST} nie powiodla sie: {exc}")
+        return finish(failures, undetermined, "")
+
+    try:
+        failures, undetermined, ok_summary = _measure(failures, undetermined)
+        return finish(failures, undetermined, ok_summary)
+    finally:
+        try:
+            remove_client_profile(ANSIBLE_BIN, INVENTORY_PATH, APP_HOST, APP_CNF)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            print(
+                f"UWAGA: profil {APP_CNF} na {APP_HOST} nie zostal usuniety "
+                f"({exc}) — haslo aplikacji zostalo na hoscie; usun recznie",
+                file=sys.stderr,
+            )
+
+
+def _measure(failures, undetermined):
+    """Cialo pomiaru: wszystkie sekcje kontraktu aplikacyjnego.
+
+    Walidacje wejscia (APP_PW, APP_VIP_VERIFIED_TLS) sprawdzia main() PRZED
+    instalacja profilu, wiec tu nie powtarzamy. Zwraca trojke dla main(),
+    ktory jedyny orzeka o wyjsciu przez finish().
+    """
 
     # Klient 11.4 domyslnie weryfikuje certyfikat serwera, wiec sciezki, ktore
     # NIE testuja weryfikacji, musza ja jawnie wylaczyc — inaczej mierzylibysmy
@@ -333,7 +386,7 @@ def main():
             )
 
     writer = next(iter(hosts_seen), "?")
-    return finish(
+    return (
         failures,
         undetermined,
         f"kontrakt aplikacyjny OK z {APP_HOST} — app->VIP {cipher}, {backend_note}, "

@@ -30,6 +30,8 @@ import sys
 
 import yaml
 
+from _probe_common import install_client_profile, remove_client_profile
+
 CONFIG_PATH = os.environ.get("CLUSTER_CONFIG", "clusters/example-cluster/cluster.yml")
 INVENTORY = os.environ.get("CLUSTER_INVENTORY", "clusters/example-cluster/inventory.yml")
 ANSIBLE = os.environ.get("ANSIBLE", "ansible")
@@ -61,6 +63,11 @@ CLUSTER_NAME = CLUSTER["cluster"]["name"]
 TLS_FULL = (CLUSTER.get("tls") or {}).get("mode", "disabled") == "full"
 CA_PATH = f"/etc/mysql/app/{CLUSTER_NAME}/ca.pem"
 
+# Plik opcji klienta na hoscie aplikacyjnym: haslo NIGDY nie trafia do argv
+# procesu ansible (widoczne w `ps` kontrolera) ani do zdalnej linii polecenia.
+# Nazwa per klaster — grupa `app` jest wspoldzielona miedzy klastrami.
+BENCH_CNF = f"/run/isa-bench-app-{re.sub(r'[^A-Za-z0-9._-]', '_', CLUSTER_NAME)}.cnf"
+
 _app = (INV["all"]["children"].get("app") or {}).get("hosts") or {}
 if not _app:
     print("FAIL: inventory nie ma grupy 'app'")
@@ -82,7 +89,7 @@ def on_app(script, timeout=600):
 def active_writer_address():
     """Adres wezla, do ktorego ProxySQL kieruje zapisy — mierzymy 'direct' do NIEGO."""
     rc, out = on_app(
-        f"MYSQL_PWD='{APP_PW}' mariadb -h {VIP} -P {VIP_PORT} -u {APP_USER} "
+        f"mariadb --defaults-extra-file={BENCH_CNF} -h {VIP} -P {VIP_PORT} "
         f"--ssl-verify-server-cert=0 -N -B -e 'SELECT @@wsrep_node_address' 2>&1"
     )
     addr = out.strip().splitlines()[-1].strip() if out.strip() else ""
@@ -94,7 +101,7 @@ def active_writer_address():
 def slap(host, port, query, extra=""):
     """Zwraca (zapytania/s, surowy_czas) albo (None, komunikat)."""
     cmd = (
-        f"MYSQL_PWD='{APP_PW}' mariadb-slap --host={host} --port={port} --user={APP_USER} "
+        f"mariadb-slap --defaults-extra-file={BENCH_CNF} --host={host} --port={port} "
         f"{extra} --create-schema=isa_test --query=\"{query}\" "
         f"--concurrency={CONCURRENCY} --iterations={ITERATIONS} --number-of-queries={QUERIES} 2>&1"
     )
@@ -119,6 +126,12 @@ def main():
         print("FAIL: brak APP_DB_PASSWORD w srodowisku")
         return 1
 
+    try:
+        install_client_profile(ANSIBLE, INVENTORY, APP_HOST, BENCH_CNF, APP_USER, APP_PW)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        print(f"FAIL: instalacja profilu klienta na {APP_HOST} nie powiodla sie: {exc}")
+        return 1
+
     writer = active_writer_address()
     if not writer:
         print(f"FAIL: nie udalo sie ustalic aktywnego writera przez VIP {VIP}:{VIP_PORT}")
@@ -130,7 +143,7 @@ def main():
     # nie mogl uzyc klucza i skanowal cala tabele — porownywalem wtedy ROZMIARY
     # TABEL, nie sciezki sieciowe. Stad staly klucz i staly zbior.
     setup = (
-        f"MYSQL_PWD='{APP_PW}' mariadb -h {writer} -P 3306 -u {APP_USER} "
+        f"mariadb --defaults-extra-file={BENCH_CNF} -h {writer} -P 3306 "
         f"--ssl-verify-server-cert=0 isa_test -e \""
         "SET SESSION max_recursive_iterations = 100000; "
         f"CREATE TABLE {TABLE_W} (id BIGINT AUTO_INCREMENT PRIMARY KEY, v INT NOT NULL); "
@@ -194,7 +207,7 @@ def main():
 def cleanup(writer):
     """Kasuje WYLACZNIE tabele tego przebiegu. Cudzych nie tyka."""
     rc, out = on_app(
-        f"MYSQL_PWD='{APP_PW}' mariadb -h {writer} -P 3306 -u {APP_USER} "
+        f"mariadb --defaults-extra-file={BENCH_CNF} -h {writer} -P 3306 "
         f"--ssl-verify-server-cert=0 isa_test -e \""
         f"DROP TABLE IF EXISTS {TABLE_W}; DROP TABLE IF EXISTS {TABLE_R};\" 2>&1",
         timeout=120,
@@ -213,7 +226,7 @@ def report_foreign_leftovers(writer):
     zamiast kasowac cudze dane.
     """
     rc, out = on_app(
-        f"MYSQL_PWD='{APP_PW}' mariadb -h {writer} -P 3306 -u {APP_USER} "
+        f"mariadb --defaults-extra-file={BENCH_CNF} -h {writer} -P 3306 "
         f"--ssl-verify-server-cert=0 -N -B isa_test -e \""
         "SELECT GROUP_CONCAT(table_name) FROM information_schema.tables "
         "WHERE table_schema='isa_test' AND table_name IN ('bench_w','bench_r');\" 2>&1",
@@ -237,6 +250,19 @@ if __name__ == "__main__":
         # jest writer ZAPAMIETANY przez main() — drugie pytanie do ProxySQL
         # mogloby paść albo wskazać inny wezel po failoverze, a sprzatac trzeba
         # to, co sie utworzylo. `None` znaczy, ze zadne tabele nie powstaly.
+        #
+        # PROFIL KLIENTA kasowany NA KONCU, PO cleanup: obie operacje ida po
+        # pliku opcji, wiec jego wczesniejsze usuniecie odetnie sprzatanie od
+        # bazy (rc!=0 i tabele zostaja). Kolejnosc jest czescia kontraktu
+        # sprzatania, nie kosmetyka.
         if ACTIVE_WRITER:
             cleanup(ACTIVE_WRITER)
             report_foreign_leftovers(ACTIVE_WRITER)
+        try:
+            remove_client_profile(ANSIBLE, INVENTORY, APP_HOST, BENCH_CNF)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            print(
+                f"UWAGA: profil {BENCH_CNF} na {APP_HOST} nie zostal usuniety "
+                f"({exc}) — haslo aplikacji zostalo na hoscie; usun recznie",
+                file=sys.stderr,
+            )

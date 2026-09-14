@@ -131,6 +131,8 @@ if ! python3 -m unittest \
     tests.unit.test_pve_create_vm_sh.PveCreateVmScriptBehavioralExecutionTests.test_pve_token_not_leaked_in_argv_and_passed_via_file \
     tests.unit.test_pve_teardown_contract.PveTeardownCredentialContractTests.test_password_never_leaks_into_curl_argv_behavioral \
     tests.unit.test_pve_teardown_contract.PveTeardownCredentialContractTests.test_token_never_enters_process_arguments \
+    tests.unit.test_probe_client_profile_transport.AppConformanceTransportTests.test_module_never_builds_a_client_command_with_the_password \
+    tests.unit.test_probe_client_profile_transport.BenchAppTransportTests.test_module_never_builds_a_client_command_with_the_password \
     >/dev/null 2>&1; then
   echo "FAIL: ISC-43 — secret redaction/argv unit tests failed"
   FAIL=1

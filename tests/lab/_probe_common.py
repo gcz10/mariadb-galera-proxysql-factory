@@ -30,6 +30,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -279,3 +280,108 @@ def finish(failures: list[str], undetermined: list[str], ok_summary: str) -> int
         return EXIT_UNDETERMINED
     print(f"PASS: {ok_summary}")
     return EXIT_PASS
+
+
+# === Poświadczenia klienta bez sekretu w argv (ISC-43) =======================
+
+# Haslo aplikacji nie moze trafic do argv procesu `ansible` na kontrolerze
+# (widoczne kazdemu przez `ps`), ani do linii polecenia na hoscie zdalnym.
+# Wzorzec jest tu wyjatkowy, bo jedna implementacja obsluguje zarowno
+# `mariadb`, jak i `mariadb-slap` (oba czytaja `[client]` z pliku opcji,
+# potwierdzone --print-defaults). Te same ucieczki cytowania sa testowane
+# jednostkowo w test_quorum_evidence.py.
+
+
+def client_profile_text(user: str, password: str) -> str:
+    """Zawartosc pliku opcji klienta [client], wartosci z cytowaniem.
+
+    Zrodlo prawdy dla ucieczek: `_quorum_evidence.option_file_quote` —
+    tabela ucieczek z dokumentacji plikow opcji, testowana w
+    test_quorum_evidence.py. Duplikat tabeli tutaj oznaczalby dwie
+    konwencje cytowania w tym samym katalogu.
+    """
+    from _quorum_evidence import option_file_quote
+
+    return (
+        "[client]\n"
+        f"user={option_file_quote(user)}\n"
+        f"password={option_file_quote(password)}\n"
+    )
+
+
+def install_client_profile(
+    ansible_bin: str,
+    inventory: str,
+    host: str,
+    remote_path: str,
+    user: str,
+    password: str,
+    timeout: int = 120,
+) -> None:
+    """Wgraj plik opcji klienta na `host` (mode=0600 owner=root).
+
+    Lokalny plik tymczasowy powstaje z 0600 i ginie NATYCHMIAST po
+    transferze — nieprzydzielony sekret w /tmp kontrolera to ta sama klasa
+    wycieku, ktora ta funkcja zamyka. Rzuca RuntimeError przy porazce, zeby
+    wywolujaca sonda zlozyla ja do `failures` zamiast przechodzc zielono.
+    """
+    fd, local_path = tempfile.mkstemp(prefix="isa-client-profile-", suffix=".cnf")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(client_profile_text(user, password))
+        proc = subprocess.run(
+            [
+                ansible_bin,
+                host,
+                "-i",
+                inventory,
+                "-m",
+                "ansible.builtin.copy",
+                "-a",
+                f"src={local_path} dest={remote_path} mode=0600 owner=root",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stdout + proc.stderr).strip()[:300] or f"rc={proc.returncode}"
+            raise RuntimeError(f"install_client_profile na {host}: {detail}")
+    finally:
+        if os.path.exists(local_path):
+            os.unlink(local_path)
+
+
+def remove_client_profile(
+    ansible_bin: str,
+    inventory: str,
+    host: str,
+    remote_path: str,
+    timeout: int = 60,
+) -> None:
+    """Usun profil klienta z hosta. Rzuca RuntimeError przy porazce.
+
+    Porazka usuniecia MUSI zostac zgloszona: pozostawiony plik z haslem
+    aplikacji na hoscie to regresja dokladnie tej wlasnosci, ktora ta
+    sekcja pilnuje. `state=absent` jest idempotentny, wiec drugi przebieg
+    jest no-op.
+    """
+    proc = subprocess.run(
+        [
+            ansible_bin,
+            host,
+            "-i",
+            inventory,
+            "-m",
+            "ansible.builtin.file",
+            "-a",
+            f"path={remote_path} state=absent",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stdout + proc.stderr).strip()[:300] or f"rc={proc.returncode}"
+        raise RuntimeError(f"remove_client_profile na {host}: {detail}")
