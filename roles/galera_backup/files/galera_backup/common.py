@@ -223,6 +223,58 @@ def get_storage_backend(
         raise BackupError("E_CONFIG", f"Unknown backend type '{b_type}'")
 
 
+def last_success_unixtime(state_mgr: StateManager) -> int:
+    """Ostatni udany przebieg z state.json; nieczytelny stan to 0, nigdy wyjatek.
+
+    Potrzebne w OBSLUDZE porazki. `E_STATE` znaczy dokladnie "tego pliku nie da
+    sie odczytac", wiec niezabezpieczony odczyt w galezi obslugujacej rzuca TEN
+    SAM blad po raz drugi: zastepuje oryginalna diagnostyke, a zapis metryki —
+    ktory stoi za nim — nigdy nie dochodzi do skutku. Dashboard zostaje wtedy
+    z zeszlonocnym `last_run_success=1` mimo nieudanego przebiegu.
+
+    Kazdy inny blad odczytu jest tu traktowany tak samo: to sank, nie pomiar.
+    """
+    try:
+        last_success = state_mgr.read().get("last_success") or {}
+    except Exception:
+        return 0
+    try:
+        return int(last_success.get("unixtime", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def record_state_failure(
+    state_mgr: StateManager,
+    event_mgr: EventManager,
+    command: str,
+    unixtime: int,
+    error_code: str,
+    error_message: str,
+) -> None:
+    """Best-effort zapis porazki do state.json.
+
+    Zapis stanu jest sankiem, nie pomiarem: gdy plik jest nieczytelny albo
+    niemodyfikowalny, jego porazka NIE MOZE (a) zastapic oryginalnej diagnostyki
+    ani (b) przerwac obslugi przed zapisem metryki. Dokladnie ten mechanizm
+    trzymal `last_run_success` na 1 po nieudanym przebiegu. Porazka zapisu
+    dostaje wlasne zdarzenie, zeby nie znikla bez sladu.
+    """
+    try:
+        state_mgr.update_failure(command, unixtime, error_code, error_message)
+    except Exception as state_exc:
+        try:
+            event_mgr.emit(
+                "state.write_failure",
+                {
+                    "error_code": "E_STATE",
+                    "message": f"zapis stanu nie powiodl sie: {state_exc}",
+                },
+            )
+        except Exception:
+            pass
+
+
 def _record_pre_lock_failure(
     cluster_dir: Path,
     cluster_name: str,
@@ -257,12 +309,9 @@ def _record_pre_lock_failure(
         pass
     if metrics_mgr is not None:
         try:
-            last_succ_time = 0
-            try:
-                last_succ = StateManager(cluster_name, cluster_dir / "state.json").read().get("last_success")
-                last_succ_time = last_succ.get("unixtime", 0) if last_succ else 0
-            except Exception:
-                pass
+            last_succ_time = last_success_unixtime(
+                StateManager(cluster_name, cluster_dir / "state.json")
+            )
             metrics_mgr.update(
                 last_success_unixtime=last_succ_time,
                 last_failure_unixtime=now_ts,

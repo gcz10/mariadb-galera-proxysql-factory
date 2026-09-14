@@ -27,7 +27,9 @@ from .common import (
     _finalize_success_cleanup,
     _record_pre_lock_failure,
     get_storage_backend,
+    last_success_unixtime,
     publish_drill_freshness,
+    record_state_failure,
     set_module_redactor,
 )
 from .crypto import ENCRYPTION_METHOD_V3, FORMAT_VERSION, encrypt_payload
@@ -458,10 +460,18 @@ def run_backup(
     try:
         lock_mgr.acquire()
     except BackupError as exc:
-        state_mgr.update_locked("backup", now_ts)
         event_mgr.emit("locked", {"error_code": exc.code, "message": exc.public_message})
-        last_succ_ts = (state_mgr.read().get("last_success") or {}).get("unixtime", 0)
-        metrics_mgr.update(last_success_unixtime=last_succ_ts, last_failure_unixtime=now_ts, last_run_success=0)
+        # Ten sam wzorzec co w galezi ogolnej: zapis stanu i odczyt ostatniego
+        # sukcesu to sanki, a metryka MUSI powstac nawet wtedy, gdy plik stanu
+        # jest nieczytelny. Wczesniej `state_mgr.read()` w tej linii rzucalo
+        # drugim `E_STATE`, wiec przy rownoczesnym uszkodzeniu stanu nie
+        # powstawala ani metryka porazki, ani zdarzenie o blokadzie.
+        record_state_failure(state_mgr, event_mgr, "backup", now_ts, "E_LOCKED", "Locked")
+        metrics_mgr.update(
+            last_success_unixtime=last_success_unixtime(state_mgr),
+            last_failure_unixtime=now_ts,
+            last_run_success=0,
+        )
         raise
     start_time = time.time()
     work_dir: Optional[Path] = None
@@ -566,8 +576,15 @@ def run_backup(
         # commitowac. Runner widzial ten skutek dopiero po fakcie (fc_delta
         # nizej) i odrzucal gotowa kopie: luka RPO zamiast zapobiegania.
         desynced = set_wsrep_desync(cfg.paths.socket, runner, True)
-        event_mgr.emit("galera.desync", {"applied": desynced})
+        # Emisja zdarzenia NALEZY do bloku chronionego `finally` ponizej. Byla
+        # przed nim, wiec przy pelnym dysku na katalogu zdarzen (OSError z
+        # EventManager.emit) wyjatek omijal sprzatanie i zostawial donor
+        # z `wsrep_desync=ON` na stale: ProxySQL trzyma go poza ruchem, a kazda
+        # nastepna brama zdrowia odrzuca caly klaster az do recznego OFF.
+        # Wewnatrz `try` kazda porazka — takze sink zdarzen — przechodzi przez
+        # przywrocenie synchronizacji.
         try:
+            event_mgr.emit("galera.desync", {"applied": desynced})
             wsrep_uuid, wsrep_seqno = perform_physical_backup(work_dir, cfg.paths.datadir, cfg.paths.socket, runner)
         finally:
             if desynced:
@@ -756,27 +773,17 @@ def run_backup(
 
         err_code = failure.code if isinstance(failure, BackupError) else "E_STORAGE"
         err_msg = failure.public_message if isinstance(failure, BackupError) else str(failure)
-        if err_code == "E_STATE":
-            event_mgr.emit(
-                "state.failure",
-                {"error_code": err_code, "error_message": redactor.redact(err_msg)},
-            )
-            last_succ_ts = (state_mgr.read().get("last_success") or {}).get("unixtime", 0)
-            metrics_mgr.update(
-                last_success_unixtime=last_succ_ts,
-                last_failure_unixtime=int(time.time()),
-                last_run_success=0,
-                last_duration_seconds=duration,
-            )
-            if failure is exc:
-                raise
-            raise failure
-
-        state_mgr.update_failure("backup", int(time.time()), err_code, redactor.redact(err_msg))
+        # JEDNA sciezka obslugi porazki. Wczesniej `E_STATE` mial wlasna galaz,
+        # ktora (a) ponownie czytala ten sam nieczytelny plik i tym samym bledem
+        # zastępowala oryginalna diagnostyke, oraz (b) nie miala zabezpieczenia
+        # zapisu metryki — wiec przy uszkodzonym `state.json` dashboard zostawal
+        # z zeszlonocnym `last_run_success=1`, mimo ze przebieg sie nie udal.
+        # Zapis stanu jest tu sankiem (`record_state_failure`), a metryka ponizej
+        # jest OBOWIAZKOWA i chroniona wlasnym `except`.
         event_mgr.emit("state.failure", {"error_code": err_code, "error_message": redactor.redact(err_msg)})
+        record_state_failure(state_mgr, event_mgr, "backup", int(time.time()), err_code, redactor.redact(err_msg))
 
-        last_succ = state_mgr.read().get("last_success", {})
-        last_succ_time = last_succ.get("unixtime", 0) if last_succ else 0
+        last_succ_time = last_success_unixtime(state_mgr)
         try:
             metrics_mgr.update(
                 last_success_unixtime=last_succ_time,
