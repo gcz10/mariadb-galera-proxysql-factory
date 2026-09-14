@@ -77,6 +77,15 @@ case "$*" in
     [ -n "$OUT" ] && : > "$OUT"
     printf '%s' "${DELETE_CODE:-200}"
     ;;
+  *"/qemu/"*"/status/current"*)
+    # Stan maszyny pod VMID: 200 = zywa, 500 = PVE nie zna takiej VM (tak
+    # odpowiada dla nieistniejacego configu). Testy podnosza VM_STATUS_CODE,
+    # gdy chca sprawdzic ochrone ZYWYCH maszyn albo nierozstrzygnieta odpowiedz.
+    # Wzorzec celowo wymaga `/status/current`: katalogowy `.../<vmid>/status`
+    # zwraca podkatalogi i NIE jest dowodem istnienia maszyny, wiec atrapa nie
+    # moze odpowiadac na oba warianty tak samo.
+    printf '%s' "${VM_STATUS_CODE:-500}"
+    ;;
   *access/ticket*)
     if [ -n "${TICKET_BODY:-}" ]; then
       printf '%s' "$TICKET_BODY"
@@ -357,6 +366,15 @@ TWO_NODE_VOLUMES = (
     '{"volid":"local-zfs:vm-992-cloudinit"}]}'
 )
 
+# Stan terraform juz pusty (po zakonczonym destroy) — lista celow moze przyjsc
+# wylacznie z pliku wznowienia.
+EMPTY_OUTPUT_TERRAFORM = """#!/bin/sh
+case "$*" in
+  *output*) printf '{}' ;;
+esac
+exit 0
+"""
+
 
 class PveTeardownResumeScopeTests(unittest.TestCase):
     """Wznowienie po przerwanym destroy nie moze wyjsc poza wskazany zakres.
@@ -416,6 +434,167 @@ class PveTeardownResumeScopeTests(unittest.TestCase):
         logged = self.harness.requested_urls()
         self.assertNotIn("local-zfs:vm-991-cloudinit", logged)
         self.assertNotIn("local-zfs:vm-992-cloudinit", logged)
+
+
+PARTIAL_DESTROY_TERRAFORM = """#!/bin/sh
+case "$*" in
+  *output*)
+    # Run 1: w stanie sa OBJIE maszyny. Run 2 (po przerwanym destroy): zostala
+    # tylko ocalala — dokladnie tak zachowuje sie terraform po kasowaniu polowy.
+    if [ -f "$PARTIAL_PROGRESS" ]; then
+      printf '{"neighbor":{"vmid":992,"role":"galera"}}'
+    else
+      printf '{"target":{"vmid":991,"role":"galera"},"neighbor":{"vmid":992,"role":"galera"}}'
+    fi
+    ;;
+  *destroy*)
+    if [ ! -f "$PARTIAL_PROGRESS" ]; then
+      # Przerwanie PO skasowaniu pierwszej maszyny, PRZED druga.
+      touch "$PARTIAL_PROGRESS"
+      exit 1
+    fi
+    ;;
+esac
+exit 0
+"""
+
+
+class PveTeardownPartialDestroyTests(unittest.TestCase):
+    """Wznowienie po CZESCIOWYM destroy nie moze zapomniec ofiar run-1.
+
+    ZMIERZONE 2026-09-14 na atrapach API: `terraform destroy` usunal pierwsza
+    maszyne i padl na drugiej, wiec kolejny przebieg czytal z outputu juz tylko
+    ocalala maszyne, nadpisywal nia plik wznowienia, sprzatal tylko ja i
+    konczyl "usunietych sierot: 0" z kodem 0 (bez banera bledu). Wolumen
+    pierwszej ofiary zostawal na ZFS i wywalal nastepny `apply` na tym VMID.
+    """
+
+    def setUp(self):
+        self.harness = TeardownHarness()
+        self.addCleanup(self.harness.cleanup)
+        _write_executable(self.harness.bindir / "terraform", PARTIAL_DESTROY_TERRAFORM)
+        self.progress = self.harness.sandbox / "partial-destroy"
+        self.cache = self.harness.workdir / ".teardown-vmids"
+
+    def run_teardown(self):
+        return self.harness.run(
+            TWO_NODE_VOLUMES, env_extra={"PARTIAL_PROGRESS": str(self.progress)}
+        )
+
+    def test_retry_still_sweeps_the_victim_of_the_interrupted_run(self):
+        interrupted = self.run_teardown()
+        self.assertNotEqual(interrupted.returncode, 0)
+        self.assertTrue(self.cache.exists())
+        self.assertIn("target:991:no", self.cache.read_text(encoding="utf-8"))
+
+        self.harness.curl_log.write_text("", encoding="utf-8")
+        resumed = self.run_teardown()
+
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        logged = self.harness.requested_urls()
+        self.assertIn(
+            "local-zfs:vm-991-cloudinit",
+            logged,
+            "retry zapomnial sieroty maszyny skasowanej w przerwanym przebiegu",
+        )
+        self.assertIn("local-zfs:vm-992-cloudinit", logged)
+        self.assertFalse(self.cache.exists(), "plik wznowienia zostal po sprzataniu")
+
+
+class PveTeardownLiveMachineGuardTests(unittest.TestCase):
+    """Sierota to wolumen BEZ maszyny. VMID wraca do obiegu, wiec wolumen
+    `vm-<vmid>-*` moze nalezec do maszyny utworzonej po przerwanym przebiegu —
+    skasowanie jej dyskow jest nieodwracalne."""
+
+    def setUp(self):
+        self.harness = TeardownHarness()
+        self.addCleanup(self.harness.cleanup)
+
+    def test_volumes_of_a_live_machine_are_preserved(self):
+        result = self.harness.run(ORPHAN_LISTING, env_extra={"VM_STATUS_CODE": "200"})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ZACHOWANO", result.stderr)
+        self.assertNotIn("usunieto sierote", result.stdout)
+        self.assertNotIn("local-zfs:vm-9999-cloudinit", self.harness.requested_urls())
+        # Zakotwiczenie ENDPOINTU: `/qemu/<vmid>/status` (katalogowy) zwraca
+        # podkatalogi, wiec jego 200 nie dowodzi istnienia maszyny — bramka musi
+        # pytac o lisc API `status/current`.
+        self.assertIn("/qemu/9999/status/current", self.harness.requested_urls())
+
+    def test_unresolvable_machine_state_refuses_to_delete(self):
+        # Odpowiedz, ktora nie rozstrzyga (np. 401 po utracie poswiadczen), nie
+        # moze byc czytana jako "maszyny nie ma": nierozstrzygniete kasowanie
+        # jest nieodwracalne.
+        result = self.harness.run(ORPHAN_LISTING, env_extra={"VM_STATUS_CODE": "401"})
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Odmawiam kasowania wolumenow", result.stderr)
+        self.assertNotIn("usunieto sierote", result.stdout)
+        self.assertNotIn("local-zfs:vm-9999-cloudinit", self.harness.requested_urls())
+        self.assertIn("/qemu/9999/status/current", self.harness.requested_urls())
+
+
+class PveTeardownScopePreservedResumeTests(unittest.TestCase):
+    """Wywolanie PER-NODE nie jest wlascicielem calej listy wznowienia.
+
+    Plik wznowienia jest jedynym miejscem, ktore pamieta ofiary przerwanego
+    teardownu CALEGO roota (`terraform output` ich juz nie zwroci). Gdyby
+    przebieg jednego wezla nadpisal go wlasnym zakresem i skasowal po sukcesie,
+    wolumeny pozostalych ofiar zostalyby zapomniane bez ostrzezenia.
+    """
+
+    def setUp(self):
+        self.harness = TeardownHarness()
+        self.addCleanup(self.harness.cleanup)
+        _write_executable(self.harness.bindir / "terraform", TWO_NODE_TERRAFORM)
+        self.cache = self.harness.workdir / ".teardown-vmids"
+
+    def test_scoped_run_keeps_the_other_nodes_unfinished_targets(self):
+        # Przerwany teardown calego roota: plik wznowienia zna OBIE maszyny.
+        interrupted = self.harness.run(TWO_NODE_VOLUMES, env_extra={"DELETE_CODE": "403"})
+        self.assertNotEqual(interrupted.returncode, 0)
+        cache_text = self.cache.read_text(encoding="utf-8")
+        self.assertIn("target:991:no", cache_text)
+        self.assertIn("neighbor:992:no", cache_text)
+
+        # Przebieg per-node dla jednego wezla nie moze skasowac cudzych celow.
+        self.harness.curl_log.write_text("", encoding="utf-8")
+        scoped = self.harness.run(TWO_NODE_VOLUMES, nodes=["target"])
+
+        self.assertEqual(scoped.returncode, 0, scoped.stderr)
+        self.assertIn("local-zfs:vm-991-cloudinit", self.harness.requested_urls())
+        self.assertNotIn(
+            "local-zfs:vm-992-cloudinit",
+            self.harness.requested_urls(),
+            "przebieg per-node skasowal wolumen maszyny spoza swojego zakresu",
+        )
+        self.assertTrue(self.cache.exists(), "plik wznowienia zgubil cele innego wezla")
+        kept = self.cache.read_text(encoding="utf-8")
+        self.assertIn("neighbor:992:no", kept)
+        self.assertNotIn("target:991:no", kept, "cel wlasnego zakresu zostal po sprzataniu")
+
+    def test_out_of_scope_entries_are_not_duplicated_when_output_is_empty(self):
+        """Plik jest przepisywany od zera, nie dopisywany.
+
+        Dopisanie wpisow spoza zakresu do NIEOSKROCONEGO pliku zdublowaloby je —
+        sa w nim juz te same wpisy, ktore przed chwila czytalismy.
+        """
+        interrupted = self.harness.run(TWO_NODE_VOLUMES, env_extra={"DELETE_CODE": "403"})
+        self.assertNotEqual(interrupted.returncode, 0)
+
+        # Zakres nieobecny w pliku i pusty `terraform output`: nic do sprzatania,
+        # ale cudze cele musza przetrwac bez zmian.
+        _write_executable(self.harness.bindir / "terraform", EMPTY_OUTPUT_TERRAFORM)
+        result = self.harness.run(TWO_NODE_VOLUMES, nodes=["ghost"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = self.cache.read_text(encoding="utf-8").split()
+        self.assertEqual(
+            sorted(lines),
+            ["neighbor:992:no", "target:991:no"],
+            f"wpisy wznowienia zostaly zdublowane albo zgubione: {lines}",
+        )
 
 
 if __name__ == "__main__":

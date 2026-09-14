@@ -69,6 +69,8 @@ LEGACY_PROTECTED_CACHE="$TF_DIR/.teardown-protected-vmids"
 VMIDS=()
 PROTECTED_DISK_VMIDS=()
 CACHE_ENTRIES=()
+# Wpisy pliku wznowienia spoza zakresu BIEZACEGO wywolania (patrz nizej).
+KEPT_ENTRIES=()
 while IFS=':' read -r name vmid role del_disks; do
   [ -n "$vmid" ] || continue
   VMIDS+=("$vmid")
@@ -97,18 +99,33 @@ for name, v in data.items():
         print(name + ":" + vmid + ":" + role + ":" + del_disks)
 ' 2>/dev/null
 )
-if [ "${#VMIDS[@]}" -eq 0 ] && [ -f "$VMID_CACHE" ]; then
-  # Ponowny przebieg po destroy: stan terraform jest juz pusty, ale plik zna
-  # wezly z pierwszego podejscia — sprzatanie sierot moze sie odwrocic.
-  #
-  # ZAKRES JEST WIAZACY. Wznowienie adoptowalo wczesniej CALA zapisana liste,
-  # takze przy wywolaniu per-node: teardown jednej maszyny wysylal wtedy DELETE
-  # na wolumeny sasiada, ktory nadal zyl i nadal byl w stanie terraform
-  # (zmierzone 2026-09-12 na atrapach API). Wpis spoza wskazanego zakresu albo
-  # w starym formacie (bez nazwy wezla) jest POMIJANY — sierota zostaje do
-  # recznego sprzatniecia, ale nic cudzego nie ginie.
+# Plik wznowienia zna cele POTWIERDZONEGO przebiegu. Scala sie z biezaca lista
+# przy KAZDYM wywolaniu — nie tylko wtedy, gdy `terraform output` jest pusty.
+#
+# `terraform destroy` kasuje maszyny PO KOLEI, wiec po przerwaniu w polowie
+# output zwraca juz tylko OCALE WEZLY. Wersja, ktora adoptowala cache wylacznie
+# przy pustym output, nadpisywala go wtedy ocalalymi i gubila sieroty ofiar
+# wczesniejszego przebiegu (zmierzone 2026-09-14 na atrapach API: retry konczyl
+# sie "usunietych sierot: 0" i kodem 0, a wolumen pierwszej ofiary zostawal —
+# dokladnie ta sierota, ktora wywala nastepny `apply`).
+#
+# ZAKRES JEST WIAZACY. Wznowienie adoptowalo wczesniej CALA zapisana liste,
+# takze przy wywolaniu per-node: teardown jednej maszyny wysylal wtedy DELETE
+# na wolumeny sasiada, ktory nadal zyl i nadal byl w stanie terraform
+# (zmierzone 2026-09-12 na atrapach API). Wpis spoza wskazanego zakresu albo
+# w starym formacie (bez nazwy wezla) jest POMIJANY — sierota zostaje do
+# recznego sprzatniecia, ale nic cudzego nie ginie.
+if [ -f "$VMID_CACHE" ]; then
+  restored=0
   skipped_foreign=0
   skipped_legacy=0
+  # Wpisy spoza zakresu NIE moga zniknac. Plik wznowienia jest jedynym miejscem,
+  # ktore pamieta ofiary przerwanego teardownu CALEGO roota — `terraform output`
+  # ich juz nie zwroci. Gdyby przebieg per-node nadpisal plik wlasnym zakresem,
+  # wolumeny pozostalych ofiar zostalyby bez ostrzezenia (dokladnie ta klasa
+  # sieroty, ktora ta poprawka zamyka), a przy kasowaniu pliku po sukcesie —
+  # zapomniane na stale. Dlatego wracaja do pliku i tylko CZEKAJA na przebieg,
+  # ktory obejmie ich wezly.
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     # Stary format to sam VMID w linii — nie wiadomo, do ktorej maszyny
@@ -128,14 +145,32 @@ if [ "${#VMIDS[@]}" -eq 0 ] && [ -f "$VMID_CACHE" ]; then
     if [ -n "$NODE_FILTER" ]; then
       case ",$NODE_FILTER" in
         *",$name,"*) ;;
-        *) skipped_foreign=$((skipped_foreign + 1)); continue ;;
+        *)
+          skipped_foreign=$((skipped_foreign + 1))
+          KEPT_ENTRIES+=("$entry")
+          continue
+          ;;
       esac
+    fi
+    # Ten sam VMID moze stac i w output, i w cache — nie listujemy go dwa razy.
+    # Petla jest pod bramka dlugosci, bo bash 3.2 (macOS) z `set -u` wywraca sie
+    # na rozwinieciu PUSTEJ tablicy: `"${VMIDS[@]}"` to tam "unbound variable".
+    if [ "${#VMIDS[@]}" -gt 0 ]; then
+      already=no
+      for seen in "${VMIDS[@]}"; do
+        if [ "$seen" = "$vmid" ]; then
+          already=yes
+          break
+        fi
+      done
+      [ "$already" = "yes" ] && continue
     fi
     VMIDS+=("$vmid")
     CACHE_ENTRIES+=("$name:$vmid:$protected")
     [ "$protected" = "yes" ] && PROTECTED_DISK_VMIDS+=("$vmid")
+    restored=$((restored + 1))
   done < "$VMID_CACHE"
-  [ "${#VMIDS[@]}" -gt 0 ] && echo "WZNOWIONO: VMID z poprzedniego przebiegu: ${VMIDS[*]}" >&2
+  [ "$restored" -gt 0 ] && echo "PRZYWRÓCONO niedokonczone cele poprzedniego przebiegu: ${VMIDS[*]}" >&2
   [ "$skipped_foreign" -gt 0 ] && echo "POMINIETO $skipped_foreign wpisow spoza wskazanego zakresu (${NODES[*]}) — nie naleza do tego wywolania." >&2
   [ "$skipped_legacy" -gt 0 ] && echo "POMINIETO $skipped_legacy wpisow w starym formacie (bez nazwy wezla) — sprzataj te sieroty recznie." >&2
 fi
@@ -196,8 +231,18 @@ fi
 # Plik wznowienia powstaje DOPIERO po potwierdzeniu celu. Zapis przed bramka
 # zostawial swieza liste VMID po KAZDEJ odmowie (literowka w celu, przebieg na
 # probe), a kolejne wywolanie adoptowalo ja jako "poprzedni przebieg".
-if [ "${#CACHE_ENTRIES[@]}" -gt 0 ]; then
-  printf '%s\n' "${CACHE_ENTRIES[@]}" > "$VMID_CACHE"
+# Plik jest PRZEPISYWANY od zera, gdy mamy cokolwiek do zapisania: dopisanie
+# wpisow spoza zakresu (`>>`) do nieoskroconego pliku zdublowaloby je, bo sa w
+# nim juz te same wpisy, ktore przed chwila czytalismy.
+# Bramki dlugosci, bo bash 3.2 z `set -u` wywraca sie na pustej tablicy.
+if [ "${#CACHE_ENTRIES[@]}" -gt 0 ] || [ "${#KEPT_ENTRIES[@]}" -gt 0 ]; then
+  : > "$VMID_CACHE"
+  if [ "${#CACHE_ENTRIES[@]}" -gt 0 ]; then
+    printf '%s\n' "${CACHE_ENTRIES[@]}" >> "$VMID_CACHE"
+  fi
+  if [ "${#KEPT_ENTRIES[@]}" -gt 0 ]; then
+    printf '%s\n' "${KEPT_ENTRIES[@]}" >> "$VMID_CACHE"
+  fi
 fi
 rm -f "$LEGACY_PROTECTED_CACHE"
 # Terraform odrzuca -target pojedynczej VM, gdy blok moved jest jeszcze tylko
@@ -327,7 +372,52 @@ if [ "$CONTENT_CODE" != "200" ]; then
   exit 1
 fi
 
-if ! VOLS_RAW=$(VMIDS_CSV="$(printf '%s,' "${VMIDS[@]}")" \
+# --- Sierota czy ZYWA maszyna? ---
+# Sprzatanie kasuje WOLUMENY po numerze VMID, a VMID jest zasobem wielokrotnego
+# uzytku: wolumen `vm-<vmid>-*` moze nalezec do maszyny utworzonej PO przerwanym
+# przebiegu (reczny create, apply innego roota, odbudowa po awarii). Kasowanie
+# dyskow zywej maszyny to utrata danych, ktorej nie cofa zaden kolejny `apply`.
+# Dlatego przed DELETE pytamy API o stan maszyny. Sciezka to LISCIOWY
+# `/qemu/<vmid>/status/current` (API-viewer PVE: `vm_status`, wymaga VM.Audit),
+# a nie katalogowy `/qemu/<vmid>/status` — ten zwraca podkatalogi (start, stop,
+# shutdown...), wiec 200 z niego nie mowiloby nic o istnieniu maszyny:
+#   200          => maszyna istnieje (stan `running`/`stopped`), wolumeny NIE sa
+#                   sierota — pomijamy i mowimy to glosno,
+#   500/501/404  => PVE nie zna takiej maszyny (brak configu) => wolno sprzatac,
+#   cokolwiek innego (takze 000 z timeoutu) => NIE WIEMY. Nierozstrzygniete
+#   kasowanie jest nieodwracalne, wiec konczymy bledem zamiast zgadywac.
+SWEEP_VMIDS=()
+LIVE_VMIDS=()
+UNKNOWN_VMIDS=()
+for vmid in "${VMIDS[@]}"; do
+  [ -n "$vmid" ] || continue
+  code=$(curl -sk --max-time 30 -o /dev/null -w '%{http_code}' \
+    "${AUTH_ARGS[@]}" \
+    "${PVE_API}/api2/json/nodes/${PVE_NODE}/qemu/${vmid}/status/current" || echo 000)
+  case "$code" in
+    200) LIVE_VMIDS+=("$vmid") ;;
+    500|501|404) SWEEP_VMIDS+=("$vmid") ;;
+    *) UNKNOWN_VMIDS+=("$vmid") ;;
+  esac
+done
+if [ "${#LIVE_VMIDS[@]}" -gt 0 ]; then
+  echo "ZACHOWANO: VMID ${LIVE_VMIDS[*]} nadal ma maszyne w PVE — wolumeny nie sa sierotami." >&2
+fi
+if [ "${#UNKNOWN_VMIDS[@]}" -gt 0 ]; then
+  echo "BLAD: nie udalo sie ustalic, czy VMID ${UNKNOWN_VMIDS[*]} jeszcze istnieje (odpowiedz inna niz 200/500/501/404)." >&2
+  echo "Odmawiam kasowania wolumenow, ktore moga byc dyskami ZYWYCH maszyn. Powtorz, gdy PVE API odpowiada." >&2
+  exit 1
+fi
+# Ta sama bramka dlugosci co wyzej: przypisanie z pustej tablicy wywraca bash 3.2.
+if [ "${#SWEEP_VMIDS[@]}" -gt 0 ]; then
+  VMIDS=("${SWEEP_VMIDS[@]}")
+else
+  VMIDS=()
+fi
+
+# Po filtrze zywotnosci lista moze byc PUSTA (wszystkie VMID maja jeszcze swoje
+# maszyny) — `:-` chroni rozwiniecie tablicy w tym przypadku.
+if ! VOLS_RAW=$(VMIDS_CSV="$(printf '%s,' "${VMIDS[@]:-}")" \
                 PROTECTED_CSV="$(printf '%s,' "${PROTECTED_DISK_VMIDS[@]:-}")" \
                 python3 -c '
 import json, os, re, sys
@@ -385,5 +475,14 @@ if [ "$failed" -gt 0 ]; then
   echo "BLAD: nie usunieto $failed wolumenow — sprzataj recznie przed kolejnym apply." >&2
   exit 1
 fi
-rm -f "$VMID_CACHE"
+# Plik wznowienia kasujemy tylko wtedy, gdy przebieg obejmowal CALY root.
+# Wywolanie per-node nie jest wlascicielem calej listy: wpisy innych wezlow
+# (KEPT_ENTRIES) zostaja, zeby nie zniknely ofiary przerwanego teardownu roota.
+# Gdy takich wpisow nie ma, plik nie ma czego wiecej niesc.
+if [ -z "$NODE_FILTER" ] || [ "${#KEPT_ENTRIES[@]}" -eq 0 ]; then
+  rm -f "$VMID_CACHE"
+else
+  printf '%s\n' "${KEPT_ENTRIES[@]}" > "$VMID_CACHE"
+  echo "UWAGA: w $VMID_CACHE zostaly niedokonczone cele innych wezlow: ${KEPT_ENTRIES[*]}" >&2
+fi
 echo "=== teardown zakonczony (usunietych sierot: $removed) ==="
