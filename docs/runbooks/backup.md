@@ -1,6 +1,6 @@
 # Runbook: backup i restore Galera
 
-**Status:** aktualny  
+**Status:** aktualny (zweryfikowany wobec kodu 2026-09-14)  
 **Powiązane ISC:** ISC-32, ISC-33, ISC-34, ISC-35, ISC-36, ISC-38, ISC-39
 
 ## Kontrakt
@@ -22,7 +22,11 @@ Obsługiwane backendy:
 - `smb` — udział montowany tylko na czas operacji; sukces jest zapisywany dopiero po poprawnym unmount;
 - `filesystem` — zasób wcześniej zamontowany przez operatora; runner nigdy go nie montuje ani nie odmontowuje.
 
-Źródłem backupu jest dokładnie `backup.scheduler.host`. Runner nie wybiera automatycznie „non-writera”; wybierz zdrowy węzeł Galery o akceptowalnym wpływie I/O. Przed rozpoczęciem sprawdza `Primary`, `Synced`, `wsrep_ready=ON`, `wsrep_connected=ON` i oczekiwany rozmiar klastra.
+Źródłem backupu jest **donor wybierany w runtime**, nie przypięty host. Cron stoi na każdym kandydacie („Elekcja donora" niżej), a runner rozstrzyga, kto wykona kopię w tym przebiegu: czyta z ProxySQL (`stats_mysql_connection_pool`) węzły `ONLINE` w hostgroupie backupu i zawęża je do `galera_nodes` klastra. `backup.scheduler.host` jest **preferencją** — wygrywa, gdy jest w tym zbiorze — a gdy został aktywnym writerem albo jest niezdrowy, backup przechodzi na pierwszego zdrowego kandydata (najniższy adres) zamiast padać trwale. Węzeł spoza zbioru kończy przebieg `rc=0`; to nie błąd, jego zadaniem było sprawdzenie, czy jest potrzebny.
+
+Niezależnie od elekcji runner odmawia pracy, gdy wybrany węzeł jest aktywnym writerem (`assert_scheduler_is_not_writer`, ISC-39) — elekcja i ta bramka to dwie osobne warstwy. Przed rozpoczęciem sprawdza też `Primary`, `Synced`, `wsrep_ready=ON`, `wsrep_connected=ON` i oczekiwany rozmiar klastra.
+
+Konsekwencja operacyjna: nie ma „tego jednego” węzła, na którym trzeba szukać kopii. Log, zdarzenia i metryki mogą pochodzić z dowolnego zdrowego nie-writera, a po failoverze donor zmienia się bez interwencji. Nie wybieraj ręcznie węzła o wysokim wpływie I/O — o tym, gdzie trafi kopie, decyduje stan klastra w momencie przebiegu.
 
 Backup pełny jest zaimplementowany. `incremental_backup_schedule` musi mieć wartość `disabled`.
 
@@ -51,7 +55,13 @@ backup:
     secure: true
 ```
 
-`scheduler.mode: cron` instaluje `/etc/cron.d/galera-backup-<cluster>` wyłącznie na `scheduler.host`. `manual` nie instaluje crona. `freshness_sla_hours` jest niezależnym od retencji progiem alarmowym ostatniego udanego backupu; dla harmonogramu dziennego wartość `26` daje dwie godziny tolerancji. `restore_test_schedule` opisuje oczekiwaną częstotliwość drill; repozytorium nie uruchamia automatycznego crona restore.
+`scheduler.mode: cron` instaluje `/etc/cron.d/galera-backup-<cluster>` na **każdym węźle Galery** — nie tylko na `scheduler.host`. Donora wybiera runner przy starcie, więc każdy kandydat musi mieć własny wpis cron; węzeł, który nie został wybrany, kończy przebieg `rc=0`. `manual` nie instaluje crona. Plik jest usuwany z hosta, który nie jest kandydatem (host restore albo rola inna niż `scheduler`).
+
+`scheduler.host` pozostaje znaczące w dwóch miejscach: jako **preferencja** elekcji oraz jako **wyłączny właściciel poświadczenia retencji** („Rozdział poświadczeń" niżej). Zmiana tego pola nie przenosi więc cronu — cron i tak jest wszędzie — tylko preferencję donora i miejsce, gdzie leży klucz z prawem kasowania.
+
+`freshness_sla_hours` jest niezależnym od retencji progiem alarmowym ostatniego udanego backupu; dla harmonogramu dziennego wartość `26` daje dwie godziny tolerancji.
+
+`restore_test_schedule` ma skutek: przy `scheduler.mode: cron` rola instaluje `/etc/cron.d/galera-restore-<cluster>` na hoście grupy `restore`, a drill uruchamia się sam. Wartości `disabled` i puste wyłączają ten cron. Harmonogram podlega tej samej walidacji składni co `full_backup_schedule` — błędne wyrażenie jest odrzucane już przez `validate-backup-config.py`, bo cron ignoruje taką linię po cichu i drill nie uruchomiłby się nigdy.
 
 `retention_days` musi być dodatnią liczbą całkowitą (np. `14`) lub jej zapisem
 cyfrowym bez znaku i zer wiodących (`"14"`). Schema, walidator deklaracji
@@ -144,11 +154,49 @@ obliczy filtr `minio_service_account_name`
 (`roles/galera_backup/filter_plugins/minio_access_keys.py`); ta sama funkcja
 nadaje ją przy provision i odnajduje przy derejestracji.
 
-Retencja (`run_retention`) biegnie na koordynatorze — także wtedy, gdy backup wykonał inny węzeł. Węzeł bez poświadczenia retencji nie emituje zdarzeń retencji; to normalny stan, nie awaria. Zdarzenie `retention.success` w `events.jsonl` na koordynatorze niesie liczbę usuniętych kopii.
+Retencja (`run_retention`) biegnie na **koordynatorze**, którym jest węzeł trzymający poświadczenie kasowania — czyli `backup.scheduler.host`, niezależnie od tego, który węzeł wykonał kopię. Węzeł bez tego poświadczenia kończy bez zdarzenia retencji: to normalny stan, nie awaria. Zdarzenie `retention.success` w `events.jsonl` na koordynatorze niesie liczbę usuniętych kopii.
+
+Rozdział ról jest więc taki: **donor** (dynamiczny) robi kopię, **koordynator** (`scheduler.host`) kasuje wygasłe. Gdy ten drugi jest niedostępny, kopie nadal powstają, a retencja czeka — patrz „Skutek operacyjny" niżej.
 
 **Skutek operacyjny:** gdy koordynator jest długo niedostępny, kopie nadal powstają (inny węzeł zostaje donorem), ale wygasłe przestają być kasowane do jego powrotu. Bucket rośnie; świeżość kopii pozostaje nienaruszona.
 
 **Ryzyko rezydualne:** klucz zapisu może nadpisać obiekt pod własnym prefiksem (bucket nie ma wersjonowania). Delete jest odcięty, nadpisanie nie.
+
+### Elekcja donora
+
+Kandydatami są węzły `ONLINE` w hostgroupie backupu ProxySQL
+(`galera_backup_hg`, domyślnie writer+10) zawężone do `galera_nodes` klastra.
+Hostgroup backupu trzyma zdrowe węzły `read_only=0` ponad `max_writers`, czyli
+zdrowe nie-writery; niezdrowe trafiają do `offline_hostgroup`. Dzięki temu
+runner nie musi liczyć zdrowia klastra ani mieć uprawnień `SUPER` — wystarcza
+konto read-only (`GALERA_BACKUP_PROXYSQL_STATS_*`).
+
+Kolejność: preferencja `scheduler_system_address` z `cluster.yml`, a gdy jej tam
+nie ma — najniższy adres wśród kandydatów. Brak kandydatów to `E_PROXYSQL`, nie
+cichy no-op.
+
+**Cron stoi na każdym kandydacie i jest identyczny** — nie ma „węzła backupu”.
+Ręczny `make cluster-backup` biegnie na wszystkich kandydatach; kopię wykonuje
+ten, który wygra elekcję, a reszta kończy `rc=0` ze zdarzeniem
+`skipped.not_elected` i kasuje własny plik metryki. Dlatego metryka
+`galera_backup-<cluster>.prom` opisuje klaster, a nie węzeł, i ma dokładnie
+jednego producenta w danym przebiegu.
+
+Kto był donorem, sprawdzisz na koordynatorze (jest tam `jq` i wszystkie
+zdarzenia tego klastra):
+
+```bash
+# Zdarzenia pominiętych węzłów wskazują wybranego donora.
+sudo jq -c 'select(.event=="skipped.not_elected")' \
+  /opt/galera-backup/clusters/<cluster>/events.jsonl | tail -5
+
+# Donor ostatniego przebiegu: węzeł, na którym metryka mówi sukces.
+grep -h 'galera_backup_last_run_success' \
+  /var/lib/node_exporter/textfile_collector/galera_backup-<cluster>.prom
+```
+
+Oba pliki leżą lokalnie na koordynatorze — nie ma potrzeby chodzić po węzłach
+`ssh` w pętli, bo donor i tak jest nazwany w zdarzeniach powyżej.
 
 ### Zarządzany MinIO
 

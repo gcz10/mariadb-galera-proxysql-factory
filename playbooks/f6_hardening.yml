@@ -45,7 +45,16 @@
           - mariadb_check.rc == 0
         fail_msg: >-
           MariaDB na {{ inventory_hostname }} nie odpowiada po sockecie
-          ({{ mariadb_check.stderr | default('') | trim }}). Hardening NIE
+          {#
+            `stderr or ''`, nie `stderr | default('')`: przy wartosci None ten
+            drugi filtr NIE podstawia pustego stringa (wartosc istnieje), a
+            `| trim` renderuje wtedy literal "None" zamiast diagnozy. Realny
+            Ansible zawsze dostarcza `stderr` jako string (pusty, gdy klient
+            milczy), wiec ta sciezka jest dzis nieosiagalna — forma `or ''`
+            jest zabezpieczeniem na wypadek zmiany modulu, nie naprawa
+            zmierzonego bledu.
+          #}
+          ({{ (mariadb_check.stderr or '') | trim }}). Hardening NIE
           zostal wykonany: anonimowe konta, baza test, zasieg roota i granty
           SST/PMM pozostaja niezweryfikowane. Uruchom serwer i powtorz —
           zielony wynik bez zadnej sprawdzonej asercji jest gorszy niz blad.
