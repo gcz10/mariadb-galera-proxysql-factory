@@ -110,5 +110,6 @@ class CreateVmCreateContractTests(unittest.TestCase):
         proc, _ = self.run_script({"TASK_EXITSTATUS": "ERR-start-failed"})
         self.assertNotEqual(proc.returncode, 0)
 
+
 if __name__ == "__main__":
     unittest.main()
