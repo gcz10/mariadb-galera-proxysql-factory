@@ -33,6 +33,8 @@
         if [ -f "$f" ]; then
           python3 -c "import json,sys; d=json.load(open('$f')); ls=d.get('last_success') or {}; print(ls.get('unixtime', 0) if ls.get('command') == 'restore' else 0)";
         else echo 0; fi
+      args:
+        executable: /bin/bash
       register: restore_epoch
       # `delegate_to` jest rozwiazywane PRZED `when`, wiec pusty ciag wywala
       # zadanie mimo pominiecia. Cel musi byc zawsze poprawnym hostem.
@@ -52,6 +54,8 @@
         {% else %}
         echo 0
         {% endif %}
+      args:
+        executable: /bin/bash
       register: tls_expiry_epoch
       changed_when: false
 

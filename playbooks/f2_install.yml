@@ -296,6 +296,8 @@
       ansible.builtin.include_tasks: tasks/os_tuning.yml
     - name: "ISC-3: asercja zainstalowanej wersji MariaDB zgodnej z lockfile"
       ansible.builtin.shell: "set -o pipefail; mariadbd --version | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"
+      args:
+        executable: /bin/bash
       register: f2_installed_mariadb
       changed_when: false
       failed_when: false

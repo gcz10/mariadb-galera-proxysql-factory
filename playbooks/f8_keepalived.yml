@@ -142,6 +142,8 @@
       ansible.builtin.shell: >-
         set -o pipefail;
         ip -o -4 addr show dev {{ keepalived_interface }} | grep -q "{{ proxysql.endpoint.address }}/"
+      args:
+        executable: /bin/bash
       register: vip_master_check
       until: vip_master_check.rc == 0
       retries: 15
@@ -153,6 +155,8 @@
       ansible.builtin.shell: >-
         set -o pipefail;
         ip -o -4 addr show dev {{ keepalived_interface }} | grep -q "{{ proxysql.endpoint.address }}/"
+      args:
+        executable: /bin/bash
       register: vip_backup_check
       changed_when: false
       failed_when: vip_backup_check.rc == 0
