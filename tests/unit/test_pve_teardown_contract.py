@@ -574,35 +574,6 @@ class PveTeardownScopePreservedResumeTests(unittest.TestCase):
         self.assertIn("neighbor:992:no", kept)
         self.assertNotIn("target:991:no", kept, "cel wlasnego zakresu zostal po sprzataniu")
 
-    def test_resume_message_names_only_entries_adopted_from_the_file(self):
-        """Komunikat ma wskazywac, CO dołożył plik wznowienia.
-
-        Wypisanie scalonej listy VMID sugerowaloby, ze cele pochodzace z
-        `terraform output` tez przyszly z pliku — operator nie odroznilby
-        wznowienia od zwyklego odczytu stanu.
-        """
-        # Stan terraform zna tylko sasiada; plik wznowienia zna OBA wezly.
-        _write_executable(self.harness.bindir / "terraform", NEIGHBOR_ONLY_TERRAFORM)
-        self.cache.write_text("target:991:no\nneighbor:992:no\n", encoding="utf-8")
-
-        result = self.harness.run(TWO_NODE_VOLUMES)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("PRZYWR\u00d3CONO", result.stderr)
-        restored_line = next(
-            line for line in result.stderr.splitlines() if "PRZYWR\u00d3CONO" in line
-        )
-        self.assertIn("target:991", restored_line)
-        self.assertNotIn(
-            "neighbor:992",
-            restored_line,
-            "komunikat wymienil cel z terraform output jako przywrocony z pliku",
-        )
-        # Oba wolumeny i tak zostaly sprzatniete (sasiad z output, ofiara z pliku).
-        logged = self.harness.requested_urls()
-        self.assertIn("local-zfs:vm-991-cloudinit", logged)
-        self.assertIn("local-zfs:vm-992-cloudinit", logged)
-
     def test_resume_message_names_only_targets_adopted_from_the_file(self):
         """Komunikat PRZYWRÓCONO to dowód operatora o pochodzeniu celów.
 
