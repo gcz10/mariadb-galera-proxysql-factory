@@ -116,6 +116,35 @@ def main():
             f"mariadb_tuning.slow_query_log=ON wymaga monitoring.qan_source=slowlog "
             f"(jest '{qan_source}') — inaczej slow log w datadir nie ma czym byc rotowany"
         )
+    if slow_log == "ON":
+        # Wlascicielem rotacji jest LOKALNY pmm-agent w trybie slowlog: tylko on
+        # czyta plik z datadir i ogranicza go rozmiarem. Sprawdzenie wyzej
+        # (`qan_source=slowlog`) jest KONIECZNE, ale nie wystarcza — agent musi
+        # jeszcze istniec:
+        #   * `monitoring.enabled=false` pomija caly F11 (Makefile), wiec nie
+        #     powstaje zaden agent,
+        #   * `agent_groups` bez `galera` daje klaster agentless, a ten nie ma
+        #     dostepu do pliku (schema mowi to wprost w opisie `qan_source`).
+        # W obu przypadkach `<host>-slow.log` rosnie w datadir bez ograniczen na
+        # partycji bazy. Deklaracja bez wykonawcy jest cichym dlugiem: nic jej
+        # nie egzekwuje w runtime.
+        monitoring = cluster.get("monitoring") or {}
+        agent_groups = monitoring.get("agent_groups") or []
+        if not monitoring.get("enabled", True):
+            errors.append(
+                "mariadb_tuning.slow_query_log=ON przy monitoring.enabled=false — "
+                "monitoring jest wylaczony, wiec nie powstanie lokalny pmm-agent, "
+                "a tylko on rotuje slow log w datadir (rosnie bez ograniczen). "
+                "Wylacz slow_query_log albo wlacz monitoring z lokalnym agentem"
+            )
+        elif "galera" not in agent_groups:
+            errors.append(
+                f"mariadb_tuning.slow_query_log=ON wymaga LOKALNEGO pmm-agenta na "
+                f"wezlach galera, a monitoring.agent_groups={agent_groups!r} go nie "
+                "obejmuje — klaster agentless nie czyta pliku z datadir, wiec slow "
+                "log rosnie bez ograniczen. Dodaj 'galera' do agent_groups albo "
+                "wylacz slow_query_log"
+            )
 
     # Check: endpoint.type must match Interview decision (keepalived_vip)
     ep_type = cluster.get("proxysql", {}).get("endpoint", {}).get("type", "")

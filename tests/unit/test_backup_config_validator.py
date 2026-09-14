@@ -157,6 +157,42 @@ class BackupConfigValidatorTests(unittest.TestCase):
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("cron", res.stderr.lower())
 
+    def test_rejects_malformed_restore_schedule(self):
+        # ZMIERZONE 2026-09-14: `restore_test_schedule` nie byl walidowany wcale
+        # (sprawdzano tylko `full_backup_schedule`), wiec wartosc "nonsense"
+        # przechodzila bramke i ladowala w /etc/cron.d bez slowa sprzeciwu.
+        # Cron ignoruje taka linie po cichu — automatyczny drill nie uruchamia
+        # sie nigdy, a jedynym sygnalem jest alert ISC-47 po 8 dniach.
+        for bad in ("nonsense", "0 4 * *", "0 4 * * * *", "0 4 * * SUN"):
+            with self.subTest(schedule=bad):
+                c = self.valid_s3_cluster()
+                c["backup"]["restore_test_schedule"] = bad
+                dir_path = self.create_cluster_pair(
+                    f"bad-restore-{abs(hash(bad))}", c, self.valid_inventory()
+                )
+                try:
+                    res = self.validate()
+                    self.assertNotEqual(res.returncode, 0, f"przyjeto: {bad}")
+                    self.assertIn("restore_test_schedule", res.stderr)
+                finally:
+                    shutil.rmtree(dir_path, ignore_errors=True)
+
+    def test_accepts_valid_and_disabled_restore_schedule(self):
+        # `disabled` i puste to legalne sentinele (klaster bez automatycznego
+        # drillu); poprawny cron musi przechodzic.
+        for good in ("0 4 * * 0", "disabled", ""):
+            with self.subTest(schedule=good):
+                c = self.valid_s3_cluster()
+                c["backup"]["restore_test_schedule"] = good
+                dir_path = self.create_cluster_pair(
+                    f"good-restore-{abs(hash(good))}", c, self.valid_inventory()
+                )
+                try:
+                    res = self.validate()
+                    self.assertEqual(res.returncode, 0, f"Stderr: {res.stderr}")
+                finally:
+                    shutil.rmtree(dir_path, ignore_errors=True)
+
     def test_rejects_non_positive_backup_freshness_sla(self):
         c = self.valid_s3_cluster()
         c["backup"]["freshness_sla_hours"] = 0

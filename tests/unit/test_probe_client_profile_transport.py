@@ -119,9 +119,6 @@ class AppConformanceTransportTests(unittest.TestCase):
             fake_ansible.errors = {}
             fake_ansible.body = lambda host: "PROBE_RC=0\n"
             import _probe_common
-            removed = []
-            def fake_remove(*args, **kwargs):
-                removed.append(args)
             with mock.patch.object(mod, "run_ansible", return_value=fake_ansible):
                 with mock.patch.object(
                         _probe_common.subprocess, "run", fake_run):

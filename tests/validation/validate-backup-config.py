@@ -163,6 +163,17 @@ def validate_pair(cluster_path: Path, inventory_path: Path) -> list[str]:
     # Cron schedule check
     if backup_enabled:
         errors.extend(validate_cron(backup.get("full_backup_schedule", "")))
+        # Harmonogram drillu ma TEN SAM kontrakt co harmonogram kopii: wartosc
+        # trafia bez dalszej obrobki do /etc/cron.d (restore-cron.j2), a cron nie
+        # zglasza bledu na niepoprawnym wyrazeniu — linia jest po cichu
+        # ignorowana, wiec automatyczny drill nie uruchamia sie NIGDY, a jedynym
+        # sygnalem zostaje alert ISC-47 po osmiodniowym oknie. `disabled` i puste
+        # sa legalnym sentinelem (bez crona), wiec walidujemy tylko realna
+        # wartosc.
+        restore_schedule = str(backup.get("restore_test_schedule", "") or "").strip()
+        if restore_schedule not in ("", "disabled"):
+            for message in validate_cron(restore_schedule):
+                errors.append(f"restore_test_schedule: {message}")
 
     # Encryption check
     if backup.get("encryption_enabled") is not True:

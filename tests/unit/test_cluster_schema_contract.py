@@ -1,11 +1,21 @@
 import json
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
 from jsonschema import Draft7Validator
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = WORKSPACE_ROOT / "clusters" / "schema" / "cluster.schema.json"
+# Walidator semantyczny (poza JSON Schema) i szablon, na ktorym budujemy
+# przypadki brzegowe. Sciezki trzymamy tu, a nie w klasie testowej, bo korzysta
+# z nich wiecej niz jeden zestaw przypadkow.
+REPO = WORKSPACE_ROOT
+VALIDATOR = WORKSPACE_ROOT / "tests" / "validation" / "validate-cluster-schema.py"
+EXAMPLE = WORKSPACE_ROOT / "clusters" / "example-cluster"
 
 # Kontrakt schema cluster.yml po usunieciu pol-widmo (2026-08-20):
 # macierz reject/accept pilnuje, ze zadne pole bez konsumenta nie wraca,
@@ -258,6 +268,70 @@ class ClusterSchemaContractTests(unittest.TestCase):
                 import yaml
 
                 self.assert_valid(yaml.safe_load(path.read_text()))
+
+
+class SlowLogRotationOwnerTests(unittest.TestCase):
+    """Slow log w datadir MUSI miec wykonawce rotacji, nie tylko deklaracje.
+
+    ZMIERZONE 2026-09-14: walidator wymagal `qan_source=slowlog` przy
+    `slow_query_log=ON`, ale nie sprawdzal, czy lokalny pmm-agent (jedyne, co
+    rotuje ten plik) w ogole powstanie. Konfiguracja `slow_query_log: ON` +
+    `monitoring.enabled: false` (albo `agent_groups` bez `galera`) przechodzila
+    bramke, a `<host>-slow.log` rosl w datadir bez ograniczen na partycji bazy.
+    """
+
+    @staticmethod
+    def _run(config: dict) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "cluster.yml"
+            path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(VALIDATOR), str(path), str(SCHEMA_PATH)],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+            )
+
+    def _base(self) -> dict:
+        # Baza jest klaster KANONICZNY (same pola z konsumentami), nie szablon:
+        # plik szablonu jest odrzucany przez wlasne bramki "niedokonczonej
+        # definicji" (.invalid, puste CIDR-y), wiec nie nadaje sie na fixture
+        # przypadku brzegowego.
+        config = canonical_cluster()
+        config["mariadb_tuning"]["slow_query_log"] = "ON"
+        config["mariadb_tuning"]["long_query_time"] = 0
+        config["monitoring"]["qan_source"] = "slowlog"
+        config["monitoring"]["agent_groups"] = ["galera"]
+        return config
+
+    def test_valid_owner_configuration_passes(self):
+        result = self._run(self._base())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_disabled_monitoring_is_rejected(self):
+        # Bez monitoringu F11 nie biegnie, wiec nie ma kto rotowac pliku.
+        config = self._base()
+        config["monitoring"]["enabled"] = False
+        result = self._run(config)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("monitoring.enabled=false", result.stdout + result.stderr)
+
+    def test_agentless_cluster_is_rejected(self):
+        # Agentless nie ma dostepu do pliku w datadir (schema mowi to wprost).
+        config = self._base()
+        config["monitoring"]["agent_groups"] = []
+        result = self._run(config)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("agent_groups", result.stdout + result.stderr)
+
+    def test_disabled_slow_log_needs_no_agent(self):
+        # Zaprzeczenie reguly: bez slow loga nie ma czego rotowac.
+        config = self._base()
+        config["mariadb_tuning"]["slow_query_log"] = "OFF"
+        config["monitoring"]["qan_source"] = "perfschema"
+        config["monitoring"]["agent_groups"] = []
+        result = self._run(config)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class ConsumerGuardTests(unittest.TestCase):
