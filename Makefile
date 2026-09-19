@@ -999,11 +999,16 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 # kończy się RC=2") jest HISTORYCZNY — opisuje stan sprzed podniesienia gcache.
 # NIEROZSTRZYGNIĘTE NA v17 (oba najemcy mają gcache_size=4G = 4096M na 3/3):
 # TA SAMA sonda na TYCH SAMYCH węzłach dała wymagania od 2211M do 6023M —
-# cassiopeiav17-r9: 3346M / 4182M / 4122M / 6023M (dwa ostatnie to FAIL),
-# orionv17-r10: 3406M / 3406M / 3167M / 2211M. Wdrożone 4096M leży WEWNĄTRZ
-# tego przedziału, więc werdykt przełącza się między przebiegami bez żadnej
-# zmiany stanu floty. Rozrzut 1,5–1,75× bije szum dokumentowany w repo
+# cassiopeiav17-r9: 3346M / 4182M / 4122M / 6023M, czyli TRZY z czterech
+# przebiegów czerwone (4182M, 4122M i 6023M przekraczają 4096M);
+# orionv17-r10: 3406M / 3406M / 3167M / 2211M, wszystkie poniżej progu.
+# Rozrzut 1,5–1,75× bije szum dokumentowany w repo
 # (8% ścieżka aplikacyjna, ~20% lab wg bench-app.py:178).
+# POD REGUŁĄ TEJ SONDY (docstring: odpowiada na NAJGORSZY przypadek) obowiązuje
+# NAJWYŻSZY zmierzony rate: cassiopeia 3508143 B/s → 6023M wobec 4096M =
+# braku pokrycia, orion 1983661 B/s → 3406M wobec 4096M = pokryte. Ale wynik
+# pojedynczego przebiegu przełącza się między barwami, więc nie jest dowodem
+# w żadną stronę.
 # PRZYCZYNA w kodzie sondy: `WORKLOAD_SECONDS=20`, a wynik to
 # `DELTA wsrep_replicated_bytes / ELAPSED`, gdzie ELAPSED jest całkowitoliczbowe
 # (±1 s = ±5%) i partie po 500 wstawek mogą przecinać krawędź okna. 20-sekundowa
