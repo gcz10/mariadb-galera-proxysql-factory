@@ -986,8 +986,16 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 	$(TARGET_ENV) tests/lab/probe-patch.py
 	$(TARGET_ENV) tests/lab/probe-drift.py
 	$(TARGET_ENV) PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
-# UWAGA 2026-09-08: ta sonda pada na obu najemcach (512M < ~3,7G wymagane), więc
-# cała brama kończy się RC=2. To DECYZJA operatora, nie usterka — nie wypisuj jej
-# stąd i nie dodawaj wyjątku. Powód i warunki zamknięcia: ISA.md, wpisy ISC-68.
+# UWAGA 2026-09-15: komentarz z 2026-09-08 („512M < ~3,7G wymagane, cała brama
+# kończy się RC=2") jest HISTORYCZNY — po decyzji operatora oba najemcy v17
+# deklarują gcache_size=4G (clusters/*/cluster.yml), więc nie opisuje stanu
+# bieżącego. Werdykt tej sondy na v17 NIE został jeszcze zmierzony. Zapas jest
+# jednak cienki: ostatni pomiar wymagał 4063M (cassiopeiav15-r9) wobec 4G=4096M,
+# czyli ~0,8%, a rozrzut pomiaru repo dokumentuje sam: 8% (ISA.md, ścieżka
+# aplikacyjna) i ~20% (bench-app.py:178, lab na współdzielonym hypervisorze).
+# CZERWONA W TYM MIEJSCU NIE JEST DOWODEM REGRESJI i nie wolno jej „naprawiać"
+# podniesieniem gcache ani zmianą progu — to DECYZJA operatora, nie usterka.
+# Powód i warunki zamknięcia: ISA.md, wpisy ISC-68. Nie wypisuj jej stąd i nie
+# dodawaj wyjątku.
 	$(TARGET_ENV) tests/lab/probe-gcache.py
 	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone"
