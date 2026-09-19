@@ -15,7 +15,7 @@
         lab-split-brain-test lab-backup-verify lab-restore-verify lab-backup-impact \
         lab-hardening-verify lab-selinux-verify lab-tls-expired-verify lab-monitoring-verify lab-rolling-restart-verify \
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-seed-dataset lab-proxysql-failover-test lab-admin-isolation-verify lab-post-build-gate \
-        verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code verify-inventory-tf verify-lockfiles \
+        lint verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code verify-inventory-tf verify-lockfiles \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify fleet-state \
         platform-validate platform-trust-hosts platform-deploy platform-firewall platform-firewall-verify platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
 
@@ -718,6 +718,15 @@ verify-no-secrets-leak:  ## Statyczny guard: brak sekretów w repo i argv proces
 # Wersja przypieta identycznie jak w .github/workflows/ci.yml.
 verify-dead-code:  ## Statyczny guard: martwe importy, nieuzywane zmienne, puste f-stringi (pyflakes)
 	python3 -m pyflakes tests roles/galera_backup/filter_plugins roles/galera_backup/files/galera_backup
+
+# CI odpala ten krok z jawnym ANSIBLE_INVENTORY, bo `ansible.cfg` jest celowo
+# fail-closed (domyslne inventory usuniete). Bez tej zmiennej `ansible-lint`
+# konczy sie seria `internal-error: No inventory was parsed` — wyglada jak
+# awaria srodowiska, a jest brakiem jednej zmiennej; wlasnie tak zostalo to
+# dwa razy zdiagnozowane blednie. Wersja identyczna jak w
+# .github/workflows/ci.yml (job `lint`, profil `production`).
+lint:  ## Statyczna bramka jak w CI: ansible-lint na profilu produkcyjnym
+	ANSIBLE_INVENTORY=clusters/example-cluster/inventory.yml ansible-lint playbooks roles
 
 verify-no-state-latest:  ## Guard ISC-63/P1-A: brak latest, mutowalnych RPM URL i disable_gpg_check
 	bash tests/validation/probe-no-state-latest.sh
