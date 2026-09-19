@@ -4,8 +4,8 @@ slug: "20260722-172704_galera-proxysql-cluster-factory"
 effort: comprehensive
 effort_source: explicit
 phase: build
-progress: 68/68 (65 [x], 3 [~] zaakceptowane decyzją operatora 2026-09-15, 0 otwartych)
-# 65 kryteriow spelnionych, 3 z zastrzezeniem (`[~]` — ISC-1, ISC-22, ISC-66):
+progress: 67/68 (65 [x], 2 [~], 1 otwarte — ISC-22, odstępstwo zaakceptowane decyzją operatora 2026-09-15)
+# 65 kryteriow spelnionych, 2 z zastrzezeniem (`[~]` — ISC-1, ISC-66), 1 otwarte (ISC-22, zaakceptowane):
 # ISC-1 (dowod historyczny z odbudowy 2026-08-02, powtorzenie wymaga teardownu)
 # i ISC-66 (fio nigdy nie uruchomione w F0). ISC-44 domkniety 2026-09-06
 # (wariant wygasly zmierzony sonda probe-tls-expired-cert.py).
