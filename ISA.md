@@ -9,8 +9,9 @@ progress: 67/68
 # ISC-1 (dowod historyczny z odbudowy 2026-08-02, powtorzenie wymaga teardownu)
 # i ISC-66 (fio nigdy nie uruchomione w F0). ISC-44 domkniety 2026-09-06
 # (wariant wygasly zmierzony sonda probe-tls-expired-cert.py).
-# ISC-22 OTWARTY: izolacja admin/app jest nieosiagalna przy plaskiej /24,
-# ktora deklaruje 16/16 definicji floty — wymaga decyzji o adresacji.
+# ISC-22 OTWARTY: izolacja admin/app nieosiagalna przy plaskiej /24 —
+# DECYZJA OPERATORA 2026-09-15: plaska /24 zostaje, kryterium otwarte swiadomie
+# (odstepstwo zaakceptowane, nie do domkniecia bez zmiany adresacji).
 # Zastrzezenia sa rozpisane w Verification przy kazdym ISC.
 mode: iterate
 started: "2026-07-22T15:27:04Z"
@@ -81,7 +82,7 @@ Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w k
 Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; `[ ]` — otwarte; `[~]` — PASS z zastrzeżeniem: kontrakt dotrzymany, ale dowód obejmuje tylko część kryterium lub część środowisk albo jest historyczny i nieodtwarzalny bez destrukcji — dokładne zastrzeżenie w Verification przy danym ISC.
 
 ### Instalacja i idempotencja
-- [~] ISC-1: Deployment na czystych hostach Rocky Linux 9 kończy się sukcesem (site.yml exit 0, wszystkie taski PASS).
+- [~] ISC-1: (DECYZJA OPERATORA 2026-09-15: dowod historyczny zostaje, teardown odroczony) Deployment na czystych hostach Rocky Linux 9 kończy się sukcesem (site.yml exit 0, wszystkie taski PASS).
 - [x] ISC-2: Drugi uruchomiony converge na niezmiennym klastrze raportuje `changed=0` na wszystkich hostach.
 - [x] ISC-3: Wersje MariaDB, mariadb-backup, Galera provider, ProxySQL i kolekcji Ansible są dokładnie zgodne z `versions.lock.yml`.
 - [x] ISC-4: SELinux pozostaje w trybie Enforcing po pełnym deploy.
@@ -163,7 +164,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 - [x] ISC-62: README i runbooki obejmują bootstrap, total outage, node replacement, backup, restore, upgrade i decommission.
 
 ### F0 Discovery
-- [~] ISC-66: Raport discovery zawiera fakty: OS/kernel, CPU/RAM/NUMA, dyski/filesystem/mount/wolne miejsce, IOPS+fsync (fio), DNS/routing/osigalność portów, chrony/NTP, SELinux/firewalld, repozytoria+pakiety, istniejące MariaDB/ProxySQL, monitoring, secret backend, audyt PK, write rate.
+- [~] ISC-66: (DECYZJA OPERATORA 2026-09-15: zastrzezenie zostaje — fio NIE wraca) Raport discovery zawiera fakty: OS/kernel, CPU/RAM/NUMA, dyski/filesystem/mount/wolne miejsce, IOPS+fsync (fio), DNS/routing/osigalność portów, chrony/NTP, SELinux/firewalld, repozytoria+pakiety, istniejące MariaDB/ProxySQL, monitoring, secret backend, audyt PK, write rate.
 - [x] ISC-67: Anti: F0 discovery nie modyfikuje stanu usług produkcyjnych (read-only względem usług).
 - [x] ISC-68: `gcache.size` jest wyliczony z mierzonego write rate i wymaganego okna IST i zapisany w raporcie/Decisions.
 
