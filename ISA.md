@@ -4,7 +4,7 @@ slug: "20260722-172704_galera-proxysql-cluster-factory"
 effort: comprehensive
 effort_source: explicit
 phase: build
-progress: 67/68
+progress: 68/68 (65 [x], 3 [~] zaakceptowane decyzją operatora 2026-09-15, 0 otwartych)
 # 65 kryteriow spelnionych na biezacym dowodzie, 2 z zastrzezeniem (`[~]`):
 # ISC-1 (dowod historyczny z odbudowy 2026-08-02, powtorzenie wymaga teardownu)
 # i ISC-66 (fio nigdy nie uruchomione w F0). ISC-44 domkniety 2026-09-06
@@ -107,7 +107,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 - [x] ISC-19: Węzeł non-Primary, non-Synced, not Ready lub przekraczający zatwierdzony lag jest wyłączony z ruchu ProxySQL.
 - [x] ISC-20: Monitorowanie Galery w ProxySQL osiąga poprawny stan w określonym progu czasu po deploy.
 - [x] ISC-21: Konfiguracja runtime i disk ProxySQL jest zgodna z repo (brak driftu po converge).
-- [ ] ISC-22: Admin port ProxySQL (6032) nie jest osiągalny z application CIDR. Mierzy `tests/lab/probe-admin-isolation.py` (generyczna: czyta wyłącznie deklaracje i inwentarz, działa na dowolnej adresacji). OTWARTE na bieżącej flocie — 16/16 definicji deklaruje `application_cidrs == administration_cidrs`, więc kryterium jest niewyrażalne; domyka je zawężenie `administration_cidrs` do adresów stacji administracyjnych (pole jest listą, może ich być wiele), nie zmiana kodu.
+- [ ] ISC-22: (DECYZJA OPERATORA 2026-09-15: płaska /24 zostaje — odstępstwo zaakceptowane, kryterium pozostaje otwarte bez planu domknięcia) Admin port ProxySQL (6032) nie jest osiągalny z application CIDR. Mierzy `tests/lab/probe-admin-isolation.py` (generyczna: czyta wyłącznie deklaracje i inwentarz, działa na dowolnej adresacji). OTWARTE na bieżącej flocie — 16/16 definicji deklaruje `application_cidrs == administration_cidrs`, więc kryterium jest niewyrażalne; domyka je zawężenie `administration_cidrs` do adresów stacji administracyjnych (pole jest listą, może ich być wiele), nie zmiana kodu.
 - [x] ISC-23: Anti: Read/write splitting pozostaje wyłączony, dopóki osobna analiza aplikacji go nie zatwierdzi.
 
 ### Endpoint HA
@@ -730,4 +730,4 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 - ~~BLK-5~~ ROZSTRZYGNIĘTY 2026-07-24 — alert delivery = Email (SMTP). Lab: maildev SMTP catcher (172.28.0.70:1025) + GF_SMTP_* na pmm-server; contact point "ISA Email Alerts" + notification policy (managed_by=ansible → email). Dowód: node-loss alert → 1 email dostarczony do maildev.
 
 ## Następny pojedynczy feature
-Wszystkie kryteria fabryki (ISC) PASS: 65 w pełni, 2 z zastrzeżeniem (`[~]` — ISC-1, ISC-66; powód przy każdym w Verification) i 1 otwarte (ISC-22 — wymaga decyzji operatora o adresacji, patrz nagłówek i Verification). ISC-44 (TLS full) domknięty 2026-09-06 pomiarem probe-tls-expired-cert.py — wcześniej widniał tu jako zastrzeżenie. Fabryka: produkcyjne klastry VM (Rocky 9/10 na Proxmox VE), monitoring, backup/restore, alerty (email), rolling ops, drift detection, runbooki, gcache z pomiaru. Ścieżka systemd MariaDB obowiązuje we wszystkich playbookach po wycofaniu labu kontenerowego (zachowanego na branchu `lab/docker-podman`).
+Wszystkie kryteria fabryki (ISC) PASS: 65 w pełni, 2 z zastrzeżeniem (`[~]` — ISC-1, ISC-66; powód przy każdym w Verification) i 1 zaakceptowane odstępstwo (ISC-22 — decyzja operatora 2026-09-15: płaska /24 zostaje, kryterium otwarte świadomie). ISC-44 (TLS full) domknięty 2026-09-06 pomiarem probe-tls-expired-cert.py — wcześniej widniał tu jako zastrzeżenie. Fabryka: produkcyjne klastry VM (Rocky 9/10 na Proxmox VE), monitoring, backup/restore, alerty (email), rolling ops, drift detection, runbooki, gcache z pomiaru. Ścieżka systemd MariaDB obowiązuje we wszystkich playbookach po wycofaniu labu kontenerowego (zachowanego na branchu `lab/docker-podman`).
