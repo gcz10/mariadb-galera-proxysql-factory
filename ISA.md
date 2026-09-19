@@ -5,7 +5,7 @@ effort: comprehensive
 effort_source: explicit
 phase: build
 progress: 68/68 (65 [x], 3 [~] zaakceptowane decyzją operatora 2026-09-15, 0 otwartych)
-# 65 kryteriow spelnionych na biezacym dowodzie, 2 z zastrzezeniem (`[~]`):
+# 65 kryteriow spelnionych, 3 z zastrzezeniem (`[~]` — ISC-1, ISC-22, ISC-66):
 # ISC-1 (dowod historyczny z odbudowy 2026-08-02, powtorzenie wymaga teardownu)
 # i ISC-66 (fio nigdy nie uruchomione w F0). ISC-44 domkniety 2026-09-06
 # (wariant wygasly zmierzony sonda probe-tls-expired-cert.py).
@@ -79,7 +79,7 @@ Tworzenie VM jest w zakresie: maszyny klastrów i warstwy współdzielonej powst
 Zbudować fabrykę klastrów spełniającą wszystkie kryteria ISC poniżej, w kolejności feature'ów F0–F14, zamykając każde kryterium wyłącznie na dowodzie. Po zakmnięciu zakresu v1: drugi niezależny klaster powstaje z tego samego kodu wyłącznie przez nowy `clusters/<name>/`, zwykły converge drugiego klastra jest idempotentny, runbook total outage sprawdzony na środowisku testowym, repo bez sekretów, ISA aktualnym systemem zapisu projektu.
 
 ## Criteria
-Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; `[ ]` — otwarte; `[~]` — PASS z zastrzeżeniem: kontrakt dotrzymany, ale dowód obejmuje tylko część kryterium lub część środowisk albo jest historyczny i nieodtwarzalny bez destrukcji — dokładne zastrzeżenie w Verification przy danym ISC.
+Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; `[ ]` — otwarte; `[~]` — PASS z zastrzeżeniem: kontrakt dotrzymany, ale dowód obejmuje tylko część kryterium lub część środowisk, albo jest historyczny i nieodtwarzalny bez destrukcji, albo kryterium jest nieosiągalne przy zaakceptowanej konfiguracji (odstępstwo decyzją operatora) — dokładne zastrzeżenie w Verification przy danym ISC.
 
 ### Instalacja i idempotencja
 - [~] ISC-1: (DECYZJA OPERATORA 2026-09-15: dowod historyczny zostaje, teardown odroczony) Deployment na czystych hostach Rocky Linux 9 kończy się sukcesem (site.yml exit 0, wszystkie taski PASS).
@@ -107,7 +107,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 - [x] ISC-19: Węzeł non-Primary, non-Synced, not Ready lub przekraczający zatwierdzony lag jest wyłączony z ruchu ProxySQL.
 - [x] ISC-20: Monitorowanie Galery w ProxySQL osiąga poprawny stan w określonym progu czasu po deploy.
 - [x] ISC-21: Konfiguracja runtime i disk ProxySQL jest zgodna z repo (brak driftu po converge).
-- [ ] ISC-22: (DECYZJA OPERATORA 2026-09-15: płaska /24 zostaje — odstępstwo zaakceptowane, kryterium pozostaje otwarte bez planu domknięcia) Admin port ProxySQL (6032) nie jest osiągalny z application CIDR. Mierzy `tests/lab/probe-admin-isolation.py` (generyczna: czyta wyłącznie deklaracje i inwentarz, działa na dowolnej adresacji). OTWARTE na bieżącej flocie — 16/16 definicji deklaruje `application_cidrs == administration_cidrs`, więc kryterium jest niewyrażalne; domyka je zawężenie `administration_cidrs` do adresów stacji administracyjnych (pole jest listą, może ich być wiele), nie zmiana kodu.
+- [~] ISC-22: (DECYZJA OPERATORA 2026-09-15: płaska /24 zostaje — odstępstwo zaakceptowane, kryterium pozostaje otwarte bez planu domknięcia) Admin port ProxySQL (6032) nie jest osiągalny z application CIDR. Mierzy `tests/lab/probe-admin-isolation.py` (generyczna: czyta wyłącznie deklaracje i inwentarz, działa na dowolnej adresacji). OTWARTE na bieżącej flocie — 16/16 definicji deklaruje `application_cidrs == administration_cidrs`, więc kryterium jest niewyrażalne; domyka je zawężenie `administration_cidrs` do adresów stacji administracyjnych (pole jest listą, może ich być wiele), nie zmiana kodu.
 - [x] ISC-23: Anti: Read/write splitting pozostaje wyłączony, dopóki osobna analiza aplikacji go nie zatwierdzi.
 
 ### Endpoint HA
