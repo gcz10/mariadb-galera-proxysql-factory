@@ -999,7 +999,7 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 # kończy się RC=2") jest HISTORYCZNY — opisuje stan sprzed podniesienia gcache.
 # ZMIERZONE 2026-09-15 na obu najemcach v17 (gcache_size=4G): sonda ZIELONA,
 # z zapasem daleko powyżej szumu pomiaru — cassiopeiav17-r9 write_rate=1948800
-# B/s -> wymagane 3346M (+22%), orionv17-r10 1705200 B/s -> 2928M (+40%),
+# B/s -> wymagane 3346M (+22%), orionv17-r10 1983600 B/s -> 3406M (+20%),
 # wdrożone 4096M na 3/3 węzłach każdego najemcy. Dla skali szumu: repo sam
 # dokumentuje 8% na ścieżce aplikacyjnej (ISA.md) i ~20% w labie
 # (bench-app.py:178). Próg NIE jest wpisany na stałe — sonda wylicza go
