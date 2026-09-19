@@ -997,14 +997,22 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 	$(TARGET_ENV) PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
 # UWAGA 2026-09-15: komentarz z 2026-09-08 („512M < ~3,7G wymagane, cała brama
 # kończy się RC=2") jest HISTORYCZNY — opisuje stan sprzed podniesienia gcache.
-# ZMIERZONE 2026-09-15 na obu najemcach v17 (gcache_size=4G): sonda ZIELONA,
-# z zapasem daleko powyżej szumu pomiaru — cassiopeiav17-r9 write_rate=1948800
-# B/s -> wymagane 3346M (+22%), orionv17-r10 1983600 B/s -> 3406M (+20%),
-# wdrożone 4096M na 3/3 węzłach każdego najemcy. Dla skali szumu: repo sam
-# dokumentuje 8% na ścieżce aplikacyjnej (ISA.md) i ~20% w labie
-# (bench-app.py:178). Próg NIE jest wpisany na stałe — sonda wylicza go
-# z pomiaru write rate, więc czerwona tutaj znaczyłaby wzrost ruchu albo
-# spadek gcache, nie „za niski próg". Nie wolno jej „naprawiać" podniesieniem
-# progu ani wypisywać z bramki. Powód i historia: ISA.md, wpisy ISC-68.
+# NIEROZSTRZYGNIĘTE NA v17 (oba najemcy mają gcache_size=4G = 4096M na 3/3):
+# TA SAMA sonda na TYCH SAMYCH węzłach dała wymagania od 2211M do 6023M —
+# cassiopeiav17-r9: 3346M / 4182M / 4122M / 6023M (dwa ostatnie to FAIL),
+# orionv17-r10: 3406M / 3406M / 3167M / 2211M. Wdrożone 4096M leży WEWNĄTRZ
+# tego przedziału, więc werdykt przełącza się między przebiegami bez żadnej
+# zmiany stanu floty. Rozrzut 1,5–1,75× bije szum dokumentowany w repo
+# (8% ścieżka aplikacyjna, ~20% lab wg bench-app.py:178).
+# PRZYCZYNA w kodzie sondy: `WORKLOAD_SECONDS=20`, a wynik to
+# `DELTA wsrep_replicated_bytes / ELAPSED`, gdzie ELAPSED jest całkowitoliczbowe
+# (±1 s = ±5%) i partie po 500 wstawek mogą przecinać krawędź okna. 20-sekundowa
+# próbka ekstrapolowana na 30-minutowe okno IST na współdzielonym hypervisorze
+# nie daje powtarzalności wymaganej od progu.
+# CZYTAJĄC CZERWONĄ TUTAJ: nie jest dowodem regresji — tak samo jak ZIELONA nie
+# jest dowodem pokrycia. Do rozstrzygnięcia trzeba albo stabilniejszego protokołu
+# (dłuższe okno, mediana z N przebiegów), albo zapasu ponad zmierzony przedział;
+# oba to decyzja operatora. Nie wypisuj sondy z bramki i nie zmieniaj progu
+# po cichu. Powód i historia: ISA.md, wpisy ISC-68.
 	$(TARGET_ENV) tests/lab/probe-gcache.py
 	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone"
