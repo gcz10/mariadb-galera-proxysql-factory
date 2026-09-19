@@ -996,15 +996,15 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 	$(TARGET_ENV) tests/lab/probe-drift.py
 	$(TARGET_ENV) PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
 # UWAGA 2026-09-15: komentarz z 2026-09-08 („512M < ~3,7G wymagane, cała brama
-# kończy się RC=2") jest HISTORYCZNY — po decyzji operatora oba najemcy v17
-# deklarują gcache_size=4G (clusters/*/cluster.yml), więc nie opisuje stanu
-# bieżącego. Werdykt tej sondy na v17 NIE został jeszcze zmierzony. Zapas jest
-# jednak cienki: ostatni pomiar wymagał 4063M (cassiopeiav15-r9) wobec 4G=4096M,
-# czyli ~0,8%, a rozrzut pomiaru repo dokumentuje sam: 8% (ISA.md, ścieżka
-# aplikacyjna) i ~20% (bench-app.py:178, lab na współdzielonym hypervisorze).
-# CZERWONA W TYM MIEJSCU NIE JEST DOWODEM REGRESJI i nie wolno jej „naprawiać"
-# podniesieniem gcache ani zmianą progu — to DECYZJA operatora, nie usterka.
-# Powód i warunki zamknięcia: ISA.md, wpisy ISC-68. Nie wypisuj jej stąd i nie
-# dodawaj wyjątku.
+# kończy się RC=2") jest HISTORYCZNY — opisuje stan sprzed podniesienia gcache.
+# ZMIERZONE 2026-09-15 na obu najemcach v17 (gcache_size=4G): sonda ZIELONA,
+# z zapasem daleko powyżej szumu pomiaru — cassiopeiav17-r9 write_rate=1948800
+# B/s -> wymagane 3346M (+22%), orionv17-r10 1705200 B/s -> 2928M (+40%),
+# wdrożone 4096M na 3/3 węzłach każdego najemcy. Dla skali szumu: repo sam
+# dokumentuje 8% na ścieżce aplikacyjnej (ISA.md) i ~20% w labie
+# (bench-app.py:178). Próg NIE jest wpisany na stałe — sonda wylicza go
+# z pomiaru write rate, więc czerwona tutaj znaczyłaby wzrost ruchu albo
+# spadek gcache, nie „za niski próg". Nie wolno jej „naprawiać" podniesieniem
+# progu ani wypisywać z bramki. Powód i historia: ISA.md, wpisy ISC-68.
 	$(TARGET_ENV) tests/lab/probe-gcache.py
 	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone"
