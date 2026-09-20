@@ -16,6 +16,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -311,9 +312,49 @@ class ProbeGcacheBehavioralTests(unittest.TestCase):
         self.assertEqual(self.mod.select_worst_rate("RATE_BPS=999999"), (0, []))
 
     def test_workload_script_runs_the_requested_number_of_rounds(self):
-        script = self.mod.build_workload_script("gcache_meas_X", 1, 3)
-        self.assertIn("for ROUND in $(seq 1 3)", script)
-        self.assertIn("ROUND=$ROUND RATE_BPS=", script)
+        """Petla naprawde wykonuje N rund, a selektor czyta format, ktory skrypt emituje.
+
+        WATCHDOG §5: sama obecnosc oczekiwanego tekstu w pliku nie dowodzi
+        dzialania. Ten test uruchamia wyrenderowany skrypt prawdziwym bashem
+        przeciw atrapie `mariadb` i sprawdza, ze powstal DOKLADNIE N rund, oraz
+        ze `select_worst_rate` dopasowuje to, co skrypt faktycznie wypisuje.
+        Ta druga asercja nie jest kosmetyczna: rozjazd formatu miedzy skryptem
+        a parserem wywalil 4 testy zakresu floty, gdy tylko zmienil sie format
+        wyjscia.
+        """
+        db_name = self.mod.generate_measurement_db_name()
+        proc, _ = self._run_bash_workload(db_name, workload_seconds=1, rounds=3)
+
+        self.assertEqual(proc.returncode, 0, f"script failed: {proc.stderr}")
+        emitted = re.findall(r"^ROUND=(\d+) RATE_BPS=(\d+)", proc.stdout, re.M)
+        self.assertEqual(
+            [int(n) for n, _ in emitted], [1, 2, 3],
+            "petla musi wykonac dokladnie N rund, nie tylko zawierac naglowek",
+        )
+
+        worst, samples = self.mod.select_worst_rate(proc.stdout)
+        self.assertEqual(len(samples), 3, "selektor nie dopasowal formatu skryptu")
+        self.assertEqual(worst, max(samples))
+
+    def test_workload_script_uses_nanosecond_clock_and_closed_batches(self):
+        """Granice okna: zegar w ns, licznik i czas po tej samej stronie partii.
+
+        Poprzednia wersja liczyla ELAPSED z `date +%s` (±1 s = ±5% okna) i brala
+        delte licznika z okna przesunietego wzgledem zegara. Te dwie rzeczy sa
+        adresowane w skrypcie i musza byc widoczne dla czytelnika zmian.
+        """
+        script = self.mod.build_workload_script("gcache_meas_X", 1, 2)
+        self.assertIn("date +%s%N", script)
+        self.assertNotIn("date +%s)", script, "calkowite sekundy wrocily do pomiaru")
+        # B1/T1 PO ostatniej partii (za wewnetrznym `while`), ale w ciele petli rund.
+        loop_start = script.index("for ROUND")
+        inner_done = script.index("  done", loop_start)
+        outer_done = script.index("\ndone", loop_start)
+        b1 = script.index("B1=$(counter)")
+        t1 = script.index("T1=$(date +%s%N)")
+        self.assertLess(inner_done, b1, "B1 musi byc PO ostatniej partii, nie przed nia")
+        self.assertLess(inner_done, t1, "T1 musi byc PO ostatniej partii")
+        self.assertLess(b1, outer_done, "B1 musi nalezec do ciala petli rund")
         self.assertNotIn("{{", script, "niepodmieniony nawias f-stringa")
         self.assertNotIn("}}", script, "niepodmieniony nawias f-stringa")
 

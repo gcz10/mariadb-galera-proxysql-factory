@@ -105,7 +105,10 @@ class GcacheFormulaTests(unittest.TestCase):
         """Jawny zapis stanu, ktory bramka pokazuje na czerwono.
 
         2_192_400 to POJEDYNCZA PROBKA nasycenia zmierzona 2026-09-08 na
-        orionv15-r10, nie stala fizyczna - rozrzut miedzy przebiegami siega 3%.
+        orionv15-r10, nie stala fizyczna - rozrzut miedzy przebiegami siega 1,5-1,75x
+        (ZMIERZONE 2026-09-15: 1,29-3,51 MB/s; wczesniejsza nota mowila "3%",
+        co bylo nieprawda i zanizalo niepewnosc instrumentu — to wlasnie ten
+        rozrzut jest powodem zmiany protokolu sondy na maksimum z 5 rund).
         Ten test pilnuje ZGODNOSCI Z WPISEM W ISA, nie stanu floty: padnie, gdy
         default urosnie na tyle, ze pokryje te probke, i kaze wtedy zamknac
         ISC-68 zamiast trzymac wpis o "znanym braku". Nie wykryje sytuacji

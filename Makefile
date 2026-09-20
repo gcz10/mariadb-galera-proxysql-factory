@@ -1014,7 +1014,9 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 # `DELTA wsrep_replicated_bytes / ELAPSED`, gdzie ELAPSED było całkowitoliczbowe
 # (±1 s = ±5% okna), a delta licznika brała się z okna przesuniętego względem
 # zegara. Poza tym próg wypada blisko samego wyniku: 4096M pokrywa
-# ~2,38 MB/s przez 1800 s, a zmierzone nasycenie tego klastra to 1,29-3,51 MB/s.
+# 4096 × 1048576 / 1800 = ~2,39 MB/s, a zmierzone nasycenie cassiopei to
+# 2,10–2,41 MB/s — czyli próg leży WEWNĄTRZ pasma, które ten sprzęt realnie
+# osiąga, i dlatego werdykt się przełączał.
 # NAPRAWIONE (2026-09-15): sonda liczy w nanosekundach, bierze B0/T0 przed
 # pierwszą partią i B1/T1 po ostatniej (to samo okno dla licznika i zegara),
 # wykonuje `ISC68_ROUNDS` rund (domyślnie 5) i orzeka na MAKSIMUM — zgodnie ze
