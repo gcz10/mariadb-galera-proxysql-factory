@@ -1009,15 +1009,21 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 # braku pokrycia, orion 1983661 B/s → 3406M wobec 4096M = pokryte. Ale wynik
 # pojedynczego przebiegu przełącza się między barwami, więc nie jest dowodem
 # w żadną stronę.
-# PRZYCZYNA w kodzie sondy: `WORKLOAD_SECONDS=20`, a wynik to
-# `DELTA wsrep_replicated_bytes / ELAPSED`, gdzie ELAPSED jest całkowitoliczbowe
-# (±1 s = ±5%) i partie po 500 wstawek mogą przecinać krawędź okna. 20-sekundowa
-# próbka ekstrapolowana na 30-minutowe okno IST na współdzielonym hypervisorze
-# nie daje powtarzalności wymaganej od progu.
-# CZYTAJĄC CZERWONĄ TUTAJ: nie jest dowodem regresji — tak samo jak ZIELONA nie
-# jest dowodem pokrycia. Do rozstrzygnięcia trzeba albo stabilniejszego protokołu
-# (dłuższe okno, mediana z N przebiegów), albo zapasu ponad zmierzony przedział;
-# oba to decyzja operatora. Nie wypisuj sondy z bramki i nie zmieniaj progu
-# po cichu. Powód i historia: ISA.md, wpisy ISC-68.
+# PRZYCZYNA (zmierzona 2026-09-15): pojedyncza 20-sekundowa próbka nie była
+# wystarczająco powtarzalna, żeby rozstrzygnąć werdykt — wynik to
+# `DELTA wsrep_replicated_bytes / ELAPSED`, gdzie ELAPSED było całkowitoliczbowe
+# (±1 s = ±5% okna), a delta licznika brała się z okna przesuniętego względem
+# zegara. Poza tym próg wypada blisko samego wyniku: 4096M pokrywa
+# ~2,38 MB/s przez 1800 s, a zmierzone nasycenie tego klastra to 1,29-3,51 MB/s.
+# NAPRAWIONE (2026-09-15): sonda liczy w nanosekundach, bierze B0/T0 przed
+# pierwszą partią i B1/T1 po ostatniej (to samo okno dla licznika i zegara),
+# wykonuje `ISC68_ROUNDS` rund (domyślnie 5) i orzeka na MAKSIMUM — zgodnie ze
+# swoim kontraktem najgorszego przypadku. Rozkład próbek jest drukowany
+# (min/mediana/max), żeby czytelnik widział rozrzut, nie jedną liczbę.
+# CZYTAJĄC CZERWONĄ TUTAJ: to wynik NAJGORSZEGO z N pomiarów, więc nie jest
+# dowodem regresji z tego jednego przebiegu — ale ZIELONA też nie jest dowodem
+# pokrycia poza tymi rundami. Trwałe rozstrzygnięcie wymaga zapasu ponad zmierzony
+# przedział (konfiguracja + rolling restart) — decyzja operatora. Nie wypisuj
+# sondy z bramki i nie zmieniaj progu po cichu. Powód i historia: ISA.md, ISC-68.
 	$(TARGET_ENV) tests/lab/probe-gcache.py
 	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone"

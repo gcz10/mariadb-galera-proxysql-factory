@@ -74,8 +74,10 @@ class _FleetAnsible:
             # ProxySQL wskazuje writer; adres mapuje sie na gnode1 z inwentarza.
             result.bodies["pnode1"] = "192.0.2.11\n"
         elif pattern == self.writer:
+            # Format zgodny z realnym skryptem po zmianie protokolu (2026-09-15):
+            # jedna runda, bo te testy weryfikuja ZAKRES floty, nie statystyke.
             result.bodies[self.writer] = (
-                f"RATE_BPS={WRITE_RATE_BPS} DELTA=360000000 ELAPSED=20s\n"
+                f"ROUND=1 RATE_BPS={WRITE_RATE_BPS} DELTA=360000000 ELAPSED_NS=20000000000\n"
             )
         elif pattern == "galera":
             for host, body in self.per_host.items():

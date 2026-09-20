@@ -160,8 +160,8 @@ class ProbeGcacheBehavioralTests(unittest.TestCase):
             cls.mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(cls.mod)
 
-    def _run_bash_workload(self, db_name, workload_seconds=1, extra_env=None):
-        script = self.mod.build_workload_script(db_name, workload_seconds)
+    def _run_bash_workload(self, db_name, workload_seconds=1, rounds=1, extra_env=None):
+        script = self.mod.build_workload_script(db_name, workload_seconds, rounds)
         state_file = Path(self.tmp.name) / f"mariadb_state_{db_name}.json"
         if state_file.exists():
             state_file.unlink()
@@ -283,9 +283,39 @@ class ProbeGcacheBehavioralTests(unittest.TestCase):
         failures = []
         undetermined = []
         with mock.patch.dict(self.mod.CTX.config, {"cluster": {"environment": "production"}}):
-            rate = self.mod.measure_write_rate("gnode1", failures, undetermined)
+            rate, samples = self.mod.measure_write_rate("gnode1", failures, undetermined)
             self.assertIsNone(rate)
+            self.assertEqual(samples, [], "odmowa nie moze niesc probek pomiaru")
             self.assertTrue(any("must not run" in f for f in failures))
+
+    def test_worst_case_selector_takes_the_max_across_rounds(self):
+        """Werdykt stoi na MAKSIMUM z rund, bo sonda odpowiada na najgorszy przypadek.
+
+        Pomiar z 2026-09-15 na jednym wezle dal 1948800 / 2436000 / 2401200 /
+        3508143 B/s, czyli wymagania 3346-6023M wobec wdrozonych 4096M — srednia
+        albo pierwsza probka daja inny werdykt niz maksimum, a to maksimum jest
+        wlasciwa statystyka dla doboru rozmiaru na najgorszy przypadek.
+        """
+        body = "\n".join(
+            f"ROUND={i} RATE_BPS={r} DELTA=1 ELAPSED_NS=1"
+            for i, r in enumerate([1948800, 2436000, 2401200, 3508143], 1)
+        )
+        worst, samples = self.mod.select_worst_rate(body)
+        self.assertEqual(samples, [1948800, 2436000, 2401200, 3508143])
+        self.assertEqual(worst, 3508143)
+        self.assertNotEqual(worst, samples[0], "pierwsza probka nie moze decydowac")
+
+    def test_worst_case_selector_without_samples_is_zero(self):
+        """Brak rund = 0 (nie „nie wiem"): brak pomiaru nie moze udawac pokrycia."""
+        self.assertEqual(self.mod.select_worst_rate(""), (0, []))
+        self.assertEqual(self.mod.select_worst_rate("RATE_BPS=999999"), (0, []))
+
+    def test_workload_script_runs_the_requested_number_of_rounds(self):
+        script = self.mod.build_workload_script("gcache_meas_X", 1, 3)
+        self.assertIn("for ROUND in $(seq 1 3)", script)
+        self.assertIn("ROUND=$ROUND RATE_BPS=", script)
+        self.assertNotIn("{{", script, "niepodmieniony nawias f-stringa")
+        self.assertNotIn("}}", script, "niepodmieniony nawias f-stringa")
 
     # --- DB Name Format Constraints ---
 

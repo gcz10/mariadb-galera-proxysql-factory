@@ -30,6 +30,18 @@ Falsifiable: if the deployed gcache is smaller than what the measured write rate
 requires for the IST window, the probe FAILS (a node down for the window would
 fall back to full SST instead of IST).
 
+History, third chapter (2026-09-15): a SINGLE 20-second sample was not
+reproducible enough to decide the verdict. The same probe on the same node with
+the same deployed gcache measured 1948800 / 2436000 / 2401200 / 3508143 B/s,
+i.e. required 3346M / 4182M / 4122M / 6023M against 4096M deployed — the verdict
+flipped between PASS and FAIL with no change to the cluster. Fixed on both ends:
+the workload now runs `ISC68_ROUNDS` windows (default 5) and the verdict uses the
+WORST (max), which matches this probe's stated worst-case contract and is an
+upper bound rather than a coin flip; the rate is computed from a nanosecond clock
+and over the SAME span as the counter delta (previously integer seconds, ±5%, with
+the delta window offset from the timer). Samples are printed (min/median/max) so a
+reader sees the distribution instead of one number.
+
 History, second chapter (2026-09-12): the deployed value was read from GALERA[0]
 alone, yet the verdict printed and the PASS summary claimed the whole cluster. A
 single-node read is not a fleet claim: with g1=512M and g2=g3=128M the probe
@@ -50,6 +62,7 @@ GALERA = CTX.group_hosts("galera")
 PROXYSQL = CTX.group_hosts("proxysql")
 IST_WINDOW_MIN = int(os.environ.get("ISC68_IST_WINDOW_MIN", "30"))
 WORKLOAD_SECONDS = int(os.environ.get("ISC68_WORKLOAD_SECONDS", "20"))
+ROUNDS = int(os.environ.get("ISC68_ROUNDS", "5"))
 ALLOWED_ENVIRONMENTS = {"laboratory"}
 
 
@@ -71,7 +84,7 @@ def generate_measurement_db_name() -> str:
     return f"gcache_meas_{ts}_{token}"
 
 
-def build_workload_script(db_name: str, workload_seconds: int) -> str:
+def build_workload_script(db_name: str, workload_seconds: int, rounds: int) -> str:
     """Build isolated workload script with exclusive DB creation and trap-based cleanup.
 
     Contract:
@@ -80,6 +93,8 @@ def build_workload_script(db_name: str, workload_seconds: int) -> str:
       so table or insert failures trigger cleanup.
     - Trap checks OWNED: never drops colliding or pre-existing unowned databases.
     - Cleanup failure forces nonzero exit (no || true).
+    - Runs `rounds` measurement windows and prints one `ROUND=<n> RATE_BPS=<n>` line
+      each; the caller takes the worst (max), matching the probe's worst-case contract.
     """
     return rf'''
 set -eo pipefail
@@ -115,16 +130,33 @@ mariadb --socket=$SOCK -e "CREATE TABLE \`$DB\`.w (id INT PRIMARY KEY AUTO_INCRE
 # zanizona stawka zaniza WYMAGANY gcache — blad w strone niebezpieczna.
 BATCH=$(seq 1 500 | sed "s|.*|INSERT INTO \`$DB\`.w (payload) VALUES (RPAD('x',1024,'x'));|")
 
-T0=$(mariadb --socket=$SOCK -N -B -e "SHOW STATUS LIKE 'wsrep_replicated_bytes'" | awk '{{print $2}}')
-START=$(date +%s)
-while :; do
-  printf '%s\n' "$BATCH" | mariadb --socket=$SOCK
-  now=$(date +%s); [ $((now-START)) -ge {workload_seconds} ] && break
+counter() {{
+  mariadb --socket=$SOCK -N -B -e "SHOW STATUS LIKE 'wsrep_replicated_bytes'" | awk '{{print $2}}'
+}}
+
+# N rund; raportowana jest NAJWYZSZA. Sonda odpowiada na pytanie o NAJGORSZY
+# przypadek (docstring), wiec statystyka jest MAKSIMUM, nie pojedyncza probka.
+# ZMIERZONE 2026-09-15: pojedyncza probka tej samej sondy na tym samym wezle
+# dawala 1948800-3508143 B/s, czyli wymagania 3346-6023M wobec wdrozonych 4096M
+# — werdykt przelaczal sie miedzy PASS i FAIL bez zmiany stanu floty.
+#
+# Zegar w NANOSEKUNDACH, nie w calkowitych sekundach: poprzednia wersja liczyla
+# ELAPSED z `date +%s` (±1 s = ±5% w 20-sekundowym oknie), a delte licznika
+# brala z okna przesunietego wzgledem zegara (T0 czytane PRZED START).
+# Teraz obie granice sa te same: B0/T0 przed pierwsza partia, B1/T1 po ostatniej.
+for ROUND in $(seq 1 {rounds}); do
+  T0=$(date +%s%N)
+  B0=$(counter)
+  while :; do
+    printf '%s\n' "$BATCH" | mariadb --socket=$SOCK
+    now=$(date +%s%N); [ $(( (now-T0)/1000000000 )) -ge {workload_seconds} ] && break
+  done
+  B1=$(counter)
+  T1=$(date +%s%N)
+  ELAPSED_NS=$((T1-T0))
+  DELTA=$((B1-B0))
+  echo "ROUND=$ROUND RATE_BPS=$(( ELAPSED_NS>0 ? DELTA*1000000000/ELAPSED_NS : 0 )) DELTA=$DELTA ELAPSED_NS=$ELAPSED_NS"
 done
-END=$(date +%s)
-T1=$(mariadb --socket=$SOCK -N -B -e "SHOW STATUS LIKE 'wsrep_replicated_bytes'" | awk '{{print $2}}')
-ELAPSED=$((END-START)); DELTA=$((T1-T0))
-echo "RATE_BPS=$(( (ELAPSED>0 ? DELTA/ELAPSED : 0) )) DELTA=$DELTA ELAPSED=${{ELAPSED}}s"
 '''
 
 
@@ -163,31 +195,44 @@ def find_writer(failures, undetermined):
     return None
 
 
+def select_worst_rate(body: str) -> tuple[int, list[int]]:
+    """(najgorszy zmierzony rate, wszystkie probki) z wyjscia skryptu.
+
+    Sonda odpowiada na pytanie o NAJGORSZY przypadek (docstring), wiec werdykt
+    opiera sie na MAKSIMUM z rund. Bierze sie je dlatego, ze pojedyncza probka
+    tej samej sondy na tym samym wezle zmierzyla 1948800-3508143 B/s, czyli
+    wymagania 3346-6023M wobec wdrozonych 4096M — werdykt przelaczal sie miedzy
+    PASS i FAIL bez zmiany stanu floty. Maksimum z N rund jest ograniczeniem
+    gornym (rosnie monotonicznie z N), wiec PASS na nim jest twierdzeniem
+    mocnym, a FAIL slabym — i taka asymetrie wlasnie chcemy przy doborze
+    rozmiaru na najgorszy przypadek.
+    """
+    samples = [int(m) for m in re.findall(r"ROUND=\d+ RATE_BPS=(\d+)", body)]
+    return (max(samples) if samples else 0), samples
+
+
 def measure_write_rate(writer, failures, undetermined):
-    """Run a write workload on the writer; return bytes/sec from wsrep delta."""
+    """Run a write workload on the writer; return (worst bytes/sec, all samples)."""
     if writer is None:
-        return None
+        return None, []
     valid_env, env_msg = validate_environment(CTX.config)
     if not valid_env:
         failures.append(f"ISC-68 — probe-gcache writes synthetic workload and must not run: {env_msg}")
-        return None
+        return None, []
 
     db_name = generate_measurement_db_name()
-    script = build_workload_script(db_name, WORKLOAD_SECONDS)
+    script = build_workload_script(db_name, WORKLOAD_SECONDS, ROUNDS)
     result = run_ansible(
         CTX,
         writer,
         script,
-        timeout=WORKLOAD_SECONDS + 90,
+        timeout=ROUNDS * WORKLOAD_SECONDS + 90,
     )
     require_hosts(result, [writer], "write-rate", failures, undetermined)
     if writer not in result.bodies:
-        return None
+        return None, []
 
-    body = result.body(writer)
-
-    match = re.search(r"RATE_BPS=(\d+)", body)
-    return int(match.group(1)) if match else 0
+    return select_worst_rate(result.body(writer))
 
 def parse_gcache(body: str) -> int:
     """Wartosc gcache.size z ciala odpowiedzi wezla; brak wpisu = 0.
@@ -237,7 +282,7 @@ def main():
         print(f"REFUSED: probe-gcache writes synthetic workload and must not run: {env_msg}")
         return 1
     writer = find_writer(failures, undetermined)
-    rate = measure_write_rate(writer, failures, undetermined)
+    rate, samples = measure_write_rate(writer, failures, undetermined)
     if rate is None:
         required_mb = None
     elif rate <= 0:
@@ -255,6 +300,13 @@ def main():
         f"writer={writer or 'unknown'} write_rate={rate if rate is not None else 'unknown'} "
         f"B/s  ist_window={IST_WINDOW_MIN}min"
     )
+    if samples:
+        s_sorted = sorted(samples)
+        s_med = s_sorted[len(s_sorted) // 2]
+        print(
+            f"  proby ({len(samples)} rund, werdykt na MAKSIMUM — najgorszy przypadek): "
+            f"min={s_sorted[0]} mediana={s_med} max={s_sorted[-1]} B/s  [{', '.join(str(s) for s in samples)}]"
+        )
     print(
         f"required gcache={required_mb if required_mb is not None else 'unknown'}M "
         f"(min 128M)  deployed gcache="
