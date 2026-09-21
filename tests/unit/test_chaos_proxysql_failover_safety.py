@@ -60,6 +60,21 @@ def load_probe():
     return module
 
 
+
+class _FakeResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return self._body
+
+
 class VirtualClock:
     """Zegar wirtualny: kazdy `sleep` przesuwa czas, wiec petle z deadline koncza."""
 
@@ -185,11 +200,16 @@ class ChaosProxysqlFailoverSafetyTests(unittest.TestCase):
             time=clock,
             vip_holder=lambda: VICTIM,
             hostgroups_present=lambda host: True,
-            pve=lambda vmid, action: pve_calls.append((str(vmid), action)),
+            pve=lambda vmid, action, node: pve_calls.append((str(vmid), action, node)),
             committed_rows=committed_rows,
             committed_seqs=lambda: ([1.0, 2.0], list(seqs)),
         ), mock.patch.dict(
-            os.environ, {"PROXYSQL_VMIDS": f"{VICTIM}={VICTIM_VMID}"}
+            os.environ, {
+                "PROXYSQL_VMIDS": f"{VICTIM}={VICTIM_VMID}",
+                "PROXMOX_VE_ENDPOINT": "https://hv.example.invalid:8006",
+                "PROXMOX_VE_API_TOKEN": "root@pam!probe=token",
+                "PROXMOX_VE_NODE": "hvnode1",
+            }
         ), mock.patch("builtins.print") as printed:
             code = module.main()
 
@@ -206,7 +226,8 @@ class ChaosProxysqlFailoverSafetyTests(unittest.TestCase):
         self.assertIn("nie odpowiada na porcie administracyjnym", output)
         self.assertIn("6032", output)
         # Przywracanie maszyny nadal sie odbywa: sonda oddaje lab w stanie, w jakim go zastala.
-        self.assertEqual(pve_calls, [(VICTIM_VMID, "stop"), (VICTIM_VMID, "start")])
+        self.assertEqual(pve_calls,
+                         [(VICTIM_VMID, "stop", "hvnode1"), (VICTIM_VMID, "start", "hvnode1")])
 
     def test_service_restore_without_admin_port_is_failure(self):
         """Tryb service: `systemctl start` zwraca 0, ale usluga nie wstaje -> exit 1."""
@@ -253,6 +274,88 @@ class ChaosProxysqlFailoverSafetyTests(unittest.TestCase):
         self.addCleanup(lambda: os.path.exists(src) and os.unlink(src))
         self.assertFalse(os.path.exists(src),
                          "lokalna kopia poswiadczen zostala po zakonczeniu sondy")
+
+
+class ChaosPveTargetTests(unittest.TestCase):
+    """Tryb `node` nie ma danych hypervisora skadkolwiek — tylko z deklaracji.
+
+    Do 2026-09-21 endpoint mial labowy fallback, a wezel byl wpisany na sztywno:
+    probe destrukcyjna wysylala stop() tam, gdzie kazal adres z repozytorium.
+    """
+
+    def run_main_node(self, env_extra):
+        module = load_probe()
+        clock = VirtualClock()
+        ansible = FakeAnsible()
+        copy_stub = FakeAnsibleCopy()
+        pve_calls = []
+        seen = []
+
+        def committed_rows():
+            seen.append(1)
+            return {1: 10, 2: 20}.get(len(seen), 24)
+
+        with mock.patch.multiple(
+            module,
+            APP_PW=SENTINEL_PW,
+            MODE="node",
+            sh=ansible,
+            subprocess=copy_stub,
+            time=clock,
+            vip_holder=lambda: VICTIM,
+            hostgroups_present=lambda host: True,
+            pve=lambda vmid, action, node: pve_calls.append((str(vmid), action, node)),
+            committed_rows=committed_rows,
+            committed_seqs=lambda: ([1.0, 2.0], [1, 2]),
+        ), mock.patch.dict(os.environ, env_extra), mock.patch("builtins.print") as printed:
+            code = module.main()
+        output = "\n".join(" ".join(str(arg) for arg in call.args)
+                           for call in printed.call_args_list)
+        return code, output, ansible, pve_calls
+
+    def test_node_mode_refuses_without_declared_hypervisor(self):
+        code, output, ansible, pve_calls = self.run_main_node({
+            "PROXYSQL_VMIDS": f"{VICTIM}={VICTIM_VMID}",
+            "PROXMOX_VE_ENDPOINT": "",
+            "PROXMOX_VE_API_TOKEN": "",
+        })
+        self.assertEqual(code, 1, output)
+        self.assertIn("PROXMOX_VE_ENDPOINT", output)
+        self.assertEqual(pve_calls, [])
+        self.assertFalse(
+            any("pkill" in script or "workload.run" in script for _, script in ansible.calls),
+            "sonda mutowala flote przed rozstrzygnieciem danych hypervisora")
+
+    def test_node_mode_reports_the_resolved_target_before_mutation(self):
+        code, output, ansible, pve_calls = self.run_main_node({
+            "PROXYSQL_VMIDS": f"{VICTIM}={VICTIM_VMID}",
+            "PROXMOX_VE_ENDPOINT": "https://hv.example.invalid:8006/",
+            "PROXMOX_VE_API_TOKEN": "root@pam!probe=token",
+            "PROXMOX_VE_NODE": "hvnode1",
+        })
+        self.assertEqual(code, 0, output)
+        self.assertIn("hvnode1", output)
+        self.assertEqual(
+            pve_calls,
+            [(VICTIM_VMID, "stop", "hvnode1"), (VICTIM_VMID, "start", "hvnode1")])
+
+    def test_node_resolution_prefers_declaration_and_falls_back_to_cluster_resources(self):
+        module = load_probe()
+        with mock.patch.dict(os.environ, {"PROXMOX_VE_NODE": "decl-node"}):
+            self.assertEqual(module.pve_node("https://hv.example.invalid", "tok", "9401"),
+                             "decl-node")
+        with mock.patch.dict(os.environ, {"PROXMOX_VE_NODE": ""}), \
+                mock.patch.object(
+                    module.urllib.request, "urlopen",
+                    return_value=_FakeResponse(b'{"data": [{"vmid": 9401, "node": "list-node"}]}')):
+            self.assertEqual(module.pve_node("https://hv.example.invalid", "tok", "9401"),
+                             "list-node")
+        with mock.patch.dict(os.environ, {"PROXMOX_VE_NODE": ""}), \
+                mock.patch.object(
+                    module.urllib.request, "urlopen",
+                    return_value=_FakeResponse(b'{"data": [{"vmid": 2, "node": "other"}]}')):
+            with self.assertRaises(RuntimeError):
+                module.pve_node("https://hv.example.invalid", "tok", "9401")
 
 
 if __name__ == "__main__":

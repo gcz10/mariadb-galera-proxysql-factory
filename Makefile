@@ -125,7 +125,7 @@ fleet-orphans:  ## Raport: maszyny puli PVE spoza stanu terraform (nic nie kasuj
 	tools/pve-pool-teardown.sh
 
 fleet-orphans-teardown:  ## Skasuj maszyny puli PVE spoza stanu terraform (wymaga CONFIRM_POOL=<pula>)
-	@pula="$${FLEET_POOL:-claude-isa}"; \
+	@pula="$${FLEET_POOL:?Ustaw FLEET_POOL na pulę tej infrastruktury}"; \
 	if [ "$${CONFIRM_POOL:-}" != "$$pula" ]; then \
 		echo "ERROR: wymaga CONFIRM_POOL=$$pula (powtorzenie nazwy puli — CONFIRM=yes przenosi sie przez export i kasowalo zla flote)" >&2; exit 1; \
 	fi; \

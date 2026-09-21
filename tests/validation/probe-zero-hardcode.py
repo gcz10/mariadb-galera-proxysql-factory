@@ -37,11 +37,18 @@ import os
 import re
 import sys
 
-SCAN_DIRS = ["playbooks", "roles"]
+SCAN_DIRS = ["playbooks", "roles", "tools", "terraform/modules"]
 # Makefile jest interfejsem operatora i tez potrafi przypiac fabryke do jednego
 # klastra — `GALERA_VMS ?= gnode1 ...` kierowalo cel destrukcyjny na nazwy VM
 # nieistniejace w innych klastrach. Skanujemy go tymi samymi wzorcami.
-SCAN_FILES = ["Makefile"]
+SCAN_FILES = [
+    "Makefile",
+    "tests/lab/fleet-state.py",
+    "tests/lab/probe-orphans.py",
+    "tests/lab/probe-endpoint.py",
+    "tests/lab/probe-platform.py",
+    "tests/lab/chaos-proxysql-failover.py",
+]
 SKIP_DIRS = {"clusters", "tests", "docs", "versions", ".git", "node_modules"}
 
 # README to kontrakt produktu, nie zapis stanu — nazwa instancji jest w nim
@@ -56,6 +63,8 @@ TEMPLATE_DEFAULTS = {"CLUSTER": "clusters/example-cluster", "PLATFORM": "platfor
 
 HARDCODE_PATTERNS = [
     (re.compile(r"172\.(28|29)\.0\.\d+"), "lab IP"),
+    (re.compile(r"192\.168\.1\.(?:\d+)?"), "lab IP"),
+    (re.compile(r"\bclaude-isa\b"), "lab pool"),
     (re.compile(
         r"\b(gnode\d+|g9t?node\d+|pnode\d+|rnode\d+|r9t?node\d+"
         r"|galera\d+|infranode)\b"
@@ -181,12 +190,12 @@ def main():
 
     # ISC-59: no hardcoded cluster data in roles/playbooks/templates/Makefile
     hits = []
-    for path in iter_files((".yml", ".yaml", ".j2", ".py", ".sh", ".cnf"),
+    for path in iter_files((".yml", ".yaml", ".j2", ".py", ".sh", ".cnf", ".tf"),
                            include_standalone=True):
         for lineno, label, match, snippet in scan_file(path, instances):
             hits.append(f"{path}:{lineno} {label} {match!r}: {snippet}")
     if hits:
-        failures.append("ISC-59 — hardcoded cluster data found in roles/playbooks/Makefile:")
+        failures.append("ISC-59 — hardcoded cluster data found in generic factory code:")
         failures.extend(f"  - {h}" for h in hits[:20])
 
     # ISC-59: README jest kontraktem produktu — bez nazw instancji w ogole.

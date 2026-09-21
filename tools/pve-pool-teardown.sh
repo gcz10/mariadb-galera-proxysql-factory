@@ -12,8 +12,8 @@
 #   tools/pve-pool-teardown.sh                     # RAPORT (nic nie kasuje)
 #   CONFIRM_POOL=<pula> tools/pve-pool-teardown.sh # kasuje sieroty puli
 #
-# Wymaga PROXMOX_VE_ENDPOINT i PROXMOX_VE_API_TOKEN. Pula: FLEET_POOL
-# (domyslnie `claude-isa`) — ta sama zmienna, co w tests/lab/fleet-state.py.
+# Wymaga PROXMOX_VE_ENDPOINT, PROXMOX_VE_API_TOKEN i jawnej puli FLEET_POOL
+# — ta sama zmienna, co w tests/lab/fleet-state.py. Brak domyślnej puli.
 #
 # NAPRAWY PO AUDYCIE 2026-09-07:
 #   1. FAIL-LOUD przy nieczytelnym `terraform output` — wczesniej
@@ -33,7 +33,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-POOL="${FLEET_POOL:-claude-isa}"
+POOL="${FLEET_POOL:?Ustaw FLEET_POOL na pulę tej infrastruktury}"
 : "${PROXMOX_VE_ENDPOINT:?Ustaw PROXMOX_VE_ENDPOINT}"
 : "${PROXMOX_VE_API_TOKEN:?Ustaw PROXMOX_VE_API_TOKEN}"
 

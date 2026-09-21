@@ -1,8 +1,11 @@
 output "vms" {
-  description = "Parametry maszyn zbioru: vmid, ip, rola, cpu, ram_mb, disk_gb, flagi destroy."
+  description = "Parametry maszyn zbioru: vmid, ip (adres bez maski — kontrakt odbiorcow `terraform output`), rola, cpu, ram_mb, disk_gb, flagi destroy."
   value = { for k, v in var.vms : k => {
-    vmid                                 = v.id
-    ip                                   = "${var.ip_prefix}${v.ip}"
+    vmid = v.id
+    # Wejscie niesie CIDR (do ip_config), a output zwraca sam adres — ksztalt
+    # `terraform output -json vms` pozostaje taki sam jak przed migracja,
+    # chociaz zapis maszyn przeszedl na pelne CIDR-y.
+    ip                                   = split("/", v.ip)[0]
     role                                 = v.role
     cpu                                  = v.cpu
     ram_mb                               = v.ram

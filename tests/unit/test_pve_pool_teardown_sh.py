@@ -121,6 +121,7 @@ class PoolTeardownHarness:
             "PATH": f"{self.workdir / 'bin'}{os.pathsep}{os.environ['PATH']}",
             "PROXMOX_VE_ENDPOINT": "https://never.invalid:8006",
             "PROXMOX_VE_API_TOKEN": "root@pam!test=secret",
+            "FLEET_POOL": "claude-isa",
             "CURL_LOG": str(self.curl_log),
             "RESOURCES_COUNTER": str(self.curl_log) + ".resources",
         }
@@ -141,6 +142,23 @@ class PoolTeardownContractTests(unittest.TestCase):
     def tearDown(self):
         if getattr(self, "harness", None) is not None:
             self.harness.cleanup()
+
+    def test_missing_pool_refuses_before_network(self):
+        self.harness = PoolTeardownHarness(FAKE_TERRAFORM_OK)
+        proc, calls = self.harness.run({"FLEET_POOL": "", "CONFIRM_POOL": "claude-isa"})
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("FLEET_POOL", proc.stderr)
+        self.assertEqual(calls, [])
+
+    def test_alternative_pool_scopes_deletion(self):
+        self.harness = PoolTeardownHarness(FAKE_TERRAFORM_OK)
+        proc, calls = self.harness.run({
+            "FLEET_POOL": "customer-west",
+            "POOL_NAME": "customer-west",
+            "CONFIRM_POOL": "customer-west",
+        })
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len([c for c in calls if "DELETE" in c]), 1)
 
     def test_unreadable_terraform_output_aborts_before_any_delete(self):
         """Atrapa terraform rc=1: skrypt MUSI odmowic i NIE wolno mu wyslac DELETE."""

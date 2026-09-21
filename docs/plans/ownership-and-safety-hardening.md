@@ -560,8 +560,8 @@ nowych klastrów, a istniejące wymagałyby migracji danych do nowego bucketa.
   jako interfejs operatora; do danych przenosimy wyłącznie graf zależności F0–F15.
 - **Nie zmienia nazw `F0`–`F15`.** Numery są opisanym protokołem; aliasy podwoiłyby
   nazewnictwo.
-- **Nie dodaje anti-affinity jako bramki.** Lab ma jeden węzeł PVE
-  (`terraform/modules/pve_vm_set/variables.tf:39-42`, `node_name = "pve"`), więc
+- **Nie dodaje anti-affinity jako bramki.** Bieżące wdrożenie labowe ma jeden węzeł PVE
+  (topologia zadeklarowana jawnie w każdym roocie, np. `terraform/xenonv17/main.tf` — `node_name = "pve"`), więc
   sonda byłaby permanentnie czerwona. Zapisujemy to jako świadomie przyjęte ryzyko
   i włączamy bramkę dopiero przy drugim węźle hypervisora.
 

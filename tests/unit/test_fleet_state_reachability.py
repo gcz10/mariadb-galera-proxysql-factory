@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import errno
 import importlib.util
+import io
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -31,6 +32,27 @@ def load_fleet_state():
 class EndpointReachabilityTests(unittest.TestCase):
     def setUp(self):
         self.module = load_fleet_state()
+
+    def test_missing_pool_refuses_before_contacting_hypervisor(self):
+        with mock.patch.object(self.module, "POOL", ""), \
+                mock.patch.object(self.module, "api") as api, \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(self.module.main(), self.module.EXIT_UNDETERMINED)
+        api.assert_not_called()
+        self.assertIn("FLEET_POOL", output.getvalue())
+
+    def test_report_only_includes_selected_pool(self):
+        resources = [
+            {"name": "west-db", "vmid": 700, "status": "running", "pool": "west"},
+            {"name": "other-db", "vmid": 701, "status": "running", "pool": "other"},
+        ]
+        with mock.patch.object(self.module, "POOL", "west"), \
+                mock.patch.object(self.module, "api", return_value=resources), \
+                mock.patch.object(self.module, "definitions", return_value=[]), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(self.module.main(), self.module.EXIT_OK)
+        self.assertIn("west-db", output.getvalue())
+        self.assertNotIn("other-db", output.getvalue())
 
     def test_open_endpoint_answers(self):
         with mock.patch.object(self.module.socket, "create_connection"):

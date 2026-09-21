@@ -79,17 +79,25 @@ po 7 s (service) i 2 s (node) od przywrocenia. Rozbieznosc miedzy konfiguracja a
 pomiarem jest ODNOTOWANA, nie wytlumaczona — mechanizmu nie zgaduje. Do
 sprawdzenia w dokumentacji keepalived przy okazji prac nad endpointem.
 
-Wymaga APP_DB_PASSWORD. Tryb `node` wymaga PROXMOX_VE_API_TOKEN i mapowania
-nazwa->VMID w PROXYSQL_VMIDS (np. "fcp1=9401,fcp2=9402").
+Wymaga APP_DB_PASSWORD. Tryb `node` wymaga PROXMOX_VE_ENDPOINT i
+PROXMOX_VE_API_TOKEN (adres i poswiadczenie hypervisora tej infrastruktury;
+adresu ani nazwy wezla nie podstawiamy — bez deklaracji sonda odmawia PRZED
+mutacja), mapowania nazwa->VMID w PROXYSQL_VMIDS
+(np. "<nazwa_wezla>=9401,<nazwa_sasiada>=9402") oraz — gdy hypervisor ma
+wiecej niz jeden wezel — PROXMOX_VE_NODE; bez niej wezel jest odczytywany
+z /cluster/resources (jak w tools/pve-pool-teardown.sh).
 Odmawia uruchomienia na profilu produkcyjnym (ISC-64).
 """
 
+import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 import urllib3
 import yaml
 
@@ -222,26 +230,73 @@ def committed_seqs():
     return times, seqs
 
 
-def pve(vmid, action):
+def pve_endpoint():
+    """Adres API Proxmoksa — WYLACZNIE zadeklarowany przez operatora.
+
+    Do 2026-09-21 stal tu labowy fallback: sonda destrukcyjna wysylala stop()
+    pod adres zaszyty w repo, a nie pod adres tej infrastruktury. Fabryka
+    obsluguje wiele labow, wiec brak deklaracji to odmowa PRZED mutacja,
+    nie podstawianie adresu.
+    """
+    endpoint = os.environ.get("PROXMOX_VE_ENDPOINT", "").strip().rstrip("/")
+    if not endpoint:
+        raise RuntimeError(
+            "brak PROXMOX_VE_ENDPOINT — tryb 'node' nie ma gdzie wyslac stop/start"
+        )
+    return endpoint
+
+
+def pve_node(endpoint, token, vmid):
+    """Wezel PVE, na ktorym stoi `vmid` — jawnie albo z listy zasobow klastra.
+
+    Twardy wezel w URL bylo zalozeniem o topologii JEDNEGO labu: na
+    hypervisorze z inna nazwa tryb `node` trafialby stop() w nieistniejaca
+    sciezke. Rozstrzygamy jak tools/pve-pool-teardown.sh: PROXMOX_VE_NODE
+    wygrywa, a bez niej pole `node` z /cluster/resources dopasowane po VMID.
+    """
+    declared = os.environ.get("PROXMOX_VE_NODE", "").strip()
+    if declared:
+        return declared
+    req = urllib.request.Request(
+        f"{endpoint}/api2/json/cluster/resources?type=vm",
+        headers={"Authorization": f"PVEAPIToken={token}"},
+    )
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    with urllib.request.urlopen(req, timeout=30, context=context) as resp:
+        resources = json.loads(resp.read().decode()).get("data") or []
+    for entry in resources:
+        if str(entry.get("vmid")) == str(vmid):
+            node = entry.get("node")
+            if isinstance(node, str) and node:
+                return node
+    raise RuntimeError(
+        f"VMID {vmid} nie wystepuje w /cluster/resources — sprawdz PROXYSQL_VMIDS, "
+        "wezla wskaz jawnie PROXMOX_VE_NODE"
+    )
+
+
+def pve(vmid, action, node):
     """Twardy stop/start VM przez API Proxmoksa.
 
     Biblioteka STANDARDOWA, nie `requests`: host kontrolny go nie ma i pierwszy
     przebieg trybu `node` wywalil sie na ImportError — na szczescie ZANIM cokolwiek
     zgasil, ale rownie dobrze mogl paść przy przywracaniu i zostawic wezel wylaczony.
+    Endpoint i wezel musza byc rozstrzygniete PRZED mutacja: `main` robi to w
+    preflight, wiec tu sa tylko dane juz zweryfikowane.
     """
-    import ssl
-    import urllib.request
-
-    tok = os.environ["PROXMOX_VE_API_TOKEN"]
-    endpoint = os.environ.get("PROXMOX_VE_ENDPOINT", "https://192.168.1.181:8006").rstrip("/")
-    url = f"{endpoint}/api2/json/nodes/pve/qemu/{vmid}/status/{action}"
+    tok = os.environ.get("PROXMOX_VE_API_TOKEN", "").strip()
+    if not tok:
+        raise RuntimeError("brak PROXMOX_VE_API_TOKEN — tryb 'node' nie ma czym sie uwierzytelnic")
+    url = f"{pve_endpoint()}/api2/json/nodes/{node}/qemu/{vmid}/status/{action}"
     req = urllib.request.Request(
         url, data=b"", method="POST",
         headers={"Authorization": f"PVEAPIToken={tok}"})
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    with urllib.request.urlopen(req, timeout=30, context=context) as resp:
         return resp.read().decode()
 
 
@@ -278,6 +333,7 @@ def main():
         return 1
 
     vmid = None
+    node = None
     if MODE == "node":
         mapping = dict(kv.split("=") for kv in
                        os.environ.get("PROXYSQL_VMIDS", "").split(",") if "=" in kv)
@@ -285,6 +341,23 @@ def main():
             print(f"FAIL: tryb node wymaga VMID {victim} w PROXYSQL_VMIDS")
             return 1
         vmid = mapping[victim]
+        # DANE ZEWNETRZNE PRZED MUTACJA: endpoint, token i wezel hypervisora
+        # rozstrzygamy ZANIM cokolwiek zgasimy. Do 2026-09-21 endpoint mial
+        # labowy fallback (https://192.168.1.181:8006), a wezel byl wpisany
+        # na sztywno (`nodes/pve`) — probe destrukcyjna trafiala tam, gdzie
+        # kazal adres z repozytorium, nie deklaracja tej infrastruktury.
+        try:
+            endpoint = pve_endpoint()
+            token = os.environ.get("PROXMOX_VE_API_TOKEN", "").strip()
+            if not token:
+                raise RuntimeError(
+                    "brak PROXMOX_VE_API_TOKEN — tryb 'node' nie ma czym sie uwierzytelnic"
+                )
+            node = pve_node(endpoint, token, vmid)
+        except Exception as exc:                                  # noqa: BLE001
+            print(f"FAIL: {exc}")
+            return 1
+        print(f"VM {victim} (VMID {vmid}) na wezle PVE '{node}' ({endpoint})")
 
     # HASLO APLIKACJI NIE MOZE JECHAC ARGUMENTEM. Do 2026-09-12 profil klienta
     # powstawal przez `sh(APP_HOST, "printf ... password={APP_PW} ... > CNF")`,
@@ -375,7 +448,7 @@ def main():
                 print(f"FAIL: proxysql nadal zyje na {victim} — awaria nie zaistniala")
                 return 1
         else:
-            pve(vmid, "stop")
+            pve(vmid, "stop", node)
 
         if MODE == "worker":
             # ASERCJA ODWROCONA: tu failover bylby BLEDEM. Przelaczenie VIP przy
@@ -479,7 +552,7 @@ def main():
                         f"(127.0.0.1:6032) po przywroceniu w trybie 'service' — wezel "
                         f"zostaje martwy, a warstwa zdegradowana dla kolejnych sond")
             elif vmid:
-                pve(vmid, "start")
+                pve(vmid, "start", node)
                 # ZMIENIONE 2026-09-12: bylo `sleep(45)` i `restored = True` —
                 # sonda oglaszala przywrocenie, nie sprawdzajac, czy ProxySQL na
                 # wskrzeszonym wezle w ogole wstal. Gdy zostawal nieaktualny plik

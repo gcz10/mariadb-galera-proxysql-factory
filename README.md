@@ -398,9 +398,17 @@ wcześniej. Podział źródeł prawdy:
 
 `make fleet-state` zestawia definicje z repo z maszynami w puli i pokazuje, które
 są żywe, zatrzymane albo są już tylko archiwum, kto dzieli wspólny endpoint i czy
-ten endpoint odpowiada. Zasady, które nie zależą od floty — limit zasobów, zakresy
-VMID poza tą automatyzacją, reguła przynależności do puli — w
+ten endpoint odpowiada. Granice własności i polityki bieżącego laboratorium
+(nie wymagania innych wdrożeń) opisuje
 `docs/infrastructure-state.md`.
+
+Narzędzia PVE wymagają jawnej puli: ustaw `FLEET_POOL` dla `fleet-state`,
+`fleet-orphans` i `fleet-orphans-teardown`. Tworzenie VM przez
+`tools/pve-create-vm.sh` przyjmuje `--pool` z pierwszeństwem przed tą zmienną;
+brak obu zatrzymuje operację przed API. Węzeł, storage, obraz, most, DNS,
+bramę i adres z prefiksem wybiera operator — nie kod fabryki.
+Moduł `terraform/modules/pve_vm_set` również wymaga tych danych jawnie;
+ustawienia konkretnego wdrożenia należą do jego roota Terraform.
 
 Że README pozostanie wolne od nazw instancji, pilnuje `make verify-zero-hardcode`:
 nazwy czyta z katalogów `clusters/*/` i `platform/*/`, więc bramka obejmuje każdy

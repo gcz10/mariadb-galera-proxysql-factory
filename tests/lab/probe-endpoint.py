@@ -11,12 +11,17 @@ Reads the endpoint address from cluster.yml.
 
 from __future__ import annotations
 
-import os
 import sys
 
-from _probe_common import ProbeContext, check, finish, require_hosts, run_ansible
-
-IFACE = os.environ.get("PROXYSQL_ENDPOINT_INTERFACE", "eth0")
+from _probe_common import (
+    IFACE_UNRESOLVED,
+    ProbeContext,
+    check,
+    finish,
+    require_hosts,
+    run_ansible,
+    vip_holder_shell,
+)
 
 
 def main() -> int:
@@ -28,9 +33,12 @@ def main() -> int:
     vip = ctx.config["proxysql"]["endpoint"]["address"]
 
     # Per-node: does it hold the VIP? is ProxySQL running?
+    # Interfejs noszacy VIP jest rozstrzygany na HOSCIE, ta sama regula co w
+    # f8_keepalived.yml: deklaracja `proxysql_endpoint_interface` albo domyslna
+    # trasa. Twarde `eth0` bylo zalozeniem o topologii jednego labu.
     probe = (
-        f"if ip -o -4 addr show dev {IFACE} | grep -q '{vip}/'; then echo VIP=1; else echo VIP=0; fi; "
-        f"if pgrep -x proxysql >/dev/null; then echo PROXYSQL=1; else echo PROXYSQL=0; fi"
+        vip_holder_shell(vip)
+        + "if pgrep -x proxysql >/dev/null; then echo PROXYSQL=1; else echo PROXYSQL=0; fi"
     )
     raw = run_ansible(ctx, "proxysql", probe)
     # Guard VIP: kazdy host grupy musi dostarczyc stan do pomiaru.
@@ -40,8 +48,22 @@ def main() -> int:
     for node in proxysql_hosts:
         if node not in raw.bodies:
             continue
+        if IFACE_UNRESOLVED in raw.body(node):
+            # "Nie wiem, gdzie patrzec" nie jest "patrzylem i nie ma": bez tego
+            # rozroznienia brak trasy domyslnej opisywalby wezel jako naruszenie
+            # ISC-24, choc niczego tu nie zmierzono.
+            undetermined.append(
+                f"{node}: nie rozstrzygnieto interfejsu VIP-a — wskaz go jawnie "
+                f"przez PROXYSQL_ENDPOINT_INTERFACE (keepalived bierze go z tej "
+                f"samej deklaracji albo z domyslnej trasy hosta)"
+            )
+            continue
         vals = dict(kv.split("=", 1) for kv in raw.body(node).split() if "=" in kv)
-        state[node] = {"vip": vals.get("VIP") == "1", "proxysql": vals.get("PROXYSQL") == "1"}
+        state[node] = {
+            "vip": vals.get("VIP") == "1",
+            "proxysql": vals.get("PROXYSQL") == "1",
+            "iface": vals.get("IFACE", ""),
+        }
 
     vip_holders = [n for n, s in state.items() if s["vip"]]
 
@@ -150,8 +172,9 @@ def main() -> int:
             tls_note = f"TLS obecny, wystawca: {issuer}"
 
     holder = vip_holders[0] if vip_holders else "?"
+    holder_iface = state.get(holder, {}).get("iface") or "?"
     summary = (
-        f"ProxySQL endpoint healthy — VIP {vip} on {holder} "
+        f"ProxySQL endpoint healthy — VIP {vip} on {holder} via {holder_iface} "
         f"(ProxySQL running), {len(state)} node(s) evaluated; {tls_note}"
     )
     return finish(failures, undetermined, summary)

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import shlex
 import sys
 import textwrap
@@ -86,8 +87,20 @@ def api_get(
     return data
 
 
-def _load_mc_image(undetermined: list[str]) -> str:
-    lock_path = REPO_ROOT / "versions" / "versions.lock.yml"
+def _load_mc_image(ctx: ProbeContext, undetermined: list[str]) -> str:
+    """Obraz `mc` z lockfile WSKAZANEGO przez definicje, nie z sztywnej sciezki.
+
+    Rola i playbooki laduja `(versions | default({})).lock_file |
+    default('versions/versions.lock.yml')` — klaster przypina mc_image do
+    WLASNEGO lockfile (np. versions-el10-123.lock.yml). Sonda czytajaca zawsze
+    `versions/versions.lock.yml` porownywalaby konta z obrazem, ktory ta
+    definicja nie wdrozy.
+    """
+    lock_reference = (
+        (ctx.config.get("versions") or {}).get("lock_file")
+        or "versions/versions.lock.yml"
+    )
+    lock_path = REPO_ROOT / lock_reference
     try:
         lock = yaml.safe_load(lock_path.read_text(encoding="utf-8")) or {}
         if not isinstance(lock, dict):
@@ -104,7 +117,7 @@ def _load_mc_image(undetermined: list[str]) -> str:
         return f"{image}@{digest}"
     except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
         undetermined.append(
-            f"MinIO: nie mozna odczytac versions/versions.lock.yml ({type(exc).__name__})"
+            f"MinIO: nie mozna odczytac {lock_reference} ({type(exc).__name__})"
         )
         return ""
 
@@ -207,6 +220,21 @@ def _minio_probe_script(image_ref: str, username: str, password: str) -> str:
     )
 
 
+def _managed_minio_address(backup_cfg: dict, infra_address: str | None) -> bool:
+    """Czy endpoint S3 wskazuje host infra TEGO inwentarza (zarzadzane MinIO)?
+
+    TEN SAM predykat co `galera_backup_managed_minio` w
+    roles/galera_backup/tasks/main.yml i playbooks/cluster_deregister.yml
+    (derejestracyjny wariant — bez `backup.enabled` i bez
+    `galera_backup_provision_s3`, bo derejestracja sprzata konto tez po
+    wylaczeniu kopii). Port odcinamy, bo operator moze wpisac `host:9000`.
+    """
+    endpoint = (backup_cfg.get("s3") or {}).get("endpoint")
+    if not isinstance(endpoint, str) or not endpoint or not infra_address:
+        return False
+    return re.sub(r":[0-9]+$", "", endpoint) == str(infra_address)
+
+
 def main() -> int:
     failures: list[str] = []
     undetermined: list[str] = []
@@ -215,7 +243,20 @@ def main() -> int:
     cluster_name = ctx.config.get("cluster", {}).get("name", ctx.cluster_name)
     pmm_cfg = ctx.config.get("monitoring", {}).get("pmm", {})
     pmm_cluster_name = pmm_cfg.get("cluster_name", cluster_name)
-    pmm_server_url = pmm_cfg.get("server_url", "https://192.168.1.130").rstrip("/")
+    pmm_server_url = str(pmm_cfg.get("server_url") or "").rstrip("/")
+    if not pmm_server_url:
+        # Adres PMM jest DANYM ZEWNETRZNYM tej sondy. Do 2026-09-21 stal tu
+        # labowy fallback (https://192.168.1.130): definicja bez server_url
+        # byla mierzona na CUDZYM PMM, wiec raport o sierotach dotyczyl
+        # obcych obiektow. cluster.schema.json wymaga tego pola — brak to
+        # wada definicji, wiec odmawiamy, a nie podstawiamy adresu.
+        print(
+            "FAIL: cluster.yml nie deklaruje monitoring.pmm.server_url — "
+            "sonda nie ma gdzie zmierzyc sierot PMM, a adresu zadnej "
+            "infrastruktury nie podstawia zamiast deklaracji",
+            file=sys.stderr,
+        )
+        return 1
     proxysql_cfg = ctx.config.get("proxysql", {})
     hostgroup_base = int(proxysql_cfg.get("hostgroup_base", 10))
     app_user = proxysql_cfg.get("app_user", "app_user")
@@ -435,7 +476,37 @@ def main() -> int:
     # ==========================================================================
     backup_cfg = ctx.config.get("backup", {})
     backup_enabled = bool(backup_cfg.get("enabled", True))
-    if backup_cfg.get("destination") == "s3" and not backup_enabled:
+    minio_measured = False
+    infra_hosts = ctx.group_hosts("infra")
+    infra_children = (ctx.inventory.get("all", {}).get("children", {}) or {}).get("infra", {})
+    infra_entry = (infra_children.get("hosts", {}) or {}).get(infra_hosts[0], {}) if infra_hosts else {}
+    # Predykat porownuje DOKLADNIE `hostvars[groups['infra'][0]].ansible_host`.
+    # Zmierzono na ansible 2.15: na hoscie bez `ansible_host` playbook NIE
+    # renderuje pustego napisu — pada z AnsibleUndefinedVariable, czyli
+    # preflight derejestracji wywala sie glosno, zanim cokolwiek zostanie
+    # odwolane. Sonda w tym stanie raportuje NIEzarzadzane (SKIP): nie wolno
+    # jej zadac poswiadczen MinIO na klastrowie, ktorego fabryka nigdy nie
+    # provisionowala. Fallback na `infra_node_address` utworzylby konwencje,
+    # ktorej playbook nie zna.
+    infra_address = str(infra_entry.get("ansible_host") or "") if infra_entry else ""
+    if (
+        backup_cfg.get("destination") == "s3"
+        and not _managed_minio_address(backup_cfg, infra_address)
+    ):
+        # Predykat "zarzadzane MinIO" jest TEN SAM co w
+        # roles/galera_backup/tasks/main.yml i playbooks/cluster_deregister.yml:
+        # endpoint S3 musi wskazywac host grupy `infra` TEGO inwentarza.
+        # S3 zewnetrzny (AWS, R2, Ceph, operator) nie ma tu konta serwisowego
+        # zakladanego przez fabryke, wiec wymaganie poswiadczen root MinIO albo
+        # `mc` na grupie infra opisywaloby jako nierozstrzygniete cos, czego
+        # nikt nie zadeklarowal — a derejestracja i tak tam niczego nie odwoluje.
+        endpoint = (backup_cfg.get("s3") or {}).get("endpoint")
+        print(
+            "SKIP: magazyn S3 jest zewnetrzny wobec tego inwentarza "
+            f"(endpoint {endpoint!r}, host infra {infra_address!r}) — "
+            "konta serwisowe dostawcy nie naleza do tego klastra"
+        )
+    elif backup_cfg.get("destination") == "s3" and not backup_enabled:
         # Wylaczona kopia nigdy nie zalozyla konta serwisowego, wiec nie ma czego
         # osierocic. Do 2026-08-25 bramkowal tu SAM backend: `nova-r9` mial
         # `enabled: false` obok `destination: s3`, wiec sonda szla do MinIO po
@@ -453,8 +524,7 @@ def main() -> int:
                 "lub tests/lab/.env"
             )
         else:
-            image_ref = _load_mc_image(undetermined)
-            infra_hosts = ctx.group_hosts("infra")
+            image_ref = _load_mc_image(ctx, undetermined)
             if not infra_hosts:
                 undetermined.append("MinIO: brak grupy infra w inwentarzu")
             elif image_ref:
@@ -474,6 +544,7 @@ def main() -> int:
                     undetermined.append(
                         f"MinIO konta serwisowe: ansible rc={minio_result.returncode}"
                     )
+                minio_measured = True
 
                 target_name = f"galera-backup-{cluster_name}"
                 seen_keys: set[str] = set()
@@ -578,8 +649,11 @@ def main() -> int:
     else:
         undetermined.append("ProxySQL: brak grupy proxysql w inwentarzu")
 
+    # Podsumowanie mowi tylko o TYM, co zostalo zmierzone. Do 2026-09-21
+    # klaster z zewnetrznym S3 dostawal "w MinIO" w wierszu PASS, chociaz
+    # sonda tam niczego nie zmierzyla.
     components = "PMM, Grafanie i ProxySQL"
-    if backup_cfg.get("destination") == "s3":
+    if minio_measured:
         components = "PMM, Grafanie, MinIO i ProxySQL"
     return finish(
         failures,

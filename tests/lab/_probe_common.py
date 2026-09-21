@@ -26,6 +26,7 @@ import http.client
 import json
 import os
 import re
+import shlex
 import socket
 import ssl
 import subprocess
@@ -46,6 +47,44 @@ EXIT_UNDETERMINED = 2
 _HEADER_RE = re.compile(
     r"^(?P<host>\S+)\s+\|\s+(?P<status>CHANGED|SUCCESS|FAILED!?|UNREACHABLE!?)(?P<rest>.*)$"
 )
+
+# Interfejs VIP-a rozstrzyga TEN SAM kontrakt co playbooks/f8_keepalived.yml:
+# jawna deklaracja operatora wygrywa, a bez niej interfejs bierzemy z domyslnej
+# trasy hosta. Twarde `eth0` bylo zalozeniem, ktore nie zachodzi ani na Rocky
+# (`ens18`, `enp1s0`), ani na blaszakach z wieloma kartami: sonda raportowala
+# wtedy VIP=0 na wezle, ktory adres trzymal — falszywe naruszenie ISC-24.
+VIP_INTERFACE_ENV = "PROXYSQL_ENDPOINT_INTERFACE"
+# Znacznik "interfejsu nie rozstrzygnieto". To nie jest "VIP-a nie ma": sonda,
+# ktora nie wie, gdzie szukac adresu, nie moze tego opisac jako pomiarem
+# potwierdzony brak — raportuje nierozstrzygniecie (exit 2), nie awarie.
+IFACE_UNRESOLVED = "IFACE_UNRESOLVED"
+
+
+def vip_holder_shell(vip: str) -> str:
+    """Fragment skryptu ad-hoc: czy host trzyma `vip` i na jakim interfejsie.
+
+    Kolejnosc rozstrzygania jest dokladnie jak w f8_keepalived.yml:
+    PROXYSQL_ENDPOINT_INTERFACE (odpowiednik extra-vara
+    `proxysql_endpoint_interface`) albo interfejs domyslnej trasy
+    (`ansible_facts['default_ipv4']['interface']`). Interfejs, ktory nie
+    istnieje, traktujemy jak nierozstrzygniety — keepalived.conf z takim
+    interfejsem wstaje bez VIP-a, wiec "VIP=0" na martwym interfejsie bylby
+    pomiarem niczego.
+    """
+    declared = os.environ.get(VIP_INTERFACE_ENV, "").strip()
+    pattern = re.escape(vip) + "/"
+    return (
+        f"iface={shlex.quote(declared)}; "
+        'if [ -z "$iface" ]; then '
+        "iface=$(ip -o -4 route show default 2>/dev/null "
+        "| awk '{for (i = 1; i <= NF; i++) if ($i == \"dev\") {print $(i + 1); exit}}'); "
+        "fi; "
+        'if [ -n "$iface" ] && ip link show dev "$iface" >/dev/null 2>&1; then '
+        'echo "IFACE=$iface"; '
+        "if ip -o -4 addr show dev \"$iface\" | grep -qE \"[[:space:]]" + pattern + "\"; then "
+        "echo VIP=1; else echo VIP=0; fi; "
+        "else echo " + IFACE_UNRESOLVED + "; fi; "
+    )
 
 
 def pmm_ssl_context(pmm_config: dict) -> ssl.SSLContext:

@@ -22,8 +22,7 @@ maszyn dla definicji to normalny stan archiwum, nie blad. Konczy sie kodem 2
 tylko wtedy, gdy nie da sie ZMIERZYC (brak poswiadczen, hypervisor nieosiagalny)
 - nigdy cicho.
 
-Wymaga PROXMOX_VE_ENDPOINT i PROXMOX_VE_API_TOKEN. Pula wlasnosci: FLEET_POOL
-(domyslnie `claude-isa`).
+Wymaga PROXMOX_VE_ENDPOINT, PROXMOX_VE_API_TOKEN i jawnej puli FLEET_POOL.
 """
 from __future__ import annotations
 
@@ -40,7 +39,7 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-POOL = os.environ.get("FLEET_POOL", "claude-isa")
+POOL = os.environ.get("FLEET_POOL", "").strip()
 EXIT_OK = 0
 EXIT_UNDETERMINED = 2
 
@@ -158,6 +157,8 @@ def endpoint_reachable(address: str, port: int) -> bool | None:
 
 def main() -> int:
     try:
+        if not POOL:
+            raise RuntimeError("brak FLEET_POOL — wskaż pulę tej infrastruktury")
         resources = api("/cluster/resources?type=vm")
     except (RuntimeError, urllib.error.URLError, OSError, ValueError, KeyError) as exc:
         print(f"UNDETERMINED: {exc}")

@@ -1,14 +1,18 @@
 # Wejscia modulu pve_vm_set. Konwencja:
-#   - required: decyzje wlasne dla roota (obraz, klucz, maszyny, tagi),
-#   - default:  stalone floty isa (wezel PVE, storage, bridge, adresacja),
+#   - required topologia: wezel, pula, storage, bridge, adresacja i DNS sa
+#     deklaracja roota. Modul nie ma dla nich wartosci domyslnej — domyslna
+#     bylaby topologia jednego laboratorium wpisana w fabryke wielokrotnego
+#     uzytku (ISC-59 pilnuje tego skanem po `terraform/modules`),
+#   - required: decyzje wlasne dla roota (obraz, klucz, maszyny, tagi, opis),
+#   - default: wartosci niezwiazane z infrastruktura,
 #   - default null: atrybuty Optional+Computed providera — null oznacza
 #     "nie ustawiaj" i zachowuje wartosc ze stanu (patrz main.tf).
 
 variable "vms" {
-  description = "Maszyny zbioru: klucz = nazwa VM w PVE. id to VMID, ip to ostatni oktet."
+  description = "Maszyny zbioru: klucz = nazwa VM w PVE. id to VMID, ip to pelny adres IPv4 z prefiksem sieci (CIDR)."
   type = map(object({
     id                                   = number
-    ip                                   = number
+    ip                                   = string
     role                                 = string
     cpu                                  = number
     ram                                  = number
@@ -16,6 +20,17 @@ variable "vms" {
     purge_on_destroy                     = optional(bool)
     delete_unreferenced_disks_on_destroy = optional(bool)
   }))
+
+  # Adres jest pelnym CIDR-em, nie oktetem doklejonym do prefiksu sieci modulu:
+  # dzieki temu zbior stoi na dowolnej podsieci i dowolnym prefiksie. Walidacja
+  # zamienia literowke w adresie na blad planu, a nie na blad API hypervisora —
+  # wczesniejszy typ `number` dawal to za darmo (oktet nie mogl byc niepoprawny).
+  validation {
+    condition = alltrue([
+      for vm in var.vms : can(cidrhost(vm.ip, 0)) && can(cidrnetmask(vm.ip))
+    ])
+    error_message = "Kazdy `ip` musi byc adresem IPv4 w notacji CIDR, np. 192.0.2.10/24."
+  }
 }
 
 variable "source_img" {
@@ -39,45 +54,33 @@ variable "description_prefix" {
 }
 
 variable "node_name" {
-  description = "Wezel hypervisora PVE."
+  description = "Wezel hypervisora PVE, na ktorym powstaja maszyny zbioru."
   type        = string
-  default     = "pve"
 }
 
 variable "pool_id" {
-  description = "Pula PVE grupujaca cala flote isa."
+  description = "Pula PVE grupujaca zbior (kazda maszyna zbioru trafia do tej puli)."
   type        = string
-  default     = "claude-isa"
 }
 
 variable "storage" {
   description = "Datastore na dyski VM i snippet cloud-init."
   type        = string
-  default     = "local-zfs"
 }
 
 variable "bridge" {
   description = "Mostek sieciowy VM."
   type        = string
-  default     = "vmbr0"
-}
-
-variable "ip_prefix" {
-  description = "Prefiks adresu IPv4 bez ostatniego oktetu (np. 192.168.1.)."
-  type        = string
-  default     = "192.168.1."
 }
 
 variable "gateway" {
-  description = "Brama domyslna maszyn zbioru."
+  description = "Brama domyslna maszyn zbioru (ta sama dla calego zbioru — zbior stoi na jednej sieci)."
   type        = string
-  default     = "192.168.1.1"
 }
 
 variable "dns_servers" {
-  description = "Serwery DNS wypychane przez cloud-init."
+  description = "Serwery DNS wypychane przez cloud-init; jawna decyzja roota, nie domysl publiczny."
   type        = list(string)
-  default     = ["1.1.1.1", "8.8.8.8"]
 }
 
 variable "description_dash" {

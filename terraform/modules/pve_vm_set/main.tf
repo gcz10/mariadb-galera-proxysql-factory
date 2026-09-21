@@ -1,12 +1,17 @@
-# Wspolny zbior VM floty isa (PVE): warstwa wspoldzielona i klastry konsumentow.
+# Wspolny zbior VM (PVE): warstwa wspoldzielona i klastry konsumentow.
 #
 # Modul jest jedynym miejscem definicji `proxmox_virtual_environment_vm` w repo.
 # Wczesniej kazdy root mial wlasna kopie tego zasobu i roznice miedzy kopiami
 # (file_format, aio, flagi destroy) rozjezdzaly sie po kazdym nowym klastrze.
 #
+# Modul nie zna ZADNEJ topologii: wezel, pula, storage, bridge, brama i DNS sa
+# required inputami roota, a adresy maszyn to pelne CIDR-y z deklaracji zbioru
+# (patrz variables.tf). Nowy root nie dziedziczy po poprzednim ani adresu,
+# ani puli, ani magazynu.
+#
 # Roznice platformowe rootow sa parametrami, nie odrebna logika:
-#   - Rocky 10 (shared, finalclaude-r10): snippet cloud-init + scsi1 + os_type,
-#   - Rocky 9 (newclaude16-r9): bez snippetu, domyslny ide2, raw/io_uring.
+#   - Rocky 10: snippet cloud-init + scsi1 + os_type,
+#   - Rocky 9: bez snippetu, domyslny ide2, raw/io_uring.
 #
 # Atrybuty Optional+Computed przekazywane jako null (file_format, aio, purge_
 # on_destroy itd.) sa dla providera rownowazne z pominieciem: wartosc zostaje
@@ -86,7 +91,10 @@ resource "proxmox_virtual_environment_vm" "node" {
     }
     ip_config {
       ipv4 {
-        address = "${var.ip_prefix}${each.value.ip}/24"
+        # Adres z prefiksem sieci siedzi w deklaracji zbioru — modul nie sklada
+        # go z oktetu i wlasnego prefiksu, wiec zbior moze stac na innej podsieci
+        # lub innym prefiksie niz laboratorium, ktore go kiedys zamowilo.
+        address = each.value.ip
         gateway = var.gateway
       }
     }

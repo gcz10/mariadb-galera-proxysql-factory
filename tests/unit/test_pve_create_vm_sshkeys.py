@@ -91,8 +91,14 @@ class SshKeyTransportTests(unittest.TestCase):
             "PVE_SSH_WAIT_SLEEP": "0",
         }
         proc = subprocess.run(
-            [str(SCRIPT), "--vmid", "10020", "--name", "testvm",
-             "--ip", "40", "--cluster", "test-c", "--key-file", str(self.key_file),
+            [str(SCRIPT),
+             "--vmid", "10020", "--name", "testvm",
+             "--ip", "192.0.2.10/24", "--gateway", "192.0.2.1",
+             "--cluster", "example-c1", "--pool", "example-pool",
+             "--bridge", "vmbr0", "--node", "node1",
+             "--storage", "local-zfs", "--image", "local:import/rocky.qcow2",
+             "--nameserver", "203.0.113.53",
+             "--key-file", str(self.key_file),
              "--no-wait-ssh"],
             capture_output=True, text=True, env=env, timeout=30,
         )

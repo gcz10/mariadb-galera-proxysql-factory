@@ -1,8 +1,8 @@
 # Zasady floty
 
-Ten plik zawiera **wyłącznie to, co nie zmienia się razem z flotą**: limity,
-polityki i granice własności. Nie ma tu spisu maszyn ani klastrów — i nie
-powinien się pojawić.
+Ten plik opisuje granice własności fabryki oraz polityki bieżącego laboratorium.
+Limity zasobów i rezerwacje VMID poniżej dotyczą tego laboratorium — nie są
+wymaganiami ani domyślnymi ustawieniami wdrożeń na innej infrastrukturze.
 
 Do 2026-08-26 stał tu ręcznie wpisywany spis maszyn. Ogłaszał jako aktywny stack
 skasowany dwa dni wcześniej i wyliczał najemców zniszczonych tydzień wcześniej.
@@ -71,13 +71,16 @@ klientami, wersje pochodzą z aktywnego lockfile'a.
 
 ## Reguła stała
 
-Każdy zasób tworzony przez tę automatyzację należy do puli `claude-isa`.
+Każdy zasób PVE tworzony przez tę automatyzację należy do jawnie wybranej puli.
+Narzędzia raportowania i teardownu wymagają `FLEET_POOL`; tworzenie VM pozwala
+nadpisać ją przez `--pool`, a root Terraform przekazuje `pool_id` do modułu.
+Nie ma domyślnej puli produktu. Wartość `claude-isa` jest wyborem obecnego labu.
 Przynależność do puli to **asercja** („to jest nasze"), nigdy źródło listy do
 skasowania. Lista do skasowania pochodzi zawsze z definicji, którą kasujesz —
 `terraform destroy` dla maszyn terraformowych albo jawna lista VMID dla maszyn
 z REST API.
 
 Wolny VMID to nie to samo co wolny magazyn: przed utworzeniem maszyny sprawdź
-także wolumeny (`local-zfs`), bo osierocony `vm-<id>-cloudinit` zatrzyma
+także wolumeny w wybranym storage, bo osierocony `vm-<id>-cloudinit` zatrzyma
 `terraform apply` w połowie. Procedurę opisuje
 `docs/runbooks/machines-from-elsewhere.md`.

@@ -27,15 +27,15 @@ import sys
 from urllib.parse import urlencode
 
 from _probe_common import (
+    IFACE_UNRESOLVED,
     ProbeContext,
     check,
     finish,
     pmm_get_json,
     require_hosts,
     run_ansible,
+    vip_holder_shell,
 )
-
-IFACE = os.environ.get("PROXYSQL_ENDPOINT_INTERFACE", "eth0")
 # Rozprowadza go platform_proxysql.yml — platforma jest wlascicielem CA frontendu.
 SHARED_CA = "/etc/mysql/app/shared/proxysql-ca.pem"
 
@@ -127,8 +127,11 @@ def main() -> int:
     failures: list[str] = []
     undetermined: list[str] = []
 
-    os.environ.setdefault("CLUSTER_CONFIG", "platform/shared/platform.yml")
-    os.environ.setdefault("CLUSTER_INVENTORY", "platform/shared/inventory.yml")
+    # Domyslne sciezki wskazuja SZABLON (platform/example), tak samo jak
+    # PLATFORM ?= example w Makefile i validate-platform.py. Stara wartosc
+    # `platform/shared/` byla nazwa JEDNEJ instancji, ktora przestala istniec.
+    os.environ.setdefault("CLUSTER_CONFIG", "platform/example/platform.yml")
+    os.environ.setdefault("CLUSTER_INVENTORY", "platform/example/inventory.yml")
     ctx = ProbeContext()
 
     # Niezaleznosc nie jest deklaracja w komentarzu, tylko mierzalna wlasnoscia
@@ -165,8 +168,8 @@ def main() -> int:
     # pilnuje ISC-21 (`probe-drift.py` i `probe-proxysql.py`, oba zielone na tej
     # samej parze), ktore porownuja tabele zarzadzane przez operatora.
     probe = (
-        f"if ip -o -4 addr show dev {IFACE} | grep -q '{vip}/'; then echo VIP=1; else echo VIP=0; fi; "
-        "if pgrep -x proxysql >/dev/null; then echo PROC=1; else echo PROC=0; fi; "
+        vip_holder_shell(vip)
+        + "if pgrep -x proxysql >/dev/null; then echo PROC=1; else echo PROC=0; fi; "
         "mariadb --defaults-extra-file=/etc/proxysql/admin-check.cnf -h127.0.0.1 -P6032 -uadmin -N -B "
         "-e \"SELECT 'ADMIN=1'\" 2>/dev/null || echo ADMIN=0; "
         # Liczba najemcow rozstrzyga, czy `connection_pool` MA prawo nie istniec,
@@ -190,6 +193,15 @@ def main() -> int:
     for node in proxysql_hosts:
         if node not in raw.bodies:
             continue
+        if IFACE_UNRESOLVED in raw.body(node):
+            # Bez rozstrzygnietego interfejsu obecnosci VIP-a nie da sie mierzyc:
+            # czytamy "VIP=0" tylko wtedy, gdy wiemy, gdzie szukac adresu.
+            undetermined.append(
+                f"{node}: nie rozstrzygnieto interfejsu VIP-a — wskaz go jawnie "
+                f"przez PROXYSQL_ENDPOINT_INTERFACE (keepalived bierze go z tej "
+                f"samej deklaracji albo z domyslnej trasy hosta)"
+            )
+            continue
         state[node] = dict(
             kv.split("=", 1) for kv in raw.body(node).split() if "=" in kv
         )
@@ -204,9 +216,13 @@ def main() -> int:
         )
 
     holders = [n for n, v in state.items() if v.get("VIP") == "1"]
+    unresolved = [n for n in proxysql_hosts if n not in state]
+    # Pary z nierozstrzygniętym interfejsem nie sa pelnym pomiarem: werdykt
+    # "dokladnie jeden trzyma VIP" wymagalby odczytu z KAZDEGO wezla.
     complete = bool(state) and len(state) == len(proxysql_hosts)
-
-    vip_may_be_withdrawn = withdrawal_is_expected(state, proxysql_hosts)
+    # Bez rozstrzygnietego interfejsu nie wolno twierdzic, ze bramka CELOWO
+    # zdjela adres (ISC-26): takiej decyzji tu nie zmierzono.
+    vip_may_be_withdrawn = not unresolved and withdrawal_is_expected(state, proxysql_hosts)
 
     if complete and not vip_may_be_withdrawn:
         check(
