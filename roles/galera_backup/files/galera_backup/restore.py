@@ -138,6 +138,7 @@ def run_restore(
 
     old_term = signal.signal(signal.SIGTERM, _sig_handler)
     old_int = signal.signal(signal.SIGINT, _sig_handler)
+    start_time = time.monotonic()
     try:
         state_mgr.read()
         backend = get_storage_backend(cfg, secrets, runner)
@@ -314,18 +315,31 @@ def run_restore(
         # Odtwarzanie juz sie UDALO i zostalo zweryfikowane, wiec awaria samego
         # znacznika nie moze zdegradowac drillu do porazki: raportujemy ja
         # zdarzeniem, dokladnie jak robi to retencja po udanym backupie.
+        #
+        # JEDEN snapshot pomiaru, zrobiony po zamknieciu serwera weryfikacyjnego
+        # i po potwierdzeniu danych. Ten sam czas i ten sam rozmiar leca do
+        # znacznika, do state.json i do metryki lokalnej — trzy zapisy nie moga
+        # opisac trzech roznych drillow. `size_bytes` to rozmiar SZYFROWANEGO
+        # artefaktu z backendu, zmierzony przy weryfikacji integralnosci, a nie
+        # rozmiar odtworzonego datadir.
         drill_unixtime = int(time.time())
+        drill_duration_seconds = time.monotonic() - start_time
+        drill_size_bytes = enc_size
+        # Walidacja PRZED publikacja (fail closed): niepoprawny pomiar nie moze
+        # trafic ani do znacznika, ani do stanu, ani do metryki. Wyjatek leci
+        # normalna sciezka porazki, zamiast utrwalic klamstwo w backendzie.
+        marker_payload = build_drill_marker(
+            cluster_name=cluster_name,
+            last_success_unixtime=drill_unixtime,
+            backup_name=art_set.backup_name,
+            rows_verified=total_rows,
+            duration_seconds=drill_duration_seconds,
+            size_bytes=drill_size_bytes,
+        )
         completed_backend = backend
         backend = None
         try:
-            completed_backend.write_drill_marker(
-                build_drill_marker(
-                    cluster_name=cluster_name,
-                    last_success_unixtime=drill_unixtime,
-                    backup_name=art_set.backup_name,
-                    rows_verified=total_rows,
-                )
-            )
+            completed_backend.write_drill_marker(marker_payload)
         except BackupError as marker_exc:
             event_mgr.emit(
                 "drill_marker.failure",
@@ -344,12 +358,15 @@ def run_restore(
 
         state_mgr.update_success(
             "restore",
-            int(time.time()),
+            drill_unixtime,
             artifact={
                 "backup_name": art_set.backup_name,
                 "databases_verified": database_count,
                 "tables_verified": table_count,
                 "rows_verified": total_rows,
+                # Ten sam snapshot co znacznik i metryka lokalna.
+                "duration_seconds": marker_payload["duration_seconds"],
+                "size_bytes": marker_payload["size_bytes"],
             },
         )
         event_mgr.emit(
@@ -359,11 +376,16 @@ def run_restore(
                 "databases_verified": database_count,
                 "tables_verified": table_count,
                 "rows_verified": total_rows,
+                "duration_seconds": drill_duration_seconds,
+                "size_bytes": drill_size_bytes,
             },
         )
         metrics_mgr.update(
-            last_success_unixtime=int(time.time()),
+            last_success_unixtime=drill_unixtime,
             last_run_success=1,
+            # Size of the encrypted artifact fetched from the backend, not datadir size.
+            last_size_bytes=drill_size_bytes,
+            last_duration_seconds=drill_duration_seconds,
         )
         print(
             f"galera-backup restore for {cluster_name} completed successfully "
@@ -411,6 +433,7 @@ def run_restore(
                 last_success_unixtime=last_succ_time,
                 last_failure_unixtime=int(time.time()),
                 last_run_success=0,
+                last_duration_seconds=time.monotonic() - start_time,
             )
         except Exception as metrics_exc:
             # A metric write failure must not replace the real diagnostic:

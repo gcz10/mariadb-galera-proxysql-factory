@@ -997,7 +997,9 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 	$(TARGET_ENV) PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
 # UWAGA 2026-09-15: komentarz z 2026-09-08 („512M < ~3,7G wymagane, cała brama
 # kończy się RC=2") jest HISTORYCZNY — opisuje stan sprzed podniesienia gcache.
-# NIEROZSTRZYGNIĘTE NA v17 (oba najemcy mają gcache_size=4G = 4096M na 3/3):
+# [ROZSTRZYGNIĘTE 2026-09-20 — decyzja operatora ponizej; brzmienie „NIEROZSTRZYGNIETE"
+# zachowane w historii commita, bo opisuje stan, w ktorym zapadala decyzja]
+# STAN POMIARU NA v17 (oba najemcy mają gcache_size=4G = 4096M na 3/3):
 # TA SAMA sonda na TYCH SAMYCH węzłach dała wymagania od 2211M do 6023M —
 # cassiopeiav17-r9: 3346M / 4182M / 4122M / 6023M, czyli TRZY z czterech
 # przebiegów czerwone (4182M, 4122M i 6023M przekraczają 4096M);
@@ -1024,8 +1026,17 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 # (min/mediana/max), żeby czytelnik widział rozrzut, nie jedną liczbę.
 # CZYTAJĄC CZERWONĄ TUTAJ: to wynik NAJGORSZEGO z N pomiarów, więc nie jest
 # dowodem regresji z tego jednego przebiegu — ale ZIELONA też nie jest dowodem
-# pokrycia poza tymi rundami. Trwałe rozstrzygnięcie wymaga zapasu ponad zmierzony
-# przedział (konfiguracja + rolling restart) — decyzja operatora. Nie wypisuj
-# sondy z bramki i nie zmieniaj progu po cichu. Powód i historia: ISA.md, ISC-68.
+# pokrycia poza tymi rundami.
+# DECYZJA OPERATORA 2026-09-20 (ISC-68 ZAMKNIETE, opcja 2): zapas gcache na
+# cassiopeiav17-r9 NIE jest podnoszony — najemca zostaje z 4096M, a zmierzony
+# niedobor (maksimum 4145M wobec 4096M, o 1,2%) jest PRZYJETY SWIADOMIE. Bez
+# rolling restartu i bez zmiany okna IST; wariant podniesienia rozmiaru ODRZUCONY.
+# CZERWONA NA CASSIOPEI JEST WIEC ZAMIERZONA, NIE REGRESJA: ten jeden FAIL
+# opisuje zaakceptowany niedobor, a nie awarie. Obu pomiarow nie uniewazniamy —
+# 4145M (maksimum z 5 rund) i historyczne 6023M (3508143 B/s, pojedyncza probka)
+# zostaja jako zmierzone fakty i nadal sluza interpretacji bramki. Orion decyzji
+# nie dotyczy: 3175M wobec 4096M = zapas 29%.
+# NIEZMIENNE: nie wypisuj sondy z bramki i nie zmieniaj progu po cichu.
+# Powód i historia: ISA.md, ISC-68.
 	$(TARGET_ENV) tests/lab/probe-gcache.py
 	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone"

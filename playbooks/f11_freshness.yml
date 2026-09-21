@@ -5,9 +5,13 @@
 # /var/lib/node_exporter/textfile_collector/galera_backup-<cluster>.prom.
 #
 # Źródła dowodów:
-#   /opt/galera-backup/clusters/<cluster>/state.json → restore[0] (ostatni udany restore drill)
+#   /opt/galera-backup/clusters/<cluster>/state.json → last_success (ostatni udany restore drill)
+#   Pomiar drillu (artifact.duration_seconds, artifact.size_bytes) jest OPCJONALNY:
+#   stan zapisany przed wprowadzeniem pomiarów go nie ma i wtedy metryki pomiaru
+#   są POMIJANE, a nie zerowane.
 #
-# Cel: node_exporter textfile collector na galera[0] → isa_monitoring_state.prom.
+# Cel: node_exporter textfile collector na galera[0] → isa_monitoring_state.prom
+# oraz galera_restore_drill-<cluster>.prom (świeżość i pomiary drillu).
 
 - name: "F11 — zbierz stany restore/TLS i opublikuj świeżość na galera[0]"
   hosts: galera[0]
@@ -18,6 +22,18 @@
     state_file: "{{ textfile_dir }}/isa_monitoring_state.prom"
     config_file: "{{ textfile_dir }}/isa_monitoring_config.prom"
     cluster_label: "{{ monitoring.pmm.cluster_name }}"
+    backup_state_file: "/opt/galera-backup/clusters/{{ cluster.name }}/state.json"
+    # Mostek drillu: DOKŁADNIE ta sama nazwa pliku, którą po udanym backupie
+    # zapisuje runner na hoście schedulera (galera_backup/common.py
+    # `drill_metric_path`). Dwa pliki z tą samą rodziną metryk na jednym
+    # hoście to odrzucony scrape, więc oba źródła piszą do JEDNEGO pliku.
+    drill_file: "{{ textfile_dir }}/galera_restore_drill-{{ cluster.name }}.prom"
+    # Etykiety 1:1 z runnerem: `cluster` to nazwa z PMM, `logical_cluster` to
+    # nazwa klastra, `backend` to zadeklarowany cel kopii (config.json.j2:
+    # backend.type = backup.destination, runner obniża go do małych liter).
+    drill_labels: >-
+      cluster="{{ cluster_label }}",logical_cluster="{{ cluster.name }}",backend="{{ backup.destination | lower }}"
+    drill_label_set: "{{ '{' ~ drill_labels ~ '}' }}"
     tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
     # Klaster bez cwiczen odtworzeniowych (backup wylaczony) nie ma grupy
     # `restore` i to jest legalne. Bez tego domyslnika play wywracal sie na
@@ -26,20 +42,83 @@
     restore_host: "{{ (groups['restore'] | default([]) | first) | default('') }}"
 
   tasks:
-    - name: "Odczytaj unixtime ostatniego udanego restore drill (restore[0])"
-      ansible.builtin.shell: >-
-        set -o pipefail;
-        f=/opt/galera-backup/clusters/{{ cluster.name }}/state.json;
-        if [ -f "$f" ]; then
-          python3 -c "import json,sys; d=json.load(open('$f')); ls=d.get('last_success') or {}; print(ls.get('unixtime', 0) if ls.get('command') == 'restore' else 0)";
-        else echo 0; fi
+    - name: "Odczytaj stan ostatniego udanego restore drill (restore[0])"
+      # JEDEN odczyt pliku stanu daje wszystkie pola: świeżość i pomiar. Osobne
+      # odczyty per pole mogłyby opisać pomiar z innego przebiegu niż świeżość.
+      # Stan nieczytelny (uszkodzony JSON) przerywa przebieg z podaną ścieżką:
+      # to uszkodzony dowód, a nie "brak drillu". Brak pliku to legalny stan
+      # "drill jeszcze nie był" i daje świeżość 0.
+      ansible.builtin.shell: |
+        set -o pipefail
+        python3 - "{{ backup_state_file }}" <<'PY'
+        import json, math, sys
+
+        path = sys.argv[1]
+        absent = {"unixtime": 0, "duration_seconds": None, "size_bytes": None}
+
+
+        def fail(message):
+            sys.stderr.write(message + "\n")
+            raise SystemExit(3)
+
+
+        try:
+            with open(path, encoding="utf-8") as handle:
+                state = json.load(handle)
+        except FileNotFoundError:
+            print(json.dumps(absent))
+            raise SystemExit(0)
+        except (OSError, ValueError) as exc:
+            fail(f"Stan restore '{path}' nie jest czytelnym JSON-em: {exc}")
+
+        success = state.get("last_success") or {}
+        if success.get("command") != "restore":
+            print(json.dumps(absent))
+            raise SystemExit(0)
+
+        unixtime = success.get("unixtime")
+        artifact = success.get("artifact")
+        artifact = artifact if isinstance(artifact, dict) else {}
+
+
+        def duration(raw):
+            # Zero jest POMIAREM, brak pomiaru nie jest. Wartość obecna, ale
+            # niemożliwa (ujemna, NaN, nieskończoność, tekst, bool) zatrzymuje
+            # publikację: zmysłone zero wyglądałoby jak natychmiastowy drill,
+            # a NaN/inf zatruwa serię bez błędu składni.
+            if raw is None:
+                return None
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw) or raw < 0:
+                fail(f"artifact.duration_seconds w '{path}' nie jest skonczona liczba nieujemna: {raw!r}")
+            return raw
+
+
+        def size(raw):
+            if raw is None:
+                return None
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+                fail(f"artifact.size_bytes w '{path}' nie jest calkowita liczba nieujemna: {raw!r}")
+            return raw
+
+
+        print(json.dumps({
+            "unixtime": unixtime if isinstance(unixtime, int) and not isinstance(unixtime, bool) and unixtime >= 0 else 0,
+            "duration_seconds": duration(artifact.get("duration_seconds")),
+            "size_bytes": size(artifact.get("size_bytes")),
+        }))
+        PY
       args:
         executable: /bin/bash
-      register: restore_epoch
+      register: restore_state
       # `delegate_to` jest rozwiazywane PRZED `when`, wiec pusty ciag wywala
       # zadanie mimo pominiecia. Cel musi byc zawsze poprawnym hostem.
       delegate_to: "{{ restore_host if restore_host | length > 0 else inventory_hostname }}"
       changed_when: false
+      when: restore_host | length > 0
+
+    - name: "Rozpoznaj odczytane pola stanu drillu"
+      ansible.builtin.set_fact:
+        restore_measured: "{{ (restore_state.stdout | default('{}', true) | trim) | from_json }}"
       when: restore_host | length > 0
 
     # === Wygaśnięcie certyfikatu TLS (0 gdy tls.mode != full) ===
@@ -75,13 +154,50 @@
           # Wartość 0 oznacza brak potwierdzonego sukcesu.
           # HELP isa_restore_test_last_success_unixtime Unix time of the last successful restore drill.
           # TYPE isa_restore_test_last_success_unixtime gauge
-          isa_restore_test_last_success_unixtime{cluster="{{ cluster_label }}"} {{ restore_epoch.stdout | default('0') | trim | int }}
+          isa_restore_test_last_success_unixtime{cluster="{{ cluster_label }}"} {{ (restore_measured | default({})).unixtime | default(0, true) }}
           # HELP isa_tls_cert_expiry_unixtime Unix time when the monitored certificate expires.
           # TYPE isa_tls_cert_expiry_unixtime gauge
           isa_tls_cert_expiry_unixtime{cluster="{{ cluster_label }}"} {{ tls_expiry_epoch.stdout | trim | int }}
         owner: root
         group: root
         mode: "0644"
+
+    # === Mostek drillu: świeżość + pomiar w pliku runnera ===
+    # Plik zapisuje runner na wybranym donorze (z znacznika w backendzie) i ten
+    # play na galera[0] (ze stanu na hoście restore). Pisze tylko ten, kto MA
+    # potwierdzony drill: gdy stan nie niesie świeżości, plik zostaje taki, jaki
+    # jest. Wpisanie wtedy zera skasowałoby świeższy dowód donora z backendu
+    # (a `galera[0]` bywa donorem — `backup.scheduler.host` to preferencja
+    # elekcji), czyli alert "restore drill stale" zapaliłby się bez powodu.
+    - name: "Opublikuj świeżość i pomiary drillu do wspólnego pliku mostka"
+      ansible.builtin.copy:
+        dest: "{{ drill_file }}"
+        content: |
+          # Świeżość i pomiary ostatniego UDANEGO restore drillu
+          # ({{ backup_state_file }} na {{ restore_host }}).
+          # Ten sam plik zapisuje runner po backupie na hoście schedulera.
+          # Brak pomiaru (stan sprzed wprowadzenia pomiarów) = brak linii
+          # pomiaru, nigdy zero: zero jest pomiarem, a brak pomiaru nie jest.
+          {% set drill = restore_measured | default({}) %}
+          {% set drill_duration = drill.duration_seconds | default(none) %}
+          {% set drill_size = drill.size_bytes | default(none) %}
+          # HELP galera_restore_last_success_unixtime Unix time of the last successful restore drill.
+          # TYPE galera_restore_last_success_unixtime gauge
+          galera_restore_last_success_unixtime{{ drill_label_set }} {{ drill.unixtime | default(0, true) }}
+          {% if drill_duration is not none %}
+          # HELP galera_restore_last_duration_seconds Duration of the last successful restore drill, in seconds.
+          # TYPE galera_restore_last_duration_seconds gauge
+          galera_restore_last_duration_seconds{{ drill_label_set }} {{ '%.3f' | format(drill_duration) }}
+          {% endif %}
+          {% if drill_size is not none %}
+          # HELP galera_restore_last_size_bytes Size of the encrypted artifact restored by the last successful drill, in bytes.
+          # TYPE galera_restore_last_size_bytes gauge
+          galera_restore_last_size_bytes{{ drill_label_set }} {{ drill_size }}
+          {% endif %}
+        owner: root
+        group: root
+        mode: "0644"
+      when: (restore_measured | default({})).unixtime | default(0, true) | int > 0
 
     # Bramki cyklu zycia mowia regulom alertowym, CZY dana swiezosc jest w ogole
     # wymagana. Publikowal je f11_node_exporter.yml, ale `hosts:` tamtego playa

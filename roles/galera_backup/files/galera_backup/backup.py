@@ -26,6 +26,8 @@ from .common import (
     MetricsManager,
     _finalize_success_cleanup,
     _record_pre_lock_failure,
+    discard_metric_file,
+    drill_metric_path,
     get_storage_backend,
     last_success_unixtime,
     publish_drill_freshness,
@@ -41,7 +43,7 @@ from .locking import LockManager, resolve_lock_path
 from .runner import CommandRunner, SecretRedactor
 from .secrets import redactable_secret_values, sensitive_secret_values
 from .state import EventManager, StateManager
-from .storage.artifacts import ArtifactSet, drill_marker_unixtime
+from .storage.artifacts import ArtifactSet, drill_marker_measurements, drill_marker_unixtime
 from .textutil import sanitize_cluster_name
 
 
@@ -523,6 +525,20 @@ def run_backup(
                     "metrics.discard_failure",
                     {"error_code": metrics_exc.code, "message": metrics_exc.public_message},
                 )
+            # Ten sam los musi spotkac plik mostka drillu. Niesie te same serie
+            # (`galera_restore_last_*`) i ma jednego producenta: wezel, ktory w
+            # danym przebiegu publikuje metryki. Gdyby zostal, po przeniesieniu
+            # donora node_exporter serwowalby na tym wezle serie nieaktualna
+            # wzgledem swiezosci publikowanej przez nowego producenta.
+            try:
+                discard_metric_file(
+                    drill_metric_path(cfg.paths.metric_file.parent, cluster_name)
+                )
+            except BackupError as bridge_exc:
+                event_mgr.emit(
+                    "metrics.discard_failure",
+                    {"error_code": bridge_exc.code, "message": bridge_exc.public_message},
+                )
             # Retencja nalezy do KOORDYNATORA, nie do donora: gdyby biegla tylko
             # w sciezce backupu, kazde przejecie backupu przez inny wezel
             # zatrzymywaloby kasowanie wygaslych kopii az do powrotu preferencji.
@@ -727,15 +743,58 @@ def run_backup(
         # w backendzie, zeby alert ISC-47 widzial realne wykonanie drillu, a nie
         # date ostatniego uruchomienia Ansible. Jak retencja wyzej: awaria mostka
         # jest raportowana zdarzeniem i NIGDY nie degraduje udanego backupu.
+        #
+        # Swiezosc i pomiary pochodza z JEDNEGO odczytu znacznika — inaczej seria
+        # `last_success_unixtime` i seria `last_size_bytes` moglyby opisac dwa
+        # rozne drille (odczyt pomiedzy zapisami). Znacznik v1 nie ma pomiarow i
+        # wtedy obie metryki sa POMIJANE, a nie zerowane.
         try:
             marker = backend.read_drill_marker()
-            publish_drill_freshness(
-                cfg.paths.metric_file.parent / f"galera_restore_drill-{cluster_name}.prom",
-                cfg.metric_cluster_label,
-                cluster_name,
-                b_type,
-                drill_marker_unixtime(marker, cluster_name, "backend drill marker") if marker else 0,
+            marker_source = "backend drill marker"
+            drill_unixtime, drill_duration, drill_size = (
+                (
+                    drill_marker_unixtime(marker, cluster_name, marker_source),
+                    *drill_marker_measurements(marker, cluster_name, marker_source),
+                )
+                if marker
+                else (0, None, None)
             )
+            # ZNANY, POZOSTAJACY RISK (swiadomie nie rozwiazywany tutaj): gdy
+            # `write_drill_marker` padnie dla NAJNOWSZEGO drillu, w backendzie
+            # zostaje znacznik POPRZEDNIEGO (starszy, ale poprawny, wiec
+            # przechodzi walidacje) i ten mostek opublikuje jego unixtime.
+            # Jesli F11 zdazylo juz zapisac swiezsza wartosc do tego samego
+            # pliku, mostek ja cofnie. Rozstrzyganie "ktory dowod jest nowszy"
+            # wymagaloby parsowania tekstu Prometheusa albo osobnej maszynerii
+            # stanu — poza zakresem tego pakietu. Propagacja jest wiec
+            # zdefiniowana jako para (znacznik w backendzie, metryka swiezosci):
+            # mostek jest autorytetem tylko wtedy, gdy MA potwierdzony znacznik.
+            #
+            # BRAK POTWIERDZONEGO ZNACZNIKA NIE NADPISUJE ISTNIEJACEGO PLIKU.
+            # Ten sam plik zapisuje play F11 na galera[0], gdy drill udal sie na
+            # hoscie `restore`. Sciezka bez znacznika jest REALNA: `write_drill_marker`
+            # po udanym drillu tylko raportuje zdarzenie `drill_marker.failure`
+            # i samego drillu nie degraduje, wiec swiezy sukces trafia do
+            # `state.json` przy nieobecnym znaczniku. Wpisanie tu zera skasowaloby
+            # ten dowod i zapalilo alert ISC-47 mimo udanego drillu. Zero nie
+            # niesie zreszta zadnej informacji, ktorej nie niesie plik nieobecny:
+            # regula bierze `max` po serii, wiec nieobecna seria jest rownowazna
+            # brakowi dowodu, a stara seria — dowodowi starszemu.
+            if drill_unixtime > 0:
+                publish_drill_freshness(
+                    drill_metric_path(cfg.paths.metric_file.parent, cluster_name),
+                    cfg.metric_cluster_label,
+                    cluster_name,
+                    b_type,
+                    drill_unixtime,
+                    duration_seconds=drill_duration,
+                    size_bytes=drill_size,
+                )
+            else:
+                event_mgr.emit(
+                    "drill_freshness.skipped",
+                    {"reason": "no_confirmed_backend_marker"},
+                )
         except BackupError as drill_exc:
             event_mgr.emit(
                 "drill_freshness.failure",

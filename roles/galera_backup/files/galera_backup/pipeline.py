@@ -38,6 +38,8 @@ from .common import (
     MetricsManager,
     _finalize_success_cleanup,
     _record_pre_lock_failure,
+    discard_metric_file,
+    drill_metric_path,
     get_module_redactor,
     get_storage_backend,
     publish_drill_freshness,
@@ -67,6 +69,7 @@ from .storage.artifacts import (
     ArtifactSet,
     PublishedArtifact,
     build_drill_marker,
+    drill_marker_measurements,
     drill_marker_unixtime,
 )
 from .storage.filesystem import FilesystemBackend, SMBBackend
@@ -89,7 +92,8 @@ __all__ = [
     "RunConfig", "S3Backend", "SMBBackend", "SecretRedactor", "EventManager",
     "StateManager", "assert_scheduler_is_not_writer", "atomic_write",
     "build_drill_marker", "clear_datadir", "combine_failures",
-    "drill_marker_unixtime", "elect_backup_donor", "escape_metric_label",
+    "discard_metric_file", "drill_marker_measurements", "drill_marker_unixtime",
+    "drill_metric_path", "elect_backup_donor", "escape_metric_label",
     "file_sha256_and_size", "get_module_redactor", "get_storage_backend",
     "has_retention_credential", "is_mariadb_version_compatible",
     "is_safe_tar_member", "load_run_config", "load_secrets", "main",

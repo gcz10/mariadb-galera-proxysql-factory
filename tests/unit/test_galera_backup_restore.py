@@ -165,7 +165,8 @@ class GaleraBackupRestoreTests(unittest.TestCase):
                 "Backend belongs to another cluster",
             )
             with patch("socket.gethostname", return_value="rnode1"):
-                with patch.object(restore, "get_storage_backend", return_value=backend):
+                with patch.object(restore, "get_storage_backend", return_value=backend), \
+                        patch.object(restore.time, "monotonic", side_effect=[10.0, 12.5]):
                     with self.assertRaises(pipeline.BackupError):
                         pipeline.run_restore(
                             config_path=cfg_path,
@@ -178,6 +179,12 @@ class GaleraBackupRestoreTests(unittest.TestCase):
             state = json.loads((cluster_dir / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(state["last_failure"]["command"], "restore")
             self.assertEqual(state["last_failure"]["error_code"], "E_OWNER_CONFLICT")
+            metrics = (td_path / "galera_restore-claude-r10b.prom").read_text()
+            duration_line = next(
+                line for line in metrics.splitlines()
+                if line.startswith("galera_restore_last_duration_seconds{")
+            )
+            self.assertEqual(float(duration_line.rsplit(" ", 1)[1]), 2.5)
 
             backend.close.side_effect = pipeline.BackupError(
                 "E_STORAGE",

@@ -28,6 +28,7 @@ from typing import Any, Optional
 from .errors import BackupError
 from .textutil import escape_metric_label
 from .fsutil import atomic_write, remove_sensitive_work_dir
+from .storage.artifacts import validated_duration_seconds, validated_size_bytes
 from .storage.filesystem import FilesystemBackend, SMBBackend
 from .storage.s3 import S3Backend
 from .state import EventManager, StateManager
@@ -123,15 +124,38 @@ class MetricsManager:
         porzucone zero i alert palil sie mimo zdrowych kopii (zmierzone
         2026-09-12). Wezel, ktory nie zostal donorem, zabiera swoj plik ze soba.
         """
-        try:
-            self.metric_path.unlink()
-        except FileNotFoundError:
-            return
-        except OSError as exc:
-            raise BackupError(
-                "E_METRICS",
-                f"Failed to remove the stale metric file {self.metric_path}: {exc}",
-            ) from exc
+        discard_metric_file(self.metric_path)
+
+
+def discard_metric_file(metric_path: Path) -> None:
+    """Usun plik textfile, ktory nie nalezy juz do producenta z TEGO wezla.
+
+    Jeden wspolny mechanizm dla metryki kopii i mostka swiezosci drillu: oba
+    pliki opisuja KLASTER i oba maja dokladnie jednego producenta w przebiegu.
+    Porzucony plik zostaje na poprzednim wezle po przeniesieniu donora i
+    node_exporter serwuje wtedy dwie sprzeczne serie. Brak pliku to normalny
+    stan kandydata, ktory nigdy producentem nie byl — nie blad.
+    """
+    try:
+        metric_path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise BackupError(
+            "E_METRICS",
+            f"Failed to remove the stale metric file {metric_path}: {exc}",
+        ) from exc
+
+
+def drill_metric_path(metric_dir: Path, cluster_name: str) -> Path:
+    """Plik textfile mostka swiezosci drillu — JEDNA nazwa dla obu producentow.
+
+    Mostek publikuje runner na hoscie schedulera (po backupie), a sciezka
+    Ansible (F11) na galera[0]. Gdyby kazdy pisal do wlasnego pliku, obie serie
+    tej samej metryki trafialyby na ten sam host i Prometheus odrzucilby caly
+    scrape jako duplikat.
+    """
+    return metric_dir / f"galera_restore_drill-{cluster_name}.prom"
 
 
 def publish_drill_freshness(
@@ -140,8 +164,10 @@ def publish_drill_freshness(
     logical_cluster: str,
     backend_label: str,
     last_success_unixtime: int,
+    duration_seconds: Optional[float] = None,
+    size_bytes: Optional[int] = None,
 ) -> None:
-    """Przepisz swiezosc restore drillu ze znacznika backendu do textfile collectora.
+    """Przepisz swiezosc (i pomiary) restore drillu do textfile collectora.
 
     Wolane z hosta SCHEDULERA podczas backupu, bo to on jest scrapowany. Sam drill
     biegnie na izolowanym hoscie `restore`, ktorego nikt nie odpytuje — bez tego
@@ -150,12 +176,19 @@ def publish_drill_freshness(
     Nazwa metryki jest CELOWO ta sama, ktorej uzywa runner na hoscie restore
     (`galera_restore_last_success_unixtime`): regula alertu bierze `max` po serii,
     wiec obie sciezki uruchomienia — cron i Ansible — trafiaja w ten sam licznik.
+
+    `duration_seconds`/`size_bytes` sa OPCJONALNE i domyslnie `None`. `None`
+    znaczy "pomiaru nie ma" (znacznik v1 albo wpis sprzed v2) i metryka jest
+    wtedy POMIJANA — nie zapisywana jako 0. Zero jest pomiarem, a zmyslone zero
+    wygladaloby jak natychmiastowy, pusty drill. Wartosc podana jest walidowana
+    i bledna przerywa publikacje (fail closed), zamiast zatruc serie.
     """
     labels = (
         f'cluster="{escape_metric_label(cluster_label)}",'
         f'logical_cluster="{escape_metric_label(logical_cluster)}",'
         f'backend="{escape_metric_label(backend_label)}"'
     )
+    source = str(metric_path)
     content = (
         "# Zrodlo: znacznik restore drill w backendzie kopii (patrz storage/artifacts.py).\n"
         "# Wartosc 0 oznacza brak potwierdzonego drillu dla tego klastra.\n"
@@ -163,6 +196,20 @@ def publish_drill_freshness(
         "# TYPE galera_restore_last_success_unixtime gauge\n"
         f"galera_restore_last_success_unixtime{{{labels}}} {int(last_success_unixtime)}\n"
     )
+    if duration_seconds is not None:
+        value = validated_duration_seconds(duration_seconds, source)
+        content += (
+            "# HELP galera_restore_last_duration_seconds Duration of the last successful restore drill, in seconds.\n"
+            "# TYPE galera_restore_last_duration_seconds gauge\n"
+            f"galera_restore_last_duration_seconds{{{labels}}} {value:.3f}\n"
+        )
+    if size_bytes is not None:
+        value = validated_size_bytes(size_bytes, source)
+        content += (
+            "# HELP galera_restore_last_size_bytes Size of the encrypted artifact restored by the last successful drill, in bytes.\n"
+            "# TYPE galera_restore_last_size_bytes gauge\n"
+            f"galera_restore_last_size_bytes{{{labels}}} {value}\n"
+        )
     atomic_write(metric_path, content, mode=0o644)
     restore_default_context(metric_path)
 
