@@ -24,8 +24,8 @@ mariadb:
   # Pelna wersja z prefiksem: repozytorium serii trzyma tylko najnowsza latke,
   # wiec przypiecie do "11.4" nie jest przypieciem (patrz komentarz w EL9).
   repo_setup_args: "--mariadb-server-version=mariadb-12.3.3"
-  # Skrypt repo_setup jest OS-agnostyczny — ta sama suma co w lockfile EL9 (v2026-06-30, 44184B).
-  repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"
+  # Skrypt repo_setup jest OS-agnostyczny — ta sama suma co w lockfile EL9 (v2026-09-15, 44285B).
+  repo_setup_sha256: "b54c87edfe81b9837ef44a4a4f39383dd8df32776e6a18c0743a5d3ece044ac3"
   galera_provider: "galera-4"
   galera_provider_version: "26.4.27"
   galera_provider_rpm_release: "1.el10"

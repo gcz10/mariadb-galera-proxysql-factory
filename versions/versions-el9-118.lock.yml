@@ -33,7 +33,7 @@ mariadb:
   rpm_release: "1.el9"           # zweryfikowane w dnf probe: MariaDB-server-11.8.9-1.el9
   repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
   repo_setup_args: "--mariadb-server-version=mariadb-11.8.9"
-  repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"
+  repo_setup_sha256: "b54c87edfe81b9837ef44a4a4f39383dd8df32776e6a18c0743a5d3ece044ac3"
   galera_provider: "galera-4"
   galera_provider_version: "26.4.27"
   galera_provider_rpm_release: "1.el9"

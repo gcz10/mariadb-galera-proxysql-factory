@@ -43,6 +43,10 @@ terraform/**/*.tfstate.backup
 terraform/**/*.tfplan
 terraform/**/.teardown-vmids
 terraform/**/.teardown-protected-vmids
+# Archiwalne rooty (docs/records/archives/terraform-*) leza poza `terraform/`,
+# wiec wzorce wyzej ich nie lapia: katalog .terraform (26 MB binarki providera
+# na jeden root) trafial do commita w kazdym archiwum tej generacji.
+docs/records/archives/*/.terraform/
 # SSH known_hosts - artefakt klienta
 clusters/**/known_hosts
 clusters/*/known_hosts.old
@@ -50,6 +54,11 @@ platform/**/known_hosts
 platform/*/known_hosts.old
 # Wybrany wezel bootstrap po cold recovery (artefakt playbooku, odczytuje go Makefile)
 clusters/*/recover-bootstrap-node
+# Ustawienia operatora na jego wlasnej stacji (np. interpreter localhost na macOS).
+# Kontrakt repozytorium celowo nie przypina interpretera dla implicit localhost:
+# ansible.cfg zostawia `interpreter_python = auto_silent`, a playbooki generyczne
+# nie moga zakladac systemu operatora. Kto potrzebuje pinu, trzyma go tutaj.
+playbooks/host_vars/localhost.yml
 
 # Isolated execution worktrees
 .worktrees/

@@ -24,7 +24,7 @@ mariadb:
   # 11.4.13 w trakcie budowy, wiec czesc wezlow dostala 11.4.12, a host
   # dolaczany chwile pozniej juz nie mial jej skad wziac.
   repo_setup_args: "--mariadb-server-version=mariadb-11.4.13"
-  repo_setup_sha256: "7325ac7755809ca3312b446bd832542421699298f25b701f9a111bb42df0c7c1"  # audit#6: integralność skryptu (v2026-06-30, 44184B)
+  repo_setup_sha256: "b54c87edfe81b9837ef44a4a4f39383dd8df32776e6a18c0743a5d3ece044ac3"  # audit#6: integralność skryptu (v2026-09-15, 44285B)
   galera_provider: "galera-4"
   galera_provider_version: "26.4.27"   # audit#12: galera-4-26.4.27-1.el9
   galera_provider_rpm_release: "1.el9"
