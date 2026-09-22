@@ -38,6 +38,10 @@ PASS: brak kolizji w sprawdzonych wymiarach (raportuje, ktore sprawdzenia byly a
 FAIL: kolizja adresu z hypervisorem, innym klastrem, wlasnym VIP-em albo rejestrem.
 """
 
+# Adnotacje leniwie: sonda ma wydac werdykt o kolizji adresow, a nie TypeError
+# na starszym interpreterze.
+from __future__ import annotations
+
 import glob
 import ipaddress
 import os

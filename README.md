@@ -32,7 +32,7 @@ i PMM niezależnie od pochodzenia maszyn.
 
 ## Zależności deweloperskie
 
-Fabryka wystarcza z SSH i systemd, ale **testy i bramki statyczne** (529 testów
+Fabryka wystarcza z SSH i systemd, ale **testy i bramki statyczne** (866 testów
 jednostkowych, walidatory, `pyflakes`, `ansible-lint`) potrzebują pakietów
 Pythona z przypiętymi wersjami:
 
@@ -43,6 +43,15 @@ python3 -m pip install -r requirements-dev.txt
 Te same piny instaluje CI (`.github/workflows/ci.yml`), więc świeży klon +
 `python3 -m unittest discover tests/unit` przechodzi tam, gdzie przechodzi
 w CI — bez zgadywania, czego brakuje.
+
+**Środowisko deweloperskie wymaga Pythona 3.12.** Nie z powodu sond — te są
+pisane zgodnie wstecz (adnotacje wykonywane leniwie) i uruchomią się także na
+starszym interpreterze — ale dlatego, że `ansible-core==2.21.3` deklaruje na
+PyPI `requires_python: >=3.12`, więc na 3.9 `pip install -r requirements-dev.txt`
+nie zainstaluje ani playbookowego toolchainu, ani `ansible-lint`. CI pinuje
+3.12. `make` bierze pierwszy `python3` z `PATH`, więc na macOS z systemowym 3.9
+uruchamiaj bramki tym samym interpreterem, w którym zainstalowałeś zależności
+deweloperskie — inaczej zobaczysz błąd środowiska, a nie werdykt sondy.
 
 ### Własne hosty, krok po kroku
 

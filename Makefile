@@ -1039,7 +1039,10 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 # NIEZMIENNE: nie wypisuj sondy z bramki i nie zmieniaj progu po cichu.
 # Powód i historia: ISA.md, ISC-68.
 # 2026-09-22: osobna zgoda operatora dla nowej cassiopeiav18-r9: pozostaje
-# 4096M mimo wymogu 4273M zmierzonego podczas budowy. Sonda nadal fail-closed;
-# zaakceptowane ryzyko NIE zmienia FAIL w PASS. Stara v17 jest zarchiwizowana.
+# 4096M mimo DWOCH pomiarow tej generacji — 4273M podczas budowy (2489129 B/s)
+# i 4546M w pelnej bramie (2647889 B/s, maksimum z 5 rund). Obowiazuje wyzszy.
+# Sonda nadal fail-closed; zaakceptowane ryzyko NIE zmienia FAIL w PASS, wiec
+# ta bramka na v18 KONCZY SIE NIEZEREM i banner ponizej nie zostaje wypisany.
+# Stara v17 jest zarchiwizowana (docs/records/archives/).
 	$(TARGET_ENV) tests/lab/probe-gcache.py
-	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone"
+	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone (zaakceptowane wyjatki ISC-68 musza byc wypisane przy klastrze w ISA.md)"
