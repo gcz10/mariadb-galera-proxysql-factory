@@ -37,12 +37,37 @@
           }
       register: monitoring_logrotate_config
 
-    - name: "Sprawdź składnię polityki logrotate"
+    # MariaDB-server instaluje wlasna polityke /etc/logrotate.d/mariadb dla tego
+    # samego /var/log/mariadb/*.log. Dwie reguly na jeden plik to dla logrotate
+    # blad ("mariadb:9 duplicate log entry"): druga jest pomijana, a
+    # logrotate.service konczy sie `failed` CODZIENNIE — zmierzone 2026-09-23 na
+    # c18db1 i o17db1 (10 porazek z rzedu). Rotacja zachodzila wg reguly ISA,
+    # ale jednostka w stanie failed zaslania kazda PRAWDZIWA awarie rotacji.
+    # Wlascicielem logu bledow (@@log_error = /var/log/mariadb/mariadb.log) jest
+    # regula wyzej; plik producenta zostaje jako pusty szkielet, a nie jest
+    # kasowany: to %config(noreplace), wiec aktualizacja RPM zostawi nasza tresc
+    # i odlozy swoja jako .rpmnew (logrotate ignoruje to rozszerzenie), zamiast
+    # odtworzyc duplikat, co zrobilaby po usunieciu pliku.
+    - name: "Wylacz polityke producenta dublujaca log bledow MariaDB"
+      ansible.builtin.copy:
+        dest: /etc/logrotate.d/mariadb
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Zarzadzane przez playbooks/f11_log_lifecycle.yml.
+          # Rotacje /var/log/mariadb/*.log prowadzi /etc/logrotate.d/isa-database-monitoring;
+          # druga regula dla tego samego pliku jest dla logrotate bledem konfiguracji.
+
+    # Walidujemy CALA konfiguracje, nie tylko nasz plik. Sprawdzanie samego
+    # isa-database-monitoring przepuscilo duplikat z pliku producenta: kazdy
+    # plik z osobna byl poprawny, zepsute bylo ich zestawienie.
+    - name: "Sprawdź składnię pełnej konfiguracji logrotate"
       ansible.builtin.command:
         argv:
           - logrotate
           - --debug
-          - /etc/logrotate.d/isa-database-monitoring
+          - /etc/logrotate.conf
       register: monitoring_logrotate_debug
       changed_when: false
 

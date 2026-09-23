@@ -108,14 +108,114 @@
         owner: root
         group: root
         mode: "0644"
-      notify: "ProxySQL - daemon-reload po zmianie limitow systemd"
+      notify: "ProxySQL - daemon-reload po zmianie drop-in systemd"
+
+    # Pidfile ProxySQL lezy w TRWALYM katalogu danych (/var/lib/proxysql), nie
+    # w /run. Czyste zatrzymanie go usuwa (systemd sprzata PIDFile=), ale utrata
+    # zasilania zostawia stary numer PID. libdaemon sprawdza wtedy wylacznie
+    # `kill(pid, 0)` i traktuje EPERM jako "zyje" — ProxySQL dziala jako
+    # uzytkownik `proxysql`, wiec DOWOLNY proces roota, ktory w nowym boocie
+    # dostal ten numer, blokuje start: "Daemon already running on PID file N".
+    # Zmierzone 2026-09-23 na x17p2 po 14 h bez zasilania hypervisora; tak samo
+    # odtworzone pidfile'em z PID 1 (identyczny komunikat, rc=1).
+    #
+    # Straznik sprawdza TOZSAMOSC, nie tylko zycie procesu: pidfile wskazujacy
+    # na dzialajacy `proxysql` zostaje (wtedy odmowa startu jest poprawna),
+    # kazdy inny — martwy numer, obcy proces, smieci — jest usuwany. Prefiks `+`
+    # uruchamia komende z pelnymi uprawnieniami mimo User=proxysql. `$$` to
+    # doslowny `$` dla powloki (systemd podstawia pojedynczy `$`).
+    #
+    # To NIE jest samoleczenie: decyzja `Restart=no` (tests/lab/chaos-proxysql-
+    # failover.py) zostaje nietknieta — crash petla nadal nie jest maskowana,
+    # a alert isa-shared-proxysql-down nadal mowi prawde. Zmienia sie wylacznie
+    # to, ze pierwszy start po utracie zasilania przestaje zalezec od tego, czy
+    # stary numer PID trafil na inny proces.
+    - name: "ProxySQL - drop-in: straznik osieroconego pidfile po utracie zasilania"
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          ExecStartPre=+/bin/sh -c 'p=$$(cat /var/lib/proxysql/proxysql.pid 2>/dev/null) || exit 0; [ "$$(cat /proc/$$p/comm 2>/dev/null)" = proxysql ] || rm -f /var/lib/proxysql/proxysql.pid'
+        dest: /etc/systemd/system/proxysql.service.d/stale-pidfile.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: "ProxySQL - daemon-reload po zmianie drop-in systemd"
+
+    # === Cykl zycia logu ProxySQL (ISC-48 dla warstwy wspolnej) ===
+    # f11_log_lifecycle.yml obejmuje wylacznie galera:restore, wiec na wezlach
+    # ProxySQL obowiazywala jedynie polityka z RPM (tygodniowa, bez `su`) i nie
+    # zadzialala ANI RAZU: log rosl od 12 wrzesnia do 95 MB. Dwie bariery,
+    # obie zmierzone na x17p1/x17p2:
+    #   1. DAC — katalog danych to 0700 proxysql, a logrotate jako root nie
+    #      przechodzi: "error opening ... Permission denied" 13 i 20 wrzesnia,
+    #      bez AVC. Leczy to `su proxysql proxysql` (otwarcie jako wlasciciel).
+    #   2. SELinux — sam `su` NIE wystarcza: logrotate.service dziala w domenie
+    #      logrotate_t, a plik ma etykiete katalogu (var_lib_t). Zmierzone
+    #      2026-09-23: AVC `denied { write } comm="logrotate" name="proxysql.log"`.
+    #      Log dostaje wiec etykiete var_log_t — te sama, co kazdy log w /var/log;
+    #      ProxySQL (bez wlasnej polityki, domena unconfined_service_t) pisze do
+    #      niej dalej. Regula obejmuje tez obrocone kopie (proxysql.log-DATA.gz).
+    # Weryfikowac wylacznie przez `systemctl start logrotate.service`: reczny
+    # `logrotate` z sesji roota dziala jako unconfined_t i obchodzi bariere 2.
+    - name: "SELinux - etykieta var_log_t dla logu ProxySQL (rotacja przez logrotate_t)"
+      community.general.sefcontext:
+        target: "/var/lib/proxysql/proxysql.log.*"
+        setype: var_log_t
+        state: present
+      when: ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    - name: "SELinux - przywroc kontekst logu ProxySQL"
+      ansible.builtin.command:
+        argv: [restorecon, -RFv, /var/lib/proxysql]
+      register: proxysql_log_restorecon
+      changed_when: proxysql_log_restorecon.stdout | length > 0
+      when: ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled'
+
+    # Nadpisujemy plik producenta zamiast dodawac drugi: dwie reguly dla jednej
+    # sciezki to dla logrotate blad konfiguracji. To %config(noreplace), wiec
+    # aktualizacja RPM zostawi te tresc i odlozy swoja jako .rpmnew (logrotate
+    # ignoruje to rozszerzenie). Parametry jak w f11: daily / 14 / maxsize 100M.
+    - name: "ProxySQL - rotacja logu jako wlasciciel pliku"
+      ansible.builtin.copy:
+        dest: /etc/logrotate.d/proxysql
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Zarzadzane przez playbooks/platform_install.yml (ISC-48).
+          /var/lib/proxysql/proxysql.log {
+              su proxysql proxysql
+              daily
+              rotate 14
+              maxsize 100M
+              missingok
+              notifempty
+              compress
+              delaycompress
+              dateext
+              copytruncate
+          }
+
+    - name: "ProxySQL - sprawdz skladnie pelnej konfiguracji logrotate"
+      ansible.builtin.command:
+        argv:
+          - logrotate
+          - --debug
+          - /etc/logrotate.conf
+      changed_when: false
+
+    - name: "ProxySQL - wlacz systemowy timer rotacji logow"
+      ansible.builtin.systemd:
+        name: logrotate.timer
+        enabled: true
+        state: started
 
     # === Tuning OS wezlow warstwy wspolnej (sysctl, THP, chrony, qemu-guest-agent) ===
     - name: "Tuning OS i komponenty wspólne"
       ansible.builtin.include_tasks: tasks/os_tuning.yml
 
   handlers:
-    - name: "ProxySQL - daemon-reload po zmianie limitow systemd"
+    - name: "ProxySQL - daemon-reload po zmianie drop-in systemd"
       ansible.builtin.systemd:
         daemon_reload: true
     - name: "Zastosuj parametry sysctl"
