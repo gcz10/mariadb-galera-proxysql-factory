@@ -322,11 +322,17 @@ def main() -> int:
     pmm_url_override = os.environ.get("PMM_SERVER_URL", "").strip().rstrip("/")
     pmm_url = pmm_url_override or pmm.get("server_url", "").rstrip("/")
     expected_prefix = pmm.get("cluster_name", "")
-    # Tylko para ProxySQL: `fcinfra` hostuje sam serwer PMM i figuruje tam jako
-    # wezel `pmm-server`, a nie jako `shared-fcinfra` — warstwa go nie rejestruje.
+    # Oczekiwane wezly wynikaja z DEKLARACJI `monitoring.agent_groups` platformy,
+    # tej samej, z ktorej rola pmm wybiera hosty dla lokalnego agenta. Wczesniej
+    # stala tu na sztywno sama grupa `proxysql` z uzasadnieniem, ze host infra
+    # figuruje w PMM tylko jako kontener `pmm-server`. Od 2026-09-24 xenonv17
+    # deklaruje tez `infra` (x17mon ma wlasny agent), a sonda sprawdzajaca
+    # wylacznie proxysql nie zauwazylaby, gdyby ta rejestracja zniknela.
+    agent_groups = ctx.config.get("monitoring", {}).get("agent_groups") or ["proxysql"]
     managed = {
-        ctx.host_address(host, "proxysql"): f"{expected_prefix}-{host}"
-        for host in ctx.group_hosts("proxysql")
+        ctx.host_address(host, group): f"{expected_prefix}-{host}"
+        for group in agent_groups
+        for host in ctx.group_hosts(group)
     }
     try:
         nodes = pmm_json(pmm_url, "admin", ctx.env_secret("PMM_ADMIN_PASSWORD"), "/v1/inventory/nodes", pmm)
