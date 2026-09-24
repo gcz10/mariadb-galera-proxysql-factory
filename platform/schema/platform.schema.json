@@ -136,7 +136,8 @@
       "required": [
         "nodes_expected",
         "frontend_tls",
-        "endpoint"
+        "endpoint",
+        "server_version"
       ],
       "additionalProperties": false,
       "properties": {
@@ -144,6 +145,11 @@
           "type": "integer",
           "minimum": 2,
           "description": "Wspolny endpoint serwuje CALA flote, wiec pojedynczy wezel ProxySQL bylby jednym punktem awarii wszystkich klastrow naraz — stad minimum 2."
+        },
+        "server_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-MariaDB$",
+          "description": "Wersja, ktora ProxySQL przedstawia klientom w handshake'u (mysql-server_version). Jeden endpoint serwuje wszystkich najemcow, wiec to JEDNA wartosc dla calej floty — deklaruj najstarsza wersje MariaDB wsrod najemcow, w formacie dokladnie takim, jak podaje ja sam MariaDB (np. '11.4.13-MariaDB'). Bez deklaracji zostawal stock z /etc/proxysql.cnf, '5.5.30', czyli klient widzial MySQL 5.5 przed backendem 11.x/12.x. SELECT VERSION() i tak idzie do backendu (mysql-select_version_forwarding=3)."
         },
         "frontend_tls": {
           "type": "object",

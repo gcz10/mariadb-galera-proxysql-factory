@@ -259,6 +259,32 @@
       no_log: true
       changed_when: true
 
+    # Wersja w handshake'u to zmienna GLOBALNA instancji, wspolna dla wszystkich
+    # najemcow — dlatego nalezy do platformy. Bez tego obowiazywal stock z
+    # /etc/proxysql.cnf ('5.5.30'): klient laczacy sie przez VIP widzial MySQL
+    # 5.5, a backend odpowiada '11.4.13-MariaDB' / '12.3.3-MariaDB' (zmierzone
+    # 2026-09-24 surowym handshake'iem na 3306 i 6033). Zmienna jest dynamiczna
+    # (dokumentacja mysql-variables), wiec LOAD wystarcza — bez restartu.
+    - name: "Sprawdź wersję przedstawianą klientom"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          SELECT COUNT(*) FROM runtime_global_variables
+          WHERE variable_name='mysql-server_version' AND variable_value='{{ proxysql.server_version }}';
+      register: current_server_version
+      changed_when: false
+
+    - name: "Ustaw wersję przedstawianą klientom (mysql-server_version)"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          UPDATE global_variables SET variable_value='{{ proxysql.server_version }}'
+          WHERE variable_name='mysql-server_version';
+          LOAD MYSQL VARIABLES TO RUNTIME;
+          SAVE MYSQL VARIABLES TO DISK;
+      when: current_server_version.stdout | trim != '1'
+      changed_when: true
+
     # === Certyfikat FRONTENDU wspolnego endpointu ===
     #
     # Do tej pory ProxySQL serwowal aplikacjom auto-cert

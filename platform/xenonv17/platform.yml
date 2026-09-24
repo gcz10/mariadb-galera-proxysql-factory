@@ -13,6 +13,8 @@ versions:
   lock_file: "versions/versions-el9-123.lock.yml"
 proxysql:
   nodes_expected: 2
+  # Najstarszy najemca: cassiopeiav18-r9 (11.4.13); orionv17-r10 ma 12.3.3.
+  server_version: "11.4.13-MariaDB"
   frontend_tls:
     ca_reference: "pki/xenonv17/ca.pem"
     certificate_reference: "pki/xenonv17/server-cert.pem"
