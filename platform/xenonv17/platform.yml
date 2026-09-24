@@ -38,7 +38,11 @@ monitoring:
     ca_reference: "pki/xenonv17/ca.pem"
     credentials_revision: 1
     backup_retention: 2
-  agent_groups: ["proxysql"]
+  # `infra` = x17mon: host, na ktorym stoi sam PMM (plus MinIO i Maildev).
+  # Wezel `pmm-server` w PMM to kontener, nie maszyna — bez agentu na hoscie
+  # nie bylo metryk dysku, pamieci ani CPU maszyny, od ktorej zalezy caly
+  # monitoring i backup floty.
+  agent_groups: ["proxysql", "infra"]
   alerts:
     email: "ops@claude.local"
     folder_uid: ""
