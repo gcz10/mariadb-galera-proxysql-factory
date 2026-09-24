@@ -195,6 +195,85 @@
       no_log: true
       changed_when: true
 
+    # === ProxySQL Cluster: pary synchronizuje sam ProxySQL, nie tylko Ansible ===
+    # Do 2026-09-24 spojnosc pary zapewnial wylacznie push Ansible (serial: 1):
+    # zmiana wykonana recznie albo przerwany przebieg zostawialy wezly rozne, a
+    # f13_drift.yml umial to tylko wykryc. Dokumentacja ProxySQL Cluster: wezly
+    # porownuja sumy kontrolne co admin-cluster_check_interval_ms i po
+    # diffs_before_sync niezgodnosciach pobieraja konfiguracje od peera z nowsza
+    # epoka, z automatycznym SAVE TO DISK. Push Ansible zostaje — cluster
+    # jedynie domyka okno miedzy przebiegami.
+    #
+    # Trzy decyzje, kazda z dokumentacji cluster-variables:
+    #  1. Poswiadczenie: `admin-cluster_username/password` MUSI byc na liscie
+    #     admin-admin_credentials kazdego wezla. Uzywamy istniejacej zdalnej
+    #     tozsamosci (proxysql_remote_admin_user, ten sam sekret co admin) — ma
+    #     juz ten poziom uprawnien i dostep sieciowy; osobne konto nie dawaloby
+    #     mniejszych praw, tylko drugi sekret do rotacji.
+    #  2. `admin-cluster_mysql_servers_sync_algorithm = 2`: synchronizuj wylacznie
+    #     konfiguracje (mysql_servers_v2), NIE stan runtime. Przy Galerze stan
+    #     runtime (ktory backend jest writerem/offline) wylicza LOKALNY monitor
+    #     kazdego wezla; domyslne 1 kopiowaloby cudza decyzje monitora.
+    #  3. `admin-checksum_admin_variables = false`: zmienne admina (interfejsy,
+    #     restapi, poswiadczenia) zostaja lokalne i zarzadzane przez Ansible.
+    #     Wylaczenie bramki zeruje prog synchronizacji tego modulu.
+    - name: "ProxySQL Cluster - sprawdź zmienne admina"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          SELECT COUNT(*) FROM runtime_global_variables WHERE
+             (variable_name='admin-cluster_username' AND variable_value='{{ proxysql_remote_admin_user }}')
+          OR (variable_name='admin-cluster_password' AND variable_value='{{ proxysql_admin_password_sql }}')
+          OR (variable_name='admin-cluster_mysql_servers_sync_algorithm' AND variable_value='2')
+          OR (variable_name='admin-checksum_admin_variables' AND variable_value='false');
+      register: proxysql_cluster_vars_check
+      changed_when: false
+      no_log: true
+
+    - name: "ProxySQL Cluster - ustaw zmienne admina"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          UPDATE global_variables SET variable_value='{{ proxysql_remote_admin_user }}' WHERE variable_name='admin-cluster_username';
+          UPDATE global_variables SET variable_value='{{ proxysql_admin_password_sql }}' WHERE variable_name='admin-cluster_password';
+          UPDATE global_variables SET variable_value='2' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm';
+          UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-checksum_admin_variables';
+          LOAD ADMIN VARIABLES TO RUNTIME;
+          SAVE ADMIN VARIABLES TO DISK;
+      when: proxysql_cluster_vars_check.stdout | trim != '4'
+      no_log: true
+      changed_when: true
+
+    # Lista czlonkow (core nodes) z inwentarza: wszystkie wezly grupy proxysql,
+    # lacznie z samym soba — tak opisuje konfiguracje dokumentacja (kazdy core
+    # node ma wszystkich w proxysql_servers).
+    - name: "ProxySQL Cluster - sprawdź listę członków"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: >-
+          SELECT COALESCE(GROUP_CONCAT(hostname || ':' || port, ','), '')
+          FROM (SELECT hostname, port FROM runtime_proxysql_servers ORDER BY hostname, port);
+      register: proxysql_cluster_members
+      changed_when: false
+
+    - name: "ProxySQL Cluster - ustaw listę członków"
+      vars:
+        proxysql_cluster_expected: >-
+          {{ groups['proxysql'] | map('extract', hostvars, 'proxysql_node_address')
+             | sort | map('regex_replace', '$', ':6032') | join(',') }}
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          DELETE FROM proxysql_servers;
+          {% for host in groups['proxysql'] %}
+          INSERT INTO proxysql_servers (hostname, port, weight, comment)
+          VALUES ('{{ hostvars[host].proxysql_node_address }}', 6032, 0, '{{ host }}');
+          {% endfor %}
+          LOAD PROXYSQL SERVERS TO RUNTIME;
+          SAVE PROXYSQL SERVERS TO DISK;
+      when: proxysql_cluster_members.stdout | trim != (proxysql_cluster_expected | trim)
+      changed_when: true
+
     # Straznik writera w backupie najemcy dostaje WYLACZNIE to konto. Runner jest
     # cronem na wezle Galery, wiec jego sekret lezy na dysku bazy — poprzednio
     # bylo to haslo puli read-write, czyli przejecie jednego wezla dawalo zapis
