@@ -144,11 +144,15 @@
     # === Cykl zycia logu ProxySQL (ISC-48 dla warstwy wspolnej) ===
     # f11_log_lifecycle.yml obejmuje wylacznie galera:restore, wiec na wezlach
     # ProxySQL obowiazywala jedynie polityka z RPM (tygodniowa, bez `su`) i nie
-    # zadzialala ANI RAZU: log rosl od 12 wrzesnia do 95 MB. Dwie bariery,
-    # obie zmierzone na x17p1/x17p2:
+    # zadzialala ANI RAZU: log rosl od 12 wrzesnia do 95 MB. Dwie bariery:
     #   1. DAC — katalog danych to 0700 proxysql, a logrotate jako root nie
     #      przechodzi: "error opening ... Permission denied" 13 i 20 wrzesnia,
-    #      bez AVC. Leczy to `su proxysql proxysql` (otwarcie jako wlasciciel).
+    #      bez AVC. Przyczyna uprawnien DAC jest [INFERENCE]: brak AVC moze
+    #      tez wynikac z dontaudit w polityce. Zmierzona wariant potwierdzajacy
+    #      to `su proxysql proxysql` (otwarcie jako wlasciciel) — po nim dalszy
+    #      przebieg poszedl do warstwy SELinux (patrz 2), wiec DAC jest
+    #      pokonana w praktyce, chociaz mechanizm nie zostal rozdzielony
+    #      eksperymentem od dontaudit.
     #   2. SELinux — sam `su` NIE wystarcza: logrotate.service dziala w domenie
     #      logrotate_t, a plik ma etykiete katalogu (var_lib_t). Zmierzone
     #      2026-09-23: AVC `denied { write } comm="logrotate" name="proxysql.log"`.
