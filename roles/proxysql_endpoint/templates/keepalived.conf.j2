@@ -18,7 +18,14 @@ vrrp_script chk_proxysql {
                # Wcześniej weight -60: przy awarii OBU ProxySQL MASTER (150-60=90) i tak trzymał VIP.
     fall 2
     rise 2
-    timeout 3
+    # Skrypt ma dwa wlasne limity: `timeout 2` na TCP 6033 i `timeout 2` na
+    # zapytanie admina, czyli do ~4 s przy przeciazonym ProxySQL. Przy
+    # `timeout 3` keepalived zabijal skrypt, zanim ten zdazyl wydac werdykt, i
+    # liczyl to jako porazke — dwie z rzedu (fall 2) przerzucaly VIP z zywego
+    # wezla. Limit keepalived musi byc WIEKSZY niz suma limitow skryptu, zeby o
+    # zdrowiu decydowal skrypt, a nie zegar. Koszt: wolniejsza detekcja
+    # zawieszonego skryptu (~10 s zamiast ~6 s), wciaz ponizej RTO wezla.
+    timeout 5
 }
 
 vrrp_instance PROXYSQL_VIP {
