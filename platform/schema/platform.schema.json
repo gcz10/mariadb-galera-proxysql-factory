@@ -272,6 +272,28 @@
               "maximum": 5,
               "description": "Liczba najnowszych, zweryfikowanych volume backupu PMM zachowywanych po poprawnym converge."
             },
+            "scheduled_backup": {
+              "type": "object",
+              "required": [
+                "on_calendar",
+                "retention_days"
+              ],
+              "additionalProperties": false,
+              "description": "Cykliczna kopia danych PMM (volume isa-pmm-data) do zarzadzanego MinIO warstwy. Kopia ZATRZYMUJE pmm-server na czas archiwizacji (zalecenie Percona dla spojnej kopii), wiec kazdy przebieg to 1-2 min bez metryk i bez alertow. MinIO stoi na tym samym hoscie infra: kopia chroni przed uszkodzeniem danych i nieudana aktualizacja, NIE przed utrata hosta. Brak pola = brak harmonogramu (zostaje tylko kopia przed zmiana obrazu).",
+              "properties": {
+                "on_calendar": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Wyrazenie systemd OnCalendar (np. 'Sun *-*-* 03:30:00'); walidowane na hoscie przez systemd-analyze calendar."
+                },
+                "retention_days": {
+                  "type": "integer",
+                  "minimum": 7,
+                  "maximum": 365,
+                  "description": "Po ilu dniach MinIO usuwa kopie (regula ILM bucketa). Dzieki temu poswiadczenie kopii nie ma prawa kasowania."
+                }
+              }
+            },
             "certificate_reference": {
               "type": "string",
               "minLength": 1,

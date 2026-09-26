@@ -1,0 +1,332 @@
+---
+# Platforma: cykliczna kopia danych PMM do zarzadzanego MinIO (make platform-pmm-backup).
+#
+# Deklaracja: monitoring.pmm.scheduled_backup w platform.yml. Brak deklaracji
+# = zadnego harmonogramu; playbook wtedy USUWA timer, zeby wycofanie pola
+# z definicji realnie wylaczalo kopie, a nie zostawialo osierocony cron.
+#
+# Model poswiadczen (ten sam kierunek co kopie najemcow, docs/runbooks/backup.md):
+#   * klucz na hoscie ma WYLACZNIE ListBucket + Put/Get na obiekty `pmm-*`,
+#     bez zadnego Delete — przejecie hosta nie daje kasowania historii kopii;
+#   * retencje realizuje regula ILM bucketa (expire-days), czyli samo MinIO;
+#   * root MinIO jest uzywany tylko przez ten playbook, z pliku /run usuwanego
+#     w `always`, nigdy nie zostaje na dysku.
+#
+# OGRANICZENIE, ktore trzeba znac: MinIO stoi na tym samym hoscie infra co PMM.
+# Kopia chroni przed uszkodzeniem danych PMM i nieudana aktualizacja obrazu,
+# NIE przed utrata hosta. Decyzja operatora 2026-09-26.
+
+- name: "Platforma — cykliczna kopia danych PMM"
+  hosts: infra
+  become: true
+  gather_facts: false
+  vars:
+    infra_services: "{{ platform.infra.services | default(['pmm', 'minio', 'maildev']) }}"
+    pmm_backup: "{{ monitoring.pmm.scheduled_backup | default({}) }}"
+    pmm_backup_enabled: "{{ pmm_backup | length > 0 }}"
+    pmm_backup_bucket: "{{ platform.name }}-pmm-backups"
+    pmm_backup_key_name: "pmm-backup-{{ platform.name }}"
+    pmm_backup_mc: "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+  pre_tasks:
+    - name: "Zaladuj lockfile platformy (obraz mc)"
+      ansible.builtin.include_vars:
+        file: "../{{ versions.lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
+    - name: "Odrzuc uruchomienie z definicja inna niz platforma"
+      ansible.builtin.assert:
+        that:
+          - platform.name is defined
+          - galera is not defined
+        fail_msg: "Ten playbook nalezy do warstwy wspolnej. Uruchom: make platform-pmm-backup"
+
+    - name: "Wymagaj PMM i MinIO na tej warstwie, gdy kopia jest zadeklarowana"
+      ansible.builtin.assert:
+        that:
+          - "'pmm' in infra_services"
+          - "'minio' in infra_services"
+        fail_msg: >-
+          monitoring.pmm.scheduled_backup wymaga uslug pmm i minio w
+          platform.infra.services — kopia trafia do zarzadzanego MinIO tej warstwy.
+      when: pmm_backup_enabled | bool
+
+  tasks:
+    - name: "Wycofaj harmonogram, gdy definicja go nie deklaruje"
+      when: not (pmm_backup_enabled | bool)
+      block:
+        - name: "Zatrzymaj i wylacz timer kopii PMM"
+          ansible.builtin.systemd:
+            name: isa-pmm-backup.timer
+            state: stopped
+            enabled: false
+          failed_when: false
+
+        - name: "Usun jednostki kopii PMM"
+          ansible.builtin.file:
+            path: "/etc/systemd/system/{{ item }}"
+            state: absent
+          loop:
+            - isa-pmm-backup.service
+            - isa-pmm-backup.timer
+
+    - name: "Skonfiguruj kopie PMM"
+      when: pmm_backup_enabled | bool
+      block:
+        - name: "Waliduj harmonogram na hoscie (systemd-analyze calendar)"
+          ansible.builtin.command:
+            argv: [systemd-analyze, calendar, "{{ pmm_backup.on_calendar }}"]
+          changed_when: false
+
+        - name: "Katalog konfiguracji kopii (root-only)"
+          ansible.builtin.file:
+            path: /etc/isa-pmm-backup
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        # Katalog w /run, root.env i polityka sa EFEMERYCZNE (znikaja w `always`),
+        # wiec ich utworzenie nie jest zmiana stanu hosta — changed_when: false,
+        # zeby drugi przebieg konczyl sie changed=0.
+        - name: "Utworz unikalny root-only katalog na poswiadczenie root MinIO"
+          ansible.builtin.tempfile:
+            state: directory
+            path: /run
+            prefix: isa-pmm-backup-minio-
+          register: pmm_backup_ws
+          changed_when: false
+
+        - name: "Zapisz root.env klienta mc (usuwany w always)"
+          ansible.builtin.copy:
+            dest: "{{ pmm_backup_ws.path }}/root.env"
+            owner: root
+            group: root
+            mode: "0600"
+            content: >-
+              MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}:{{
+              lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}@localhost:9000
+          changed_when: false
+          no_log: true
+
+        - name: "Sprawdz, czy bucket kopii PMM istnieje"
+          ansible.builtin.command:
+            argv: [docker, run, --rm, --network, "container:minio", --env-file, "{{ pmm_backup_ws.path }}/root.env",
+                   "{{ pmm_backup_mc }}", stat, "myminio/{{ pmm_backup_bucket }}"]
+          register: pmm_backup_bucket_stat
+          changed_when: false
+          failed_when: false
+
+        - name: "Utworz bucket kopii PMM"
+          ansible.builtin.command:
+            argv: [docker, run, --rm, --network, "container:minio", --env-file, "{{ pmm_backup_ws.path }}/root.env",
+                   "{{ pmm_backup_mc }}", mb, "myminio/{{ pmm_backup_bucket }}"]
+          when: pmm_backup_bucket_stat.rc != 0
+          changed_when: true
+
+        - name: "Odczytaj regule retencji (ILM)"
+          ansible.builtin.command:
+            argv: [docker, run, --rm, --network, "container:minio", --env-file, "{{ pmm_backup_ws.path }}/root.env",
+                   "{{ pmm_backup_mc }}", ilm, rule, ls, "myminio/{{ pmm_backup_bucket }}", --json]
+          register: pmm_backup_ilm
+          changed_when: false
+          failed_when: false
+
+        # Bucket nalezy WYLACZNIE do kopii PMM, wiec zarzadzamy calym zestawem
+        # regul: docelowo dokladnie jedna — wygasanie `pmm-*` po N dniach.
+        # `mc ilm rule add` nie przyjmuje wlasnego ID (nadaje je sam), wiec
+        # zbieznosc liczymy po tresci, nie po identyfikatorze.
+        - name: "Wylicz obecne reguly retencji"
+          ansible.builtin.set_fact:
+            pmm_backup_ilm_rules: >-
+              {{ (((pmm_backup_ilm.stdout | default('{}', true) | from_json).config | default({}, true)).Rules | default([], true))
+                 | map(attribute='Expiration') | map(attribute='Days') | list }}
+          when: pmm_backup_ilm.rc == 0
+
+        - name: "Ustaw regule retencji (jedna regula, wygasanie po N dniach)"
+          ansible.builtin.shell: |
+            set -eu
+            mc() { docker run --rm --network container:minio --env-file "{{ pmm_backup_ws.path }}/root.env" "{{ pmm_backup_mc }}" "$@"; }
+            mc ilm rule rm --all --force "myminio/{{ pmm_backup_bucket }}" >/dev/null 2>&1 || true
+            mc ilm rule add --prefix pmm- --expire-days {{ pmm_backup.retention_days | int }} "myminio/{{ pmm_backup_bucket }}"
+          args:
+            executable: /bin/bash
+          when: (pmm_backup_ilm_rules | default([])) != [pmm_backup.retention_days | int]
+          changed_when: true
+
+        - name: "Polityka klucza kopii (bez Delete)"
+          ansible.builtin.copy:
+            dest: "{{ pmm_backup_ws.path }}/policy.json"
+            owner: root
+            group: root
+            mode: "0600"
+            content: "{{ policy | to_nice_json }}"
+          changed_when: false
+          vars:
+            policy:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: ["s3:GetBucketLocation", "s3:ListBucket"]
+                  Resource: ["arn:aws:s3:::{{ pmm_backup_bucket }}"]
+                - Effect: Allow
+                  Action: ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
+                  Resource: ["arn:aws:s3:::{{ pmm_backup_bucket }}/pmm-*"]
+
+        - name: "Sprawdz, czy klucz na hoscie dziala i ma dostep do bucketa"
+          ansible.builtin.command:
+            argv: [docker, run, --rm, --network, "container:minio", --env-file, /etc/isa-pmm-backup/s3.env,
+                   "{{ pmm_backup_mc }}", ls, "backup/{{ pmm_backup_bucket }}"]
+          register: pmm_backup_key_probe
+          changed_when: false
+          failed_when: false
+          no_log: true
+
+        - name: "Wypisz klucze kopii PMM (po nazwie)"
+          ansible.builtin.shell: |
+            set -euo pipefail
+            mc() { docker run --rm --network container:minio --env-file "{{ pmm_backup_ws.path }}/root.env" "{{ pmm_backup_mc }}" "$@"; }
+            for ak in $(mc admin accesskey list myminio --all --json | grep -o '"accessKey":"[^"]*"' | cut -d'"' -f4 | sort -u); do
+              mc admin accesskey info myminio "$ak" --json
+              echo
+            done
+          args:
+            executable: /bin/bash
+          register: pmm_backup_keys_raw
+          changed_when: false
+          no_log: true
+
+        - name: "Wylicz klucze noszace nazwe kopii PMM"
+          ansible.builtin.set_fact:
+            pmm_backup_named_keys: >-
+              {{ pmm_backup_keys_raw.stdout_lines | select | map('from_json')
+                 | selectattr('name', 'defined') | selectattr('name', 'equalto', pmm_backup_key_name)
+                 | map(attribute='accessKey') | list }}
+          no_log: true
+
+        - name: "Odczytaj klucz zapisany na hoscie"
+          ansible.builtin.shell: |
+            set -o pipefail
+            sed -n 's#^MC_HOST_backup=http://\([^:]*\):.*#\1#p' /etc/isa-pmm-backup/s3.env 2>/dev/null || true
+          args:
+            executable: /bin/bash
+          register: pmm_backup_host_key
+          changed_when: false
+
+        - name: "Uzyj istniejacego klucza (dziala i nosi nazwe kopii PMM)"
+          ansible.builtin.set_fact:
+            pmm_backup_reuse: >-
+              {{ pmm_backup_key_probe.rc == 0
+                 and (pmm_backup_host_key.stdout | trim) in pmm_backup_named_keys }}
+
+        - name: "Utworz nowy klucz kopii PMM"
+          ansible.builtin.command:
+            argv: [docker, run, --rm, --network, "container:minio", --env-file, "{{ pmm_backup_ws.path }}/root.env",
+                   -v, "{{ pmm_backup_ws.path }}/policy.json:/tmp/policy.json:ro,Z",
+                   "{{ pmm_backup_mc }}", admin, accesskey, create, myminio/, --json,
+                   --name, "{{ pmm_backup_key_name }}", --policy, /tmp/policy.json]
+          register: pmm_backup_new_key
+          when: not (pmm_backup_reuse | bool)
+          changed_when: true
+          no_log: true
+
+        - name: "Zapisz nowy klucz na hoscie (0600)"
+          ansible.builtin.copy:
+            dest: /etc/isa-pmm-backup/s3.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: >-
+              MC_HOST_backup=http://{{ (pmm_backup_new_key.stdout | from_json).accessKey }}:{{
+              (pmm_backup_new_key.stdout | from_json).secretKey }}@localhost:9000
+          when: not (pmm_backup_reuse | bool)
+          no_log: true
+
+        - name: "Potwierdz nowy klucz, zanim odwolasz stare"
+          ansible.builtin.command:
+            argv: [docker, run, --rm, --network, "container:minio", --env-file, /etc/isa-pmm-backup/s3.env,
+                   "{{ pmm_backup_mc }}", ls, "backup/{{ pmm_backup_bucket }}"]
+          when: not (pmm_backup_reuse | bool)
+          changed_when: false
+          no_log: true
+
+        - name: "Odwolaj stare klucze kopii PMM"
+          ansible.builtin.command:
+            argv: [docker, run, --rm, --network, "container:minio", --env-file, "{{ pmm_backup_ws.path }}/root.env",
+                   "{{ pmm_backup_mc }}", admin, accesskey, rm, myminio, "{{ item }}"]
+          loop: >-
+            {{ pmm_backup_named_keys | reject('equalto',
+               (pmm_backup_new_key.stdout | from_json).accessKey if not (pmm_backup_reuse | bool)
+               else (pmm_backup_host_key.stdout | trim)) | list }}
+          changed_when: true
+          no_log: true
+
+        - name: "Konfiguracja przebiegu (bez sekretow)"
+          ansible.builtin.copy:
+            dest: /etc/isa-pmm-backup/backup.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              PMM_BACKUP_PLATFORM={{ platform.name }}
+              PMM_BACKUP_BUCKET={{ pmm_backup_bucket }}
+              PMM_BACKUP_MC_IMAGE={{ pmm_backup_mc }}
+
+        - name: "Skrypt kopii"
+          ansible.builtin.copy:
+            src: ../roles/infra_services/files/isa-pmm-backup.sh
+            dest: /usr/local/sbin/isa-pmm-backup
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: "Jednostka uslugi kopii"
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/isa-pmm-backup.service
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              # Zarzadzane przez playbooks/platform_pmm_backup.yml.
+              [Unit]
+              Description=ISA: kopia danych PMM do MinIO (zatrzymuje pmm-server na 1-2 min)
+              Requires=docker.service
+              After=docker.service
+              [Service]
+              Type=oneshot
+              ExecStart=/usr/local/sbin/isa-pmm-backup
+              TimeoutStartSec=45min
+          register: pmm_backup_service
+
+        - name: "Timer kopii"
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/isa-pmm-backup.timer
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              # Zarzadzane przez playbooks/platform_pmm_backup.yml.
+              [Unit]
+              Description=ISA: harmonogram kopii danych PMM
+              [Timer]
+              OnCalendar={{ pmm_backup.on_calendar }}
+              # Bez Persistent: przegapiony termin (host wylaczony) NIE odpala kopii
+              # zaraz po starcie — przestoj PMM ma wypasc w zaplanowanym oknie.
+              Persistent=false
+              [Install]
+              WantedBy=timers.target
+          register: pmm_backup_timer
+
+        - name: "Wlacz timer"
+          ansible.builtin.systemd:
+            name: isa-pmm-backup.timer
+            state: started
+            enabled: true
+            daemon_reload: "{{ pmm_backup_service.changed or pmm_backup_timer.changed }}"
+
+      always:
+        - name: "Usun poswiadczenie root MinIO i polityke"
+          ansible.builtin.file:
+            path: "{{ pmm_backup_ws.path }}"
+            state: absent
+          changed_when: false
+          when: pmm_backup_ws.path is defined

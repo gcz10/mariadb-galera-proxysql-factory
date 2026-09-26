@@ -17,7 +17,7 @@
         lab-upgrade-plan-verify lab-patch-verify lab-drift-verify lab-gcache-verify lab-seed-smoke lab-seed-dataset lab-proxysql-failover-test lab-admin-isolation-verify lab-post-build-gate \
         lint verify-no-mass-restart verify-no-double-bootstrap verify-zero-hardcode verify-role-contract verify-no-conditional-env verify-no-secrets-leak verify-proxysql-tenancy verify-no-state-latest verify-docs-fetch-hook verify-address-collision verify-dead-code verify-inventory-tf verify-lockfiles \
         infra-teardown infra-provision cluster-trust-hosts cluster-deregister cluster-deregister-verify fleet-state \
-        platform-validate platform-trust-hosts platform-deploy platform-firewall platform-firewall-verify platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-alerts platform-adopt platform-build platform-verify
+        platform-validate platform-trust-hosts platform-deploy platform-firewall platform-firewall-verify platform-infra platform-proxysql platform-monitor-rotate platform-endpoint platform-monitoring platform-pmm-backup platform-alerts platform-adopt platform-build platform-verify
 
 CLUSTER ?= example-cluster
 ANSIBLE_OPTS ?=
@@ -360,6 +360,13 @@ platform-monitoring:  ## Zarejestruj wezly i eksportery warstwy wspolnej w PMM
 	ansible-playbook playbooks/f11_pmm_agent.yml $(PLATFORM_OPTS)
 	ansible-playbook playbooks/f11_proxysql_metrics.yml $(PLATFORM_OPTS)
 
+# Po platform-monitoring: metryki swiezosci kopii trafiaja do textfile
+# collectora pmm-agenta na hoscie infra, ktorego wczesniej nie ma. Root MinIO
+# jest potrzebny do bucketa, reguly ILM i klucza bez prawa kasowania.
+platform-pmm-backup:  ## Harmonogram kopii danych PMM do MinIO (monitoring.pmm.scheduled_backup)
+	$(platform_guard)
+	ansible-playbook playbooks/platform_pmm_backup.yml $(PLATFORM_OPTS)
+
 platform-alerts:  ## Reguly alertowe warstwy wspolnej (namespace isa-shared-*)
 	@# f15_alerts.yml sam wymaga PMM_ADMIN_PASSWORD i adresu alertow.
 	$(platform_guard)
@@ -478,6 +485,7 @@ platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→
 	$(MAKE) platform-proxysql PLATFORM=$(PLATFORM)
 	$(MAKE) platform-endpoint PLATFORM=$(PLATFORM)
 	$(MAKE) platform-monitoring PLATFORM=$(PLATFORM)
+	$(MAKE) platform-pmm-backup PLATFORM=$(PLATFORM)
 	$(MAKE) platform-alerts PLATFORM=$(PLATFORM)
 	$(MAKE) platform-firewall-verify PLATFORM=$(PLATFORM)
 	$(MAKE) platform-verify PLATFORM=$(PLATFORM)

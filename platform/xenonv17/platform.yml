@@ -38,6 +38,12 @@ monitoring:
     ca_reference: "pki/xenonv17/ca.pem"
     credentials_revision: 1
     backup_retention: 2
+    # Decyzja operatora 2026-09-26: raz w tygodniu, do MinIO na x17mon.
+    # Niedziela 03:30 — po nocnych kopiach najemcow (02:00/02:30), przed
+    # drillami restore (14:00/15:00). 35 dni = 5 kopii tygodniowych.
+    scheduled_backup:
+      on_calendar: "Sun *-*-* 03:30:00"
+      retention_days: 35
   # `infra` = x17mon: host, na ktorym stoi sam PMM (plus MinIO i Maildev).
   # Wezel `pmm-server` w PMM to kontener, nie maszyna — bez agentu na hoscie
   # nie bylo metryk dysku, pamieci ani CPU maszyny, od ktorej zalezy caly
