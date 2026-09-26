@@ -123,6 +123,59 @@
           when: pmm_backup_bucket_stat.rc != 0
           changed_when: true
 
+        # Na istniejacym buckecie brak znacznika wymaga JAWNEJ, jednorazowej
+        # adopcji. Bez tego `ilm rule rm --all` mogloby skasowac cudze reguly.
+        - name: "Odczytaj znacznik wlasciciela bucketa PMM"
+          ansible.builtin.command:
+            argv: [docker, run, --rm, --network, "container:minio", --env-file, "{{ pmm_backup_ws.path }}/root.env",
+                   "{{ pmm_backup_mc }}", cat, "myminio/{{ pmm_backup_bucket }}/isa-pmm-backup-owner.json"]
+          register: pmm_backup_owner_initial
+          changed_when: false
+          failed_when: false
+          no_log: true
+
+        - name: "Odmow pracy na istniejacym buckecie bez znacznika"
+          ansible.builtin.assert:
+            that:
+              - pmm_backup_bucket_stat.rc != 0 or pmm_backup_adopt_existing_bucket | default(false) | bool
+            fail_msg: >-
+              Istniejacy bucket PMM nie ma znacznika wlasciciela. Zweryfikuj jego
+              zawartosc i reguly ILM; jednorazowo uzyj -e pmm_backup_adopt_existing_bucket=true.
+            quiet: true
+          when: pmm_backup_owner_initial.rc != 0
+
+        - name: "Potwierdz wlasciciela istniejacego bucketa PMM"
+          ansible.builtin.assert:
+            that:
+              - (pmm_backup_owner_initial.stdout | from_json).format_version == 1
+              - (pmm_backup_owner_initial.stdout | from_json).platform_name == platform.name
+            fail_msg: "Znacznik bucketa PMM jest niepoprawny lub nalezy do innej platformy"
+            quiet: true
+          when: pmm_backup_owner_initial.rc == 0
+        - name: "Oznacz bucket PMM (nowy albo jawnie przejety)"
+          ansible.builtin.command:
+            argv: [docker, run, --rm, -i, --network, "container:minio", --env-file, "{{ pmm_backup_ws.path }}/root.env",
+                   "{{ pmm_backup_mc }}", pipe, "myminio/{{ pmm_backup_bucket }}/isa-pmm-backup-owner.json"]
+            stdin: "{{ {'format_version': 1, 'platform_name': platform.name} | to_json }}"
+          when: pmm_backup_owner_initial.rc != 0
+          changed_when: true
+          no_log: true
+        - name: "Sprawdz zapis znacznika PMM przed zmianami ILM"
+          ansible.builtin.command:
+            argv: [docker, run, --rm, --network, "container:minio", --env-file, "{{ pmm_backup_ws.path }}/root.env",
+                   "{{ pmm_backup_mc }}", cat, "myminio/{{ pmm_backup_bucket }}/isa-pmm-backup-owner.json"]
+          register: pmm_backup_owner_final
+          changed_when: false
+          no_log: true
+
+        - name: "Wymagaj zgodnego znacznika PMM"
+          ansible.builtin.assert:
+            that:
+              - (pmm_backup_owner_final.stdout | from_json).format_version == 1
+              - (pmm_backup_owner_final.stdout | from_json).platform_name == platform.name
+            fail_msg: "Nie udalo sie potwierdzic wlasciciela bucketa PMM"
+            quiet: true
+
         - name: "Odczytaj regule retencji (ILM)"
           ansible.builtin.command:
             argv: [docker, run, --rm, --network, "container:minio", --env-file, "{{ pmm_backup_ws.path }}/root.env",
@@ -138,19 +191,24 @@
         - name: "Wylicz obecne reguly retencji"
           ansible.builtin.set_fact:
             pmm_backup_ilm_rules: >-
-              {{ (((pmm_backup_ilm.stdout | default('{}', true) | from_json).config | default({}, true)).Rules | default([], true))
-                 | map(attribute='Expiration') | map(attribute='Days') | list }}
+              {{ (((pmm_backup_ilm.stdout | default('{}', true) | from_json).config | default({}, true)).Rules | default([], true)) }}
           when: pmm_backup_ilm.rc == 0
 
         - name: "Ustaw regule retencji (jedna regula, wygasanie po N dniach)"
           ansible.builtin.shell: |
             set -eu
             mc() { docker run --rm --network container:minio --env-file "{{ pmm_backup_ws.path }}/root.env" "{{ pmm_backup_mc }}" "$@"; }
-            mc ilm rule rm --all --force "myminio/{{ pmm_backup_bucket }}" >/dev/null 2>&1 || true
+            if [ {{ pmm_backup_ilm_rules | default([]) | length }} -gt 0 ]; then
+              mc ilm rule rm --all --force "myminio/{{ pmm_backup_bucket }}" >/dev/null
+            fi
             mc ilm rule add --prefix pmm- --expire-days {{ pmm_backup.retention_days | int }} "myminio/{{ pmm_backup_bucket }}"
           args:
             executable: /bin/bash
-          when: (pmm_backup_ilm_rules | default([])) != [pmm_backup.retention_days | int]
+          when: >-
+            (pmm_backup_ilm_rules | default([]) | length) != 1
+            or pmm_backup_ilm_rules[0].get('Status') != 'Enabled'
+            or pmm_backup_ilm_rules[0].get('Filter', {}).get('Prefix') != 'pmm-'
+            or pmm_backup_ilm_rules[0].get('Expiration', {}).get('Days') != (pmm_backup.retention_days | int)
           changed_when: true
 
         - name: "Polityka klucza kopii (bez Delete)"
