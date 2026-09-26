@@ -208,3 +208,19 @@ f15_shared_rules:
       Wezel moze byc zarejestrowany i miec dzialajaca usluge pmm-agent, a mimo to nie raportowac.
     severity: "critical"
     noDataState: "Alerting"
+
+  # Kopia danych PMM (playbooks/platform_pmm_backup.yml) biega co tydzien;
+  # bez tej reguly jej cicha porazka (MinIO, pelny dysk, klucz) wyszlaby na jaw
+  # dopiero przy probie odtworzenia. Prog 8 dni = tydzien + dzien zapasu.
+  # `or vector(0)`: brak metryki (skrypt nigdy nie zadzialal albo zniknal plik)
+  # to tez stan alarmowy, nie „brak danych”. Powstaje tylko, gdy platforma
+  # deklaruje monitoring.pmm.scheduled_backup (filtr w f15_alerts.yml).
+  - uid: "isa-shared-pmm-backup-stale"
+    requires_pmm_backup: true
+    title: "PMM data backup stale"
+    expr: "(time() - (max(isa_pmm_backup_last_success_unixtime{cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool (8 * 86400)"
+    summary: >-
+      Ostatnia udana kopia danych PMM do MinIO jest starsza niz 8 dni (albo metryki brak).
+      Sprawdz: journalctl -u isa-pmm-backup na hoscie infra.
+    severity: "warning"
+    noDataState: "Alerting"

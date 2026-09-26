@@ -78,8 +78,12 @@
     # klastrze BEZ backupu nie ma czego mierzyc i pali sie wiecznie, zamieniajac
     # alerting w szum, ktory operator wycisza — a wtedy nie zadziala takze wtedy,
     # gdy naprawde bedzie mial racje.
+    # `requires_pmm_backup` — to samo dla warstwy: regula swiezosci kopii PMM
+    # powstaje tylko, gdy platforma deklaruje monitoring.pmm.scheduled_backup.
     f15_effective_rules: >-
-      {{ f15_shared_rules
+      {{ ((f15_shared_rules | rejectattr('requires_pmm_backup', 'defined') | list)
+          + (f15_shared_rules | selectattr('requires_pmm_backup', 'defined') | list
+             if ((monitoring | default({})).pmm | default({})).scheduled_backup is defined else []))
          if galera is not defined
          else ((f15_cluster_rules
                 | rejectattr('requires_tls', 'defined')
