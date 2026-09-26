@@ -9,7 +9,7 @@ Aplikacja stoi obok, wiec mierzymy stad.
 Co porownuje (ta sama praca, rozne sciezki):
   * bezposrednio do aktywnego writera        — koszt samej bazy,
   * przez VIP ProxySQL                       — koszt bazy + przeskok proxy,
-  * bezposrednio z TLS i bez TLS             — koszt szyfrowania polaczenia klienta.
+  * bezposrednio z TLS i bez TLS             — tylko gdy serwer dopuszcza plaintext.
 
 To NIE jest bramka jakosci: laboratorium na wspoldzielonym hypervisorze nie daje
 powtarzalnosci wymaganej od progu wydajnosci. Skrypt konczy sie bledem tylko
@@ -61,6 +61,7 @@ VIP_PORT = CLUSTER["proxysql"]["endpoint"]["port"]
 APP_USER = CLUSTER.get("proxysql", {}).get("app_user", "app_user")
 CLUSTER_NAME = CLUSTER["cluster"]["name"]
 TLS_FULL = (CLUSTER.get("tls") or {}).get("mode", "disabled") == "full"
+REQUIRE_SECURE_TRANSPORT = (CLUSTER.get("tls") or {}).get("require_secure_transport", False)
 CA_PATH = f"/etc/mysql/app/{CLUSTER_NAME}/ca.pem"
 
 # Plik opcji klienta na hoscie aplikacyjnym: haslo NIGDY nie trafia do argv
@@ -160,11 +161,12 @@ def main():
     write_q = f"INSERT INTO {TABLE_W} (v) VALUES (1)"
     read_q = f"SELECT v FROM {TABLE_R} WHERE id={ROWS // 2}"
 
-    paths = [
-        ("direct (plaintext)", writer, 3306, noverify),
-        ("direct (TLS)", writer, 3306, f"--ssl {noverify}"),
-        ("przez VIP ProxySQL", VIP, VIP_PORT, noverify),
-    ]
+    paths = []
+    if not REQUIRE_SECURE_TRANSPORT:
+        paths.append(("direct (plaintext)", writer, 3306, f"--disable-ssl {noverify}"))
+    if TLS_FULL:
+        paths.append(("direct (TLS)", writer, 3306, f"--ssl {noverify}"))
+    paths.append(("przez VIP ProxySQL", VIP, VIP_PORT, noverify))
     if TLS_FULL:
         paths.append(("direct (TLS zweryfikowany)", writer, 3306,
                       f"--ssl-ca={CA_PATH} --ssl-verify-server-cert"))

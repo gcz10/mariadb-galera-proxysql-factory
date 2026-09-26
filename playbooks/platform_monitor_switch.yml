@@ -92,11 +92,14 @@
     # a switch odcialby im monitoring. Dlatego pytamy sam ProxySQL, KTO jest
     # u niego zarejestrowany, i sprawdzamy logowanie na kazdym z tych hostow —
     # niezaleznie od tego, co operator wpisal w TENANTS.
-    - name: "Zbierz wszystkie backendy zarejestrowane w tym ProxySQL"
+    - name: "Zbierz backendy i ich tryb TLS z runtime ProxySQL"
       ansible.builtin.command:
-        argv: "{{ proxysql_admin_cli + ['-e', 'SELECT DISTINCT hostname FROM runtime_mysql_servers ORDER BY hostname'] }}"
+        argv: >-
+          {{ proxysql_admin_cli + ['-e',
+             "SELECT DISTINCT m.hostname,m.use_ssl,IFNULL(p.ssl_ca,'') FROM runtime_mysql_servers m LEFT JOIN mysql_servers_ssl_params p ON p.hostname=m.hostname AND p.port=m.port ORDER BY m.hostname,m.use_ssl"] }}
       register: monitor_registered_backends
       changed_when: false
+      tags: [monitor-backend-gate]
 
     - name: "Odrzuc rotacje bez zarejestrowanych backendow"
       ansible.builtin.assert:
@@ -105,25 +108,51 @@
         fail_msg: >-
           ProxySQL nie ma zarejestrowanych backendow — rotacja nie ma czego
           zweryfikowac i zostaje przerwana.
+      tags: [monitor-backend-gate]
+
+    - name: "Odrzuc niejednoznaczny backend lub brak CA dla backendu TLS"
+      ansible.builtin.assert:
+        that:
+          - item.split('\t') | length in [2, 3]
+          - item.split('\t')[0] | length > 0
+          - item.split('\t')[1] in ['0', '1']
+          - >-
+            item.split('\t')[1] == '0' or
+            ((item.split('\t') | length) == 3 and item.split('\t')[2].startswith('/etc/mysql/tls/'))
+        fail_msg: "Backend ma nieznany tryb TLS lub brakuje ścieżki do CA; odmawiam przełączenia monitora."
+      loop: "{{ monitor_registered_backends.stdout_lines | select() | list }}"
+      tags: [monitor-backend-gate]
+
+    # YAML >- zachowuje doslowne '\t' w wyrazeniu Jinja (split daje jeden element).
+    # Podwojnie cytowany scalar zamienia je na separator tabulacji przed renderem.
+    - name: "Przygotuj hosty i CA do prob logowania"
+      ansible.builtin.set_fact:
+        monitor_backend_checks: "{{ (monitor_backend_checks | default([])) + [{'host': item.split('\t')[0], 'tls': item.split('\t')[1] == '1', 'ca': item.split('\t')[2] | default('')}] }}"
+      loop: "{{ monitor_registered_backends.stdout_lines | select() | list }}"
+      tags: [monitor-backend-gate]
+
+    - name: "Odrzuc wiele konfiguracji TLS tego samego backendu"
+      ansible.builtin.assert:
+        that:
+          - >-
+            (monitor_backend_checks | map(attribute='host') | unique | length)
+            == (monitor_backend_checks | length)
+        fail_msg: "Jeden backend ma wiele konfiguracji TLS; odmawiam przełączenia monitora."
+      tags: [monitor-backend-gate]
 
     - name: "Potwierdz nowe konto na KAZDYM zarejestrowanym backendzie PRZED switchem"
       ansible.builtin.command:
-        argv:
-          - mariadb
-          - -h
-          - "{{ item | trim }}"
-          - -P
-          - "3306"
-          - -u
-          - "{{ monitor_idle_user }}"
-          - -N
-          - -B
-          - -e
-          - "SELECT 1"
+        argv: >-
+          {{ ['mariadb', '-h', item.host, '-P', '3306', '-u',
+              monitor_idle_user, '-N', '-B', '-e', 'SELECT 1']
+             + (['--ssl-ca=' ~ item.ca, '--ssl-verify-server-cert']
+                if item.tls else ['--disable-ssl']) }}
       environment:
         MYSQL_PWD: "{{ monitor_next_password }}"
-      loop: "{{ monitor_registered_backends.stdout_lines | map('trim') | select() | list }}"
+      loop: "{{ monitor_backend_checks }}"
       changed_when: false
+      no_log: true
+      tags: [monitor-backend-gate]
 
     # Znacznik czasu SPRZED przelaczenia: bramka ponizej patrzy wylacznie na
     # proby monitora WYKONANE JUZ NOWYM poswiadczeniem. Bez niego stare, udane

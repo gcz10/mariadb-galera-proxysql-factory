@@ -129,23 +129,19 @@
     # konto, ktorego istnienia nikt nie potwierdzil na KAZDYM backendzie.
     - name: "Expand — potwierdz logowanie bezczynnym kontem na KAZDYM backendzie"
       ansible.builtin.command:
-        argv:
-          - mariadb
-          - -h
-          - "{{ hostvars[item].galera_node_address }}"
-          - -P
-          - "3306"
-          - -u
-          - "{{ monitor_idle_user }}"
-          - -N
-          - -B
-          - -e
-          - "SELECT 1"
+        argv: >-
+          {{ ['mariadb', '-h', hostvars[item].galera_node_address, '-P', '3306',
+              '-u', monitor_idle_user, '-N', '-B', '-e', 'SELECT 1']
+             + (['--ssl-ca=/etc/mysql/tls/ca.pem', '--ssl-verify-server-cert']
+                if ((tls | default({})).mode | default('disabled')) == 'full'
+                else ['--disable-ssl']) }}
       environment:
         MYSQL_PWD: "{{ monitor_next_password }}"
       loop: "{{ groups['galera'] }}"
       changed_when: false
       when: rotation_phase == 'expand'
+      no_log: true
+      tags: [monitor-backend-gate]
 
     # CONTRACT. Wybor kandydata zapadl w pre_tasks, ale miedzy nim a kasowaniem
     # mija faza switch calej floty. Dlatego TUZ PRZED kasowaniem zadna pamiec

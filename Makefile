@@ -647,7 +647,7 @@ lab-app-verify:  ## Zweryfikuj kontrakt aplikacyjny z hosta `app` (TLS, read-you
 
 # Pomiar Z HOSTA APLIKACYJNEGO, nie z wezla klastra: wczesniejsze benchmarki
 # szly z hosta `restore`, ktory dzieli CPU i siec z warstwa bazodanowa.
-lab-app-bench:  ## Zmierz przepustowosc z hosta `app` (direct vs VIP, TLS vs plaintext)
+lab-app-bench:  ## Zmierz direct vs VIP z hosta `app` (plaintext tylko bez require_secure_transport)
 	$(cluster_guard)
 	@: "$${APP_DB_PASSWORD:?Ustaw APP_DB_PASSWORD poza repozytorium}"
 	$(TARGET_ENV) APP_DB_PASSWORD="$${APP_DB_PASSWORD}" tests/lab/bench-app.py

@@ -30,7 +30,7 @@ tls:
   ca_reference: "pki/o17/ca.pem"
   certificate_reference: "pki/o17/server-cert.pem"
   private_key_reference: "pki/o17/server-key.pem"
-  require_secure_transport: false
+  require_secure_transport: true
 
 network:
   application_cidrs: ["192.168.1.0/24"]

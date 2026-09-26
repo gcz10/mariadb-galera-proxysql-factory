@@ -479,5 +479,80 @@ class ContractGateSmokeTests(unittest.TestCase):
         self.assert_blocked(self.run_case(peers), "NIC nie skasowano")
 
 
+FAKE_BACKEND_MARIADB = r"""#!/usr/bin/env python3
+import os
+import sys
+
+argv = sys.argv[1:]
+if any("runtime_mysql_servers" in arg for arg in argv):
+    print(os.environ["FAKE_BACKENDS"])
+elif "-h" in argv:
+    with open(os.environ["FAKE_PROBE_LOG"], "a", encoding="utf-8") as handle:
+        handle.write(argv[argv.index("-h") + 1] + " " +
+                     ("verified" if "--ssl-verify-server-cert" in argv and
+                      any(arg.startswith("--ssl-ca=/etc/mysql/tls/") for arg in argv)
+                      else "plain" if "--disable-ssl" in argv else "unprotected") + "\n")
+    if "--ssl-verify-server-cert" not in argv and "--disable-ssl" not in argv:
+        sys.exit(1)
+else:
+    sys.exit(2)
+"""
+
+
+@unittest.skipIf(ANSIBLE_PLAYBOOK is None, "ansible-playbook niedostepny w PATH")
+class MixedTenantBackendGateTests(unittest.TestCase):
+    """Uruchamia prawdziwa bramke bez switcha na odpowiedzi dwoch najemcow."""
+
+    def run_gate(self, backends):
+        with tempfile.TemporaryDirectory(prefix="monitor-tls-gate-") as tmp:
+            base = Path(tmp)
+            bin_dir = base / "bin"
+            bin_dir.mkdir()
+            cli = bin_dir / "mariadb"
+            cli.write_text(FAKE_BACKEND_MARIADB, encoding="utf-8")
+            cli.chmod(0o755)
+            inventory = base / "inventory.yml"
+            inventory.write_text(yaml.safe_dump({
+                "all": {"vars": {"ansible_connection": "local", "ansible_become": False,
+                                 "ansible_python_interpreter": sys.executable},
+                        "children": {"proxysql": {"hosts": {"px1": None}}}}
+            }), encoding="utf-8")
+            log = base / "probes.txt"
+            env = os.environ.copy()
+            env.update({
+                "PATH": str(bin_dir) + os.pathsep + env.get("PATH", ""),
+                "FAKE_BACKENDS": backends,
+                "FAKE_PROBE_LOG": str(log),
+                "PROXYSQL_MONITOR_PASSWORD_NEXT": "test-only-password",
+            })
+            proc = subprocess.run(
+                [ANSIBLE_PLAYBOOK, "-i", str(inventory), str(SWITCH_PLAY),
+                 "--tags", "monitor-backend-gate", "-e", "monitor_idle_user=proxysql_monitor_b"],
+                capture_output=True, text=True, env=env, cwd=tmp, timeout=60,
+            )
+            return proc, log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+    def test_mixed_tls_backends_are_verified_before_switch(self):
+        proc, log = self.run_gate(
+            "db-tls\t1\t/etc/mysql/tls/tenant/ca.pem\n"
+            "db-plain\t0\t"
+        )
+        self.assertEqual(proc.returncode, 0, tail(proc.stdout + proc.stderr))
+        self.assertEqual(log, ["db-tls verified", "db-plain plain"])
+
+    def test_tls_backend_without_ca_refuses_switch_before_login(self):
+        proc, log = self.run_gate("db-tls\t1\t")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(log, [])
+
+    def test_conflicting_tls_modes_for_one_host_refuse_switch(self):
+        proc, log = self.run_gate(
+            "db-shared\t0\t\n"
+            "db-shared\t1\t/etc/mysql/tls/tenant/ca.pem"
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(log, [])
+
+
 if __name__ == "__main__":
     unittest.main()
