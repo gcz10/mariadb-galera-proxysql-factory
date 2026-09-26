@@ -290,16 +290,24 @@
         username: "{{ pmm_monitor_user }}"
         password: "{{ pmm_monitor_password }}"
         skip_connection_check: true
+        tls: "{{ pmm_mysql_tls_enabled | bool }}"
+        tls_skip_verify: false
+        tls_ca: "{{ pmm_mysql_tls_ca }}"
         custom_labels:
           values:
             cluster: "{{ pmm_cluster_name_effective }}"
             environment: "{{ pmm_environment_effective }}"
             credentials_revision: "{{ pmm_credentials_revision_effective }}"
+            tls_ca_sha256: "{{ pmm_mysql_tls_ca_sha256 }}"
     status_code: 200
   loop: "{{ pmm_agents_after_cleanup.json.mysqld_exporter | default([]) }}"
   when:
     - item.service_id in (pmm_mysql_service_ids.values() | list)
-    - item.custom_labels.get('credentials_revision', '') != pmm_credentials_revision_effective
+    - >-
+      item.custom_labels.get('credentials_revision', '') != pmm_credentials_revision_effective
+      or (item.tls | default(false) | bool) != (pmm_mysql_tls_enabled | bool)
+      or (item.tls_skip_verify | default(false) | bool)
+      or item.custom_labels.get('tls_ca_sha256', '') != pmm_mysql_tls_ca_sha256
   no_log: true
 
 - name: "Uzgodnij dane dostępowe istniejących QAN Performance Schema agents"
@@ -313,16 +321,24 @@
         password: "{{ pmm_monitor_password }}"
         skip_connection_check: true
         disable_comments_parsing: true
+        tls: "{{ pmm_mysql_tls_enabled | bool }}"
+        tls_skip_verify: false
+        tls_ca: "{{ pmm_mysql_tls_ca }}"
         custom_labels:
           values:
             cluster: "{{ pmm_cluster_name_effective }}"
             environment: "{{ pmm_environment_effective }}"
             credentials_revision: "{{ pmm_credentials_revision_effective }}"
+            tls_ca_sha256: "{{ pmm_mysql_tls_ca_sha256 }}"
     status_code: 200
   loop: "{{ pmm_agents_after_cleanup.json.qan_mysql_perfschema_agent | default([]) }}"
   when:
     - item.service_id in (pmm_mysql_service_ids.values() | list)
-    - item.custom_labels.get('credentials_revision', '') != pmm_credentials_revision_effective
+    - >-
+      item.custom_labels.get('credentials_revision', '') != pmm_credentials_revision_effective
+      or (item.tls | default(false) | bool) != (pmm_mysql_tls_enabled | bool)
+      or (item.tls_skip_verify | default(false) | bool)
+      or item.custom_labels.get('tls_ca_sha256', '') != pmm_mysql_tls_ca_sha256
   no_log: true
 
 - name: "Utwórz external exporter agents dla node_exporter"
@@ -355,10 +371,14 @@
         username: "{{ pmm_monitor_user }}"
         password: "{{ pmm_monitor_password }}"
         skip_connection_check: true
+        tls: "{{ pmm_mysql_tls_enabled | bool }}"
+        tls_skip_verify: false
+        tls_ca: "{{ pmm_mysql_tls_ca }}"
         custom_labels:
           cluster: "{{ pmm_cluster_name_effective }}"
           environment: "{{ pmm_environment_effective }}"
           credentials_revision: "{{ pmm_credentials_revision_effective }}"
+          tls_ca_sha256: "{{ pmm_mysql_tls_ca_sha256 }}"
     status_code: 200
   loop: "{{ pmm_mysql_names }}"
   when: pmm_mysql_service_ids[item + '-mysql'] not in (pmm_agents_after_cleanup.json.mysqld_exporter | default([]) | map(attribute='service_id') | list)
@@ -377,10 +397,14 @@
         password: "{{ pmm_monitor_password }}"
         skip_connection_check: true
         disable_comments_parsing: true
+        tls: "{{ pmm_mysql_tls_enabled | bool }}"
+        tls_skip_verify: false
+        tls_ca: "{{ pmm_mysql_tls_ca }}"
         custom_labels:
           cluster: "{{ pmm_cluster_name_effective }}"
           environment: "{{ pmm_environment_effective }}"
           credentials_revision: "{{ pmm_credentials_revision_effective }}"
+          tls_ca_sha256: "{{ pmm_mysql_tls_ca_sha256 }}"
     status_code: 200
   loop: "{{ pmm_mysql_names }}"
   when: pmm_mysql_service_ids[item + '-mysql'] not in (pmm_agents_after_cleanup.json.qan_mysql_perfschema_agent | default([]) | map(attribute='service_id') |

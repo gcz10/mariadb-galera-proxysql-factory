@@ -23,3 +23,12 @@ pmm-client, tryb agentless dla hostów bez agenta, konto monitorujące ProxySQL.
   GPG oraz odcisk palca klucza żyją w lockfile (`pmm_client.*`), bez
   `disable_gpg_check`; pilnuje sonda `verify-no-state-latest` (P1-A).
 - Weryfikacja: `make lab-monitoring-verify`, sonda PMM-native w post-build gate.
+- Transport PMM→MariaDB idzie za deklaracją najemcy: przy `tls.mode=full`
+  `tasks/agentless_register.yml` ustawia `mysqld_exporter` i agentowi QAN
+  `tls=true`, `tls_skip_verify=false` i **zawartość** `ca_reference` w `tls_ca`
+  (API przyjmuje PEM, nie ścieżkę na hoście PMM). Przy `disabled` zostaje
+  `tls=false` bez wczytywania CA.
+- PMM (3.9.1) **nie odsyła `tls_ca`** w `GET /v1/inventory/agents` — pole
+  przychodzi puste, choć w bazie `pmm-managed` leży pełny łańcuch. Zbieżność
+  liczymy więc po etykiecie `tls_ca_sha256` (odcisk CA), bo porównanie
+  z odczytem `tls_ca` przepisywałoby agentów w każdym przebiegu.

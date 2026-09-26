@@ -28,6 +28,23 @@ pmm_validate_certs_effective: "{{ monitoring.get('pmm', {}).get('validate_certs'
 
 pmm_remote_ca_path: "/etc/pki/ca-trust/source/anchors/isa-pmm-ca.pem"
 
+# To jest TLS PMM Agent -> MariaDB, niezalezny od TLS kontroler -> PMM API.
+# Agentless API przyjmuje zawartosc CA, nie sciezke na hoście pmm-server.
+pmm_mysql_tls_enabled: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
+pmm_mysql_tls_ca: >-
+  {{ lookup('ansible.builtin.file',
+            pmm_mysql_tls_ca_ref if pmm_mysql_tls_ca_ref.startswith('/')
+            else (playbook_dir ~ '/../' ~ pmm_mysql_tls_ca_ref))
+     if pmm_mysql_tls_enabled | bool else '' }}
+pmm_mysql_tls_ca_ref: "{{ (tls | default({})).ca_reference | default('') }}"
+
+# PMM NIE odsyla `tls_ca` w GET /v1/inventory/agents — na 3.9.1 pole przychodzi
+# puste, choc w bazie pmm-managed lezy pelny lancuch (1780 B z pliku tenanta).
+# Zbieznosc liczymy wiec po odcisku, ktory sami etykietujemy; porownywanie
+# `tls_ca` z odpowiedzi GET przepisywaloby agentow w KAZDYM przebiegu.
+pmm_mysql_tls_ca_sha256: >-
+  {{ (pmm_mysql_tls_ca | hash('sha256')) if pmm_mysql_tls_enabled | bool else 'none' }}
+
 # Wspolne etykiety i rewizja sekretow.
 #
 # Rola obsluguje DWIE definicje: najemce (blok `cluster`) i warstwe wspolna
