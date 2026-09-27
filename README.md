@@ -339,6 +339,9 @@ make cluster-recover CLUSTER=<name> CONFIRM=yes
 
 PMM UI laboratorium: `http://127.0.0.1:8080`. Stan usług w PMM jest diagnostyczny: `Down` oznacza rzeczywiście nieosiągalną usługę, a nie błąd rejestracji.
 `GF_SECURITY_ADMIN_PASSWORD` inicjalizuje tylko czysty `pmm-data`; istniejący volume zachowuje zapisane hasło. Rotację wykonaj w PMM UI, po czym ustaw tę samą wartość w `PMM_ADMIN_PASSWORD`.
+Zmiana `PROXYSQL_ADMIN_PASSWORD` na istniejącej parze nie polega na podmianie samego `.env`: najpierw trzeba zapewnić dostęp nowym hasłem na każdym węźle i podmienić profil bramki VIP razem z hasłem serwera. Następnie zaktualizuj tożsamość zdalnego administratora i zwiększ `monitoring.pmm.credentials_revision` platformy przed wycofaniem starego konta eksportera; `make platform-monitoring` rejestruje nowy eksport. Konto stats strażnika backupu przenoś przez okres równoległego dostępu obu kont, zanim usuniesz stare.
+Jeśli QAN raportuje HTTP 500, ale metryki i digesty są dostępne, zobacz [obserwację błędu `metrics:getReport` i obejście](docs/records/2026-09-27-pmm-qan-report.md).
+
 Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje reguły zdrowia Galery, writera ProxySQL, backupu i restore, zamrożonych metryk oraz — gdy TLS jest włączony — ważności certyfikatu; reguły warstwy wspólnej (`isa-shared-*`) provisionuje `make platform-alerts`. Krytyczne reguły używają `noDataState: Alerting`; brak metryk nie przechodzi cicho. Contact point i notification policy (`managed_by=ansible` → e-mail) biorą adres z `monitoring.alerts.email` w `cluster.yml`. W laboratorium poczta trafia do `maildev`.
 
 `lab-backup-verify` weryfikuje backend S3 i wymaga przypiętego SDK (`minio.sdk_version` z lockfile). Zarządzany SMB oraz wcześniej zamontowany filesystem weryfikuje `tests/live/probe-galera-backup-backends.py`; procedury i ograniczenia opisuje `docs/runbooks/backup.md`.
@@ -363,7 +366,7 @@ istnieje; jego powrotu pilnuje `make verify-proxysql-tenancy`.
 | `make platform-trust-hosts` | re-skan kluczy SSH po re-provision |
 | `make platform-deploy` | pakiety ProxySQL wg lockfile EL10 (sha256 + GPG) |
 | `make platform-patch` | rolling patch pary ProxySQL (serial:1, ISC-57) — dziala tez przy ZATRZYMANYCH najemcach; `cluster-patch` w tym stanie przerywa na play'u 0 |
-| `make platform-infra` | PMM, MinIO, maildev na `fcinfra` |
+| `make platform-infra` | PMM, MinIO, maildev na hoście infra; Compose używa [`--pull missing`](https://github.com/docker/compose/blob/main/cmd/compose/up.go): PMM i MinIO są przypięte digestem i mogą wystartować z cache przy niedostępnym rejestrze; brak obrazu nadal wymaga pobrania. Maildev ma tylko tag, więc ta polityka nie sprawdza jego aktualności ani dostępności rejestru. |
 | `make platform-proxysql` | konfiguracja pary: TLS frontendu, tozsamosc admina, monitor |
 | `make platform-endpoint` | Keepalived VIP — **wylacznie tutaj**, nigdy z klastra |
 | `make platform-monitoring` | rejestracja wezlow i eksporterow w PMM |

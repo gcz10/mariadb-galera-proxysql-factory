@@ -100,7 +100,7 @@
           {{ (pmm_svcs_now.json.proxysql | default([]))
              | selectattr('service_name', 'equalto', monitoring.pmm.cluster_name ~ '-' ~ item ~ '-proxysql')
              | map(attribute='service_id') | first }}
-        username: "{{ proxysql_remote_admin_user | default('isa_admin') }}"
+        username: "{{ proxysql_remote_admin_user }}"
         password: "{{ pmm_proxysql_admin_password }}"
         push_metrics: true
         # Etykieta rotacji hasel MUSI byc taka sama w obu trybach: to po niej

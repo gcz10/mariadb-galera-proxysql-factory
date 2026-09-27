@@ -28,7 +28,7 @@ galera_app_user: "{{ proxysql.app_user | default('app_user') }}"
 # o nazwie `admin` spoza loopbacku ("ERROR 1040: User 'admin' can only connect
 # locally"), wiec operacje mutujace warstwy wspolnej (f12/f13/f11) uzywaja tej
 # nazwy z hosta kontrolnego. Konto nalezy do puli READ-WRITE.
-proxysql_remote_admin_user: "isa_admin"
+proxysql_remote_admin_user: "isa_admin_r2"
 
 # Tozsamosc READ-ONLY dla straznika writera w backupie. Runner backupu jest
 # cronem na wezle Galery, wiec jego poswiadczenie lezy na dysku bazy danych —
@@ -52,4 +52,4 @@ proxysql_remote_admin_user: "isa_admin"
 #   wylaczony (https://proxysql.com/documentation/main-runtime/mysql-tables)
 #
 # Dlatego straznik czyta tabele statystyczna, a nie schemat konfiguracyjny.
-proxysql_stats_user: "isa_stats"
+proxysql_stats_user: "isa_stats_r2"

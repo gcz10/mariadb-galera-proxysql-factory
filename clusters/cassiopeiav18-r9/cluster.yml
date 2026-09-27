@@ -12,7 +12,7 @@ galera:
 proxysql:
   nodes_expected: 2
   hostgroup_base: 820
-  app_user: app_user_cv18
+  app_user: app_user_cv18_r2
   frontend_tls:
     ca_reference: pki/xenonv17/ca.pem
   endpoint:
@@ -64,7 +64,7 @@ monitoring:
     cluster_name: cassiopeiav18-r9
     validate_certs: true
     ca_reference: pki/xenonv17/ca.pem
-    credentials_revision: 1
+    credentials_revision: 2
   alerts:
     email: ops@claude.local
     folder_uid: ''

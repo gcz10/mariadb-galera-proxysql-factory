@@ -287,6 +287,11 @@
         mode: "0600"
       no_log: true
 
+    # 2026-09-27 Quay zwracał 401 dla HEAD przypiętego digestu MinIO nawet przy obrazie
+    # obecnym lokalnie. PMM i MinIO mają image@sha256 z lockfile: w trybie
+    # missing używamy istniejącego obrazu, a brakujący nadal wymaga rejestru.
+    # To świadomie NIE sprawdza dostępności rejestru przy każdej konwergencji;
+    # Maildev ma tylko tag, więc jego cache nie potwierdza świeżości taga.
     - name: "Uruchom usługi infra"
       ansible.builtin.command:
         argv:
@@ -298,7 +303,7 @@
           - --detach
           - --remove-orphans
           - --pull
-          - always
+          - missing
       register: infra_compose_up
       changed_when: >-
         'Created' in (infra_compose_up.stdout ~ infra_compose_up.stderr)
