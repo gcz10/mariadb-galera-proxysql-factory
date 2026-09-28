@@ -184,6 +184,29 @@
           changed_when: false
           failed_when: false
 
+        # mc zwraca blad takze dla NOWEGO bucketa bez reguly. Jedynie ten
+        # konkretny blad jest legalnym pustym stanem; pozostale blokuja zapis.
+        - name: "Rozpoznaj odpowiedz odczytu ILM"
+          ansible.builtin.set_fact:
+            pmm_backup_ilm_response: "{{ pmm_backup_ilm.stdout | from_json }}"
+
+        - name: "Odmow zmiany ILM przy bledzie odczytu"
+          ansible.builtin.assert:
+            that:
+              - >-
+                (pmm_backup_ilm.rc == 0 and pmm_backup_ilm_response.status == 'success')
+                or
+                (pmm_backup_ilm.rc != 0
+                 and pmm_backup_ilm_response.status == 'error'
+                 and (
+                   (pmm_backup_ilm_response.error.message == 'Unable to get lifecycle'
+                    and pmm_backup_ilm_response.error.cause.message == 'The lifecycle configuration does not exist')
+                   or
+                   (pmm_backup_ilm_response.error.message == 'Unable to ls lifecycle configuration'
+                    and pmm_backup_ilm_response.error.cause.message == 'lifecycle configuration not set')))
+            fail_msg: "Nie udalo sie odczytac ILM; reguly retencji pozostaly bez zmian"
+            quiet: true
+
         # Bucket nalezy WYLACZNIE do kopii PMM, wiec zarzadzamy calym zestawem
         # regul: docelowo dokladnie jedna — wygasanie `pmm-*` po N dniach.
         # `mc ilm rule add` nie przyjmuje wlasnego ID (nadaje je sam), wiec
@@ -191,21 +214,20 @@
         - name: "Wylicz obecne reguly retencji"
           ansible.builtin.set_fact:
             pmm_backup_ilm_rules: >-
-              {{ (((pmm_backup_ilm.stdout | default('{}', true) | from_json).config | default({}, true)).Rules | default([], true)) }}
-          when: pmm_backup_ilm.rc == 0
+              {{ pmm_backup_ilm_response.config.Rules if pmm_backup_ilm.rc == 0 else [] }}
 
         - name: "Ustaw regule retencji (jedna regula, wygasanie po N dniach)"
           ansible.builtin.shell: |
             set -eu
             mc() { docker run --rm --network container:minio --env-file "{{ pmm_backup_ws.path }}/root.env" "{{ pmm_backup_mc }}" "$@"; }
-            if [ {{ pmm_backup_ilm_rules | default([]) | length }} -gt 0 ]; then
+            if [ {{ pmm_backup_ilm_rules | length }} -gt 0 ]; then
               mc ilm rule rm --all --force "myminio/{{ pmm_backup_bucket }}" >/dev/null
             fi
             mc ilm rule add --prefix pmm- --expire-days {{ pmm_backup.retention_days | int }} "myminio/{{ pmm_backup_bucket }}"
           args:
             executable: /bin/bash
           when: >-
-            (pmm_backup_ilm_rules | default([]) | length) != 1
+            (pmm_backup_ilm_rules | length) != 1
             or pmm_backup_ilm_rules[0].get('Status') != 'Enabled'
             or pmm_backup_ilm_rules[0].get('Filter', {}).get('Prefix') != 'pmm-'
             or pmm_backup_ilm_rules[0].get('Expiration', {}).get('Days') != (pmm_backup.retention_days | int)

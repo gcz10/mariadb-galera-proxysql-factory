@@ -370,6 +370,7 @@ istnieje; jego powrotu pilnuje `make verify-proxysql-tenancy`.
 | `make platform-proxysql` | konfiguracja pary: TLS frontendu, tozsamosc admina, monitor |
 | `make platform-endpoint` | Keepalived VIP — **wylacznie tutaj**, nigdy z klastra |
 | `make platform-monitoring` | rejestracja wezlow i eksporterow w PMM |
+| `make platform-pmm-backup` | Timer kopii PMM do MinIO; uzgadnia regułę retencji ILM. Błąd odczytu ILM zatrzymuje konfigurację przed zmianą reguł; wyjątkiem jest potwierdzony brak konfiguracji w nowym buckecie. Samo uruchomienie celu nie wykonuje kopii ani nie zatrzymuje PMM. |
 | `make platform-alerts` | reguly `isa-shared-*` |
 | `make platform-firewall-verify` | polityka firewalld warstwy + filtr ingress Dockera (ISC-5) — mierzy je wlasciciel hostow, nie najemca |
 | `make platform-verify` | sonda warstwy jako calosci |
