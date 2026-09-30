@@ -127,6 +127,12 @@ i wymaga `BOOTSTRAP_NODE=<węzeł>` — kroki poniżej to procedura ręczna
 dla przypadków, których `grastate.dat` nie rozstrzyga (np. pozycje
 odzyskane z journala po nieczystym zamknięciu).
 
+**Świeży dowód automatu (2026-09-30):** po kontrolowanym, łagodnym zatrzymaniu
+3/3 usług Cassiopei automat wybrał najświeższy `c18db3`, przywrócił 3/3
+Primary/Synced/Ready i ruch przez VIP bez utraty zmierzonych ACK oraz bez
+błędów ruchu sąsiedniego Oriona. [Zapis próby, czasy i granice dowodu](../records/2026-09-30-cassiopeia-cold-recovery.md).
+Ta próba nie sprawdza power-loss ani odzyskiwania nieznanego `seqno: -1`.
+
 1. **Odczytaj odzyskane pozycje.** `mariadbd --wsrep-recover` uruchomione ręcznie
    NIE wypisuje pozycji (kończy się po jednej linii `[Note]`). Pozycję wylicza
    `ExecStartPre` unitu i loguje ją do journala — dlatego czytamy stamtąd:
@@ -151,11 +157,13 @@ odzyskane z journala po nieczystym zamknięciu).
    # (Flaga bootstrap_confirm_all_down=true jest wymagana przez Audit#2, gdy pozostałe węzły
    # są nieosiągalne po SSH; automat make cluster-recover przekazuje ją zawsze).
 5. **Dołącz pozostałe:** `make cluster-join CLUSTER=<name>`.
-6. **Odtwórz warstwy zależne.** `cluster-join` przywraca węzły do Galery, ale NIE do
-   ProxySQL ani PMM. Po recovery uruchom `make cluster-proxysql CLUSTER=<name>` i
-   `make cluster-monitoring CLUSTER=<name>` — bez jawnego `CLUSTER=` obie komendy
-   zatrzyma straznik Makefile. Inaczej `lab-proxysql-verify` zgłosi za mało
-   backendów, a metryki wsrep nie wrócą.
+6. **Sprawdź warstwy zależne.** `cluster-join` nie provisionuje ProxySQL ani PMM.
+   Po samym zatrzymaniu usług ich istniejące rejestracje mogą pozostać poprawne:
+   w próbie z 2026-09-30 backendy, metryki i QAN wróciły bez rekonfiguracji.
+   Jeśli bramki poniżej wykażą brak backendów lub rejestracji, odtwórz konfigurację
+   przez `make cluster-proxysql CLUSTER=<name>` i
+   `make cluster-monitoring CLUSTER=<name>`; jawne `CLUSTER=` jest wymagane.
+   Nie rekonfiguruj zdrowej warstwy wspólnej tylko z powodu cold recovery.
 
 ## Anti-criteria
 
@@ -171,6 +179,9 @@ odzyskane z journala po nieczystym zamknięciu).
 ```bash
 # Sprawdź cluster size, UUID, synced
 make lab-galera-verify CLUSTER=<name>
+make lab-proxysql-verify CLUSTER=<name>
+make lab-endpoint-verify CLUSTER=<name>
+make lab-monitoring-verify CLUSTER=<name>
 ```
 
 ## Wymagany dostęp

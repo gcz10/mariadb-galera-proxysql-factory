@@ -1,0 +1,1002 @@
+{
+  "cleanup": {
+    "absence_all_nodes": {
+      "cassiopeiav18-r9": {
+        "c18db1": true,
+        "c18db2": true,
+        "c18db3": true
+      },
+      "orionv17-r10": {
+        "o17db1": true,
+        "o17db2": true,
+        "o17db3": true
+      }
+    },
+    "monotonic_ns": 16689903041,
+    "remote_files_removed": "/var/tmp/isa-cold-20260930T092705Z-8c217d76",
+    "run_id": "cold-20260930T092705Z-8c217d76",
+    "status": "CLEANED",
+    "tables": {
+      "cassiopeiav18-r9": {
+        "classification": "sql_client_success",
+        "status": "dropped"
+      },
+      "orionv17-r10": {
+        "classification": "sql_client_success",
+        "status": "dropped"
+      }
+    },
+    "utc": "2026-09-30T10:30:23.198772+00:00"
+  },
+  "clock_policy": "Inter-ACK gaps use the apphost monotonic clock; canonical command duration uses the controller monotonic clock. UTC labels from separate hosts are not used to derive outage duration. Event markers are not actual service-stop or command-finish times.",
+  "command_results": [
+    {
+      "command": [
+        "make",
+        "lab-galera-verify",
+        "lab-proxysql-verify",
+        "lab-backup-verify",
+        "CLUSTER=cassiopeiav18-r9"
+      ],
+      "duration_seconds": 14.310295667,
+      "ended_at_utc": "2026-09-30T09:32:26.855156+00:00",
+      "label": "target-preflight",
+      "returncode": 0,
+      "started_at_utc": "2026-09-30T09:32:12.544168+00:00"
+    },
+    {
+      "command": [
+        "make",
+        "lab-galera-verify",
+        "lab-proxysql-verify",
+        "CLUSTER=orionv17-r10"
+      ],
+      "duration_seconds": 12.229005875,
+      "ended_at_utc": "2026-09-30T09:32:24.773814+00:00",
+      "label": "neighbor-preflight",
+      "returncode": 0,
+      "started_at_utc": "2026-09-30T09:32:12.544184+00:00"
+    },
+    {
+      "command": [
+        "make",
+        "cluster-recover",
+        "CLUSTER=cassiopeiav18-r9",
+        "CONFIRM=yes"
+      ],
+      "duration_seconds": 78.27662875,
+      "ended_at_utc": "2026-09-30T10:12:53.652549+00:00",
+      "label": "recover",
+      "returncode": 0,
+      "started_at_utc": "2026-09-30T10:11:35.374819+00:00"
+    },
+    {
+      "command": [
+        "make",
+        "lab-galera-verify",
+        "lab-proxysql-verify",
+        "lab-endpoint-verify",
+        "lab-monitoring-verify",
+        "CLUSTER=cassiopeiav18-r9"
+      ],
+      "duration_seconds": 17.879882792,
+      "ended_at_utc": "2026-09-30T10:15:08.371486+00:00",
+      "label": "target-postflight",
+      "returncode": 0,
+      "started_at_utc": "2026-09-30T10:14:50.490340+00:00"
+    },
+    {
+      "command": [
+        "make",
+        "lab-galera-verify",
+        "lab-proxysql-verify",
+        "lab-endpoint-verify",
+        "CLUSTER=orionv17-r10"
+      ],
+      "duration_seconds": 14.683353916,
+      "ended_at_utc": "2026-09-30T10:15:05.229395+00:00",
+      "label": "neighbor-postflight",
+      "returncode": 0,
+      "started_at_utc": "2026-09-30T10:14:50.545649+00:00"
+    }
+  ],
+  "controlled_stop": {
+    "duration_seconds": 7.643125375,
+    "finished_at_utc": "2026-09-30T10:10:33.921787+00:00",
+    "nodes": [
+      {
+        "finished_at_utc": "2026-09-30T10:10:29.350556+00:00",
+        "node": "c18db1",
+        "returncode": 0,
+        "started_at_utc": "2026-09-30T10:10:26.278585+00:00"
+      },
+      {
+        "finished_at_utc": "2026-09-30T10:10:32.109186+00:00",
+        "node": "c18db2",
+        "returncode": 0,
+        "started_at_utc": "2026-09-30T10:10:29.351213+00:00"
+      },
+      {
+        "finished_at_utc": "2026-09-30T10:10:33.920431+00:00",
+        "node": "c18db3",
+        "returncode": 0,
+        "started_at_utc": "2026-09-30T10:10:32.109832+00:00"
+      }
+    ],
+    "operation": "controlled graceful stop of all target MariaDB services",
+    "started_at_utc": "2026-09-30T10:10:26.277977+00:00"
+  },
+  "drill_markers": {
+    "all_down": [
+      {
+        "kind": "marker",
+        "label": "all_down",
+        "monotonic_ns": 640981562614968,
+        "run_id": "cold-20260930T092705Z-8c217d76",
+        "utc": "2026-09-30T10:11:33.891606+00:00"
+      }
+    ],
+    "outage_start": [
+      {
+        "kind": "marker",
+        "label": "outage_start",
+        "monotonic_ns": 640860998082191,
+        "run_id": "cold-20260930T092705Z-8c217d76",
+        "utc": "2026-09-30T10:09:33.327078+00:00"
+      }
+    ],
+    "recovery_end": [
+      {
+        "kind": "marker",
+        "label": "recovery_end",
+        "monotonic_ns": 641177957077514,
+        "run_id": "cold-20260930T092705Z-8c217d76",
+        "utc": "2026-09-30T10:14:50.286071+00:00"
+      }
+    ],
+    "recovery_start": [
+      {
+        "kind": "marker",
+        "label": "recovery_start",
+        "monotonic_ns": 640982820832075,
+        "run_id": "cold-20260930T092705Z-8c217d76",
+        "utc": "2026-09-30T10:11:35.149814+00:00"
+      }
+    ]
+  },
+  "endpoint": "192.168.1.74:6033",
+  "full_outage_rto_sla": null,
+  "method": "Controlled graceful MariaDB service stop on all three target nodes, followed by the existing canonical cluster-recover; fresh verified-TLS VIP transactions on both tenants. Not power-loss or backup restore.",
+  "neighbor": "orionv17-r10",
+  "result": "PASS",
+  "run_id": "cold-20260930T092705Z-8c217d76",
+  "schema_version": 1,
+  "selected_bootstrap": {
+    "generated_at": "2026-09-30T10:11:47Z",
+    "node": "c18db3",
+    "run_id": "6bec677d-2616-44bb-a4cb-8cc219a41c80"
+  },
+  "service_and_replication_snapshots": {
+    "neighbor-state-after": {
+      "o17db1": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    492f6568-ae41-11f1-bd0e-e7772e3e342d\nseqno:   -1\nsafe_to_bootstrap: 0\n     ",
+        "observed_utc": "2026-09-30T10:16:18.824082+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "343137039671",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Sat 2026-09-26 23:26:56 UTC",
+            "InvocationID": "9316c04264d54d2d902b889e64c909bd",
+            "MainPID": "96603",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "492f6568-ae41-11f1-bd0e-e7772e3e342d",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "3571760",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      },
+      "o17db2": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    492f6568-ae41-11f1-bd0e-e7772e3e342d\nseqno:   -1\nsafe_to_bootstrap: 0\n     ",
+        "observed_utc": "2026-09-30T10:16:18.831444+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "343203667954",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Sat 2026-09-26 23:27:58 UTC",
+            "InvocationID": "b25c5d8f2c97454389edadbf3b9eda39",
+            "MainPID": "89422",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "492f6568-ae41-11f1-bd0e-e7772e3e342d",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "3571760",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      },
+      "o17db3": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    492f6568-ae41-11f1-bd0e-e7772e3e342d\nseqno:   -1\nsafe_to_bootstrap: 0\n     ",
+        "observed_utc": "2026-09-30T10:16:18.825892+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "343264723189",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Sat 2026-09-26 23:29:06 UTC",
+            "InvocationID": "43ecfbe33e7245c9a3910d47b0a677ec",
+            "MainPID": "90154",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "492f6568-ae41-11f1-bd0e-e7772e3e342d",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "3571760",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      }
+    },
+    "neighbor-state-before": {
+      "o17db1": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    492f6568-ae41-11f1-bd0e-e7772e3e342d\nseqno:   -1\nsafe_to_bootstrap: 0\n     ",
+        "observed_utc": "2026-09-30T09:33:59.518805+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "343137039671",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Sat 2026-09-26 23:26:56 UTC",
+            "InvocationID": "9316c04264d54d2d902b889e64c909bd",
+            "MainPID": "96603",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "492f6568-ae41-11f1-bd0e-e7772e3e342d",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "3571294",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      },
+      "o17db2": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    492f6568-ae41-11f1-bd0e-e7772e3e342d\nseqno:   -1\nsafe_to_bootstrap: 0\n     ",
+        "observed_utc": "2026-09-30T09:33:59.526980+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "343203667954",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Sat 2026-09-26 23:27:58 UTC",
+            "InvocationID": "b25c5d8f2c97454389edadbf3b9eda39",
+            "MainPID": "89422",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "492f6568-ae41-11f1-bd0e-e7772e3e342d",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "3571294",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      },
+      "o17db3": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    492f6568-ae41-11f1-bd0e-e7772e3e342d\nseqno:   -1\nsafe_to_bootstrap: 0\n     ",
+        "observed_utc": "2026-09-30T09:33:59.519585+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "343264723189",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Sat 2026-09-26 23:29:06 UTC",
+            "InvocationID": "43ecfbe33e7245c9a3910d47b0a677ec",
+            "MainPID": "90154",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "492f6568-ae41-11f1-bd0e-e7772e3e342d",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "3571294",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      }
+    },
+    "neighbor-state-during-recovery": {
+      "o17db1": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    492f6568-ae41-11f1-bd0e-e7772e3e342d\nseqno:   -1\nsafe_to_bootstrap: 0\n     ",
+        "observed_utc": "2026-09-30T10:12:56.258095+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "343137039671",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Sat 2026-09-26 23:26:56 UTC",
+            "InvocationID": "9316c04264d54d2d902b889e64c909bd",
+            "MainPID": "96603",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "492f6568-ae41-11f1-bd0e-e7772e3e342d",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "3571558",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      },
+      "o17db2": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    492f6568-ae41-11f1-bd0e-e7772e3e342d\nseqno:   -1\nsafe_to_bootstrap: 0\n     ",
+        "observed_utc": "2026-09-30T10:12:56.277338+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "343203667954",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Sat 2026-09-26 23:27:58 UTC",
+            "InvocationID": "b25c5d8f2c97454389edadbf3b9eda39",
+            "MainPID": "89422",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "492f6568-ae41-11f1-bd0e-e7772e3e342d",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "3571558",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      },
+      "o17db3": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    492f6568-ae41-11f1-bd0e-e7772e3e342d\nseqno:   -1\nsafe_to_bootstrap: 0\n     ",
+        "observed_utc": "2026-09-30T10:12:56.274738+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "343264723189",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Sat 2026-09-26 23:29:06 UTC",
+            "InvocationID": "43ecfbe33e7245c9a3910d47b0a677ec",
+            "MainPID": "90154",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "492f6568-ae41-11f1-bd0e-e7772e3e342d",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "3571558",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      }
+    },
+    "platform-state-after": {
+      "x17p1": {
+        "observed_utc": "2026-09-30T10:16:20.198704+00:00",
+        "units": {
+          "keepalived": {
+            "ActiveEnterTimestampMonotonic": "108781953992",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Thu 2026-09-24 06:21:27 UTC",
+            "InvocationID": "0a19f7ebe6d3439c984aa9daa9e42719",
+            "MainPID": "447839",
+            "SubState": "running"
+          },
+          "proxysql": {
+            "ActiveEnterTimestampMonotonic": "28506825",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Wed 2026-09-23 00:08:53 UTC",
+            "InvocationID": "c5c6aed58a984196ba7b8fee05f1255f",
+            "MainPID": "1165",
+            "SubState": "running"
+          }
+        }
+      },
+      "x17p2": {
+        "observed_utc": "2026-09-30T10:16:20.206500+00:00",
+        "units": {
+          "keepalived": {
+            "ActiveEnterTimestampMonotonic": "108817257547",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Thu 2026-09-24 06:22:08 UTC",
+            "InvocationID": "282086f8918849b3af2cbfd173aa8b41",
+            "MainPID": "433924",
+            "SubState": "running"
+          },
+          "proxysql": {
+            "ActiveEnterTimestampMonotonic": "2651715832",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Wed 2026-09-23 00:52:43 UTC",
+            "InvocationID": "ca29ca96ac414d3a89db39759fb0a863",
+            "MainPID": "17549",
+            "SubState": "running"
+          }
+        }
+      }
+    },
+    "platform-state-before": {
+      "x17p1": {
+        "observed_utc": "2026-09-30T09:34:01.134588+00:00",
+        "units": {
+          "keepalived": {
+            "ActiveEnterTimestampMonotonic": "108781953992",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Thu 2026-09-24 06:21:27 UTC",
+            "InvocationID": "0a19f7ebe6d3439c984aa9daa9e42719",
+            "MainPID": "447839",
+            "SubState": "running"
+          },
+          "proxysql": {
+            "ActiveEnterTimestampMonotonic": "28506825",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Wed 2026-09-23 00:08:53 UTC",
+            "InvocationID": "c5c6aed58a984196ba7b8fee05f1255f",
+            "MainPID": "1165",
+            "SubState": "running"
+          }
+        }
+      },
+      "x17p2": {
+        "observed_utc": "2026-09-30T09:34:01.127732+00:00",
+        "units": {
+          "keepalived": {
+            "ActiveEnterTimestampMonotonic": "108817257547",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Thu 2026-09-24 06:22:08 UTC",
+            "InvocationID": "282086f8918849b3af2cbfd173aa8b41",
+            "MainPID": "433924",
+            "SubState": "running"
+          },
+          "proxysql": {
+            "ActiveEnterTimestampMonotonic": "2651715832",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Wed 2026-09-23 00:52:43 UTC",
+            "InvocationID": "ca29ca96ac414d3a89db39759fb0a863",
+            "MainPID": "17549",
+            "SubState": "running"
+          }
+        }
+      }
+    },
+    "target-all-down": {
+      "c18db1": {
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    90150c56-b60d-11f1-8c6d-429633e4a3f8\nseqno:   359383\nsafe_to_bootstrap: 0\n",
+        "mariadbd_process_absent": true,
+        "observed_utc": "2026-09-30T10:11:32.482652+00:00",
+        "socket_error_code": 2002,
+        "unit": {
+          "ActiveState": "inactive",
+          "MainPID": "0",
+          "SubState": "dead"
+        }
+      },
+      "c18db2": {
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    90150c56-b60d-11f1-8c6d-429633e4a3f8\nseqno:   359387\nsafe_to_bootstrap: 0\n",
+        "mariadbd_process_absent": true,
+        "observed_utc": "2026-09-30T10:11:32.435817+00:00",
+        "socket_error_code": 2002,
+        "unit": {
+          "ActiveState": "inactive",
+          "MainPID": "0",
+          "SubState": "dead"
+        }
+      },
+      "c18db3": {
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    90150c56-b60d-11f1-8c6d-429633e4a3f8\nseqno:   359391\nsafe_to_bootstrap: 1\n",
+        "mariadbd_process_absent": true,
+        "observed_utc": "2026-09-30T10:11:32.443319+00:00",
+        "socket_error_code": 2002,
+        "unit": {
+          "ActiveState": "inactive",
+          "MainPID": "0",
+          "SubState": "dead"
+        }
+      }
+    },
+    "target-state-after": {
+      "c18db1": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    90150c56-b60d-11f1-8c6d-429633e4a3f8\nseqno:   -1\nsafe_to_bootstrap: 0\n    ",
+        "observed_utc": "2026-09-30T10:16:17.245373+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "641015546786",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Wed 2026-09-30 10:12:28 UTC",
+            "InvocationID": "9f53e378994a479ea7a8189b1daaa213",
+            "MainPID": "69932",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "90150c56-b60d-11f1-8c6d-429633e4a3f8",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "359647",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      },
+      "c18db2": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    90150c56-b60d-11f1-8c6d-429633e4a3f8\nseqno:   -1\nsafe_to_bootstrap: 0\n    ",
+        "observed_utc": "2026-09-30T10:16:17.226157+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "641030140576",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Wed 2026-09-30 10:12:39 UTC",
+            "InvocationID": "1e899da5e2bf41f5bd38dd7660fdfe49",
+            "MainPID": "59258",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "90150c56-b60d-11f1-8c6d-429633e4a3f8",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "359647",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      },
+      "c18db3": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    90150c56-b60d-11f1-8c6d-429633e4a3f8\nseqno:   -1\nsafe_to_bootstrap: 0\n    ",
+        "observed_utc": "2026-09-30T10:16:17.228096+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "640976832737",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Wed 2026-09-30 10:11:53 UTC",
+            "InvocationID": "1eab81c1d7ef4bd6b7247ae7dc13c7ae",
+            "MainPID": "57871",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "90150c56-b60d-11f1-8c6d-429633e4a3f8",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "359647",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      }
+    },
+    "target-state-before": {
+      "c18db1": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    90150c56-b60d-11f1-8c6d-429633e4a3f8\nseqno:   -1\nsafe_to_bootstrap: 0\n    ",
+        "observed_utc": "2026-09-30T09:33:57.827905+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "119325118",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Wed 2026-09-23 00:09:23 UTC",
+            "InvocationID": "f4cfcbd7587e492da2129d8f720022eb",
+            "MainPID": "824",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "90150c56-b60d-11f1-8c6d-429633e4a3f8",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "359266",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      },
+      "c18db2": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    90150c56-b60d-11f1-8c6d-429633e4a3f8\nseqno:   -1\nsafe_to_bootstrap: 0\n    ",
+        "observed_utc": "2026-09-30T09:33:57.820149+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "117640194",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Wed 2026-09-23 00:09:26 UTC",
+            "InvocationID": "fbdf0cc2911648c8be010154829df1a8",
+            "MainPID": "827",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "90150c56-b60d-11f1-8c6d-429633e4a3f8",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "359266",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      },
+      "c18db3": {
+        "database_query_rc": 0,
+        "grastate": "# GALERA saved state\nversion: 2.1\nuuid:    90150c56-b60d-11f1-8c6d-429633e4a3f8\nseqno:   -1\nsafe_to_bootstrap: 0\n    ",
+        "observed_utc": "2026-09-30T09:33:57.816230+00:00",
+        "units": {
+          "mariadb": {
+            "ActiveEnterTimestampMonotonic": "111989272",
+            "ActiveState": "active",
+            "ExecMainStartTimestamp": "Wed 2026-09-23 00:09:32 UTC",
+            "InvocationID": "03c0700a40fd4c319abfaa4277a80e0b",
+            "MainPID": "833",
+            "SubState": "running"
+          }
+        },
+        "wsrep": {
+          "wsrep_cluster_size": "3",
+          "wsrep_cluster_state_uuid": "90150c56-b60d-11f1-8c6d-429633e4a3f8",
+          "wsrep_cluster_status": "Primary",
+          "wsrep_connected": "ON",
+          "wsrep_last_committed": "359266",
+          "wsrep_local_state": "4",
+          "wsrep_ready": "ON"
+        }
+      }
+    }
+  },
+  "target": "cassiopeiav18-r9",
+  "tenants": {
+    "cassiopeiav18-r9": {
+      "ack_log_sha256": "7c6ab51c7ccb5bec4cac369c082ae26c8211a3bda179bf9c1fa27f060e9315c4",
+      "acknowledged_attempt_ranges": [
+        [
+          1,
+          122
+        ],
+        [
+          134,
+          384
+        ]
+      ],
+      "expected_ack_rowset_sha256": "f076447b5b31eb4e3ee9fce148f44df78648774d4bab6197db12a46061152dbe",
+      "nodes": [
+        {
+          "acknowledged_row_count": 373,
+          "address": "192.168.1.94",
+          "classification": "all_acknowledgments_compared",
+          "extra_count": 0,
+          "extra_ids": [],
+          "health": {
+            "ADDRESS": "192.168.1.94",
+            "wsrep_cluster_size": "3",
+            "wsrep_cluster_status": "Primary",
+            "wsrep_connected": "ON",
+            "wsrep_local_state_comment": "Synced",
+            "wsrep_ready": "ON"
+          },
+          "host": "c18db1",
+          "mismatch_count": 0,
+          "mismatch_ids": [],
+          "missing_count": 0,
+          "missing_ids": [],
+          "row_count": 373,
+          "rowset_sha256": "f076447b5b31eb4e3ee9fce148f44df78648774d4bab6197db12a46061152dbe",
+          "status": "PASS",
+          "table": "cold_20260930T092705Z_8c217d76_cv18",
+          "uncertain_extra_ids": [],
+          "unknown_extra_ids": [],
+          "verified_at": {
+            "monotonic_ns": 5230038625,
+            "utc": "2026-09-30T10:27:42.130668+00:00"
+          }
+        },
+        {
+          "acknowledged_row_count": 373,
+          "address": "192.168.1.95",
+          "classification": "all_acknowledgments_compared",
+          "extra_count": 0,
+          "extra_ids": [],
+          "health": {
+            "ADDRESS": "192.168.1.95",
+            "wsrep_cluster_size": "3",
+            "wsrep_cluster_status": "Primary",
+            "wsrep_connected": "ON",
+            "wsrep_local_state_comment": "Synced",
+            "wsrep_ready": "ON"
+          },
+          "host": "c18db2",
+          "mismatch_count": 0,
+          "mismatch_ids": [],
+          "missing_count": 0,
+          "missing_ids": [],
+          "row_count": 373,
+          "rowset_sha256": "f076447b5b31eb4e3ee9fce148f44df78648774d4bab6197db12a46061152dbe",
+          "status": "PASS",
+          "table": "cold_20260930T092705Z_8c217d76_cv18",
+          "uncertain_extra_ids": [],
+          "unknown_extra_ids": [],
+          "verified_at": {
+            "monotonic_ns": 7490246666,
+            "utc": "2026-09-30T10:27:44.390906+00:00"
+          }
+        },
+        {
+          "acknowledged_row_count": 373,
+          "address": "192.168.1.96",
+          "classification": "all_acknowledgments_compared",
+          "extra_count": 0,
+          "extra_ids": [],
+          "health": {
+            "ADDRESS": "192.168.1.96",
+            "wsrep_cluster_size": "3",
+            "wsrep_cluster_status": "Primary",
+            "wsrep_connected": "ON",
+            "wsrep_local_state_comment": "Synced",
+            "wsrep_ready": "ON"
+          },
+          "host": "c18db3",
+          "mismatch_count": 0,
+          "mismatch_ids": [],
+          "missing_count": 0,
+          "missing_ids": [],
+          "row_count": 373,
+          "rowset_sha256": "f076447b5b31eb4e3ee9fce148f44df78648774d4bab6197db12a46061152dbe",
+          "status": "PASS",
+          "table": "cold_20260930T092705Z_8c217d76_cv18",
+          "uncertain_extra_ids": [],
+          "unknown_extra_ids": [],
+          "verified_at": {
+            "monotonic_ns": 9902910458,
+            "utc": "2026-09-30T10:27:46.803604+00:00"
+          }
+        }
+      ],
+      "rowset_encoding": "UTF-8, LF-terminated rows ordered by numeric attempt ID; tab-separated attempt, uppercase HEX(payload), uppercase HEX(run_id), uppercase HEX(tenant), started_monotonic_ns",
+      "table": "cold_20260930T092705Z_8c217d76_cv18",
+      "traffic": {
+        "ack_ids_without_outcome_record": [],
+        "acknowledged": 373,
+        "attempts": 384,
+        "errors": 11,
+        "first_ack": {
+          "monotonic_ns": 640800044441575,
+          "utc": "2026-09-30T10:08:32.373428+00:00"
+        },
+        "largest_inter_ack_gap": {
+          "from": {
+            "monotonic_ns": 640921052995885,
+            "utc": "2026-09-30T10:10:33.381750+00:00"
+          },
+          "from_attempt": 122,
+          "seconds": 97.433296737,
+          "to": {
+            "monotonic_ns": 641018486292622,
+            "utc": "2026-09-30T10:12:10.815284+00:00"
+          },
+          "to_attempt": 134
+        },
+        "last_ack": {
+          "monotonic_ns": 641268780650966,
+          "utc": "2026-09-30T10:16:21.109635+00:00"
+        },
+        "stop_tail_is_censored_not_a_recovered_gap": true,
+        "stop_tail_seconds": 0.519204272,
+        "timeouts": 11,
+        "uncertain": 11,
+        "uncertain_ids": [
+          123,
+          124,
+          125,
+          126,
+          127,
+          128,
+          129,
+          130,
+          131,
+          132,
+          133
+        ],
+        "unfinished_uncertain_intents": [],
+        "unverified_tls_acknowledgments": 0
+      }
+    },
+    "orionv17-r10": {
+      "ack_log_sha256": "4c2299215170c508abc4d85dc61781e0ba99e3ffb7fd0377a8c2729243554398",
+      "acknowledged_attempt_ranges": [
+        [
+          1,
+          468
+        ]
+      ],
+      "expected_ack_rowset_sha256": "221b465e282d163bffe982ad9e56165c0d94698ba4a171db095e9abdae5d16fd",
+      "nodes": [
+        {
+          "acknowledged_row_count": 468,
+          "address": "192.168.1.80",
+          "classification": "all_acknowledgments_compared",
+          "extra_count": 0,
+          "extra_ids": [],
+          "health": {
+            "ADDRESS": "192.168.1.80",
+            "wsrep_cluster_size": "3",
+            "wsrep_cluster_status": "Primary",
+            "wsrep_connected": "ON",
+            "wsrep_local_state_comment": "Synced",
+            "wsrep_ready": "ON"
+          },
+          "host": "o17db1",
+          "mismatch_count": 0,
+          "mismatch_ids": [],
+          "missing_count": 0,
+          "missing_ids": [],
+          "row_count": 468,
+          "rowset_sha256": "221b465e282d163bffe982ad9e56165c0d94698ba4a171db095e9abdae5d16fd",
+          "status": "PASS",
+          "table": "cold_20260930T092705Z_8c217d76_ov17",
+          "uncertain_extra_ids": [],
+          "unknown_extra_ids": [],
+          "verified_at": {
+            "monotonic_ns": 12569237666,
+            "utc": "2026-09-30T10:27:49.469978+00:00"
+          }
+        },
+        {
+          "acknowledged_row_count": 468,
+          "address": "192.168.1.81",
+          "classification": "all_acknowledgments_compared",
+          "extra_count": 0,
+          "extra_ids": [],
+          "health": {
+            "ADDRESS": "192.168.1.81",
+            "wsrep_cluster_size": "3",
+            "wsrep_cluster_status": "Primary",
+            "wsrep_connected": "ON",
+            "wsrep_local_state_comment": "Synced",
+            "wsrep_ready": "ON"
+          },
+          "host": "o17db2",
+          "mismatch_count": 0,
+          "mismatch_ids": [],
+          "missing_count": 0,
+          "missing_ids": [],
+          "row_count": 468,
+          "rowset_sha256": "221b465e282d163bffe982ad9e56165c0d94698ba4a171db095e9abdae5d16fd",
+          "status": "PASS",
+          "table": "cold_20260930T092705Z_8c217d76_ov17",
+          "uncertain_extra_ids": [],
+          "unknown_extra_ids": [],
+          "verified_at": {
+            "monotonic_ns": 15054168583,
+            "utc": "2026-09-30T10:27:51.954942+00:00"
+          }
+        },
+        {
+          "acknowledged_row_count": 468,
+          "address": "192.168.1.82",
+          "classification": "all_acknowledgments_compared",
+          "extra_count": 0,
+          "extra_ids": [],
+          "health": {
+            "ADDRESS": "192.168.1.82",
+            "wsrep_cluster_size": "3",
+            "wsrep_cluster_status": "Primary",
+            "wsrep_connected": "ON",
+            "wsrep_local_state_comment": "Synced",
+            "wsrep_ready": "ON"
+          },
+          "host": "o17db3",
+          "mismatch_count": 0,
+          "mismatch_ids": [],
+          "missing_count": 0,
+          "missing_ids": [],
+          "row_count": 468,
+          "rowset_sha256": "221b465e282d163bffe982ad9e56165c0d94698ba4a171db095e9abdae5d16fd",
+          "status": "PASS",
+          "table": "cold_20260930T092705Z_8c217d76_ov17",
+          "uncertain_extra_ids": [],
+          "unknown_extra_ids": [],
+          "verified_at": {
+            "monotonic_ns": 17557741291,
+            "utc": "2026-09-30T10:27:54.458553+00:00"
+          }
+        }
+      ],
+      "rowset_encoding": "UTF-8, LF-terminated rows ordered by numeric attempt ID; tab-separated attempt, uppercase HEX(payload), uppercase HEX(run_id), uppercase HEX(tenant), started_monotonic_ns",
+      "table": "cold_20260930T092705Z_8c217d76_ov17",
+      "traffic": {
+        "ack_ids_without_outcome_record": [],
+        "acknowledged": 468,
+        "attempts": 468,
+        "errors": 0,
+        "first_ack": {
+          "monotonic_ns": 640800026323089,
+          "utc": "2026-09-30T10:08:32.355309+00:00"
+        },
+        "largest_inter_ack_gap": {
+          "from": {
+            "monotonic_ns": 641006032514747,
+            "utc": "2026-09-30T10:11:58.361494+00:00"
+          },
+          "from_attempt": 207,
+          "seconds": 2.751435132,
+          "to": {
+            "monotonic_ns": 641008783949879,
+            "utc": "2026-09-30T10:12:01.112938+00:00"
+          },
+          "to_attempt": 208
+        },
+        "last_ack": {
+          "monotonic_ns": 641268858177208,
+          "utc": "2026-09-30T10:16:21.187161+00:00"
+        },
+        "stop_tail_is_censored_not_a_recovered_gap": true,
+        "stop_tail_seconds": 0.44167803,
+        "timeouts": 0,
+        "uncertain": 0,
+        "uncertain_ids": [],
+        "unfinished_uncertain_intents": [],
+        "unverified_tls_acknowledgments": 0
+      }
+    }
+  },
+  "final_post_cleanup_health_checks": [
+    {
+      "label": "target-postflight",
+      "command": [
+        "make",
+        "lab-galera-verify",
+        "lab-proxysql-verify",
+        "lab-endpoint-verify",
+        "lab-monitoring-verify",
+        "CLUSTER=cassiopeiav18-r9"
+      ],
+      "started_at_utc": "2026-09-30T11:00:13.957515+00:00",
+      "ended_at_utc": "2026-09-30T11:00:33.853851+00:00",
+      "duration_seconds": 19.895938958,
+      "returncode": 0
+    },
+    {
+      "label": "neighbor-postflight",
+      "command": [
+        "make",
+        "lab-galera-verify",
+        "lab-proxysql-verify",
+        "lab-endpoint-verify",
+        "CLUSTER=orionv17-r10"
+      ],
+      "started_at_utc": "2026-09-30T11:00:13.956767+00:00",
+      "ended_at_utc": "2026-09-30T11:00:31.230261+00:00",
+      "duration_seconds": 17.272803375,
+      "returncode": 0
+    }
+  ],
+  "worker_fatal": false,
+  "workload_host": "x17app"
+}
