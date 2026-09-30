@@ -34,6 +34,9 @@ from pathlib import Path
 import yaml
 from jsonschema import validate, ValidationError
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from production_profile import production_errors
+
 DEFAULT_PLATFORM = "platform/example/platform.yml"
 DEFAULT_SCHEMA = "platform/schema/platform.schema.json"
 DEFAULT_INVENTORY = "platform/example/inventory.yml"
@@ -80,7 +83,8 @@ def inventory_groups(inventory):
 
 def semantic_errors(platform, groups):
     """Kontrole, ktorych JSON Schema nie wyrazi (relacje platform.yml <-> inwentarz)."""
-    errors = []
+    inventory = {"all": {"children": {name: {"hosts": hosts} for name, hosts in groups.items()}}}
+    errors = production_errors(platform, "platform", inventory)
 
     # Grupy klastrowe w inwentarzu platformy = powrot sprzezenia wlasnosciowego.
     for group in FORBIDDEN_GROUPS:

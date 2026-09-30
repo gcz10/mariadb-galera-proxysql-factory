@@ -1,8 +1,20 @@
 # ADR-002: TLS disabled w v1 — udokumentowane ryzyko
 
 **Data:** 2026-07-22
-**Status:** Accepted (ZAŁOŻENIE DO POTWIERDZENIA — risk acceptance wymagane w profilu production)
+**Status:** Superseded przez P2-10 dla produkcji; `disabled` pozostaje wyborem środowisk nieprodukcyjnych.
 **Decydent:** Principal (Interview 2026-07-22)
+
+## Bieżący kontrakt
+
+Decyzja użytkownika w P2-10 zastępuje produkcyjne ostrzeżenie odmową:
+`environment: production` wymaga `tls.mode: full`, weryfikacji certyfikatów
+PMM i TLS dla S3. Nie ma wyjątku przez podpisany ADR ani pole akceptacji ryzyka.
+Walidator i efektywne zmienne Ansible są sprawdzane przed mutacją;
+kontrakt i granica dowodu: [profiles/README.md](../../profiles/README.md).
+
+Poniższe sekcje opisują historyczną decyzję z 2026-07-22, nie bieżącą
+politykę produkcyjną.
+
 
 ## Kontekst
 

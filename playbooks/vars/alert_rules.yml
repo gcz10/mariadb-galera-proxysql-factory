@@ -118,8 +118,16 @@ f15_cluster_rules:
   # wybiera najnowsza. `max(metric) or vector(0)` osobno dla kazdego zrodla
   # usuwa nazwe metryki i zawsze daje ten sam pusty label set; zewnetrzne
   # `or` zachowuje wtedy LHS i ignoruje RHS niezaleznie od jego wartosci.
+  # `requires_restore_drill` — regula powstaje tylko wtedy, gdy klaster NAPRAWDE
+  # planuje cwiczenia: backup.enabled=true ORAZ restore_test_schedule inny niz
+  # `disabled`/pusty (ten sam predykat co bramka metryki w f11_freshness.yml i
+  # wymaganie swiezosci w tests/lab/probe-pmm-native.py). Marker ZASTEPUJE
+  # `requires_backup`, bo go implikuje. Produkcja ma harmonogram `disabled`
+  # (drille naleza do osobnego srodowiska nieprodukcyjnego), a regula liczaca
+  # wiek ostatniego drillu palilaby sie tam wiecznie. Regula, ktora f15 przestal
+  # tworzyc, jest kasowana rekoncyliacja osieroconych regul tego zakresu.
   - uid: "{{ f15_uid_prefix }}-restore-drill-stale"
-    requires_backup: true
+    requires_restore_drill: true
     title: "Restore drill stale (no successful drill in 8 days)"
     expr: "(time() - (max({__name__=~\"isa_restore_test_last_success_unixtime|galera_restore_last_success_unixtime\",cluster=\"{{ cluster_label }}\"}) or vector(0))) > bool (8 * 24 * 3600)"
     summary: "Last successful restore drill older than 8 days (schedule: {{ backup.restore_test_schedule }}) or drill metric missing"

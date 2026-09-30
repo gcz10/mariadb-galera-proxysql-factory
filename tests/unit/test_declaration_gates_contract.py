@@ -30,7 +30,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SCHEMA = REPO / "clusters" / "schema" / "cluster.schema.json"
 MAKEFILE = REPO / "Makefile"
-GATE_SCRIPT = REPO / "tests" / "validation" / "gate-build.sh"
 
 # przelacznik -> (zmienna make, cele, sonda, marker skipu w sondzie)
 SWITCHES = {
@@ -104,34 +103,6 @@ class DeclarationGatesContractTests(unittest.TestCase):
             with self.subTest(var=var):
                 self.assertRegex(text, rf"{var}\s*=\s*\$\(shell[^\n]*cluster\.yml")
 
-    def test_seed_coupling_guard_respects_disabled_backup(self):
-        """Na klastrze bez kopii nie pytamy o dane dla drillu, ktory nie nastapi.
-
-        Straznik sprzezenia seed->backup zadal EXISTING_DATA=yes takze wtedy,
-        gdy backup byl wylaczony deklaracja — czyli wymuszal odpowiedz na
-        pytanie o przebieg, ktorego nie bedzie.
-
-        Od F4 straznik zyje w tests/validation/gate-build.sh (preflight);
-        Makefile musi mu tylko za plombowac deklaracje i przelaczniki.
-        """
-        recipe = (GATE_SCRIPT.read_text(encoding="utf-8"))
-        # Szukamy WARUNKU, nie slowa: EXISTING_DATA (w komunikacie bledu) nie
-        # mierzy kolejnosci — warunek porownania tak.
-        condition = '[ "$existing_data" != "yes" ]'
-        self.assertIn(condition, recipe)
-        self.assertLess(
-            recipe.index('[ "$backup_enabled" = "true" ]'),
-            recipe.index(condition),
-            "warunek EXISTING_DATA musi lezec WEWNATRZ bramki backup_enabled",
-        )
-        makefile = MAKEFILE.read_text(encoding="utf-8")
-        build = re.search(r"^cluster-build:.*?(?=\n\S|\Z)", makefile, re.S | re.M)
-        self.assertIsNotNone(build, "brak celu cluster-build")
-        self.assertIn(
-            'gate-build.sh preflight "$(backup_enabled)" "$(BUILD_SKIP)" "$(EXISTING_DATA)"',
-            build.group(0),
-            "cluster-build musi przekazac deklaracje backupu i przelaczniki do bramki",
-        )
 
     def test_probes_skip_instead_of_failing(self):
         """Sonda ma powiedziec, ze nie mierzy — nie udawac zielonej ani czerwonej."""

@@ -1,0 +1,103 @@
+---
+# Applied automatically to declarations with environment: production.
+# These are JSON Schema constraints over existing configuration fields.
+# There is deliberately no optional cluster.profile selector or risk bypass.
+cluster:
+  type: object
+  properties:
+    versions:
+      properties:
+        policy:
+          const: locked
+    tls:
+      properties:
+        mode:
+          const: full
+        require_secure_transport:
+          const: true
+    mariadb_tuning:
+      properties:
+        # Omitting this field still renders the existing safe default of 1.
+        innodb_flush_log_at_trx_commit:
+          enum: [1, "1"]
+    backup:
+      properties:
+        enabled:
+          const: true
+        destination:
+          # A local mount declaration cannot establish off-host provenance.
+          enum: [s3, smb]
+        encryption_enabled:
+          const: true
+        restore_test_schedule:
+          # Drills require a separate non-production restore environment.
+          const: disabled
+        s3:
+          required: [secure]
+          properties:
+            secure:
+              const: true
+        smb:
+          properties:
+            options:
+              allOf:
+                - contains:
+                    const: seal
+                - not:
+                    contains:
+                      pattern: '^noseal$'
+    monitoring:
+      required: [alerts]
+      properties:
+        enabled:
+          const: true
+        pmm:
+          required: [ca_reference]
+          properties:
+            validate_certs:
+              const: true
+            ca_reference:
+              type: string
+              minLength: 1
+        alerts:
+          required: [email]
+          properties:
+            email:
+              type: string
+              format: email
+              pattern: '^[^\s@]+@[^\s@]+\.[^\s@]+$'
+platform:
+  type: object
+  properties:
+    platform:
+      required: [infra]
+      properties:
+        infra:
+          required: [services]
+          properties:
+            services:
+              # PMM/SMTP and storage are external, operator-owned services.
+              maxItems: 0
+    versions:
+      properties:
+        policy:
+          const: locked
+    monitoring:
+      properties:
+        pmm:
+          required: [ca_reference]
+          properties:
+            validate_certs:
+              const: true
+            ca_reference:
+              type: string
+              minLength: 1
+          # Volume backup belongs to the external PMM operator, not this host.
+          not:
+            required: [scheduled_backup]
+        alerts:
+          properties:
+            email:
+              type: string
+              format: email
+              pattern: '^[^\s@]+@[^\s@]+\.[^\s@]+$'

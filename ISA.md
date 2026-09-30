@@ -74,9 +74,10 @@ Tworzenie VM jest w zakresie: maszyny klastrów i warstwy współdzielonej powst
 - Galera: 3 pełne węzły, `max_writers: 1`, read/write split wyłączony, SST przez `mariadb-backup`, nieparzysta liczba głosów i ochrona quorum.
 - ProxySQL: 2 węzły, natywny `mysql_galera_hostgroups`, admin port ograniczony do administration CIDR.
 - Endpoint: Keepalived VIP na węzłach ProxySQL (decyzja principal).
-- TLS: tryb `disabled` w v1 z udokumentowanym risk acceptance; `full` zaplanowane w późniejszym feature, pozostawia zależne ISC otwarte.
+- TLS: produkcja wymaga `tls.mode: full`, weryfikacji PMM i TLS dla S3; wyłączony TLS jest dozwolony wyłącznie poza produkcją. Akceptacja ryzyka nie omija profilu.
 - Sekrety: backend dobrany do istniejącego standardu firmy (F0 discovery); brak sekretów w repo, logach, diffach, argv.
 - Backup: szyfrowany, checksumowany i izolowany per klaster; backend wybierany jawnie spośród S3, zarządzanego SMB albo wcześniej zamontowanego filesystemu; retencja i scheduler są częścią `cluster.yml`.
+- Profil produkcyjny: automatyczny przez `environment: production`; zewnętrzne PMM/SMTP/storage, brak zarządzanego `infra`, commit durability `1`, obowiązkowy backup poza hostami Galery (S3 lub sealed SMB), bez laboratoryjnego seed/chaos/restore-drill. Kontrakt i granica dowodu: `profiles/README.md`.
 - High-blast kryteria (sekrety, dane, produkcja, recovery, upgrade) wymagają deterministycznego probe'a; `manual` niewystarcza.
 - Hierarchia dowodów: pomiar na docelowym systemie > oficjalna dokumentacja przypiętej wersji > release notes/errata > wiedza modelu jako hipoteza.
 
@@ -144,7 +145,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 - [x] ISC-42: Konta SST, monitor i app mają minimalne uprawnienia (least privilege).
 - [x] ISC-43: Anti: Sekrety nie występują w repo, logach CI, diffach ani argv procesu.
 - [x] ISC-44: W trybie `tls.mode=full` połączenie z niezaufanym lub nieważnym certyfikatem jest odrzucane.
-- [x] ISC-45: W trybie `tls.mode=disabled` w profilu production powstaje jawne ostrzeżenie i udokumentowane risk acceptance.
+- [x] ISC-45: Profil production odrzuca `tls.mode != full`; ostrzeżenie ani akceptacja ryzyka nie zastępują szyfrowania.
 
 ### Obserwowalność
 - [x] ISC-46: Metryki Galery, MariaDB i ProxySQL trafiają do istniejącego systemu monitoringowego.
@@ -236,7 +237,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 | ISC-42 | literal | bash | `SHOW GRANTS` dla kont SST/monitor/app | minimalne uprawnienia | mariadb client |
 | ISC-43 | Anti: no-secrets-leak | bash | gitleaks + `grep` repo/logi + `ps` argv | brak sekretów | gitleaks + ps |
 | ISC-44 | derived: tls-full | bash | połączenie z niezaufanym cert (wrong CA) | odrzucone (ERROR 2026) | probe-app-conformance.py |
-| ISC-45 | derived: tls-disabled-warning | bash | profil production + tls.disabled | ostrzeżenie + risk acceptance w Decisions | ansible report + grep |
+| ISC-45 | derived: production-tls-required | python + Ansible | production + tls.disabled, także przez `-e` | odmowa przed mutacją | test_production_profile.py + production_profile.yml |
 | ISC-46 | literal | python | PMM Prom: `proxysql_*` + `mysql_up` + Galera + node_exporter series | 2 ProxySQL + 3 MySQL + 5 node series scraped | probe-pmm-native.py |
 | ISC-47 | literal | bash | utrata quorum/writera/node → alert | alert dostarczony do celu | monitoring |
 | ISC-48 | literal | bash | `logrotate -d` + sprawdzenie rotacji | rotuje się | logrotate + ansible |
@@ -284,6 +285,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 
 ## Decisions
 
+- P2-10 — decyzja użytkownika: wariant A, rzeczywista ścieżka produkcyjna w kodzie. Profil jest wymagany i nie ma wyjątków ryzyka. Platforma nie provisionuje laboratoryjnych PMM/MinIO/Maildev; operator dostarcza zewnętrzne PMM z zaufanym CA i SMTP oraz storage. Produkcyjny build pomija seed, drille i syntetyczny gcache, a bramka jest tylko odczytowa. Dotychczasowy lab nie został przeklasyfikowany ani wdrożony ponownie. Lokalne odmowy i smoke kontrolera nie dowodzą wdrożenia produkcyjnego, doręczenia poczty, odtwarzalności danych ani RTO/RPO.
 - 2026-07-22 — przyjęte założenie: standardowe porty (MariaDB 3306, Galera 4567/4568/4567, ProxySQL 6033/6032) — ponieważ oficjalne domyślne — dowód: MariaDB/ProxySQL docs.
 - 2026-07-22 — przyjęte założenie: SELinux pozostaje Enforcing — ponieważ hardening baseline; wyłączenie wykluczone — dowód: MASTER_PROMPT §5, §12.
 - 2026-07-22 — przyjęte założenie: firewalld włączony, tylko zadeklarowany ruch — ponieważ defense in depth — dowód: MASTER_PROMPT §5.
@@ -736,6 +738,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 - ISC-42: PASS — sst_user i pmm_monitor least privilege potwierdzone 2026-07-22.
 - ISC-43: PASS — SST password externalizowane; probe-no-secrets-leak PASS; grep = 0 trafień 2026-07-22.
 - ISC-45: PASS — f6_hardening.yml assert odrzuca production+disabled; lab=laboratory PASS 2026-07-22.
+- ISC-45, P2-10: bieżący profil odrzuca wyłączony TLS także w efektywnych zmiennych Ansible; smoke localhost: bezpieczna deklaracja `changed=0`, nadpisanie TLS oraz downgrade środowiska → odmowa przed dostępem do hostów. Testy `test_production_profile.py` obejmują też locked versions, PMM CA/verify, secure S3, trwałość commitów, backup poza źródłem, adres alertów i brak usług laboratoryjnych. Bez wdrożenia na rzeczywistej produkcji.
 - ISC-18: PASS — dokładnie jeden ONLINE writer (gnode3) w writer HG 10; probe-proxysql PASS na pnode1/pnode2 2026-07-22.
 - ISC-19: PASS — zatrzymany gnode2 przeniesiony do offline HG 40, po recovery wrócił do backup HG 20 2026-07-22.
 - ISC-20: PASS — Galera monitor skonwergował; 3 zdrowe backendy rozłożone writer/backup HG 2026-07-22.

@@ -350,7 +350,11 @@ def main() -> int:
         f"({OWNED_PATTERN}); unexpected listeners blocked"
     )
     # Docker ingress belongs to the platform, not tenants sharing its inventory.
-    if "infra" not in OWNED_GROUPS:
+    # Bez hosta `infra` (produkcja z zewnetrznym PMM/S3) nie ma czego mierzyc.
+    # Dalsza czesc odpytuje wzorzec `infra`, ktory nic nie obejmuje: albo konczy
+    # sie bledem `ansible`, albo pusta petla domyka PASS-em zapewniajacym, ze
+    # filtr Dockera i wiazanie adresow zostaly zweryfikowane, choc nic nie zmierzono.
+    if "infra" not in OWNED_GROUPS or not hosts("infra"):
         return report(failures, summary)
 
     # Filtr ingress Dockera opiera sie na module xt_conntrack (match --ctorigdst).

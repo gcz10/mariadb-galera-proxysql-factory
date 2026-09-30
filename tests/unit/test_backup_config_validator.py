@@ -401,6 +401,7 @@ class BackupLockfileTests(unittest.TestCase):
             ("backup_tools", "archive_package"),
             ("backup_tools", "cron_package"),
             ("backup_tools", "cifs_userspace_package"),
+            ("backup_tools", "smb_client_package"),
             ("minio", "mc_image"),
             ("minio", "mc_image_digest"),
         ]

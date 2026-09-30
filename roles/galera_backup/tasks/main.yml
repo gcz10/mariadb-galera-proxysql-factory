@@ -29,6 +29,14 @@
     - backup.enabled
     - (galera_backup_local_role | default('scheduler')) == 'restore' or backup.destination == 'smb'
 
+- name: Install SMB read-only artifact verification client
+  ansible.builtin.package:
+    name: "{{ lock.backup_tools.smb_client_package }}"
+    state: present
+  when:
+    - backup.enabled
+    - backup.destination == 'smb'
+
 - name: Ensure MinIO Python SDK is installed
   ansible.builtin.pip:
     name: "minio=={{ lock.minio.sdk_version }}"

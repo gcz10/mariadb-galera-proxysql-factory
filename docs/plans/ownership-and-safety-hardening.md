@@ -1,7 +1,7 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
-**Status:** W TOKU — P0/P1/P2-6/P2-7/P2-8/P2-9 zamknięte; P3 ma jedną otwartą decyzję (LICENSE), otwarte P2-10; dług testowy (usunięcie dualnej ścieżki kontenerowej) zamknięty.
-**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3/P1-4/P1-5, P2-6/P2-8/P2-9, P3 (higiena; audyt na kodzie 2026-08-24 potwierdził 10/11 pozycji zamkniętych), dług testowy (usunięcie ścieżki `not use_systemd` i labu kontenerowego). P2-7 domknięte: prawo kasowania kopii jest odseparowane od prawa zapisu i zweryfikowane na żywo.
+**Status:** W TOKU — P0/P1/P2-6/P2-7/P2-8/P2-9 zamknięte; P2-10 zamknięte jako implementacja i lokalna weryfikacja ścieżki; P3 ma jedną otwartą decyzję (LICENSE); P4 pozostaje osobnym kierunkiem; dług testowy (usunięcie dualnej ścieżki kontenerowej) zamknięty.
+**Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3/P1-4/P1-5, P2-6/P2-8/P2-9/P2-10, P3 (higiena; audyt na kodzie 2026-08-24 potwierdził 10/11 pozycji zamkniętych), dług testowy (usunięcie ścieżki `not use_systemd` i labu kontenerowego). P2-7 domknięte: prawo kasowania kopii jest odseparowane od prawa zapisu i zweryfikowane na żywo.
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
 
@@ -200,11 +200,11 @@ ostatniej sekundy transakcji przy crashu
 (https://mariadb.com/docs/server/server-management/server-monitoring-logs/binary-log/group-commit-for-the-binary-log).
 
 **Zmiana.** Domyślna wartość szablonu `1`. `laboratory` może jawnie ustawić `0`.
-Walidator odrzuca `profile: production` z wartością inną niż `1`, chyba że
-`cluster.yml` zawiera jawny rekord akceptacji ryzyka.
+Po cutover P2-10 walidator odrzuca `environment: production` z `0/2`,
+bez wyjątku akceptacji ryzyka.
 
-**Akceptacja.** Test jednostkowy renderujący szablon bez klucza → `1`. Walidator:
-produkcyjny config z `0` bez akceptacji ryzyka → FAIL.
+**Akceptacja.** Render bez klucza → `1`; produkcyjne `0/2` → FAIL,
+pominięty klucz i `"1"` → PASS.
 
 **Koszt:** mały.
 
@@ -212,6 +212,10 @@ produkcyjny config z `0` bez akceptacji ryzyka → FAIL.
 laboratoryjne zachowują jawne `0` (explicit opt-out). Schemat ogranicza wartości do `0/1/2`
 i dodaje boolean `durability_risk_accepted`. Walidator odrzuca produkcyjne `0/2`
 bez jawnej akceptacji, a pominięcie klucza pozostaje bezpieczne.
+
+**Cutover P2-10.** Pole `durability_risk_accepted` usunięte ze schematu
+i walidatora; jest odrzucane, nie pozostaje nieaktywną furtką. Wynik powyżej
+opisuje wcześniejsze commity, nie bieżącą politykę.
 
 ---
 
@@ -487,25 +491,54 @@ Stary plaintext, obcy run_id, zły host i częściowy JSON są odrzucane.
 
 ---
 
-## P2-10. Brak zadeklarowanej ścieżki produkcyjnej
+## P2-10. Brak zadeklarowanej ścieżki produkcyjnej — ZROBIONE
 
 **Problem.** `profiles/` zawiera wyłącznie placeholder README. `platform-build`
 bezwarunkowo wywołuje `platform-infra`, który asertuje
 `platform.environment != 'production'`. Repozytorium ma więc inwarianty
 produkcyjne, ale nie ma ścieżki produkcyjnej.
 
-**Zmiana — decyzja jawna, jeden z dwóch wariantów:**
+**Decyzja użytkownika: A.** `profiles/production.yml` jest obowiązkowym
+profilem wybranym automatycznie przez `environment: production`, nie polem
+`cluster.profile` ani opcjonalną nakładką.
 
-- **A.** Powstaje `profiles/production.yml` wymuszający: `versions.policy: locked`,
-  TLS full, walidację certyfikatów PMM, TLS dla S3, `innodb_flush_log_at_trx_commit=1`,
-  wyłączony chaos, brak maildeva, backup poza hostem, produkcyjne adresy alertów.
-- **B.** README i ISA mówią wprost, że fabryka jest referencją lab/staging, a
-  „production design requirements" to nie to samo co „production-supported deployment".
+**Implementacja.** Walidatory YAML i kontrolerowy preflight Ansible wymagają
+locked versions, full TLS, PMM HTTPS/CA/verify, secure S3 lub sealed SMB poza
+hostami Galery, szyfrowanego backupu, commit durability `1`, nielaboratoryjnego
+odbiorcy alertów i braku usług laboratoryjnych. Preflight rozwiązuje DNS
+endpointu backupu na każdym źródle i odrzuca także niebezpieczne `-e` oraz
+downgrade produkcyjnej deklaracji. Platforma wymaga `infra.services: []`,
+braku hostów `infra` i hosta `app`; znane artefakty labu blokują promocję hosta.
 
-**Akceptacja.** Wariant A: walidator odrzuca produkcyjny config łamiący którykolwiek
-warunek. Wariant B: brak zdania o produkcji bez kwalifikatora w README i ISA.
+`platform-build` pomija stack laboratoryjny i backup jego wolumenu PMM.
+`cluster-build` nie wykonuje seed/drillu i kończy się odczytową
+`cluster-production-verify`; pominięcie backup/app-host/alerts jest błędem.
+PMM pozostaje przypięty wersją, ale produkcja nie wymaga dystrybucji Docker.
+Wyłączony restore harmonogram nie wymaga metryki ani alertu stale-drill;
+istniejąca zarządzana reguła jest usuwana przez reconciliation F15.
 
-**Koszt:** A średni, B trywialny.
+**Akceptacja.** Produkcyjny config łamiący którykolwiek warunek → odmowa.
+Dowody zachowania: `test_production_profile.py`, `test_production_backup_location.py`,
+`test_production_make_guards.py`, `test_gate_build_sh.py`, testy infra i cyklu
+restore/PMM. Rzeczywiste smoke kontrolera Ansible potwierdziły `changed=0`
+dla bezpiecznej konfiguracji oraz odmowy TLS override, downgrade, Maildev
+i produkcyjnego drillu. `--limit` ani nadpisanie zmiennych środowiska Make
+nie omijają kontroli; inwentarz bez `ansible_host` nadal mierzy wszystkie źródła.
+
+**Pomiar cutoveru.** Lokalnie wykonano 16 kroków weryfikacyjnych z CI bez
+modyfikowania ich poleceń: zero błędów, 994 testy jednostkowe. Instalacji
+narzędzi i kolekcji nie powtarzano. W izolowanych kontenerach rzeczywisty
+klient SMB odczytał kompletny szyfrowany artefakt bez montowania udziału;
+sonda zaakceptowała poprawną sumę, odrzuciła zmianę bajtu payloadu i nie
+uznała błędu logowania za dowód braku kopii. Pomiar złapał rozdzielenie
+strumieni przez `smbclient -E`: flaga pozostaje dla `get`, nie dla `ls`.
+Przechwycony ruch potwierdził szyfrowanie sesji SMB. Zasoby próby usunięto.
+
+**Granica dowodu.** To implementacja i lokalna weryfikacja ścieżki, nie certyfikacja
+wdrożenia produkcyjnego. Nie dostarczono produkcyjnych hostów, PKI, PMM/SMTP,
+storage ani poświadczeń. Nie zmieniano bieżącej floty. Doręczenie alertów,
+odtwarzalność produkcyjnych danych, niezależność fizycznego storage i RTO/RPO
+wymagają osobnych pomiarów; szczegóły w `profiles/README.md`.
 
 ---
 

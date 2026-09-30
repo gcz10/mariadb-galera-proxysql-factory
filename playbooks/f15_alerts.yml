@@ -80,6 +80,15 @@
     # gdy naprawde bedzie mial racje.
     # `requires_pmm_backup` — to samo dla warstwy: regula swiezosci kopii PMM
     # powstaje tylko, gdy platforma deklaruje monitoring.pmm.scheduled_backup.
+    # `requires_restore_drill` — regula swiezosci drillu powstaje tylko, gdy
+    # `restore_drill_enabled`: backup.enabled ORAZ restore_test_schedule inny niz
+    # `disabled`/pusty. `disabled` jest niepustym napisem, wiec samo `length > 0`
+    # uznaloby go za harmonogram i regula palilaby sie wiecznie (produkcja nie ma
+    # drilli — naleza do osobnego srodowiska nieprodukcyjnego). Ten sam predykat
+    # ma f11_freshness.yml (bramka metryki) i tests/lab/probe-pmm-native.py.
+    restore_drill_enabled: >-
+      {{ (backup | default({})).enabled | default(false) | bool
+         and ((backup | default({})).restore_test_schedule | default('') | trim) not in ['', 'disabled'] }}
     f15_effective_rules: >-
       {{ ((f15_shared_rules | rejectattr('requires_pmm_backup', 'defined') | list)
           + (f15_shared_rules | selectattr('requires_pmm_backup', 'defined') | list
@@ -87,11 +96,14 @@
          if galera is not defined
          else ((f15_cluster_rules
                 | rejectattr('requires_tls', 'defined')
-                | rejectattr('requires_backup', 'defined') | list)
+                | rejectattr('requires_backup', 'defined')
+                | rejectattr('requires_restore_drill', 'defined') | list)
                + (f15_cluster_rules | selectattr('requires_tls', 'defined') | list
                   if tls_full | bool else [])
                + (f15_cluster_rules | selectattr('requires_backup', 'defined') | list
-                  if (backup | default({})).enabled | default(false) else [])) }}
+                  if (backup | default({})).enabled | default(false) else [])
+               + (f15_cluster_rules | selectattr('requires_restore_drill', 'defined') | list
+                  if restore_drill_enabled | bool else [])) }}
   pre_tasks:
     - name: "Wymagaj PMM_ADMIN_PASSWORD i adresu alertów"
       ansible.builtin.assert:

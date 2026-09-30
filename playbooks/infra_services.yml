@@ -5,6 +5,82 @@
 # Odpalane wyłącznie z definicji platformy (`make platform-infra`,
 # `-e @platform.yml`). Host infra należy do warstwy współdzielonej;
 # playbook nie czyta żadnej zmiennej z konfiguracji najemcy.
+#
+# KONTRAKT DEKLARACJI (play kontrolera, przed jakąkolwiek mutacją):
+#   * usługi zadeklarowane => inventory MUSI mieć dokładnie jeden host `infra`.
+#     Play `hosts: infra` bez hosta jest pomijany z kodem 0, więc bez tej
+#     bramki zażądane PMM/MinIO/Maildev "przechodziło" bez niczego uruchomionego;
+#   * `platform.infra.services: []` => jawny no-op (ani Docker, ani firewall,
+#     ani kontenery nie są ruszane — także na hostach `infra` z inventory);
+#   * `platform.environment: production` => `infra.services` MUSI być jawnie `[]`.
+#     Produkcja korzysta z zewnętrznego, zarządzanego przez operatora PMM/S3/SMTP;
+#     laboratoryjne kontenery nie powstają w niej także przy inventory bez hosta.
+# Pozostałe play'e wybierają hosty tym samym warunkiem (`all:!all` = brak hostów),
+# więc nawet gdyby bramka kontrolera została pominięta, produkcyjny host infra
+# nie jest adresowany.
+
+- name: "Infra — kontrakt deklaracji usług (kontroler, przed jakąkolwiek mutacją)"
+  hosts: all
+  connection: local
+  become: false
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    ansible_become: false
+    infra_declared_services: "{{ platform.infra.services | default(['pmm', 'minio', 'maildev']) }}"
+    infra_inventory_hosts: "{{ groups['infra'] | default([]) }}"
+  tasks:
+    - name: "Wymagaj konfiguracji platformy przed oceną deklaracji usług"
+      ansible.builtin.assert:
+        that:
+          - platform is defined
+          - platform is mapping
+          - cluster is not defined
+          - platform.environment is defined
+        fail_msg: >-
+          infra_services.yml przyjmuje wyłącznie konfigurację platformy.
+          Użyj kanonicznego celu platform-infra.
+        quiet: true
+
+    # Odrzucenie jest kontrolerowe i nie zależy od inventory: produkcyjna
+    # definicja bez hosta `infra` również nie może "przejść" z żądaniem usług.
+    - name: "Produkcja nie hostuje usług laboratoryjnych — wymagaj jawnego infra.services: []"
+      ansible.builtin.assert:
+        that:
+          - platform.infra is defined
+          - platform.infra.services is defined
+          - platform.infra.services is sequence
+          - platform.infra.services is not string
+          - platform.infra.services | length == 0
+        fail_msg: >-
+          platform.environment=production wymaga jawnego platform.infra.services: [].
+          PMM, MinIO i Maildev tej warstwy są laboratoryjne; produkcja korzysta z
+          zewnętrznego PMM/S3/SMTP zarządzanego przez operatora. Zadeklarowano:
+          {{ (platform.infra | default({})).get('services', 'brak deklaracji (domyślnie pmm, minio, maildev)') }};
+          hostów infra w inventory: {{ infra_inventory_hosts | length }}.
+        quiet: true
+      when: platform.environment == 'production'
+
+    - name: "Wymagaj dokładnie jednego hosta infra dla zadeklarowanych usług"
+      ansible.builtin.assert:
+        that:
+          - infra_inventory_hosts | length == 1
+        fail_msg: >-
+          platform.infra.services={{ infra_declared_services }}, a inventory ma
+          {{ infra_inventory_hosts | length }} hostów w grupie infra (wymagany 1).
+          Play ograniczony do grupy bez hostów kończy się kodem 0 bez uruchomienia
+          czegokolwiek; zażądane usługi nie mogą zostać uznane za wdrożone.
+        quiet: true
+      when: infra_declared_services | length > 0
+
+    - name: "Brak zadeklarowanych usług — jawny no-op, żaden host nie jest dotykany"
+      ansible.builtin.debug:
+        msg: >-
+          INFRA NO-OP: environment={{ platform.environment }},
+          platform.infra.services=[] (zmierzone: usług 0, hostów infra w inventory
+          {{ infra_inventory_hosts | length }}). Docker, Compose, PMM, MinIO, Maildev,
+          filtr DOCKER-USER i firewall hosta infra nie są instalowane ani zmieniane.
+      when: infra_declared_services | length == 0
 
 - name: "Infra — wymagaj ownership warstwy wspólnej"
   hosts: infra
@@ -45,10 +121,10 @@
 - name: "Infra — wymuś dokładną politykę host firewall przed uruchomieniem usług"
   ansible.builtin.import_playbook: firewall.yml
   vars:
-    firewall_target_hosts: infra
+    firewall_target_hosts: "{{ 'infra' if ((platform | default({})).get('environment', '') != 'production' and ((platform | default({})).get('infra', {}).get('services', ['pmm', 'minio', 'maildev']) | length) > 0) else 'all:!all' }}"
 
 - name: "Infra — uslugi warstwy wspolnej zadeklarowane przez platforme"
-  hosts: infra
+  hosts: "{{ 'infra' if ((platform | default({})).get('environment', '') != 'production' and ((platform | default({})).get('infra', {}).get('services', ['pmm', 'minio', 'maildev']) | length) > 0) else 'all:!all' }}"
   become: true
   gather_facts: true
   serial: 1

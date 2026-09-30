@@ -112,18 +112,22 @@ class ProbeBackupInventoryTests(unittest.TestCase):
         self.assertIn("SKIP: backup wylaczony", result.stdout)
         self.assertNotIn("Traceback", result.stderr)
 
-    def test_enabled_smb_backup_is_undetermined_not_green(self):
-        """Brak sondy backendu jest jawnym brakiem pomiaru, nie PASS."""
+    def test_enabled_backend_without_a_probe_is_undetermined_not_green(self):
+        """A backend the probe cannot measure is an explicit non-measurement."""
         cluster = {
-            "cluster": {"name": "smb-backup"},
-            "backup": {"enabled": True, "destination": "smb"},
+            "cluster": {"name": "fs-backup"},
+            "backup": {
+                "enabled": True,
+                "destination": "filesystem",
+                "freshness_sla_hours": 26,
+            },
         }
         result = self._run_probe(cluster, {"all": {"children": {}}})
         output = result.stdout + result.stderr
 
-        self.assertNotEqual(result.returncode, 0, output)
+        self.assertEqual(result.returncode, 2, output)
         self.assertIn("UNDETERMINED", output)
-        self.assertIn("brak sondy dla destination=smb", output)
+        self.assertIn("brak sondy dla destination=filesystem", output)
         self.assertNotIn("Traceback", output)
 
     def test_enabled_s3_path_uses_resolved_local_configuration(self):
@@ -136,6 +140,7 @@ class ProbeBackupInventoryTests(unittest.TestCase):
             "backup": {
                 "enabled": True,
                 "destination": "s3",
+                "freshness_sla_hours": 26,
                 "s3": {
                     "endpoint": "127.0.0.1:1",
                     "bucket": "s3-backup",

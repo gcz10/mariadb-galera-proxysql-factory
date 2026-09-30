@@ -3,6 +3,21 @@
 # Satisfies: ISC-34 (weryfikacja checksum), ISC-36 (restore + integrity), ISC-37 (drill + stan).
 # rnode1 NIE jest częścią klastra Galera — standalone MariaDB (dowód, że backup jest samodzielnie odtwarzalny).
 
+- name: "F10 - refuse production restore drills before contacting hosts"
+  hosts: all
+  connection: local
+  become: false
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    ansible_become: false
+  tasks:
+    - name: "ISC-64 - require a separate non-production restore environment"
+      ansible.builtin.assert:
+        that:
+          - cluster.environment != 'production'
+        fail_msg: "REFUSED: production does not run restore drills; use an isolated non-production declaration."
+
 - name: "F10 — restore drill na rnode1 (czysty izolowany host)"
   hosts: restore
   become: true

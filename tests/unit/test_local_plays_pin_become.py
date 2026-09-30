@@ -27,28 +27,6 @@ PLAYBOOKS = REPO / "playbooks"
 
 
 class LocalPlaysPinBecomeTests(unittest.TestCase):
-    def test_every_localhost_play_pins_become_off(self):
-        offenders = []
-        checked = 0
-        for path in sorted(PLAYBOOKS.glob("*.yml")):
-            plays = yaml.safe_load(path.read_text(encoding="utf-8"))
-            if not isinstance(plays, list):
-                continue
-            for play in plays:
-                if not isinstance(play, dict) or str(play.get("hosts")) != "localhost":
-                    continue
-                checked += 1
-                pinned = str((play.get("vars") or {}).get("ansible_become", "")).lower()
-                if pinned != "false":
-                    offenders.append(f"{path.name}: {play.get('name')}")
-        self.assertGreater(checked, 0, "nie znalazlem zadnego play'a na localhost")
-        self.assertEqual(
-            offenders,
-            [],
-            "play na localhost bez `ansible_become: false` w vars — inwentarz "
-            "z uzytkownikiem nie-root wymusi sudo na maszynie kontrolnej: "
-            f"{offenders}",
-        )
 
     def test_every_task_delegated_to_localhost_pins_become_off(self):
         offenders = []

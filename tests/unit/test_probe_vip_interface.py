@@ -228,5 +228,57 @@ class ProbePlatformInterfaceTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
 
 
+class ProbePlatformProductionCredentialTests(unittest.TestCase):
+    """Produkcja wysyla do PMM WYLACZNIE poswiadczenie ze srodowiska procesu.
+
+    `ProbeContext.env_secret` cofa sie do `tests/lab/.env`; w produkcji to byloby
+    wyslanie hasla laboratorium na zewnetrzny PMM, ktory ma wlasne poswiadczenia.
+    """
+
+    BODIES = {"p1": "IFACE=ens18 VIP=1 PROC=1 ADMIN=1 GROUPS=0 WRITERS=0",
+              "p2": "IFACE=ens18 VIP=0 PROC=1 ADMIN=1 GROUPS=0 WRITERS=0"}
+    UP_SERIES = [{"metric": {"node_name": "probe-p1"}, "value": [0, "1"]},
+                 {"metric": {"node_name": "probe-p2"}, "value": [0, "1"]}]
+
+    def setUp(self):
+        self.probe = load_probe("probe_platform_under_test", "probe-platform.py")
+
+    def verdict(self, environment, password):
+        """Werdykt sondy; `password=None` = zmienna nieustawiona w srodowisku."""
+        config = dict(PLATFORM_CONFIG)
+        if environment:
+            config["platform"] = {"name": "probe", "environment": environment}
+        with mock.patch.dict(os.environ):
+            os.environ.pop("PMM_SERVER_URL", None)
+            os.environ.pop("PMM_ADMIN_PASSWORD", None)
+            if password is not None:
+                os.environ["PMM_ADMIN_PASSWORD"] = password
+            with mock.patch.object(self.probe, "pmm_json", return_value=PMM_NODES) as nodes, \
+                    mock.patch.object(self.probe, "pmm_query", return_value=self.UP_SERIES) as query:
+                code, output = probe_verdict({"proxysql": self.BODIES, "app": APP_TLS}, self.probe,
+                                             inventory=PLATFORM_INVENTORY, config=config)
+        return code, output, nodes, query
+
+    def test_production_without_process_secret_is_undetermined_and_asks_nothing(self):
+        # StubContext.env_secret zwraca "x" tak jak plik laboratorium — to NIE moze wystarczyc.
+        code, output, nodes, query = self.verdict("production", None)
+        self.assertEqual(code, 2, output)
+        self.assertIn("PMM_ADMIN_PASSWORD", output)
+        nodes.assert_not_called()
+        query.assert_not_called()
+
+    def test_production_sends_the_process_secret_not_the_lab_fallback(self):
+        code, output, nodes, query = self.verdict("production", "prod-secret-value")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(nodes.call_args.args[2], "prod-secret-value")
+        self.assertTrue(query.call_args_list)
+        self.assertTrue(all(call.args[2] == "prod-secret-value" for call in query.call_args_list))
+
+    def test_non_production_keeps_the_lab_fallback(self):
+        code, output, nodes, _ = self.verdict(None, None)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(nodes.call_args.args[2], "x")
+
+
 if __name__ == "__main__":
     unittest.main()

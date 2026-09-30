@@ -31,6 +31,7 @@ katalog tymczasowy oraz właściciel plików z `root` na użytkownika testu
 (nieuprzywilejowany przebieg nie może zrobić `chown`).
 """
 
+import copy
 import grp
 import json
 import os
@@ -429,6 +430,44 @@ class F11FreshnessMetricsTests(unittest.TestCase):
                     self.bridge_file().exists(),
                     "uszkodzony pomiar trafil do collectora",
                 )
+
+    # --- bramki cyklu zycia -------------------------------------------------
+    def write_backup_config(self, **backup):
+        variables = copy.deepcopy(CLUSTER_VARS)
+        variables["backup"].update(backup)
+        (self.root / "cluster.yml").write_text(
+            yaml.safe_dump(variables, sort_keys=False), encoding="utf-8"
+        )
+
+    def lifecycle_gates(self):
+        text = (self.textfile_dir / "isa_monitoring_config.prom").read_text(encoding="utf-8")
+        gates = {}
+        for line in _series(text):
+            series, value = line.rsplit(" ", 1)
+            gates[series.split("{", 1)[0]] = int(value)
+        return gates
+
+    @unittest.skipIf(ANSIBLE_PLAYBOOK is None, "ansible-playbook niedostępny w PATH")
+    def test_restore_gate_follows_the_declared_schedule(self):
+        # `disabled` jest NIEPUSTYM napisem (schemat wymaga pola). Bramka oparta
+        # o niepustosc oznaczalaby produkcje bez drilli jako klaster z drillami
+        # i wlaczala wymaganie swiezosci, ktorego nikt nie spelni. Backup i TLS
+        # zostaja niezalezne od harmonogramu drillu.
+        cases = (
+            ("scheduled", {"restore_test_schedule": "0 4 * * 0"}, 1, 1),
+            ("disabled", {"restore_test_schedule": "disabled"}, 0, 1),
+            ("empty", {"restore_test_schedule": ""}, 0, 1),
+            ("backup off", {"enabled": False, "restore_test_schedule": "0 4 * * 0"}, 0, 0),
+        )
+        for label, backup, restore_gate, backup_gate in cases:
+            with self.subTest(case=label):
+                self.write_backup_config(**backup)
+                result = self.run_playbook()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                gates = self.lifecycle_gates()
+                self.assertEqual(gates["isa_restore_test_monitoring_enabled"], restore_gate)
+                self.assertEqual(gates["isa_backup_monitoring_enabled"], backup_gate)
+                self.assertEqual(gates["isa_tls_monitoring_enabled"], 0)
 
 
 if __name__ == "__main__":

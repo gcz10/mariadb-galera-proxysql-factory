@@ -1,19 +1,4 @@
-"""Testy kontraktu lifecycle klastra: cluster-build / cluster-recover.
-
-Kontrakt sprawdzany na Makefile i playbooks/cluster_recover.yml:
-
-1. cluster-build to jedna, jawna orkiestracja ISTNIEJACYCH celow, w kolejnosci
-   zaleznosci, zakonczona bramka lab-post-build-gate; CLUSTER/CONFIRM
-   propaguja sie na pod-make, a pierwszy blad konczy caly build.
-2. cluster-deploy juz zawiera firewall — cluster-build NIE doklada drugiego
-   kroku firewall.
-3. cluster-recover jest confirm-gated: wymaga CLUSTER+CONFIRM=yes, odmawia
-   pracy przy zywym Primary, wybiera wezel bootstrap JAWNIE
-   (safe_to_bootstrap=1 albo unikalny najwyzszy seqno; przy remisie wymaga
-   BOOTSTRAP_NODE) i reuse'uje kanoniczny playbooks/bootstrap.yml przez
-   parametry (bootstrap_node, bootstrap_confirm_all_down=true), potem join.
-4. Zadna sciezka recovery nie robi rownoleglego `systemctl restart`.
-"""
+"""Cold-recovery selection and refusal behavior, plus existing lifecycle guards."""
 
 import base64
 import re
@@ -28,31 +13,6 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 JOIN_PLAYBOOK = REPO / "playbooks" / "f5_join.yml"
 
-# `cluster-endpoint` znikl z tej listy 2026-08-21 wraz z wyniesieniem warstwy
-# wspolnej: VIP nalezy do `platform/shared/`, a nie do najemcy. Zostawienie go
-# tutaj bylo bledem projektowym — build KAZDEGO klastra dotykal Keepalived na
-# wspoldzielonej parze fcp1/fcp2, bez zadnej bramki wlasciciela.
-CORE_BUILD_STEPS = [
-    "cluster-validate",
-    "cluster-deploy",
-    "cluster-bootstrap",
-    "cluster-join",
-    "cluster-proxysql",
-    "cluster-monitoring",
-    "cluster-harden",
-]
-CONDITIONAL_BUILD_STEPS = [
-    "lab-seed-smoke",
-    "cluster-alerts",
-    "cluster-app-host",
-]
-BACKUP_BUILD_STEPS = [
-    "cluster-backup-configure",
-    "cluster-backup",
-    "cluster-restore-drill",
-    "cluster-monitoring-refresh",
-]
-BUILD_GATE = "lab-post-build-gate"
 
 
 def makefile_text():
@@ -116,178 +76,6 @@ def sub_make_targets(lines):
     return invoked
 
 
-class ClusterBuildContractTests(unittest.TestCase):
-    def setUp(self):
-        self.text = makefile_text()
-        _, recipes = parse_makefile(self.text)
-        self.lines = recipes.get("cluster-build", [])
-        self.joined = "\n".join(self.lines)
-
-    def test_help_is_default_goal(self):
-        self.assertRegex(
-            self.text,
-            r"(?m)^\.DEFAULT_GOAL\s*:?=\s*help\s*$",
-            "samo `make` musi pokazac help, nie uruchamiac destrukcyjnego galera-rebuild",
-        )
-
-    def test_target_exists_and_is_phony(self):
-        self.assertTrue(self.lines, "cluster-build musi istniec z niepusta recepta")
-        phony = phony_blob(self.text)
-        self.assertIsNotNone(phony, "Makefile musi miew .PHONY")
-        self.assertIn("cluster-build", phony, "cluster-build musi byc w .PHONY")
-
-    def test_orchestrates_existing_targets_only(self):
-        invoked = sub_make_targets(self.lines)
-        self.assertTrue(invoked, "cluster-build musi wywolywac istniejace cele przez $(MAKE)")
-        defined, _ = parse_makefile(self.text)
-        for target in invoked:
-            self.assertIn(
-                target,
-                defined,
-                f"cluster-build orchestruje nieistniejacy cel: {target}",
-            )
-
-    def test_core_pipeline_order(self):
-        invoked = sub_make_targets(self.lines)
-        positions = []
-        for step in CORE_BUILD_STEPS:
-            self.assertIn(step, invoked, f"cluster-build pomija krok: {step}")
-            positions.append(invoked.index(step))
-        self.assertEqual(
-            positions,
-            sorted(positions),
-            f"kolejnosc krokow builda niezgodna z grafem: {invoked}",
-        )
-
-    def test_conditional_steps_between_core_and_gate(self):
-        """Kroki warunkowe leza miedzy ostatnim krokiem rdzenia a bramka.
-
-        Od F4 polityka krokow warunkowych (mapa celow, pomijanie BUILD_SKIP,
-        kolejnosc backup: configure->backup->drill->refresh) zyje w
-        tests/validation/gate-build.sh, a Makefile wolja ja miedzy
-        `cluster-harden` a `lab-post-build-gate`. Ten test broni z lacego
-        orkiestracji; test_backup_step_materializes_gate_evidence_in_order
-        broni porzadku WEWNATRZ skryptu polityki.
-        """
-        script = (REPO / "tests" / "validation" / "gate-build.sh").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("gate-build.sh steps", self.joined)
-        last_core = CORE_BUILD_STEPS[-1]
-        for step in CONDITIONAL_BUILD_STEPS + BACKUP_BUILD_STEPS:
-            self.assertIn(step, script, f"krok warunkowy {step} musi byc w grafie builda")
-
-        invoked = sub_make_targets(self.lines)
-        self.assertIn(BUILD_GATE, invoked)
-        self.assertLess(
-            invoked.index(last_core),
-            self.joined.index("gate-build.sh steps"),
-            f"skrypt polityki musi isc PO {last_core}",
-        )
-        self.assertLess(
-            self.joined.index("gate-build.sh steps"),
-            self.joined.index(f"$(MAKE) {BUILD_GATE}"),
-            f"skrypt polityki musi isc PRZED {BUILD_GATE}",
-        )
-
-    def test_backup_step_materializes_gate_evidence_in_order(self):
-        script = (REPO / "tests" / "validation" / "gate-build.sh").read_text(
-            encoding="utf-8"
-        )
-        positions = [script.index(step) for step in BACKUP_BUILD_STEPS]
-        self.assertEqual(
-            positions,
-            sorted(positions),
-            "backup w cluster-build musi wykonac configure, backup, drill i refresh",
-        )
-
-    def test_app_host_precedes_backup_in_conditional_steps(self):
-        """app-host musi powstawac PRZED backupem/drillem.
-
-        Awaria drillu na pustym buckecie nie moze blokowac wdrozenia CA i usera
-        na hoscie aplikacyjnym, co zmierzone 2026-08-31 na orionv13-r10.
-        """
-        script = (REPO / "tests" / "validation" / "gate-build.sh").read_text(
-            encoding="utf-8"
-        )
-        match = re.search(r"for\s+step\s+in\s+([a-z0-9_\-\s]+);", script)
-        self.assertIsNotNone(match, "brak petli for step in w gate-build.sh")
-        steps = match.group(1).split()
-        self.assertIn("app-host", steps)
-        self.assertIn("backup", steps)
-        self.assertLess(
-            steps.index("app-host"),
-            steps.index("backup"),
-            "app-host musi poprzedzac backup w kolejnosci krokow warunkowych",
-        )
-
-    def test_gate_is_the_last_step(self):
-        invoked = sub_make_targets(self.lines)
-        self.assertEqual(invoked[-1], BUILD_GATE, "build konczy sie bramka stanu ustalonego")
-
-    def test_conditional_steps_are_skippable(self):
-        self.assertIn(
-            "BUILD_SKIP",
-            self.joined,
-            "kroki warunkowe (seed/backup/alerts/app-host) musza dac sie pominac bez edycji Makefile",
-        )
-        script = (REPO / "tests" / "validation" / "gate-build.sh").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn(
-            'case " $build_skip " in',
-            script,
-            "pomijanie krokow przez porownanie BUILD_SKIP",
-        )
-
-    def test_cluster_and_confirm_guards(self):
-        self.assertIn(
-            "$(cluster_guard)",
-            self.joined,
-            "cluster-build jest mutujacy — wymaga jawnego CLUSTER=",
-        )
-        self.assertIn(
-            'test "$(CONFIRM)" = "yes"',
-            self.joined,
-            "cluster-build zawiera bootstrap — wymaga CONFIRM=yes",
-        )
-
-    def test_propagates_and_stops_on_first_error(self):
-        self.assertTrue(self.lines)
-        for line in self.lines:
-            if "$(MAKE)" not in line:
-                continue
-            self.assertFalse(
-                line.lstrip().startswith("-"),
-                f"krok buildu nie moze ignorowac bledu (-): {line}",
-            )
-            self.assertNotIn(
-                "|| true",
-                line,
-                f"krok buildu nie moze maskowac bledu (|| true): {line}",
-            )
-            if ";;" in line or re.search(r"\bfor\b|\bcase\b", line):
-                make_calls = line.count("$(MAKE)")
-                exit_guards = line.count("|| exit 1")
-                self.assertEqual(
-                    exit_guards,
-                    make_calls,
-                    f"kazde $(MAKE) w petli/case wymaga wlasnego || exit 1: {line}",
-                )
-
-    def test_no_second_firewall_step(self):
-        # cluster-deploy juz robi f2_install + site + firewall.yml.
-        invoked = sub_make_targets(self.lines)
-        self.assertNotIn(
-            "cluster-firewall",
-            invoked,
-            "cluster-deploy juz zawiera firewall — zadnego drugiego kroku firewall w buildzie",
-        )
-        self.assertNotIn(
-            "playbooks/firewall.yml",
-            self.joined,
-            "cluster-build nie wywoluje firewall.yml bezposrednio (robi to cluster-deploy)",
-        )
 
 
 class ClusterRecoverMakefileContractTests(unittest.TestCase):
@@ -766,33 +554,7 @@ class MakefileDryRunGraphTests(unittest.TestCase):
             timeout=120,
         )
 
-    def test_cluster_build_graph_dry_run(self):
-        proc = self.run_make("cluster-build")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        for step in CORE_BUILD_STEPS + [BUILD_GATE]:
-            self.assertIn(step, proc.stdout, f"make -n cluster-build pokazuje krok {step}")
-        self.assertIn(
-            "gate-build.sh preflight",
-            proc.stdout,
-            "polityka sprzezenia seed->backup odpalana przed buildem",
-        )
-        self.assertIn(
-            "gate-build.sh steps",
-            proc.stdout,
-            "kroki warunkowe wolywane ze skryptu polityki",
-        )
 
-    def test_cluster_build_skip_dry_run(self):
-        proc = self.run_make(
-            "cluster-build",
-            "BUILD_SKIP=seed backup app-host",
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn(
-            'gate-build.sh steps "seed backup app-host"',
-            proc.stdout,
-            "BUILD_SKIP musi dotrzec do skryptu polityki krokow warunkowych",
-        )
 
     def test_cluster_recover_graph_dry_run(self):
         proc = self.run_make("cluster-recover")

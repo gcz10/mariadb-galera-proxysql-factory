@@ -115,42 +115,85 @@ TLS_MODE = CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled")
 BACKUP_ENABLED = bool(CLUSTER_CONFIG.get("backup", {}).get("enabled", True))
 # Rejestracja w PMM jest deklaracja klastra, tak samo jak backup.
 MONITORING_ENABLED = bool(CLUSTER_CONFIG.get("monitoring", {}).get("enabled", True))
-EXPECTED_CONFIG_METRICS = {
-    "isa_restore_test_monitoring_enabled": (
-        1
-        if BACKUP_ENABLED and str(CLUSTER_CONFIG["backup"].get("restore_test_schedule", ""))
-        else 0
-    ),
-    "isa_tls_monitoring_enabled": 1 if TLS_MODE == "full" else 0,
-}
+# Rodzaj srodowiska z deklaracji klastra. Produkcja korzysta z ZEWNETRZNEGO PMM
+# zarzadzanego przez operatora (dowolna dystrybucja), laboratorium i staging
+# z Dockera zbudowanego z lockfile.
+ENVIRONMENT = (CLUSTER_CONFIG.get("cluster") or {}).get("environment", "")
+# Harmonogram tygodniowy + 1 dzien zapasu.
+RESTORE_DRILL_MAX_AGE_HOURS = 8 * 24
+
+
+def restore_drill_enabled(cluster_config):
+    """Czy swiezosc restore drill jest WYMAGANA — jeden predykat calej sondy.
+
+    `backup.restore_test_schedule` jest polem wymaganym w schemacie, wiec brak
+    cwiczen to wartosc `disabled` (albo pusty napis), a NIE brak pola. To jest
+    niepusty napis: sonda traktowala go jak harmonogram i wymagala swiezego
+    drillu od klastra, ktory go swiadomie nie wykonuje (produkcja — drille
+    naleza do osobnego srodowiska nieprodukcyjnego). Te sama definicje maja
+    f11_freshness.yml (bramka metryki) i f15_alerts.yml (regula
+    `restore-drill-stale`).
+    """
+    backup = cluster_config.get("backup") or {}
+    if not bool(backup.get("enabled", True)):
+        return False
+    schedule = str(backup.get("restore_test_schedule", "") or "").strip()
+    return schedule not in ("", "disabled")
+
+
+def lifecycle_expectations(cluster_config):
+    """Metryki cyklu zycia wymagane od TEGO klastra.
+
+    Zwraca (bramki config -> wartosc, swiezosc drillu -> max wiek w godzinach,
+    metryki runnera backupu). Bramka `isa_restore_test_monitoring_enabled` jest
+    publikowana zawsze i sonda wymaga jej DOKLADNEJ wartosci (0 przy drillu
+    wylaczonym); sama swiezosc drillu jest wymagana tylko przy 1.
+    """
+    backup_enabled = bool((cluster_config.get("backup") or {}).get("enabled", True))
+    tls_mode = (cluster_config.get("tls") or {}).get("mode", "disabled")
+    restore_enabled = restore_drill_enabled(cluster_config)
+    config_metrics = {
+        "isa_restore_test_monitoring_enabled": 1 if restore_enabled else 0,
+        "isa_tls_monitoring_enabled": 1 if tls_mode == "full" else 0,
+    }
+    freshness_metrics = (
+        # metric name -> max acceptable age in hours
+        {"isa_restore_test_last_success_unixtime": RESTORE_DRILL_MAX_AGE_HOURS}
+        if restore_enabled
+        else {}
+    )
+    backup_metrics = (
+        [
+            "galera_backup_last_success_unixtime",
+            "galera_backup_last_failure_unixtime",
+            "galera_backup_last_run_success",
+            "galera_backup_last_size_bytes",
+            "galera_backup_last_duration_seconds",
+        ]
+        if backup_enabled
+        else []
+    )
+    return config_metrics, freshness_metrics, backup_metrics
+
+
 # ISC-49 freshness unixtimes: non-zero + within an age window after F10 runs.
 BACKUP_FRESHNESS_SLA_HOURS = int(CLUSTER_CONFIG["backup"]["freshness_sla_hours"])
-EXPECTED_FRESHNESS_METRICS = (
-    {
-        # metric name → max acceptable age in hours
-        "isa_restore_test_last_success_unixtime": 8 * 24,  # weekly schedule + 1d grace
-    }
-    if BACKUP_ENABLED
-    else {}
-)
-EXPECTED_GALERA_BACKUP_METRICS = (
-    [
-        "galera_backup_last_success_unixtime",
-        "galera_backup_last_failure_unixtime",
-        "galera_backup_last_run_success",
-        "galera_backup_last_size_bytes",
-        "galera_backup_last_duration_seconds",
-    ]
-    if BACKUP_ENABLED
-    else []
-)
-# TLS cert expiry: 0 when tls.mode != full; future epoch when full.
-TLS_EXPIRY_DISABLED_EXPECTED = TLS_MODE != "full"
+(
+    EXPECTED_CONFIG_METRICS,
+    EXPECTED_FRESHNESS_METRICS,
+    EXPECTED_GALERA_BACKUP_METRICS,
+) = lifecycle_expectations(CLUSTER_CONFIG)
 ALL_STATE_METRICS = (
     set(EXPECTED_CONFIG_METRICS)
     | set(EXPECTED_FRESHNESS_METRICS)
     | set(EXPECTED_GALERA_BACKUP_METRICS)
     | {"isa_tls_cert_expiry_unixtime"}
+)
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Zrodlo regul ISC-47: definicje w vars + bramki w playbooku.
+ALERT_SOURCE_PATHS = (
+    os.path.join(REPO_ROOT, "playbooks", "vars", "alert_rules.yml"),
+    os.path.join(REPO_ROOT, "playbooks", "f15_alerts.yml"),
 )
 
 
@@ -233,7 +276,169 @@ def wait_for_fresh_metrics(queries, started_at, timeout=90):
         time.sleep(2)
 
 
+def read_alerts_source():
+    source = ""
+    for path in ALERT_SOURCE_PATHS:
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as handle:
+                source += handle.read() + "\n"
+    return source
 
+
+def expected_alert_rule_uids(cluster_config, alerts_source):
+    """(uid-y regul ISC-47 tego klastra, uid-y regul warstwy wspolnej).
+
+    Reguly czytamy BLOKAMI, nie pojedyncza regexpa po UID: kazdy wpis moze
+    nosic marker (`shared`, `requires_tls`, `requires_backup`,
+    `requires_restore_drill`), ktory decyduje, czy regula w ogole powstaje dla
+    TEGO klastra. Sama lista UID-ow tego nie widzi i sonda zadalaby od klastra
+    regul, ktorych f15 u niego swiadomie nie tworzy. Bramki sa TE SAME, co
+    `f15_effective_rules` w f15_alerts.yml.
+    """
+    cluster_label = cluster_config["monitoring"]["pmm"]["cluster_name"]
+    tenant_uid_prefix, _ = alert_uid_prefixes(cluster_label)
+    rule_blocks = re.split(r'^\s*-\s*uid:\s*', alerts_source, flags=re.M)[1:]
+    rule_suffixes, shared_suffixes = [], []
+    tls_suffixes, backup_suffixes, restore_suffixes = [], [], []
+    for block in rule_blocks:
+        m = re.match(
+            r'"(?P<scope>isa-(?:\{\{\s*cluster_label\s*\}\}|shared)|'
+            r'\{\{\s*f15_uid_prefix\s*\}\})-(?P<suffix>[a-z0-9-]+)"',
+            block,
+        )
+        if not m:
+            continue
+        # Marker musi pochodzic z TEGO wpisu, a nie z nastepnego — tniemy blok
+        # na pierwszym `- uid:`, wiec `body` konczy sie przed kolejna regula.
+        body = block
+        scope = m.group("scope")
+        suffix = m.group("suffix")
+        if scope == "isa-shared":
+            shared_suffixes.append(suffix)
+        elif re.search(r'^\s+requires_tls:\s*true', body, re.M):
+            tls_suffixes.append(suffix)
+        elif re.search(r'^\s+requires_restore_drill:\s*true', body, re.M):
+            restore_suffixes.append(suffix)
+        elif re.search(r'^\s+requires_backup:\s*true', body, re.M):
+            backup_suffixes.append(suffix)
+        else:
+            rule_suffixes.append(suffix)
+    if not rule_suffixes:
+        raise SystemExit(
+            "FAIL: nie odczytano zadnej reguly z "
+            + ", ".join(ALERT_SOURCE_PATHS)
+        )
+    # Reguly `isa-shared-*` opisuja wspolna pare ProxySQL i naleza do warstwy
+    # wspolnej (`make platform-alerts`). Do 2026-08-21 wdrazal je klaster
+    # z `proxysql.role: owner`, a ta sonda domyslnie zakladala ownera. Po
+    # wyniesieniu warstwy takie zalozenie kazaloby jej wymagac tych regul od
+    # KAZDEGO najemcy — czyli swiecic na czerwono na poprawnej konfiguracji.
+    expected = {f"{tenant_uid_prefix}-{suffix}" for suffix in rule_suffixes}
+    if (cluster_config.get("tls") or {}).get("mode", "disabled") == "full":
+        # Bez TLS metryka wygasania ma wartosc 0 i regula nie ma sensu.
+        expected |= {f"{tenant_uid_prefix}-{suffix}" for suffix in tls_suffixes}
+    if bool((cluster_config.get("backup") or {}).get("enabled", True)):
+        # Symetrycznie do TLS: bez backupu te reguly nie maja czego mierzyc i
+        # paliłyby sie wiecznie, wiec f15 ich nie tworzy.
+        expected |= {f"{tenant_uid_prefix}-{suffix}" for suffix in backup_suffixes}
+    if restore_drill_enabled(cluster_config):
+        # Wiek drillu ma sens tylko tam, gdzie drille sa planowane; produkcja
+        # (`restore_test_schedule: disabled`) ich nie ma, a regula pali by sie
+        # wiecznie.
+        expected |= {f"{tenant_uid_prefix}-{suffix}" for suffix in restore_suffixes}
+    return expected, {f"isa-shared-{suffix}" for suffix in shared_suffixes}
+
+
+def pmm_runtime_failure(version, expected_version, environment):
+    """Komunikat bledu, gdy PMM lamie kontrakt wersji; inaczej None.
+
+    Wersja MUSI byc rowna wersji z lockfile w kazdym srodowisku. Wymog
+    dystrybucji Docker dotyczy tylko PMM zbudowanego przez to repo
+    (laboratorium/staging); produkcyjny PMM jest zewnetrzny i jego
+    dystrybucja (AMI, OVF, Docker...) nalezy do operatora.
+    """
+    actual_version = version.get("version")
+    if actual_version != expected_version:
+        return (
+            f"PMM runtime version {actual_version!r} differs from the lock "
+            f"{expected_version}: {version}"
+        )
+    if (
+        environment != "production"
+        and version.get("distribution_method") != "DISTRIBUTION_METHOD_DOCKER"
+    ):
+        return f"PMM runtime differs from Docker lock {expected_version}: {version}"
+    return None
+
+
+def lifecycle_metric_failures(cluster_config, state_value, now, probe_started):
+    """Werdykt nad metrykami cyklu zycia: bramki, swiezosc drillu, backup, TLS.
+
+    `state_value(nazwa)` zwraca `(serie, wartosc)` odczytane z PMM. Swiezosc
+    drillu jest wymagana WYLACZNIE przy `restore_drill_enabled`; swiezosc
+    backupu i metryka wygasania certyfikatu zostaja wymagane niezaleznie od
+    harmonogramu drillu.
+    """
+    expected_config, expected_freshness, expected_backup = lifecycle_expectations(
+        cluster_config
+    )
+    tls_mode = (cluster_config.get("tls") or {}).get("mode", "disabled")
+    failures = []
+
+    # Config gauges (enabled flags) — exact value match.
+    for metric_name, expected_value in expected_config.items():
+        results, value = state_value(metric_name)
+        check(
+            len(results) == 1
+            and results[0]["metric"].get("node_name") == FIRST_GALERA_NODE
+            and value == expected_value
+            and float(results[0]["value"][0]) >= probe_started,
+            f"invalid lifecycle config metric {metric_name}: {results}",
+            failures,
+        )
+
+    # ISC-49 freshness unixtimes — non-zero and within an age window.
+    for metric_name, max_age_hours in expected_freshness.items():
+        results, value = state_value(metric_name)
+        fresh = value and value > 0 and (now - value) <= max_age_hours * 3600
+        check(
+            len(results) == 1
+            and results[0]["metric"].get("node_name") == FIRST_GALERA_NODE
+            and fresh
+            and float(results[0]["value"][0]) >= probe_started,
+            f"stale or zero freshness metric {metric_name} "
+            f"(value={value}, max_age_hours={max_age_hours}): {results}",
+            failures,
+        )
+
+    # Backup runner metrics — one fresh series from whichever node was elected
+    # donor, with the logical-cluster and backend labels used by the alert rules.
+    for metric_name in expected_backup:
+        results, value = state_value(metric_name)
+        check(
+            backup_metric_valid(metric_name, results, value, now, probe_started),
+            f"invalid Galera backup metric {metric_name}: {results}",
+            failures,
+        )
+
+    # TLS cert expiry — 0 when disabled, future epoch when full.
+    results, value = state_value("isa_tls_cert_expiry_unixtime")
+    if tls_mode != "full":
+        check(
+            len(results) == 1
+            and results[0]["metric"].get("node_name") == FIRST_GALERA_NODE
+            and value == 0
+            and float(results[0]["value"][0]) >= probe_started,
+            f"unexpected non-zero TLS expiry in disabled mode: {results}",
+            failures,
+        )
+    else:
+        check(
+            len(results) == 1 and value and value > now,
+            f"TLS cert expiry not a future epoch in full mode: {results}",
+            failures,
+        )
+    return failures
 
 
 def main():
@@ -261,12 +466,8 @@ def main():
     )
     alert_policy = get_json("/graph/api/v1/provisioning/policies")
     failures = []
-    check(
-        version.get("version") == EXPECTED_PMM_VERSION
-        and version.get("distribution_method") == "DISTRIBUTION_METHOD_DOCKER",
-        f"PMM runtime differs from Docker lock {EXPECTED_PMM_VERSION}: {version}",
-        failures,
-    )
+    runtime_failure = pmm_runtime_failure(version, EXPECTED_PMM_VERSION, ENVIRONMENT)
+    check(runtime_failure is None, runtime_failure, failures)
     # ISC-47: managed alert rules plus SMTP delivery route.
     # UID-y sa namespace'owane etykieta klastra (f15_alerts.yml), inaczej drugi klaster
     # nadpisalby reguly pierwszego we wspolnym PMM.
@@ -281,71 +482,10 @@ def main():
     # uid zawiera `{{ cluster_label }}` albo `{{ f15_uid_prefix }}`. Regula floty
     # (uid bez tych zmiennych) zostanie tu celowo pominieta — tak samo jak legacy
     # UID-y z listy sprzatajacej f15.
-    alerts_playbook = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "playbooks", "f15_alerts.yml",
+    expected_alert_rules, shared_rule_uids = expected_alert_rule_uids(
+        CLUSTER_CONFIG, read_alerts_source()
     )
-    alerts_rules_file = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "playbooks", "vars", "alert_rules.yml",
-    )
-    alerts_source = ""
-    if os.path.isfile(alerts_rules_file):
-        with open(alerts_rules_file, encoding="utf-8") as rf:
-            alerts_source += rf.read() + "\n"
-    if os.path.isfile(alerts_playbook):
-        with open(alerts_playbook, encoding="utf-8") as alerts_file:
-            alerts_source += alerts_file.read()
-    # Reguly czytamy BLOKAMI, nie pojedyncza regexpa po UID: kazdy wpis moze
-    # nosic marker (`shared`, `requires_tls`), ktory decyduje, czy regula w ogole
-    # powstaje dla TEGO klastra. Sama lista UID-ow tego nie widzi i sonda
-    # zadalaby od klastra regul, ktorych f15 u niego swiadomie nie tworzy.
-    rule_blocks = re.split(r'^\s*-\s*uid:\s*', alerts_source, flags=re.M)[1:]
-    rule_suffixes, shared_suffixes, tls_suffixes, backup_suffixes = [], [], [], []
-    for block in rule_blocks:
-        m = re.match(
-            r'"(?P<scope>isa-(?:\{\{\s*cluster_label\s*\}\}|shared)|'
-            r'\{\{\s*f15_uid_prefix\s*\}\})-(?P<suffix>[a-z0-9-]+)"',
-            block,
-        )
-        if not m:
-            continue
-        # Marker musi pochodzic z TEGO wpisu, a nie z nastepnego — tniemy blok
-        # na pierwszym `- uid:`, wiec `body` konczy sie przed kolejna regula.
-        body = block
-        scope = m.group("scope")
-        suffix = m.group("suffix")
-        if scope == "isa-shared":
-            shared_suffixes.append(suffix)
-        elif re.search(r'^\s+requires_tls:\s*true', body, re.M):
-            tls_suffixes.append(suffix)
-        elif re.search(r'^\s+requires_backup:\s*true', body, re.M):
-            backup_suffixes.append(suffix)
-        else:
-            rule_suffixes.append(suffix)
-    if not rule_suffixes:
-        raise SystemExit(f"FAIL: nie odczytano zadnej reguly z {alerts_playbook}")
-    tls_full = (CLUSTER_CONFIG.get("tls", {}).get("mode", "disabled") == "full")
     tenant_uid_prefix, _ = alert_uid_prefixes(_cl)
-    expected_alert_rules = {
-        f"{tenant_uid_prefix}-{suffix}" for suffix in rule_suffixes
-    }
-    # Reguly `isa-shared-*` opisuja wspolna pare ProxySQL i naleza do warstwy
-    # wspolnej (`make platform-alerts`). Do 2026-08-21 wdrazal je klaster
-    # z `proxysql.role: owner`, a ta sonda domyslnie zakladala ownera. Po
-    # wyniesieniu warstwy takie zalozenie kazaloby jej wymagac tych regul od
-    # KAZDEGO najemcy — czyli swiecic na czerwono na poprawnej konfiguracji.
-    if tls_full:
-        # Bez TLS metryka wygasania ma wartosc 0 i regula nie ma sensu.
-        expected_alert_rules |= {
-            f"{tenant_uid_prefix}-{suffix}" for suffix in tls_suffixes
-        }
-    if BACKUP_ENABLED:
-        # Symetrycznie do TLS: bez backupu te reguly nie maja czego mierzyc i
-        # paliłyby sie wiecznie, wiec f15 ich nie tworzy.
-        expected_alert_rules |= {
-            f"{tenant_uid_prefix}-{suffix}" for suffix in backup_suffixes
-        }
     managed_alert_rules = [
         rule
         for rule in alert_rules
@@ -363,7 +503,7 @@ def main():
     # `shared` albo ktos przywrocil galaz ownera, jego reguly wchlonelyby
     # przestrzen warstwy wspolnej — i teardown tego najemcy zabralby alerty
     # calej flocie. Ta sama klasa bledu, ktora repo naprawialo przy koncie MinIO.
-    leaked = managed_uids & {f"isa-shared-{suffix}" for suffix in shared_suffixes}
+    leaked = managed_uids & shared_rule_uids
     check(
         not leaked,
         f"najemca {CLUSTER} zarzadza regulami warstwy wspolnej {sorted(leaked)} — "
@@ -902,60 +1042,13 @@ def main():
             float(results[0]["value"][1]) if len(results) == 1 else None
         )
 
-    # Config gauges (enabled flags) — exact value match.
-    for metric_name, expected_value in EXPECTED_CONFIG_METRICS.items():
-        results, value = state_value(metric_name)
-        check(
-            len(results) == 1
-            and results[0]["metric"].get("node_name") == FIRST_GALERA_NODE
-            and value == expected_value
-            and float(results[0]["value"][0]) >= probe_started,
-            f"invalid lifecycle config metric {metric_name}: {results}",
-            failures,
+    # Config gauges, swiezosc drillu (tylko gdy wymagana), metryki runnera backupu
+    # i wygasanie certyfikatu — werdykt w `lifecycle_metric_failures`.
+    failures.extend(
+        lifecycle_metric_failures(
+            CLUSTER_CONFIG, state_value, time.time(), probe_started
         )
-
-    # ISC-49 freshness unixtimes — non-zero and within an age window.
-    now = time.time()
-    for metric_name, max_age_hours in EXPECTED_FRESHNESS_METRICS.items():
-        results, value = state_value(metric_name)
-        fresh = value and value > 0 and (now - value) <= max_age_hours * 3600
-        check(
-            len(results) == 1
-            and results[0]["metric"].get("node_name") == FIRST_GALERA_NODE
-            and fresh
-            and float(results[0]["value"][0]) >= probe_started,
-            f"stale or zero freshness metric {metric_name} "
-            f"(value={value}, max_age_hours={max_age_hours}): {results}",
-            failures,
-        )
-
-    # Backup runner metrics — one fresh series from whichever node was elected
-    # donor, with the logical-cluster and backend labels used by the alert rules.
-    for metric_name in EXPECTED_GALERA_BACKUP_METRICS:
-        results, value = state_value(metric_name)
-        check(
-            backup_metric_valid(metric_name, results, value, now, probe_started),
-            f"invalid Galera backup metric {metric_name}: {results}",
-            failures,
-        )
-
-    # TLS cert expiry — 0 when disabled, future epoch when full.
-    results, value = state_value("isa_tls_cert_expiry_unixtime")
-    if TLS_EXPIRY_DISABLED_EXPECTED:
-        check(
-            len(results) == 1
-            and results[0]["metric"].get("node_name") == FIRST_GALERA_NODE
-            and value == 0
-            and float(results[0]["value"][0]) >= probe_started,
-            f"unexpected non-zero TLS expiry in disabled mode: {results}",
-            failures,
-        )
-    else:
-        check(
-            len(results) == 1 and value and value > now,
-            f"TLS cert expiry not a future epoch in full mode: {results}",
-            failures,
-        )
+    )
 
 
 

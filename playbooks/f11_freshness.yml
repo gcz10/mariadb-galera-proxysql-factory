@@ -35,6 +35,13 @@
       cluster="{{ cluster_label }}",logical_cluster="{{ cluster.name }}",backend="{{ backup.destination | lower }}"
     drill_label_set: "{{ '{' ~ drill_labels ~ '}' }}"
     tls_full: "{{ (tls | default({})).mode | default('disabled') == 'full' }}"
+    # Cwiczenia odtworzeniowe sa WYMAGANE tylko przy backup.enabled ORAZ
+    # harmonogramie innym niz `disabled`/pusty. `disabled` to niepusty napis
+    # (schemat wymaga pola), wiec sama niepustosc nie wystarcza. JEDEN predykat
+    # z f15_alerts.yml (regula restore-drill-stale) i tests/lab/probe-pmm-native.py.
+    restore_drill_enabled: >-
+      {{ (backup | default({})).enabled | default(false) | bool
+         and ((backup | default({})).restore_test_schedule | default('') | trim) not in ['', 'disabled'] }}
     # Klaster bez cwiczen odtworzeniowych (backup wylaczony) nie ma grupy
     # `restore` i to jest legalne. Bez tego domyslnika play wywracal sie na
     # `object of type 'dict' has no attribute 'restore'` — bledzie, ktory nie
@@ -215,7 +222,7 @@
           isa_backup_monitoring_enabled{cluster="{{ cluster_label }}"} {{ backup.enabled | ternary(1, 0) }}
           # HELP isa_restore_test_monitoring_enabled Whether restore drill freshness is required.
           # TYPE isa_restore_test_monitoring_enabled gauge
-          isa_restore_test_monitoring_enabled{cluster="{{ cluster_label }}"} {{ ((backup.enabled | default(false)) and (backup.restore_test_schedule | default('') | trim) not in ['', 'disabled']) | ternary(1, 0) }}
+          isa_restore_test_monitoring_enabled{cluster="{{ cluster_label }}"} {{ (restore_drill_enabled | bool) | ternary(1, 0) }}
           # HELP isa_tls_monitoring_enabled Whether certificate expiry monitoring is required.
           # TYPE isa_tls_monitoring_enabled gauge
           isa_tls_monitoring_enabled{cluster="{{ cluster_label }}"} {{ (tls_full | bool) | ternary(1, 0) }}

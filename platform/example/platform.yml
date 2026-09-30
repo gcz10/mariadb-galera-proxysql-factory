@@ -16,8 +16,8 @@
 
 platform:
   name: "example"
-  # `production` jest tu swiadomie odrzucane przez `platform-infra` — patrz
-  # README, sekcja o zakresie.
+  # Produkcja wymaga jawnego infra.services: [], zewnetrznego PMM/SMTP/storage
+  # i braku hostow infra; kontrakt: profiles/README.md.
   environment: "laboratory"
   rocky_linux_major: 10
 

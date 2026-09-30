@@ -14,6 +14,9 @@ from pathlib import Path
 from jsonschema import validate, ValidationError
 from ipaddress import ip_network
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from production_profile import production_errors
+
 
 def main():
     if len(sys.argv) < 2:
@@ -69,28 +72,16 @@ def main():
                     "current firewalld policy is IPv4-only"
                 )
 
-    # Check: versions.policy must be locked for production
-    env = cluster.get("cluster", {}).get("environment", "")
-    policy = cluster.get("versions", {}).get("policy", "")
-    if env == "production" and policy != "locked":
-        errors.append(f"production environment requires versions.policy=locked, got '{policy}'")
-
-    # Bezpieczny default to 1. Wartosci 0/2 moga utracic ostatnie zatwierdzone
-    # transakcje przy crashu hosta; w production wymagaja jawnej, maszynowo
-    # sprawdzalnej akceptacji ryzyka zamiast komentarza/ADR poza configiem.
-    tuning = cluster.get("mariadb_tuning", {})
-    flush_at_commit = int(tuning.get("innodb_flush_log_at_trx_commit", 1))
-    durability_risk_accepted = tuning.get("durability_risk_accepted", False)
-    if env == "production" and flush_at_commit != 1 and not durability_risk_accepted:
-        errors.append(
-            "production with mariadb_tuning.innodb_flush_log_at_trx_commit "
-            f"{flush_at_commit} requires mariadb_tuning.durability_risk_accepted=true"
-        )
-
-    # Check: tls.mode=disabled in production requires risk acceptance (ISC-45)
-    tls_mode = cluster.get("tls", {}).get("mode", "")
-    if env == "production" and tls_mode == "disabled":
-        print("WARN: tls.mode=disabled in production — ISC-45 requires documented risk acceptance in Decisions")
+    # Production is a required policy, not an optional ADR/risk override.
+    production_inventory = None
+    if cluster.get("cluster", {}).get("environment") == "production":
+        try:
+            production_inventory = yaml.safe_load(
+                cluster_path.with_name("inventory.yml").read_text(encoding="utf-8")
+            )
+        except (OSError, yaml.YAMLError):
+            errors.append("production inventory.yml is missing or invalid")
+    errors.extend(production_errors(cluster, "cluster", production_inventory))
 
 
     # Check: galera.nodes_expected must be 3 (v1 scope)

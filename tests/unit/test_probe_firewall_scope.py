@@ -157,6 +157,22 @@ class ProbeFirewallScopeTests(unittest.TestCase):
                 self.assertIn("Docker chain has no final fail-closed rule" if broken
                               else "Docker ingress filter and address binding verified", output)
 
+    def test_platform_without_infra_hosts_does_not_certify_docker_policy(self):
+        """Produkcja z zewnetrznym PMM/S3 nie ma hosta infra i nie ma filtra Dockera.
+
+        Sonda nie moze wtedy ani odpytywac wzorca `infra`, ani zapewniac, ze
+        filtr Dockera i wiazanie adresow zostaly zweryfikowane.
+        """
+        inventory = {"all": {"children": {
+            "proxysql": PLATFORM_INVENTORY["all"]["children"]["proxysql"],
+            "app": PLATFORM_INVENTORY["all"]["children"]["app"],
+        }}}
+        module = load_probe(inventory, dict(CONFIG, platform={"name": "probe-platform"}))
+        code, output, queried = self.run_main(module)
+        self.assertEqual(code, 0, output)
+        self.assertNotIn("infra", queried)
+        self.assertNotIn("Docker ingress filter and address binding verified", output)
+
 
 class ProbeMeasurementPathTests(unittest.TestCase):
     """„Nie zmierzono" i „zmierzono, jest zle" musza dawac rozne kody.

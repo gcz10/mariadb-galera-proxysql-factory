@@ -50,6 +50,18 @@ def pmm_json(base_url: str, user: str, password: str, path: str, pmm_config: dic
     return pmm_get_json(base_url, declared, user, password, path, pmm_config)
 
 
+def pmm_admin_password(ctx, production: bool) -> str:
+    """Haslo administratora PMM dla tej sondy.
+
+    Poza produkcja: srodowisko albo `tests/lab/.env` (`ctx.env_secret`). Produkcja
+    czyta WYLACZNIE srodowisko procesu: plik laboratorium nie moze dostarczyc
+    poswiadczenia, ktore sonda wyslalaby do zewnetrznego, produkcyjnego PMM.
+    """
+    if production:
+        return os.environ.get("PMM_ADMIN_PASSWORD", "")
+    return ctx.env_secret("PMM_ADMIN_PASSWORD")
+
+
 def pmm_query(base_url: str, user: str, password: str, expr: str, pmm_config: dict):
     """Zapytanie natychmiastowe do magazynu metryk PMM."""
     payload = urlencode({"query": expr})
@@ -310,6 +322,14 @@ def main() -> int:
     # wlasnosci nikt juz nie sprzata. Regula jest adresowa, nie po nazwie,
     # bo nazwa jest wlasnie tym, co sie rozjechalo.
     pmm = ctx.config.get("monitoring", {}).get("pmm", {})
+    production = (ctx.config.get("platform") or {}).get("environment") == "production"
+    pmm_password = pmm_admin_password(ctx, production)
+    if production and not pmm_password:
+        undetermined.append(
+            "produkcja: PMM_ADMIN_PASSWORD musi byc ustawione w srodowisku procesu "
+            "(tests/lab/.env nie jest czytany) — PMM nie zostal odpytany"
+        )
+        return finish(failures, undetermined, "")
     # PMM_SERVER_URL nadpisuje adres API TEJ SONDY — tak samo jak `pmm_api_url`
     # w playbookach. Po co: host kontrolny bywa odciety od LAN (macOS 26 odmawia
     # dostepu do sieci lokalnej binariom spoza systemu, patrz ISA 2026-09-09),
@@ -335,7 +355,7 @@ def main() -> int:
         for host in ctx.group_hosts(group)
     }
     try:
-        nodes = pmm_json(pmm_url, "admin", ctx.env_secret("PMM_ADMIN_PASSWORD"), "/v1/inventory/nodes", pmm)
+        nodes = pmm_json(pmm_url, "admin", pmm_password, "/v1/inventory/nodes", pmm)
     except Exception as exc:  # noqa: BLE001 - kazdy blad tu jest niezmierzeniem
         undetermined.append(f"nie odpytano PMM Inventory ({exc})")
     else:
@@ -367,11 +387,11 @@ def main() -> int:
     metric_age_limit = int(os.environ.get("PLATFORM_METRIC_MAX_AGE", "120"))
     try:
         live = pmm_query(
-            pmm_url, "admin", ctx.env_secret("PMM_ADMIN_PASSWORD"),
+            pmm_url, "admin", pmm_password,
             "proxysql_up", pmm,
         )
         pool = pmm_query(
-            pmm_url, "admin", ctx.env_secret("PMM_ADMIN_PASSWORD"),
+            pmm_url, "admin", pmm_password,
             "time() - max(timestamp(proxysql_connection_pool_status))", pmm,
         )
     except Exception as exc:  # noqa: BLE001 - kazdy blad tu jest niezmierzeniem

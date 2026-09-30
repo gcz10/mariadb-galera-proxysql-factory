@@ -43,6 +43,7 @@ PLATFORM_DIR = platform/$(PLATFORM)
 PLATFORM_OPTS = -i $(PLATFORM_DIR)/inventory.yml -e @$(PLATFORM_DIR)/platform.yml $(ANSIBLE_OPTS)
 # Root terraform warstwy wspolnej — jak TF_DIR dla najemcy, nadpisywalny.
 PLATFORM_TF_DIR ?= terraform/$(PLATFORM)
+override platform_environment = $(shell python3 -c "import yaml; c=yaml.safe_load(open('$(PLATFORM_DIR)/platform.yml')) or {}; print((c.get('platform') or {}).get('environment', ''))" 2>/dev/null)
 
 # Cel zwiazany z konkretnym klastrem wymaga jawnego CLUSTER= (command line/env),
 # nie domyslnego example-cluster. Dotyczy tak samo celow mutujacych, jak sond:
@@ -79,6 +80,7 @@ monitoring_skip_note = echo "SKIP: monitoring.enabled=false w clusters/$(CLUSTER
 # powtorzenie w wywolaniu tego, co juz stalo w konfiguracji.
 backup_enabled = $(shell python3 -c "import yaml,sys; c=yaml.safe_load(open('clusters/$(CLUSTER)/cluster.yml')) or {}; print(str((c.get('backup') or {}).get('enabled', True)).lower())" 2>/dev/null || echo true)
 backup_skip_note = echo "SKIP: backup.enabled=false w clusters/$(CLUSTER)/cluster.yml — pomijam konfiguracje kopii"
+override cluster_environment = $(shell python3 -c "import yaml; c=yaml.safe_load(open('clusters/$(CLUSTER)/cluster.yml')) or {}; print((c.get('cluster') or {}).get('environment', ''))" 2>/dev/null)
 
 # TF_DIR domyślnie wyprowadzany z nazwy klastra; nadpisywalny dla nietypowych układów.
 TF_DIR ?= terraform/$(CLUSTER)
@@ -246,6 +248,8 @@ help:  ## Pokaż dostępne komendy
 # EXISTING_DATA=yes (klaster ma juz dane uzytkownika, np. odtwarzasz istniejace bazy).
 # Backup materializuje dowody bramki po budowie: configure -> backup -> restore
 # drill (CONFIRM=yes) -> odswiezenie metryk swiezosci; kazdy krok fail-fast.
+# Produkcja: seed i restore drill nie startuja; backup/app-host/alerts sa
+# obowiazkowe. BUILD_SKIP dopuszcza tylko inertny token seed.
 BUILD_SKIP ?=
 EXISTING_DATA ?=
 
@@ -365,6 +369,7 @@ platform-monitoring:  ## Zarejestruj wezly i eksportery warstwy wspolnej w PMM
 # jest potrzebny do bucketa, reguly ILM i klucza bez prawa kasowania.
 platform-pmm-backup:  ## Harmonogram kopii danych PMM do MinIO (monitoring.pmm.scheduled_backup)
 	$(platform_guard)
+	@test "$(platform_environment)" != "production" || { echo "REFUSED: external PMM backup belongs to its operator, not the laboratory volume backup" >&2; exit 1; }
 	ansible-playbook playbooks/platform_pmm_backup.yml $(PLATFORM_OPTS)
 
 platform-alerts:  ## Reguly alertowe warstwy wspolnej (namespace isa-shared-*)
@@ -444,14 +449,12 @@ platform-monitor-rotate:  ## Rotuj globalne haslo monitora ProxySQL rotowanej pa
 
 platform-verify:  ## Sondy warstwy wspolnej: para ProxySQL, VIP, TLS endpointu, rejestracja w PMM
 	$(platform_guard)
-	@# Sonda rozwiazuje sekret SAMA: srodowisko ALBO tests/lab/.env
-	@# (tests/lab/_probe_common.py:79-89) — tak samo jak probe-orphans, ktora
-	@# guardu nie ma wcale. Straznik zadajacy WYLACZNIE zmiennej srodowiskowej
-	@# byl wiec ostrzejszy od konsumenta i blokowal przebieg, ktory zadzialalby.
-	@# Zmierzone 2026-09-05: cel odmawial startu (Error 127) i zostal opisany
-	@# jako "zablokowany brakiem poswiadczen", choc haslo lezalo w tests/lab/.env.
-	@test -n "$${PMM_ADMIN_PASSWORD}" || grep -q '^PMM_ADMIN_PASSWORD=' tests/lab/.env 2>/dev/null \
-	  || { echo "ERROR: ustaw PMM_ADMIN_PASSWORD w srodowisku albo w tests/lab/.env" >&2; exit 1; }
+	@if [ "$(platform_environment)" = "production" ]; then \
+	  test -n "$${PMM_ADMIN_PASSWORD}" || { echo "ERROR: production requires PMM_ADMIN_PASSWORD in the environment" >&2; exit 1; }; \
+	else \
+	  test -n "$${PMM_ADMIN_PASSWORD}" || grep -q '^PMM_ADMIN_PASSWORD=' tests/lab/.env 2>/dev/null \
+	    || { echo "ERROR: ustaw PMM_ADMIN_PASSWORD w srodowisku albo w tests/lab/.env" >&2; exit 1; }; \
+	fi
 	CLUSTER=$(PLATFORM) CLUSTER_CONFIG=$(PLATFORM_DIR)/platform.yml CLUSTER_INVENTORY=$(PLATFORM_DIR)/inventory.yml \
 	  PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-platform.py
 
@@ -481,11 +484,15 @@ platform-build:  ## Cala warstwa wspolna jednym poleceniem: validate→deploy→
 	$(MAKE) platform-validate PLATFORM=$(PLATFORM)
 	$(MAKE) platform-deploy PLATFORM=$(PLATFORM)
 	$(MAKE) platform-firewall PLATFORM=$(PLATFORM)
-	$(MAKE) platform-infra PLATFORM=$(PLATFORM)
+	@if [ "$(platform_environment)" = "production" ]; then \
+	  echo "SKIP: production uses external PMM/SMTP/storage; no laboratory platform-infra"; \
+	else $(MAKE) platform-infra PLATFORM=$(PLATFORM); fi
 	$(MAKE) platform-proxysql PLATFORM=$(PLATFORM)
 	$(MAKE) platform-endpoint PLATFORM=$(PLATFORM)
 	$(MAKE) platform-monitoring PLATFORM=$(PLATFORM)
-	$(MAKE) platform-pmm-backup PLATFORM=$(PLATFORM)
+	@if [ "$(platform_environment)" = "production" ]; then \
+	  echo "SKIP: external PMM backup belongs to its operator"; \
+	else $(MAKE) platform-pmm-backup PLATFORM=$(PLATFORM); fi
 	$(MAKE) platform-alerts PLATFORM=$(PLATFORM)
 	$(MAKE) platform-firewall-verify PLATFORM=$(PLATFORM)
 	$(MAKE) platform-verify PLATFORM=$(PLATFORM)
@@ -494,7 +501,7 @@ cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap
 	$(cluster_guard)
 	@# Sprzezenie seed->backup i mapa krokow warunkowych zyja w
 	@# tests/validation/gate-build.sh — Makefile zostaje orkiestracja.
-	@tests/validation/gate-build.sh preflight "$(backup_enabled)" "$(BUILD_SKIP)" "$(EXISTING_DATA)"
+	@tests/validation/gate-build.sh preflight "$(cluster_environment)" "$(backup_enabled)" "$(BUILD_SKIP)" "$(EXISTING_DATA)"
 	@test "$(CONFIRM)" = "yes" || (echo "Wymaga CONFIRM=yes (bootstrap tworzy nowy Primary Component)"; exit 1)
 	$(MAKE) cluster-validate
 	$(MAKE) cluster-deploy
@@ -503,8 +510,10 @@ cluster-build:  ## Caly klaster jednym poleceniem: validate→deploy→bootstrap
 	$(MAKE) cluster-proxysql
 	$(MAKE) cluster-monitoring
 	$(MAKE) cluster-harden
-	@tests/validation/gate-build.sh steps "$(BUILD_SKIP)"
-	$(MAKE) lab-post-build-gate
+	@tests/validation/gate-build.sh steps "$(cluster_environment)" "$(BUILD_SKIP)"
+	@if [ "$(cluster_environment)" = "production" ]; then \
+	  $(MAKE) cluster-production-verify; \
+	else $(MAKE) lab-post-build-gate; fi
 
 cluster-discover:  ## F0 Discovery — zbierz fakty z hostów (read-only)
 	$(cluster_guard)
@@ -973,6 +982,23 @@ lab-gcache-verify:  ## F0/ISC-68 — zmierz write rate + weryfikuj gcache.size (
 	$(cluster_guard)
 	$(TARGET_ENV) tests/lab/probe-gcache.py
 
+# Production readiness is read-only: no second converge, app DDL, drill or load.
+.PHONY: cluster-production-verify
+cluster-production-verify:  ## Produkcyjna bramka stanu: TLS, Galera, backup, PMM; bez mutacji pomiarowych
+	$(cluster_guard)
+	@test "$(cluster_environment)" = "production" || { echo "ERROR: ten cel wymaga environment: production" >&2; exit 1; }
+	@: "$${PMM_ADMIN_PASSWORD:?Ustaw PMM_ADMIN_PASSWORD poza repozytorium}"
+	python3 tests/validation/validate-cluster-schema.py clusters/$(CLUSTER)/cluster.yml clusters/schema/cluster.schema.json
+	$(TARGET_ENV) tests/lab/probe-galera-cluster.py
+	$(TARGET_ENV) tests/lab/probe-proxysql.py
+	$(TARGET_ENV) tests/lab/probe-endpoint.py
+	$(TARGET_ENV) tests/lab/probe-hardening.py
+	$(TARGET_ENV) tests/lab/probe-selinux.py
+	$(TARGET_ENV) tests/lab/probe-firewall.py
+	$(TARGET_ENV) tests/lab/probe-backup.py
+	$(TARGET_ENV) PMM_ADMIN_PASSWORD="$${PMM_ADMIN_PASSWORD}" tests/lab/probe-pmm-native.py
+	@echo "PASS: production readiness measured; restore drills, failure tests and capacity are separate evidence"
+
 # Jedno polecenie po zbudowaniu klastra: wszystkie sondy STANU USTALONEGO.
 # Kazda sonda jest fail-closed (tests/lab/_probe_common.py): brak odpowiedzi
 # hosta to UNDETERMINED (exit 2), nie zielone "wszystko OK". Pierwszy niezerowy
@@ -980,6 +1006,7 @@ lab-gcache-verify:  ## F0/ISC-68 — zmierz write rate + weryfikuj gcache.size (
 # przeszedl kontraktu.
 lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fail-closed
 	$(cluster_guard)
+	@test "$(cluster_environment)" != "production" || { echo "REFUSED: laboratory gate mutates data and generates load; use cluster-production-verify" >&2; exit 1; }
 	@# Straznicy sekretow PRZED sondami: brak zmiennej wychodzil dopiero w 13. sondzie,
 	@# po kilkunastu minutach pracy calej bramki. Kazdy sekret uzywany nizej jest
 	@# sprawdzany tutaj, nawet jesli jego sonda stoi na koncu listy.

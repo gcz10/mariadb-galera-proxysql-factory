@@ -11,6 +11,12 @@
     pmm_monitor_user: "pmm_monitor"
 
   pre_tasks:
+    - name: "ISC-45: require full TLS in production before hardening mutations"
+      ansible.builtin.assert:
+        that:
+          - cluster.environment != 'production' or (tls | default({})).mode | default('disabled') == 'full'
+        fail_msg: "Production requires tls.mode=full; risk acceptance cannot bypass the profile."
+
     # Sonda jest tolerancyjna (`failed_when: false`), bo chcemy WŁASNY komunikat,
     # a nie surowy blad klienta; werdykt wydaje asercja ponizej.
     #
@@ -167,15 +173,6 @@
         msg: "Konto pmm_monitor jeszcze nie istnieje; F11 utworzy je i ustawi dokładne granty."
       when: pmm_monitor_count.stdout | int == 0
 
-    # ISC-45: ostrzeżenie dla production + tls disabled
-    - name: "ISC-45: ostrzeżenie TLS disabled w production"
-      ansible.builtin.assert:
-        that:
-          - cluster.environment != 'production' or (tls | default({})).mode | default('disabled') != 'disabled'
-        fail_msg: >-
-          PRODUKCJA: tls.mode=disabled. Wymagane jawne risk acceptance (ADR-002).
-          Ustaw tls.mode=full lub dołącz podpisany ADR.
-      when: cluster.environment is defined
 
     - name: "Raport hardening"
       ansible.builtin.debug:

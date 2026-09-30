@@ -1,8 +1,8 @@
 # Galera + ProxySQL Cluster Factory
 
-Powtarzalna, idempotentna fabryka produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących hostach Rocky Linux 9 i 10.
+Powtarzalna fabryka klastrów MariaDB Galera z ProxySQL na istniejących hostach Rocky Linux 9 i 10.
 
-**Status: faza BUILD — wspólny kod ról działa na Rocky Linux 9 i 10. Galera, ProxySQL/Keepalived, hardening, monitoring oraz szyfrowany backup/restore zostały sprawdzone na rzeczywistych klastrach. Backup obsługuje S3, zarządzany SMB i wcześniej zamontowany filesystem; scheduler, retencja, sekrety i artefakty są izolowane per klaster.**
+**Status: faza BUILD — wspólny kod ról działa na Rocky Linux 9 i 10; dotychczasowe wdrożenia i próby dotyczą laboratorium. Ścieżka `environment: production` ma obowiązkowy profil i osobną, niedestrukcyjną bramkę, ale nie jest dowodem wdrożenia na rzeczywistej produkcji.** Galera, ProxySQL/Keepalived, hardening, monitoring oraz szyfrowany backup/restore zostały sprawdzone na rzeczywistych klastrach laboratoryjnych.
 
 Zobacz `ISA.md` — jedyne źródło prawdy dla idealnego stanu, kryteriów, mapy testów i postępu.
 
@@ -30,10 +30,29 @@ ich też za Ciebie — pełny cykl dla maszyn z innego źródła opisuje
 sprząta po sobie zawsze: `make cluster-deregister` usuwa najemcę z ProxySQL
 i PMM niezależnie od pochodzenia maszyn.
 
+## Ścieżka produkcyjna
+
+`environment: production` automatycznie wymusza [profil produkcyjny](profiles/README.md):
+przypięte wersje, TLS full, weryfikację certyfikatów PMM, szyfrowany backup poza
+hostami bazy (S3 przez TLS lub sealed SMB), trwałość commitów `1`, brak chaosu
+i Maildev oraz nielaboratoryjny adres alertów. Wyjątki akceptacji ryzyka nie
+omijają walidatora.
+
+Platforma deklaruje `infra.services: []` i nie ma hosta `infra`; korzysta
+z zewnętrznych PMM, SMTP i storage operatora. `platform-build` nie uruchamia
+laboratoryjnego stacku ani backupu jego wolumenu PMM. `cluster-build` nie zasiewa
+danych, nie wykonuje drillu i kończy się `cluster-production-verify`, nie
+mutującą bramką laboratoryjną. Efektywne zmienne Ansible są sprawdzane także
+po `-e`. Produkcja wymaga `restore_test_schedule: disabled`; ćwiczenia
+odtwarzania wykonuje się oddzielnie w izolowanym środowisku nieprodukcyjnym.
+
+Kod i odmowy można sprawdzić lokalnie bez zmiany floty. Wdrożenie wymaga
+rzeczywistych hostów, PKI, usług i sekretów; doręczenie alertów i produkcyjne
+RTO/RPO pozostają osobnymi pomiarami, nie obietnicą na podstawie testów.
+
 ## Zależności deweloperskie
 
-Fabryka wystarcza z SSH i systemd, ale **testy i bramki statyczne** (866 testów
-jednostkowych, walidatory, `pyflakes`, `ansible-lint`) potrzebują pakietów
+Testy jednostkowe, walidatory, `pyflakes` i `ansible-lint` potrzebują pakietów
 Pythona z przypiętymi wersjami:
 
 ```bash
@@ -346,7 +365,7 @@ Kontrolowane cold recovery całej Cassiopei, powrót ruchu przez VIP, zachowanie
 
 Alerting (F15) jest wdrożony: `make cluster-alerts` provisionuje reguły zdrowia Galery, writera ProxySQL, backupu i restore, zamrożonych metryk oraz — gdy TLS jest włączony — ważności certyfikatu; reguły warstwy wspólnej (`isa-shared-*`) provisionuje `make platform-alerts`. Krytyczne reguły używają `noDataState: Alerting`; brak metryk nie przechodzi cicho. Contact point i notification policy (`managed_by=ansible` → e-mail) biorą adres z `monitoring.alerts.email` w `cluster.yml`. W laboratorium poczta trafia do `maildev`.
 
-`lab-backup-verify` weryfikuje backend S3 i wymaga przypiętego SDK (`minio.sdk_version` z lockfile). Zarządzany SMB oraz wcześniej zamontowany filesystem weryfikuje `tests/live/probe-galera-backup-backends.py`; procedury i ograniczenia opisuje `docs/runbooks/backup.md`.
+`lab-backup-verify` oraz bramka produkcyjna weryfikują integralność i świeżość kopii S3 lub SMB bez restore. Odczyt S3 wymaga przypiętego SDK (`minio.sdk_version` z lockfile); SMB używa zainstalowanego przez rolę `samba-client` bez montowania zasobu. Wcześniej zamontowany filesystem nadal weryfikuje `tests/live/probe-galera-backup-backends.py`; procedury i granice dowodu opisuje `docs/runbooks/backup.md`.
 
 ## Warstwa wspolna
 
@@ -434,7 +453,7 @@ nowy klaster w chwili powstania.
 ```
 clusters/<name>/     — inventory.yml + cluster.yml + secrets per klaster
 versions/            — lockfile, discovered-versions, compatibility-report
-profiles/            — specyfikacja profili srodowiskowych (README.md)
+profiles/            — wymagany profil produkcyjny i jego kontrakt
 playbooks/           — feature po feature (F0-F15) + tasks/ z helperami wspoldzielonymi
 roles/               — standardowe katalogi, gdy potrzebne
   galera_backup/files/

@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from typing import Optional
 from jsonschema import validate, ValidationError
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from production_profile import production_errors
+
 
 @dataclass
 class BackupRecord:
@@ -138,6 +141,8 @@ def validate_pair(cluster_path: Path, inventory_path: Path) -> list[str]:
         except ValidationError as e:
             errors.append(f"JSON Schema error in {cluster_path}: {e.message}")
             return errors
+
+    errors.extend(production_errors(cluster, "cluster", inventory))
 
     backup = cluster.get("backup", {})
     env = cluster.get("cluster", {}).get("environment", "")

@@ -3,6 +3,21 @@
 # Satisfies: ISC-3 (wersje z lockfile), ISC-4 (SELinux), ISC-5 (firewalld), ISC-6 (preflight), ISC-63 (no state:latest)
 # Depends: F0 (discovery), F1 (lockfile)
 
+- name: "F2 Preflight - effective production policy before accessing hosts"
+  # Controller-only actions in each host context survive --limit and host vars.
+  hosts: all
+  connection: local
+  become: false
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    ansible_become: false
+  tasks:
+    - name: "Validate the effective cluster production policy"
+      ansible.builtin.include_tasks: tasks/production_profile.yml
+      vars:
+        production_kind: cluster
+
 - name: "F2 Preflight - walidacja preconditions"
   # Preflight najemcy dotyczy WYLACZNIE wezlow klastra (galera/restore).
   # Hosty warstwy wspolnej (proxysql/infra/app) zyja na EL majorze platformy,
@@ -16,6 +31,37 @@
   serial: 1
   max_fail_percentage: 0
   tasks:
+    - name: "Production preflight - resolve backup endpoint on each database source"
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tests/validation/production_backup_host.py') }}"
+        stdin: >-
+          {{ {'destination': backup.destination,
+              'endpoint': backup.s3.endpoint if backup.destination == 's3' else backup.smb.source,
+              'source_names': groups.get('galera', []) + [ansible_facts.hostname, ansible_facts.fqdn],
+              'source_addresses': production_source_addresses
+                + (ansible_facts.all_ipv4_addresses | default([]))
+                + (ansible_facts.all_ipv6_addresses | default([]))} | to_json }}
+      register: production_backup_location
+      changed_when: false
+      check_mode: false
+      vars:
+        production_source_addresses: >-
+          {%- set addresses = [] -%}
+          {%- for host in groups.get('galera', []) -%}
+            {%- for key in ['ansible_host', 'galera_node_address'] -%}
+              {%- if key in hostvars[host] -%}
+                {%- set _ = addresses.append(hostvars[host][key]) -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ addresses }}
+      when:
+        - cluster.environment == 'production'
+        - "'galera' in group_names"
+
     # R1/A1: lockfile wskazywany per klaster (versions.lock_file z cluster.yml),
     # nie ścieżka wpisana na sztywno. Ten sam wzorzec co f2_install — jedna konwencja w repo.
     - name: "Załaduj lockfile platformy (reprodukowalne wersje)"

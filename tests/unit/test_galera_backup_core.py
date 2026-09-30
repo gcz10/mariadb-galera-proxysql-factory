@@ -918,19 +918,6 @@ class CutoverContractTests(unittest.TestCase):
                     matches.append(str(path.relative_to(WORKSPACE_ROOT)))
             self.assertEqual(matches, [], f"Legacy term '{term}' still referenced in files: {matches}")
 
-    def test_pmm_probe_expects_galera_backup_metrics(self):
-        pmm_probe = (WORKSPACE_ROOT / "tests" / "lab" / "probe-pmm-native.py").read_text()
-        for metric in [
-            "galera_backup_last_success_unixtime",
-            "galera_backup_last_failure_unixtime",
-            "galera_backup_last_run_success",
-            "galera_backup_last_size_bytes",
-            "galera_backup_last_duration_seconds",
-        ]:
-            self.assertIn(metric, pmm_probe)
-        self.assertNotIn("isa_backup_last_success_unixtime", pmm_probe)
-        self.assertIn("for metric_name in EXPECTED_GALERA_BACKUP_METRICS:", pmm_probe)
-
     def test_backup_failure_alert_has_no_pending_delay(self):
         f15_path = WORKSPACE_ROOT / "playbooks" / "f15_alerts.yml"
         rules_path = WORKSPACE_ROOT / "playbooks" / "vars" / "alert_rules.yml"

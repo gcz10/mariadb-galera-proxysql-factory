@@ -83,6 +83,7 @@ backup_tools:
   archive_package: "tar"
   cron_package: "cronie"
   cifs_userspace_package: "cifs-utils"
+  smb_client_package: "samba-client"
 
 minio:
   image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"

@@ -89,6 +89,7 @@ backup_tools:
   archive_package: "tar"
   cron_package: "cronie"
   cifs_userspace_package: "cifs-utils"
+  smb_client_package: "samba-client"
 
 
 minio:

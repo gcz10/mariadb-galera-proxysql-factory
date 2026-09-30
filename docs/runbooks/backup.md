@@ -63,6 +63,12 @@ backup:
 
 `restore_test_schedule` ma skutek: przy `scheduler.mode: cron` rola instaluje `/etc/cron.d/galera-restore-<cluster>` na hoście grupy `restore`, a drill uruchamia się sam. Wartości `disabled` i puste wyłączają ten cron. Harmonogram podlega tej samej walidacji składni co `full_backup_schedule` — błędne wyrażenie jest odrzucane już przez `validate-backup-config.py`, bo cron ignoruje taką linię po cichu i drill nie uruchomiłby się nigdy.
 
+Wyłączony harmonogram usuwa również wymóg świeżej metryki restore w sondzie
+PMM i zarządzaną regułę `restore-drill-stale`; świeżość backupu pozostaje
+obowiązkowa. Produkcja wymaga `restore_test_schedule: disabled`, a ręczny
+`cluster-restore-drill` odmawia tego środowiska. Próby odtwarzania produkcyjnych
+kopii wykonuje się na osobnym, izolowanym środowisku nieprodukcyjnym.
+
 `retention_days` musi być dodatnią liczbą całkowitą (np. `14`) lub jej zapisem
 cyfrowym bez znaku i zer wiodących (`"14"`). Schema, walidator deklaracji
 i runner odrzucają `0`, wartości ujemne i wartości logiczne. Backend ponownie
@@ -109,6 +115,23 @@ python3 tests/validation/validate-backup-config.py clusters
 ```
 
 Walidator odrzuca mieszane backendy, niekanoniczny UNC, relatywny mount point, słabe opcje SMB, nieznany scheduler i niezabezpieczony S3 w profilu `production`.
+
+Profil produkcyjny dodatkowo odrzuca wyłączony/słabo szyfrowany backup i lokalny
+`filesystem`. S3 wymaga TLS, SMB wymaga `seal`; endpoint nie może być nazwą ani
+adresem węzła Galery. Preflight rozwiązuje DNS na każdym źródle przed mutacją,
+więc alias wskazujący lokalny interfejs lub brak rozstrzygnięcia też blokuje build.
+To sprawdza odrębność hosta, nie niezależność fizycznej infrastruktury.
+
+`tests/lab/probe-backup.py` mierzy owner marker, najnowszy kompletny zestaw,
+checksumę, szyfrowany format, tożsamość klastra i `created_unixtime` względem
+`freshness_sla_hours`. Nie zastępuje próby restore. S3 strumieniuje payload bez
+zapisu na kontrolerze; produkcja używa tylko jawnych `GALERA_BACKUP_S3_*`
+ze środowiska, bez `.env` i konta root MinIO. SMB czyta przez już poprawnie
+zamontowany zasób albo `smbclient` z szyfrowaniem; rola instaluje klienta
+z `lock.backup_tools.smb_client_package`. Sonda niczego nie montuje ani zapisuje.
+Brak poświadczeń, niedostępny backend lub nieodczytany stan to UNDETERMINED,
+nie PASS. Odczyt całego payloadu obciąża sieć i storage.
+Pakiety klienta opisuje [Rocky Linux, Samba — klient zewnętrznego udziału](https://docs.rockylinux.org/10/labs/networking/lab8-samba/#exercise-6).
 
 ## Sekrety
 

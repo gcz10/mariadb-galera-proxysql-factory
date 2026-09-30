@@ -1,0 +1,55 @@
+---
+# Validate the effective variable tree, not only the YAML file before `-e`.
+# Read the sibling declaration so an override cannot downgrade production.
+- name: "Read production policy declaration on the controller"
+  ansible.builtin.set_fact:
+    production_declaration: "{{ lookup('ansible.builtin.file', (ansible_inventory_sources | first | dirname) ~ '/' ~ production_kind ~ '.yml') | from_yaml }}"
+
+- name: "Collect public inventory identities for production policy"
+  ansible.builtin.set_fact:
+    production_inventory: >-
+      {%- set result = {'all': {'children': {}}} -%}
+      {%- for group in ['galera', 'infra', 'app'] -%}
+        {%- set hosts = {} -%}
+        {%- for host in groups.get(group, []) -%}
+          {%- set addresses = {} -%}
+          {%- for key in ['ansible_host', 'galera_node_address'] -%}
+            {%- if key in hostvars[host] -%}
+              {%- set _ = addresses.update({key: hostvars[host][key]}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- set _ = hosts.update({host: addresses}) -%}
+        {%- endfor -%}
+        {%- set _ = result['all']['children'].update({group: {'hosts': hosts}}) -%}
+      {%- endfor -%}
+      {{ result }}
+  no_log: true
+
+- name: "Validate effective production configuration without printing input"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ playbook_dir }}/../tests/validation/production_profile.py"
+      - "{{ production_kind }}"
+    stdin: >-
+      {{ {'configuration': dict(production_declaration.keys() | zip(query('ansible.builtin.vars', *(production_declaration.keys() | list)))),
+          'inventory': production_inventory,
+          'declared_environment': production_declaration[production_kind].environment} | to_json }}
+  delegate_to: localhost
+  become: false
+  # Inventory ansible_become overrides the keyword; never sudo on controller.
+  vars:
+    ansible_become: false
+    ansible_connection: local
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  register: production_policy_result
+  no_log: true
+
+- name: "Require the production profile before deployment"
+  ansible.builtin.assert:
+    that:
+      - production_policy_result.rc == 0
+    fail_msg: "{{ production_policy_result.stdout | default('Production policy could not be measured') }}"
+    quiet: true

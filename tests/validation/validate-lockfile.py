@@ -46,7 +46,7 @@ REQUIRED = {
     "minio": ["image", "image_digest", "sdk_version", "mc_image", "mc_image_digest"],
     "backup_tools": [
         "python_pip_package", "encryption_package", "crypto_package",
-        "archive_package", "cron_package", "cifs_userspace_package",
+        "archive_package", "cron_package", "cifs_userspace_package", "smb_client_package",
     ],
     "pmm": ["version", "image", "image_digest"],
     # P1-A (audyt 2026-09): lancuch dostaw percona-release musi miec piny

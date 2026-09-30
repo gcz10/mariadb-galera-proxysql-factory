@@ -5,6 +5,26 @@
 # klastrowego: lockfile platformy (EL10) opisuje hosty fcp1/fcp2/fcinfra,
 # a definicja platform.yml jest jedynym wejsciem.
 
+# Produkcja: efektywne zmienne (takze `-e` z linii polecenia) sa walidowane na
+# kontrolerze wspolnym profilem produkcyjnym PRZED jakimkolwiek dostepem do
+# hostow. Deklaratywna polityka (infra.services: [], brak grupy infra, host app,
+# PMM z weryfikacja TLS) mieszka w tasks/production_profile.yml — tu jej nie
+# duplikujemy. Poza produkcja helper jawnie pomija polityke produkcyjna.
+- name: "Platform Preflight - profil produkcyjny (kontroler, przed dostepem do hostow)"
+  # Controller-only actions in each host context survive --limit and host vars.
+  hosts: all
+  connection: local
+  become: false
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    ansible_become: false
+  tasks:
+    - name: "Waliduj efektywna konfiguracje platformy wg profilu produkcyjnego"
+      ansible.builtin.include_tasks: tasks/production_profile.yml
+      vars:
+        production_kind: platform
+
 - name: "Platform Preflight - walidacja preconditions warstwy wspolnej"
   hosts: "proxysql:infra"
   become: true
@@ -65,3 +85,141 @@
       when: "'proxysql' in group_names"
 
   handlers: []
+
+# Produkcja NIE adoptuje po cichu zasobow laboratorium. `infra.services: []`
+# (jedyna deklaracja dozwolona w produkcji) sprawia, ze infra_services.yml i
+# platform_pmm_backup.yml niczego na hostach nie robia. Host, ktory byl
+# laboratoryjnym hostem infra i zostal przeklasyfikowany (jako infra, proxysql
+# albo app), zachowalby wiec dzialajace kontenery PMM/MinIO/Maildev i timer
+# kopii PMM jako niezarzadzany stan. Dlatego skanujemy WSZYSTKIE hosty
+# wlasnosci platformy (proxysql:app:infra), nie tylko grupe infra.
+#
+# Ten play WYLACZNIE WYKRYWA i odmawia; niczego nie usuwa ani nie zatrzymuje.
+# Zakres to stala lista znanych artefaktow isa (sciezki z infra_services.yml i
+# platform_pmm_backup.yml, projekt Compose `isa-infra`, wolumeny i siec o nazwach
+# z compose.yml.j2) — NIE kazdy kontener Dockera: PMM prowadzony przez operatora
+# pod innymi nazwami i etykietami nie jest ani wykrywany, ani blokowany.
+- name: "Platform Preflight - produkcja odmawia hostow warstwy z artefaktami laboratorium (tylko odczyt)"
+  hosts: "{{ 'proxysql:app:infra' if (platform.environment | default('') == 'production') else 'all:!all' }}"
+  become: true
+  gather_facts: false
+  serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
+  vars:
+    preflight_lab_compose_project: isa-infra
+    preflight_lab_network: isa-infra
+    preflight_lab_volume_pattern: '^isa-(pmm|minio)-data(-backup-.+)?$'
+    preflight_lab_paths:
+      - /etc/isa-infra
+      - /etc/isa-pmm-backup
+      - /var/lib/isa-pmm-backup
+      - /usr/local/sbin/isa-pmm-backup
+      - /etc/systemd/system/isa-pmm-backup.service
+      - /etc/systemd/system/isa-pmm-backup.timer
+      - /usr/local/sbin/isa-docker-firewall
+      - /etc/systemd/system/isa-docker-firewall.service
+      - /etc/systemd/system/docker.service.d/isa-firewall.conf
+
+  tasks:
+    - name: "Sprawdz znane sciezki artefaktow laboratorium (tylko odczyt)"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop: "{{ preflight_lab_paths }}"
+      register: preflight_lab_stat
+
+    - name: "Sprawdz, czy Docker CLI istnieje na hoscie (tylko odczyt)"
+      ansible.builtin.command:
+        argv: [sh, -c, "command -v docker"]
+      register: preflight_docker_cli
+      changed_when: false
+      failed_when: false
+
+    - name: "Wypisz kontenery projektu Compose isa-infra (tylko odczyt)"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - ps
+          - --all
+          - --filter
+          - "label=com.docker.compose.project={{ preflight_lab_compose_project }}"
+          - --format
+          - "{{ '{{' }}.Names{{ '}}' }}"
+      register: preflight_lab_containers
+      changed_when: false
+      failed_when: false
+      when: preflight_docker_cli.rc == 0
+
+    - name: "Wypisz wolumeny Dockera (tylko odczyt)"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - ls
+          - --format
+          - "{{ '{{' }}.Name{{ '}}' }}"
+      register: preflight_lab_volumes
+      changed_when: false
+      failed_when: false
+      when: preflight_docker_cli.rc == 0
+
+    - name: "Wypisz sieci Dockera (tylko odczyt)"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - network
+          - ls
+          - --format
+          - "{{ '{{' }}.Name{{ '}}' }}"
+      register: preflight_lab_networks
+      changed_when: false
+      failed_when: false
+      when: preflight_docker_cli.rc == 0
+
+    - name: "Ustal artefakty laboratorium wykryte na hoscie"
+      ansible.builtin.set_fact:
+        preflight_lab_findings: >-
+          {{
+            (preflight_lab_stat.results | selectattr('stat.exists') | map(attribute='item')
+             | map('regex_replace', '^', 'sciezka ') | list)
+            + ((preflight_lab_containers.stdout_lines | default([]))
+               | map('regex_replace', '^', 'kontener ') | list)
+            + ((preflight_lab_volumes.stdout_lines | default([]))
+               | select('match', preflight_lab_volume_pattern)
+               | map('regex_replace', '^', 'wolumen ') | list)
+            + ((preflight_lab_networks.stdout_lines | default([]))
+               | select('equalto', preflight_lab_network)
+               | map('regex_replace', '^', 'siec ') | list)
+          }}
+        preflight_docker_unmeasured: >-
+          {{
+            preflight_docker_cli.rc == 0
+            and ([preflight_lab_containers, preflight_lab_volumes, preflight_lab_networks]
+                 | map(attribute='rc') | select('ne', 0) | list | length) > 0
+          }}
+
+    - name: "Odmow hosta, na ktorym Docker istnieje, ale nie da sie go odczytac"
+      ansible.builtin.assert:
+        that:
+          - not (preflight_docker_unmeasured | bool)
+        fail_msg: >-
+          {{ inventory_hostname }}: Docker jest zainstalowany, ale `docker ps/volume ls/network ls`
+          nie odpowiada, wiec nie da sie wykluczyc kontenerow, wolumenow i sieci isa-infra.
+          Preflight niczego nie uruchamia ani nie usuwa — rozstrzygnij stan Dockera recznie
+          i powtorz walidacje.
+        quiet: true
+
+    - name: "Odmow promocji hosta z artefaktami uslug laboratoryjnych na produkcje"
+      ansible.builtin.assert:
+        that:
+          - preflight_lab_findings | length == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: platform.environment=production, a host warstwy wspolnej niesie
+          zarzadzane artefakty laboratorium isa: {{ preflight_lab_findings | join('; ') }}.
+          Produkcja korzysta z zewnetrznego PMM/S3/SMTP i nie adoptuje tych zasobow.
+          Preflight niczego nie usuwa — zdemontuj je swiadoma operacja operatora
+          (po zabezpieczeniu danych) albo uzyj innego hosta, i powtorz walidacje.
+        quiet: true
