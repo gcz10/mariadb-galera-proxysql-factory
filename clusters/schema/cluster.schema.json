@@ -691,7 +691,7 @@
     "terraform_managed": {
       "type": "boolean",
       "default": true,
-      "description": "false = VM-y klastra NIE sa zarzadzane przez terraform (machines-from-elsewhere): probe-inventory-tf-consistency pomija wymaganie terraform/<name>/main.tf, a infra-* cele sa nieobowiazujace. Brak pola = true (kontrakt dotychczasowy)."
+      "description": "false = VM-y klastra NIE sa zarzadzane przez terraform (machines-from-elsewhere): probe-inventory-tf-consistency pomija wymaganie terraform/<name>/main.tf, a infra-* cele sa nieobowiazujace. false przy istniejacym terraform/<name>/main.tf to sprzeczna wlasnosc i naruszenie. Brak pola = true (kontrakt dotychczasowy)."
     }
   }
 }

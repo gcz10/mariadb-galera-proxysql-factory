@@ -93,6 +93,18 @@ class ManualProvisioningOptOutTests(unittest.TestCase):
         (tf_dir / "main.tf").write_text(TF_MAIN)
         self.assertEqual(probe_tf.scan(self.root), [])
 
+    def test_terraform_managed_false_with_existing_root_is_contradictory(self):
+        self._write_cluster_yml(
+            'cluster:\n  name: "manual-r9"\nterraform_managed: false\n'
+        )
+        tf_dir = self.root / "terraform" / "manual-r9"
+        tf_dir.mkdir(parents=True)
+        (tf_dir / "main.tf").write_text(TF_MAIN)
+        violations = probe_tf.scan(self.root)
+        self.assertEqual(len(violations), 1, violations)
+        self.assertIn("clusters/manual-r9/cluster.yml", violations[0])
+        self.assertIn("terraform/manual-r9/main.tf", violations[0])
+
 
 class PlatformProvisioningOwnershipTests(unittest.TestCase):
     def setUp(self):
@@ -118,7 +130,6 @@ class PlatformProvisioningOwnershipTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual(probe_tf.scan(self.root), [])
-
 
     def test_managed_platform_requires_a_root_by_default_and_when_explicit(self):
         for ownership in ("", "terraform_managed: true\n"):
@@ -158,6 +169,24 @@ class PlatformProvisioningOwnershipTests(unittest.TestCase):
         self.assertEqual(len(violations), 2)
         self.assertTrue(any("infra1" in v for v in violations), violations)
         self.assertTrue(any("orphan" in v for v in violations), violations)
+
+    def test_external_platform_with_existing_root_is_contradictory(self):
+        (self.platform_dir / "platform.yml").write_text(
+            "platform:\n  name: manual-platform\nterraform_managed: false\n",
+            encoding="utf-8",
+        )
+        tf_dir = self.root / "terraform" / "manual-platform"
+        tf_dir.mkdir(parents=True)
+        (tf_dir / "main.tf").write_text(
+            "locals {\n  vms = {\n"
+            "    p1 = {}\n    p2 = {}\n    app1 = {}\n    infra1 = {}\n"
+            "  }\n}\n",
+            encoding="utf-8",
+        )
+        violations = probe_tf.scan(self.root)
+        self.assertEqual(len(violations), 1, violations)
+        self.assertIn("platform/manual-platform/platform.yml", violations[0])
+        self.assertIn("terraform/manual-platform/main.tf", violations[0])
 
     def test_self_test_supports_a_site_without_terraform_managed_hosts(self):
         (self.platform_dir / "platform.yml").write_text(

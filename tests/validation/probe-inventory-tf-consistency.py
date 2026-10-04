@@ -27,10 +27,11 @@ Zasieg:
 - kierunek odwrotny: klucz w `vms` bez hosta w inwentarzu = sierota, ktorej
   zaden playbook nie konwerguje (i ktorej `cluster-*` nie zobacza).
 
-Wyjete: deklaracje platform i klastrow z jawnym `terraform_managed: false`,
-katalogi bez hostow w tych grupach oraz szablony `example-cluster` i
-`platform/example`. Wlasnosc hostow spoza Terraforma pozostaje po stronie
-ich dostawcy (runbook machines-from-elsewhere).
+Wyjete: deklaracje platform i klastrow z jawnym `terraform_managed: false`
+(bez roota `terraform/<nazwa>/main.tf` — flaga przy istniejacym roocie to
+sprzeczna wlasnosc i naruszenie), katalogi bez hostow w tych grupach oraz
+szablony `example-cluster` i `platform/example`. Wlasnosc hostow spoza
+Terraforma pozostaje po stronie ich dostawcy (runbook machines-from-elsewhere).
 
 Uzycie: probe-inventory-tf-consistency.py [katalog-repo]
 (brak argumentu = repo, z ktorego wywolano; argument pozwala falsyfikowac
@@ -91,18 +92,29 @@ def check_definition(root: Path, kind: str, def_dir: Path, violations: list[str]
     if not hosts:
         return
 
+    rel_def = def_dir.relative_to(root)
+    tf_main = root / "terraform" / def_dir.name / "main.tf"
+    tf_rel = tf_main.relative_to(root)
+
     # Brak pola zachowuje wymog roota; tylko jawne false oznacza hosty
     # dostarczone poza Terraformem. Wlasnosc czytamy z definicji tej warstwy.
     config_name = "cluster.yml" if kind == "najemca" else "platform.yml"
     config_path = def_dir / config_name
+    config = {}
     if config_path.is_file():
         config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-        if config.get("terraform_managed") is False:
-            return
-
-    rel_def = def_dir.relative_to(root)
-    tf_main = root / "terraform" / def_dir.name / "main.tf"
-    tf_rel = tf_main.relative_to(root)
+    if config.get("terraform_managed") is False:
+        # Cele infra-*, galera-rebuild i provisioning nie czytaja flagi i dalej
+        # dzialaja na istniejacym roocie. Wyjecie zostawiloby jego mape `vms`
+        # bez kontroli, wiec flaga przy istniejacym roocie jest naruszeniem.
+        if tf_main.is_file():
+            violations.append(
+                f"{rel_def}/{config_name}: terraform_managed: false, ale istnieje "
+                f"{tf_rel} — cele infra-* i galera-rebuild nadal uzywaja tego "
+                f"roota bez kontroli jego mapy `vms`; usun root albo ustaw "
+                f"terraform_managed: true"
+            )
+        return
 
     if not tf_main.is_file():
         violations.append(
@@ -208,6 +220,17 @@ def self_test(root: Path) -> int:
                 (
                     f"{kind}: brak wymaganego roota Terraform zapala FAIL",
                     any(f"brak terraform/{name}" in violation for violation in scan(work)),
+                )
+            )
+
+            main_tf.write_text(tf_text, encoding="utf-8")
+            (definition / config_name).write_text(
+                "terraform_managed: false\n", encoding="utf-8"
+            )
+            results.append(
+                (
+                    f"{kind}: terraform_managed: false przy istniejacym roocie zapala FAIL",
+                    any("terraform_managed: false" in violation for violation in scan(work)),
                 )
             )
 

@@ -22,7 +22,8 @@ Dla hostów dostarczonych poza Terraformem ustaw **na poziomie głównym obu
 deklaracji**, `cluster.yml` i `platform.yml`, `terraform_managed: false`.
 Szablony mają tę wartość jawnie. Dla maszyn zarządzanych przez Terraform
 ustaw `true`; pominięcie pola również oznacza `true` i zachowuje kontrolę
-zgodności inventory z mapą `vms` właściwego roota.
+zgodności inventory z mapą `vms` właściwego roota. `false` przy istniejącym
+`terraform/<nazwa>/main.tf` walidacja odrzuca jako sprzeczną własność.
 
 Jedyny wdrażany typ endpointu to `keepalived_vip`. `external_load_balancer`
 i `dns` są odrzucane podczas walidacji, przed zmianą hostów.

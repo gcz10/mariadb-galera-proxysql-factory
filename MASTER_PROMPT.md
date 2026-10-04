@@ -279,7 +279,7 @@ W jednym Interview zadaj maksymalnie cztery decyzje biznesowe, których nie da s
 
 1. Jakie są liczbowe RPO, RTO dla awarii węzła i RTO pełnej awarii klastra?
 2. Gdzie mają trafiać backupy, jaka jest retencja i kto ma dostęp?
-3. Jaki ma być redundantny endpoint: external LB, Keepalived VIP czy DNS?
+3. Czy sieć dopuszcza redundantny endpoint Keepalived VIP — jedyny typ z wykonawcą? External LB i DNS walidacja odrzuca; ich wsparcie wymaga osobnego ADR i wykonawcy.
 4. Czy produkcja wymaga `tls.mode=full`; jeśli nie, czy principal akceptuje jawnie udokumentowane ryzyko `disabled`?
 
 Przy każdym pytaniu:
@@ -373,7 +373,7 @@ Jeżeli discovery i wymagania nie wykażą przeciwwskazań:
 - `max_writers: 1`,
 - read/write splitting wyłączone,
 - MariaDB Backup jako SST i backup,
-- endpoint konfigurowalny: external LB, Keepalived VIP albo DNS,
+- endpoint: Keepalived VIP nad parą ProxySQL (external LB i DNS wymagają osobnego ADR i wykonawcy; walidacja je odrzuca),
 - nieparzysta liczba głosów i ochrona quorum,
 - osobne sieci/CIDR dla aplikacji, administracji, Galery i monitoringu.
 
@@ -643,7 +643,7 @@ Podczas scaffold ISA utwórz atomowe ISCs pokrywające wszystkie poniższe subsy
 ## Endpoint HA
 - endpoint działa przy zdrowych obu ProxySQL,
 - awaria aktywnego ProxySQL nie przekracza uzgodnionego RTO,
-- VIP/LB/DNS nie kieruje ruchu do niesprawnej instancji.
+- VIP nie kieruje ruchu do niesprawnej instancji.
 
 ## Failover i quorum
 - klient prowadzący numerowany workload wznawia zapis po utracie writera,

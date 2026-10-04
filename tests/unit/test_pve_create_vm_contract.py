@@ -43,12 +43,18 @@ if any("/tasks/" in a and a.endswith("/status") for a in argv):
     sys.exit(0)
 
 if any(a.endswith("/qemu") and "-X" in argv and "POST" in argv for a in argv):
+    # Kontrakt narzedzia: resize dotyczy dysku zaimportowanego z obrazu.
+    imported = [a.split("=", 1)[0] for a in argv if "import-from=" in a]
+    with open(os.environ["CURL_LOG"] + ".imported", "w") as state:
+        state.write(json.dumps(imported))
     print(json.dumps({"data": "UPID:pve:create"}))
     sys.exit(0)
 
 if any(a.endswith("/resize") for a in argv):
-    if not any(a.startswith("disk=") and a != "disk=" for a in argv):
-        print(json.dumps({"errors": {"disk": "property is missing"}}), file=sys.stderr)
+    with open(os.environ["CURL_LOG"] + ".imported") as state:
+        imported = json.load(state)
+    if not any("disk=" + disk in argv for disk in imported):
+        print(json.dumps({"errors": {"disk": "resize target is not the imported disk"}}), file=sys.stderr)
         sys.exit(22)
     print(json.dumps({"data": "UPID:pve:resize"}))
     sys.exit(0)

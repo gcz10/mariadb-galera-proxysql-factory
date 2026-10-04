@@ -39,10 +39,13 @@ Terraform i własne hosty klastra albo odwrotnie. Brak pola lub `true` zachowuje
 wymaganie roota Terraform oraz kontrolę zgodności jego mapy `vms` z inventory;
 tylko logiczne `false` wyłącza tę kontrolę dla danej definicji.
 
-Nie twórz pozornego roota Terraform, żeby przejść walidację. Dla hostów
-zewnętrznych nie używaj celów provisioningowych i terraformowych celów
-niszczących; tworzenie i kasowanie należy do dostawcy maszyn. Flaga opisuje
-własność dla walidatora, nie zastępuje potwierdzenia tożsamości przed usunięciem.
+Nie twórz pozornego roota Terraform, żeby przejść walidację. `false` przy
+istniejącym `terraform/<nazwa>/main.tf` jest odrzucane jako sprzeczna
+własność: cele terraformowe nie czytają flagi i dalej działałyby na tym
+roocie. Dla hostów zewnętrznych nie używaj celów provisioningowych i
+terraformowych celów niszczących; tworzenie i kasowanie należy do dostawcy
+maszyn. Flaga opisuje własność dla walidatora, nie zastępuje potwierdzenia
+tożsamości przed usunięciem.
 
 Jedyny obsługiwany `proxysql.endpoint.type` to `keepalived_vip`.
 `external_load_balancer` i `dns` nie mają wykonawcy i są odrzucane przed
