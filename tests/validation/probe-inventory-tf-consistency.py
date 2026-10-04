@@ -27,10 +27,10 @@ Zasieg:
 - kierunek odwrotny: klucz w `vms` bez hosta w inwentarzu = sierota, ktorej
   zaden playbook nie konwerguje (i ktorej `cluster-*` nie zobacza).
 
-Wyjete: katalogi bez hostow w tych grupach oraz szablony
-(`example-cluster`, `platform/example`) — ich maszyny moga pochodzic zewsad
-(BYO-hosts to sciezka dokumentowana w README), a adresy 10.0.x sa fikcyjne
-celowo.
+Wyjete: deklaracje platform i klastrow z jawnym `terraform_managed: false`,
+katalogi bez hostow w tych grupach oraz szablony `example-cluster` i
+`platform/example`. Wlasnosc hostow spoza Terraforma pozostaje po stronie
+ich dostawcy (runbook machines-from-elsewhere).
 
 Uzycie: probe-inventory-tf-consistency.py [katalog-repo]
 (brak argumentu = repo, z ktorego wywolano; argument pozwala falsyfikowac
@@ -91,13 +91,13 @@ def check_definition(root: Path, kind: str, def_dir: Path, violations: list[str]
     if not hosts:
         return
 
-    # Maszyny z poza Terraformu (machines-from-elsewhere): cluster.yml z
-    # `terraform_managed: false` to jawne, kontrolowane wyjecie. Definicja bez
-    # tego pola nadal wymaga roota — wyjecie nie moze powstac przez przypadek.
-    cluster_cfg_path = def_dir / "cluster.yml"
-    if cluster_cfg_path.is_file():
-        cluster_cfg = yaml.safe_load(cluster_cfg_path.read_text(encoding="utf-8")) or {}
-        if cluster_cfg.get("terraform_managed") is False:
+    # Brak pola zachowuje wymog roota; tylko jawne false oznacza hosty
+    # dostarczone poza Terraformem. Wlasnosc czytamy z definicji tej warstwy.
+    config_name = "cluster.yml" if kind == "najemca" else "platform.yml"
+    config_path = def_dir / config_name
+    if config_path.is_file():
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        if config.get("terraform_managed") is False:
             return
 
     rel_def = def_dir.relative_to(root)
@@ -148,85 +148,68 @@ def scan(root: Path) -> list[str]:
 
 
 def self_test(root: Path) -> int:
-    """Falsyfikacja wlasnych regul na kopii drzewa — nigdy na plikach repo."""
-    import shutil
+    """Falsyfikuj reguly na izolowanych danych, niezaleznie od providera floty."""
     import tempfile
 
-    results = []
-    ignore = shutil.ignore_patterns(".terraform", "*.tfstate", "*.tfstate.backup")
+    results = [("czyste drzewo repo przechodzi", not scan(root))]
     with tempfile.TemporaryDirectory() as tmp:
-        work = Path(tmp)
-        for part in ("clusters", "platform", "terraform"):
-            if (root / part).is_dir():
-                shutil.copytree(root / part, work / part, ignore=ignore)
-
-        results.append(("czyste drzewo repo przechodzi", not scan(work)))
-
-        # Fixture wybierany Z DRZEWA, nie po nazwie: samo-test przywiazany do
-        # `orionv8-r9`/`cassiopeiav8-r9` padal przy KAZDYM sprzataniu definicji
-        # martwego klastra, czyli bramka psula sie od operacji, ktorej pilnuje.
-        # Fixture MUSI stac na definicji, ktora bramka realnie sprawdza. Szablon
-        # albo `terraform_managed: false` sa pomijane przez `check_definition`,
-        # wiec falsyfikacja na nich wychodzilaby ZONK bez zadnego bledu w regule.
-        def validated(name: str) -> bool:
-            if name in TEMPLATE_DIRS:
-                return False
-            config = work / "clusters" / name / "cluster.yml"
-            if not config.is_file():
-                return True
-            data = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
-            return data.get("terraform_managed") is not False
-
-        pairs = sorted(
-            (path.parent.name, host)
-            for path in (work / "terraform").glob("*/main.tf")
-            if validated(path.parent.name)
-            and (work / "clusters" / path.parent.name / "inventory.yml").is_file()
-            for host in parse_vms_map(path)
-        )
-        if not pairs:
-            print("ZONK brak pary klaster+root terraform do samo-testu")
-            return 1
-        cluster, host = pairs[0]
-        root_tf = work / "terraform" / cluster / "main.tf"
-        text = root_tf.read_text(encoding="utf-8")
-
-        # dryf w strone "inwentarz > TF": usun klucz z vms
-        root_tf.write_text(
-            "\n".join(line for line in text.splitlines() if host not in line) + "\n",
-            encoding="utf-8",
-        )
-        violations = scan(work)
-        results.append(
-            (
-                f"usuniecie {host} z mapy vms zapala FAIL",
-                any(host in v for v in violations),
+        for kind, subdir, config_name, group, host in (
+            ("najemca", "clusters", "cluster.yml", "galera", "db_probe"),
+            ("platforma", "platform", "platform.yml", "proxysql", "proxy_probe"),
+        ):
+            work = Path(tmp) / kind
+            name = f"managed-{kind}"
+            definition = work / subdir / name
+            definition.mkdir(parents=True)
+            (definition / config_name).write_text(
+                "terraform_managed: true\n", encoding="utf-8"
             )
-        )
-
-        # dryf w druga strone: TF > inwentarz
-        root_tf.write_text(text, encoding="utf-8")
-        inv = work / "clusters" / cluster / "inventory.yml"
-        inv_text = inv.read_text(encoding="utf-8")
-        inv.write_text(inv_text.replace(f"{host}:", f"{host}X:"), encoding="utf-8")
-        violations = scan(work)
-        results.append(
-            (
-                "rebrand hosta w inwentarzu bez TF zapala FAIL w obu kierunkach",
-                any(f"{host}X" in v for v in violations) and any(host in v for v in violations),
+            inventory = definition / "inventory.yml"
+            inventory.write_text(
+                yaml.safe_dump(
+                    {"all": {"children": {group: {"hosts": {host: {"ansible_host": "172.24.10.11"}}}}}}
+                ),
+                encoding="utf-8",
             )
-        )
+            tf_dir = work / "terraform" / name
+            tf_dir.mkdir(parents=True)
+            main_tf = tf_dir / "main.tf"
+            tf_text = f"locals {{\n  vms = {{\n    {host} = {{}}\n  }}\n}}\n"
+            main_tf.write_text(tf_text, encoding="utf-8")
+            results.append((f"{kind}: zgodne inventory i mapa vms przechodza", not scan(work)))
 
-        # brak roota TF przy zywych hostach
-        inv.write_text(inv_text, encoding="utf-8")
-        shutil.rmtree(work / "terraform" / cluster)
-        violations = scan(work)
-        results.append(
-            (
-                "najemca bez roota TF zapala FAIL",
-                any(f"brak terraform/{cluster}" in v for v in violations),
+            main_tf.write_text(
+                tf_text.replace(f"    {host} = {{}}\n", ""), encoding="utf-8"
             )
-        )
+            results.append(
+                (
+                    f"{kind}: usuniecie hosta z mapy vms zapala FAIL",
+                    any(host in violation for violation in scan(work)),
+                )
+            )
+
+            main_tf.write_text(tf_text, encoding="utf-8")
+            inventory_text = inventory.read_text(encoding="utf-8")
+            inventory.write_text(
+                inventory_text.replace(f"{host}:", f"{host}X:"), encoding="utf-8"
+            )
+            violations = scan(work)
+            results.append(
+                (
+                    f"{kind}: dryf inventory–Terraform zapala FAIL w obu kierunkach",
+                    any(f"{host}X" in violation for violation in violations)
+                    and any(host in violation for violation in violations),
+                )
+            )
+
+            inventory.write_text(inventory_text, encoding="utf-8")
+            main_tf.unlink()
+            results.append(
+                (
+                    f"{kind}: brak wymaganego roota Terraform zapala FAIL",
+                    any(f"brak terraform/{name}" in violation for violation in scan(work)),
+                )
+            )
 
     passed = all(ok for _, ok in results)
     for description, ok in results:

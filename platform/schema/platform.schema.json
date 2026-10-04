@@ -11,6 +11,11 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "terraform_managed": {
+      "type": "boolean",
+      "default": true,
+      "description": "false = hosty platformy sa dostarczane poza Terraformem; sonda inventory–Terraform pomija wymaganie terraform/<name>/main.tf. Brak pola = true; cyklem zycia zewnetrznych hostow zarzadza ich dostawca."
+    },
     "platform": {
       "type": "object",
       "required": [
@@ -190,14 +195,13 @@
             "type": {
               "type": "string",
               "enum": [
-                "external_load_balancer",
-                "keepalived_vip",
-                "dns"
+                "keepalived_vip"
               ]
             },
             "address": {
               "type": "string",
               "minLength": 1,
+              "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$",
               "not": {
                 "pattern": "PLACEHOLDER"
               },
@@ -207,25 +211,7 @@
               "type": "integer",
               "default": 6033
             }
-          },
-          "allOf": [
-            {
-              "if": {
-                "properties": {
-                  "type": {
-                    "const": "keepalived_vip"
-                  }
-                }
-              },
-              "then": {
-                "properties": {
-                  "address": {
-                    "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$"
-                  }
-                }
-              }
-            }
-          ]
+          }
         }
       }
     },

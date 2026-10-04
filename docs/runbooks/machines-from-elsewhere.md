@@ -5,9 +5,10 @@
 
 ## Przeznaczenie
 
-Fabryka nie zna źródła maszyn: buduje na wszystkim, co ma SSH, systemd i Rocky
-Linux 9 albo 10. Ten runbook pokazuje pełny cykl dla maszyn utworzonych **poza**
-Terraformem i nazywa granicę własności, która z tego wynika.
+Fabryka buduje na hostach z SSH, systemd, sudo i Rocky Linux 9 albo 10 zgodnym
+ze wskazanym lockfile'em. Ten runbook pokazuje cykl dla maszyn dostarczonych
+**poza** Terraformem. Endpoint pozostaje parą ProxySQL z Keepalived VIP;
+inna infrastruktura musi umożliwiać jego działanie, nie tylko dostarczyć VM.
 
 ## Granica własności — przeczytaj przed startem
 
@@ -22,10 +23,50 @@ kto ją stworzył — Terraform, `virt-install`, konsola chmury albo procedura n
 Fabryka za to **posprząta po sobie logicznie**: `make cluster-deregister`
 usuwa najemcę z ProxySQL i PMM niezależnie od pochodzenia maszyn.
 
+## Własność hostów w deklaracjach
+
+Skopiuj szablony platformy i klastra, wypełnij inventory, adresy, CIDR-y,
+PKI, lockfile oraz ustawienia usług zgodnie z README. Szablony deklarują
+hosty dostarczone poza Terraformem:
+
+```yaml
+# Na poziomie głównym platform.yml ORAZ cluster.yml, nie wewnątrz ich bloków.
+terraform_managed: false
+```
+
+Flaga dotyczy każdej warstwy oddzielnie. Można mieć platformę zarządzaną przez
+Terraform i własne hosty klastra albo odwrotnie. Brak pola lub `true` zachowuje
+wymaganie roota Terraform oraz kontrolę zgodności jego mapy `vms` z inventory;
+tylko logiczne `false` wyłącza tę kontrolę dla danej definicji.
+
+Nie twórz pozornego roota Terraform, żeby przejść walidację. Dla hostów
+zewnętrznych nie używaj celów provisioningowych i terraformowych celów
+niszczących; tworzenie i kasowanie należy do dostawcy maszyn. Flaga opisuje
+własność dla walidatora, nie zastępuje potwierdzenia tożsamości przed usunięciem.
+
+Jedyny obsługiwany `proxysql.endpoint.type` to `keepalived_vip`.
+`external_load_balancer` i `dns` nie mają wykonawcy i są odrzucane przed
+deploymentem. Ustaw jawnie `environment`: szablony są laboratoryjne;
+produkcja wymaga dodatkowo kontraktu z dokumentacji profilu produkcyjnego.
+
+Po dostarczeniu sekretów, zweryfikowaniu kluczy SSH i przygotowaniu PKI:
+
+```bash
+make platform-validate PLATFORM=<platforma>
+make cluster-validate CLUSTER=<klaster>
+make platform-build PLATFORM=<platforma>
+make cluster-build CLUSTER=<klaster> CONFIRM=yes
+```
+
+Walidacja obejmuje także zdalny preflight. Hosty wymagające restartu do
+zainstalowanego kernela potrzebują jawnej zgody zgodnie z README. Sama
+zgodność YAML nie dowodzi działania VIP, backupu ani monitoringowych alertów.
+
 ## Utworzenie maszyn — REST API Proxmoxa, bez Terraforma
 
 > **Automatyzacja:** Całą opisaną poniżej procedurę (pre-flight check wolumenów ZFS,
-> `POST /qemu`, asynchroniczne czekanie na task, resize dysku do 40G, start i weryfikację SSH)
+> `POST /qemu`, asynchroniczne czekanie na task, resize jawnie wskazanego `virtio0`
+> do rozmiaru `--disk` (domyślnie 40G), start i weryfikację SSH)
 > realizuje gotowe narzędzie w repozytorium:
 > ```bash
 > ./tools/pve-create-vm.sh --vmid <ID> --name <NAZWA> --ip <IPv4/PREFIX> \

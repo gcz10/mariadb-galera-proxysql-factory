@@ -409,8 +409,8 @@ proxysql:
   max_writers: 1
   read_write_split_enabled: false
   endpoint:
-    type: "<external_load_balancer|keepalived_vip|dns>"
-    address: "<VIP-lub-FQDN>"
+    type: "keepalived_vip"
+    address: "<adres-IP-VIP>"
     port: 6033
 
 tls:

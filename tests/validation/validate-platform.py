@@ -17,6 +17,8 @@ niezalezna od klastrow Galera. Ten walidator pilnuje obie strony tej niezaleznos
      adresie istniejacego hosta to szamotanina o ruch bez zadnego bledu w ansible.
   5. proxysql_node_idx unikalne z dokladnie jednym idx==1 (MASTER) — dwa Mastery
      to pojedynek o VIP, zero Mastery to VIP, ktory nigdy nie wstaje.
+  6. proxysql.endpoint.type to keepalived_vip — external_load_balancer i dns nie
+     maja implementacji, wiec deklaracja z nimi nie moze dojsc do wdrozenia.
 
 Kontrola lustrzana na zywym hoscie robi tests/lab/probe-platform.py — dublura
 offline/runtime jest celowa, nie redundancja do usuniecia.
@@ -149,7 +151,17 @@ def semantic_errors(platform, groups):
                 else:
                     addr_owner[address] = (group, host)
 
-    vip = ((platform.get("proxysql") or {}).get("endpoint") or {}).get("address")
+    # Jedyny wdrazany typ endpointu to keepalived_vip (playbooks/f8_keepalived.yml);
+    # external_load_balancer i dns nie maja wykonawcy. Kontrola zyje tu, a nie tylko
+    # w schema, zeby wolajacy semantic_errors() bez schema tez dostal odmowe.
+    endpoint = (platform.get("proxysql") or {}).get("endpoint") or {}
+    if endpoint and endpoint.get("type") != "keepalived_vip":
+        errors.append(
+            f"proxysql.endpoint.type={endpoint.get('type')!r} — wdrazany jest wylacznie "
+            "keepalived_vip; external_load_balancer i dns nie sa zaimplementowane"
+        )
+
+    vip = endpoint.get("address")
     if vip and vip in addr_owner:
         group, host = addr_owner[vip]
         errors.append(f"VIP endpoint {vip} koliduje z adresem wezla '{host}' [{group}]")

@@ -137,10 +137,15 @@ def main():
                 "wylacz slow_query_log"
             )
 
-    # Check: endpoint.type must match Interview decision (keepalived_vip)
-    ep_type = cluster.get("proxysql", {}).get("endpoint", {}).get("type", "")
-    if ep_type and ep_type != "keepalived_vip":
-        print(f"WARN: endpoint.type='{ep_type}' — Interview decision was keepalived_vip; verify this is intentional")
+    # Check: jedyny wdrazany typ endpointu to keepalived_vip (playbooks/f8_keepalived.yml
+    # wymaga go wprost). external_load_balancer i dns nie maja wykonawcy, wiec taka
+    # deklaracja jest odrzucana tu, przed wdrozeniem, a nie dopiero w F8.
+    endpoint = cluster.get("proxysql", {}).get("endpoint")
+    if endpoint is not None and endpoint.get("type") != "keepalived_vip":
+        errors.append(
+            f"proxysql.endpoint.type={endpoint.get('type')!r} — wdrazany jest wylacznie "
+            "keepalived_vip; external_load_balancer i dns nie sa zaimplementowane"
+        )
 
     # Check: definicja skopiowana z szablonu i NIEDOKONCZONA.
     #

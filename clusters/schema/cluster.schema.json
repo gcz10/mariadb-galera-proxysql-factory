@@ -146,9 +146,7 @@
             "type": {
               "type": "string",
               "enum": [
-                "external_load_balancer",
-                "keepalived_vip",
-                "dns"
+                "keepalived_vip"
               ]
             },
             "address": {
@@ -156,31 +154,14 @@
               "minLength": 1,
               "not": {
                 "pattern": "PLACEHOLDER"
-              }
+              },
+              "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$"
             },
             "port": {
               "type": "integer",
               "default": 6033
             }
-          },
-          "allOf": [
-            {
-              "if": {
-                "properties": {
-                  "type": {
-                    "const": "keepalived_vip"
-                  }
-                }
-              },
-              "then": {
-                "properties": {
-                  "address": {
-                    "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$"
-                  }
-                }
-              }
-            }
-          ]
+          }
         }
       }
     },

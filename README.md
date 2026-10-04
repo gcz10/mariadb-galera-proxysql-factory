@@ -8,14 +8,24 @@ Zobacz `ISA.md` — jedyne źródło prawdy dla idealnego stanu, kryteriów, map
 
 ## Czego wymagają maszyny
 
-Dostępu SSH, systemd, Rocky Linux 9 albo 10 i konta z sudo. **Nic ponadto.**
-Skąd pochodzą — Proxmox, libvirt/KVM, blaszak, chmura, maszyny dostarczone przez
-klienta — jest bez znaczenia dla fabryki.
+Dostępu SSH, systemd, konta z sudo oraz Rocky Linux 9 albo 10 zgodnego ze
+wskazanym lockfile'em. Sieć musi umożliwiać używany tutaj failover VIP przez
+Keepalived. Źródło hostów — Proxmox, libvirt/KVM, sprzęt fizyczny czy dostawca
+chmurowy — nie jest częścią ról budowy; nie oznacza to obsługi dowolnej sieci.
 
 `make infra-provision` (Terraform + Proxmox VE) tworzy maszyny w tym konkretnym
 laboratorium i jest **opcjonalny**: żaden cel wołany przez `cluster-build` ani
 `platform-build` go nie uruchamia i żaden nie czyta stanu Terraforma. Cała wiedza
 o topologii pochodzi z `clusters/<name>/inventory.yml` i `platform/<name>/inventory.yml`.
+
+Dla hostów dostarczonych poza Terraformem ustaw **na poziomie głównym obu
+deklaracji**, `cluster.yml` i `platform.yml`, `terraform_managed: false`.
+Szablony mają tę wartość jawnie. Dla maszyn zarządzanych przez Terraform
+ustaw `true`; pominięcie pola również oznacza `true` i zachowuje kontrolę
+zgodności inventory z mapą `vms` właściwego roota.
+
+Jedyny wdrażany typ endpointu to `keepalived_vip`. `external_load_balancer`
+i `dns` są odrzucane podczas walidacji, przed zmianą hostów.
 
 Zweryfikowane, nie zadeklarowane: najemca powstał na maszynach utworzonych
 wyłącznie przez REST API hypervisora, a cała budowa przebiegła z atrapą

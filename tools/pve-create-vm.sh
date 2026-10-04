@@ -304,6 +304,7 @@ wait_task "$CREATE_UPID" "Tworzenie i import obrazu ($IMAGE)"
 
 echo "=== [3/5] Rozszerzenie dysku virtio0 do ${DISK}G ==="
 RESIZE_RESP=$(api -X PUT "$EP/api2/json/nodes/$NODE/qemu/$VMID/resize" \
+  --data-urlencode "disk=virtio0" \
   --data-urlencode "size=${DISK}G")
 
 RESIZE_UPID=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('data') or '')" "$RESIZE_RESP")

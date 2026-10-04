@@ -47,6 +47,9 @@ if any(a.endswith("/qemu") and "-X" in argv and "POST" in argv for a in argv):
     sys.exit(0)
 
 if any(a.endswith("/resize") for a in argv):
+    if not any(a.startswith("disk=") and a != "disk=" for a in argv):
+        print(json.dumps({"errors": {"disk": "property is missing"}}), file=sys.stderr)
+        sys.exit(22)
     print(json.dumps({"data": "UPID:pve:resize"}))
     sys.exit(0)
 

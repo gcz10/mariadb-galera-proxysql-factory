@@ -3,6 +3,9 @@
 # Walidowane przez clusters/schema/cluster.schema.json.
 # Nie wpisuj adresów IP tutaj — adresy żyją w inventory.yml.
 
+# Hosty dostarczone poza Terraformem. Dla roota Terraform ustaw true.
+terraform_managed: false
+
 cluster:
   name: "example-cluster"
   environment: "laboratory"
