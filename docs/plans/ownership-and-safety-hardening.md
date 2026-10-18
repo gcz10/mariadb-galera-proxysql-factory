@@ -1,6 +1,6 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
-**Status:** W TOKU — P0/P1/P2-6/P2-7/P2-8/P2-9 zamknięte; P2-10 zamknięte jako implementacja i lokalna weryfikacja ścieżki; P3 ma jedną otwartą decyzję (LICENSE); P4 zbadane na tymczasowym MinIO, wdrożenie czeka na decyzję o trybie Object Lock; dług testowy (usunięcie dualnej ścieżki kontenerowej) zamknięty.
+**Status:** W TOKU — P0/P1/P2-6/P2-7/P2-8/P2-9 zamknięte; P2-10 zamknięte jako implementacja i lokalna weryfikacja ścieżki; P3 ma jedną otwartą decyzję (LICENSE); P4 wdrożone dla nowych bucketów zarządzanego MinIO (GOVERNANCE na `retention_days`), migracja istniejących bucketów czeka na decyzję właściciela; dług testowy (usunięcie dualnej ścieżki kontenerowej) zamknięty.
 **Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3/P1-4/P1-5, P2-6/P2-8/P2-9/P2-10, P3 (higiena; audyt na kodzie 2026-08-24 potwierdził 10/11 pozycji zamkniętych), dług testowy (usunięcie ścieżki `not use_systemd` i labu kontenerowego). P2-7 domknięte: prawo kasowania kopii jest odseparowane od prawa zapisu i zweryfikowane na żywo.
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
@@ -566,7 +566,7 @@ nieaktualna: 10 z 11 pozycji technicznych było już zamkniętych w kodzie).
 
 ---
 
-## P4. Nadpisanie kopii kluczem zapisu (ryzyko rezydualne po P2-7) — ZBADANE
+## P4. Nadpisanie kopii kluczem zapisu (ryzyko rezydualne po P2-7) — WDROŻONE DLA NOWYCH BUCKETÓW
 
 **Problem.** P2-7 odciął `s3:DeleteObject` od poświadczenia leżącego na każdym
 węźle Galery, ale `s3:PutObject` na istniejący klucz nadal niszczy poprzednią
@@ -613,12 +613,31 @@ i `minio-policy-prune.json.j2`. Przepływ szedł przez niezmieniony `S3Backend`.
   metadane) o nowszym znaczniku czasu, a `fetch_latest` wybiera bieżące wersje.
   Wersjonowanie chroni historię, nie wybór kopii do restore.
 
-**Do wdrożenia (po decyzji właściciela):** tryb blokady i jej długość względem
-`backup.retention_days`; `mc mb --with-lock` + domyślna retencja w
-`provision_minio.yml` dla nowych bucketów; reguła ILM dla wersji niebieżących
-z próbą na żywym oknie retencji; ścieżka migracji istniejących bucketów.
+**Wdrożenie (2026-10-18, tryb GOVERNANCE — rekomendacja przyjęta poleceniem właściciela „p4”).** `backup.s3.object_lock`
+(domyślnie `true`) w schemacie; `provision_minio.yml` tworzy nowy bucket z
+`--with-lock`, a `minio_bucket_protection.yml` po weryfikacji markera ustawia
+domyślną retencję GOVERNANCE na `retention_days` i jedną regułę ILM
+(`NoncurrentDays: 1` + `ExpiredObjectDeleteMarker`). Istniejący bucket bez
+blokady zatrzymuje configure, chyba że deklaracja ma jawne `object_lock: false`
+— tak oznaczono `orionv17-r10` i `cassiopeiav18-r9` (stan na hostach bez zmian).
 
-**Koszt:** średni. **Blokuje:** nic — P2-7 jest samodzielnie poprawne.
+Interakcja ILM z blokadą rozstrzygnięta w kodzie przypiętego MinIO
+`RELEASE.2025-09-07T16-13-09Z`: `internal/bucket/lifecycle/evaluator.go`
+(`IsObjectLocked`) pomija usunięcie wersji, której `RetainUntilDate` jest w
+przyszłości, a delete markerów blokada nie dotyczy; `cmd/data-scanner.go:1095`
+przekazuje skanerowi konfigurację blokady (`WithLockRetention`). Upływu doby nie
+mierzono.
+
+Próba na żywym MinIO `x17mon` (tymczasowe buckety `p4-lock-probe-20261018{a,b,c}`,
+usunięte rootem z `--bypass`; buckety najemców i PMM nietknięte): prawdziwe
+zadania roli na nowym buckecie ustawiły GOVERNANCE `1DAYS` i regułę, drugi
+przebieg nie zmienił nic; bucket bez blokady zatrzymał przebieg z instrukcją
+migracji. Nadpisany obiekt zachował oryginał jako wersję niebieżącą, a skasowanie
+każdej wersji bez `--bypass` serwer odrzucił (`WORM protected`).
+
+**Otwarte:** migracja `orionv17-r10` i `cassiopeiav18-r9` do nowych bucketów
+(procedura w `docs/runbooks/backup.md`) — dotyka kopii działających najemców,
+wymaga osobnej decyzji. Bucket kopii PMM (`platform_pmm_backup.yml`) poza P4.
 
 ---
 

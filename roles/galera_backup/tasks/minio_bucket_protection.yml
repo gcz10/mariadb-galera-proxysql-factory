@@ -1,0 +1,176 @@
+---
+# minio_bucket_protection.yml — ochrona kopii przed nadpisaniem (P4).
+#
+# Wolane z provision_minio.yml PO weryfikacji markera wlasciciela, wiec zmienia
+# wylacznie bucket nalezacy do tego klastra. Wymaga prywatnego workspace z
+# root.env (minio_root_env.yml) i lockfile'a w `lock`.
+#
+# Klucz zapisu lezy na kazdym wezle Galery i nie ma `s3:Delete*`, ale
+# `s3:PutObject` na istniejacy klucz nadpisywal kopie w buckecie bez
+# wersjonowania. Object Lock w trybie GOVERNANCE na czas `retention_days`:
+#   - kazda wersja jest chroniona przez caly okres retencji — nadpisanie
+#     zostawia poprzednia jako niebiezaca, a jej skasowanie odrzuca serwer
+#     kazdemu poza rootem MinIO z `--bypass` (dowody: plan P4);
+#   - `prune` po `retention_days` tworzy delete markery; miejsce zwalnia ILM:
+#     wersje niebiezace po 1 dniu i delete markery bez wersji. ILM nie kasuje
+#     wersji objetej blokada — MinIO RELEASE.2025-09-07T16-13-09Z,
+#     internal/bucket/lifecycle/evaluator.go (IsObjectLocked) i
+#     cmd/data-scanner.go (WithLockRetention).
+#
+# Blokade da sie wlaczyc wylacznie przy tworzeniu bucketa. Istniejacy bucket
+# bez niej to blad z instrukcja: migracja kopii do nowego bucketa albo jawne
+# `backup.s3.object_lock: false`. Przy `false` zadanie nie dotyka retencji
+# ani ILM bucketa.
+
+- name: Wylicz oczekiwana ochrone bucketa kopii
+  ansible.builtin.set_fact:
+    galera_backup_object_lock: "{{ backup.s3.object_lock | default(true) | bool }}"
+    galera_backup_lock_days: "{{ backup.retention_days | int }}"
+
+- name: Chron kopie blokada Object Lock i regula ILM
+  when: galera_backup_object_lock | bool
+  block:
+    - name: Odczytaj domyslna retencje bucketa kopii
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - retention
+          - info
+          - --default
+          - --json
+          - "myminio/{{ backup.s3.bucket }}"
+      register: galera_backup_lock_read
+      changed_when: false
+      failed_when: false
+
+    - name: Rozpoznaj odpowiedz o retencji
+      ansible.builtin.set_fact:
+        galera_backup_lock_response: "{{ galera_backup_lock_read.stdout | from_json }}"
+
+    - name: Odmow przy bledzie odczytu retencji
+      # Jedyny akceptowany blad to bucket bez blokady — rozstrzyga go kolejna
+      # asercja. Kazdy inny (uprawnienia, siec, brak bucketa) przerywa przed
+      # jakakolwiek zmiana.
+      ansible.builtin.assert:
+        that:
+          - >-
+            (galera_backup_lock_read.rc == 0 and galera_backup_lock_response.status == 'success')
+            or
+            (galera_backup_lock_read.rc != 0
+             and galera_backup_lock_response.status == 'error'
+             and 'does not support locking' in galera_backup_lock_response.error.message)
+        fail_msg: "Nie udalo sie odczytac retencji bucketa {{ backup.s3.bucket }}; ochrona kopii pozostala bez zmian"
+        quiet: true
+
+    - name: Wymagaj Object Lock na buckecie kopii
+      ansible.builtin.assert:
+        that:
+          - galera_backup_lock_read.rc == 0
+          - galera_backup_lock_response.enabled == 'Enabled'
+        fail_msg: >-
+          Bucket {{ backup.s3.bucket }} nie ma Object Lock, a wlaczyc go mozna
+          wylacznie przy tworzeniu bucketa. Zmigruj kopie do nowego bucketa
+          (docs/runbooks/backup.md) albo ustaw backup.s3.object_lock: false,
+          swiadomie zostawiajac kopie bez ochrony przed nadpisaniem.
+        quiet: true
+
+    - name: Ustaw domyslna retencje GOVERNANCE na czas retention_days
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - retention
+          - set
+          - --default
+          - governance
+          - "{{ galera_backup_lock_days }}d"
+          - "myminio/{{ backup.s3.bucket }}"
+      when: >-
+        galera_backup_lock_response.mode != 'GOVERNANCE'
+        or galera_backup_lock_response.validity != (galera_backup_lock_days ~ 'DAYS')
+      changed_when: true
+
+    - name: Odczytaj reguly ILM bucketa kopii
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:minio
+          - --env-file
+          - "{{ galera_backup_minio_workspace.path }}/root.env"
+          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+          - ilm
+          - rule
+          - ls
+          - --json
+          - "myminio/{{ backup.s3.bucket }}"
+      register: galera_backup_ilm_read
+      changed_when: false
+      failed_when: false
+
+    - name: Rozpoznaj odpowiedz ILM
+      ansible.builtin.set_fact:
+        galera_backup_ilm_response: "{{ galera_backup_ilm_read.stdout | from_json }}"
+
+    - name: Odmow zmiany ILM przy bledzie odczytu
+      # Ten sam kontrakt co w platform_pmm_backup.yml: pusty bucket daje w
+      # przypietym mc blad, nie sukces z pusta lista.
+      ansible.builtin.assert:
+        that:
+          - >-
+            (galera_backup_ilm_read.rc == 0 and galera_backup_ilm_response.status == 'success')
+            or
+            (galera_backup_ilm_read.rc != 0
+             and galera_backup_ilm_response.status == 'error'
+             and (
+               (galera_backup_ilm_response.error.message == 'Unable to get lifecycle'
+                and galera_backup_ilm_response.error.cause.message == 'The lifecycle configuration does not exist')
+               or
+               (galera_backup_ilm_response.error.message == 'Unable to ls lifecycle configuration'
+                and galera_backup_ilm_response.error.cause.message == 'lifecycle configuration not set')))
+        fail_msg: "Nie udalo sie odczytac ILM bucketa {{ backup.s3.bucket }}; reguly pozostaly bez zmian"
+        quiet: true
+
+    - name: Wylicz obecne reguly ILM
+      ansible.builtin.set_fact:
+        galera_backup_ilm_rules: >-
+          {{ galera_backup_ilm_response.config.Rules if galera_backup_ilm_read.rc == 0 else [] }}
+
+    - name: Ustaw regule ILM (wersje niebiezace po 1 dniu, osierocone delete markery)
+      # Docelowo dokladnie jedna regula na caly bucket; `mc ilm rule add` nadaje
+      # wlasne ID, wiec zbieznosc liczymy po tresci. Bucket nalezy do tego
+      # klastra (marker zweryfikowany wczesniej), wiec `rm --all` nie dotyka
+      # cudzych regul.
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mc() { docker run --rm --network container:minio --env-file "{{ galera_backup_minio_workspace.path }}/root.env" "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}" "$@"; }
+        if [ {{ galera_backup_ilm_rules | length }} -gt 0 ]; then
+          mc ilm rule rm --all --force "myminio/{{ backup.s3.bucket }}" >/dev/null
+        fi
+        mc ilm rule add --noncurrent-expire-days 1 --expire-delete-marker "myminio/{{ backup.s3.bucket }}" >/dev/null
+      args:
+        executable: /bin/bash
+      when: >-
+        (galera_backup_ilm_rules | length) != 1
+        or galera_backup_ilm_rules[0].get('Status') != 'Enabled'
+        or (galera_backup_ilm_rules[0].get('Filter') or {}) | length > 0
+        or galera_backup_ilm_rules[0].get('Expiration') != {'ExpiredObjectDeleteMarker': true}
+        or galera_backup_ilm_rules[0].get('NoncurrentVersionExpiration') != {'NoncurrentDays': 1}
+        or galera_backup_ilm_rules[0].get('Transition') is not none
+        or galera_backup_ilm_rules[0].get('NoncurrentVersionTransition') is not none
+      changed_when: true

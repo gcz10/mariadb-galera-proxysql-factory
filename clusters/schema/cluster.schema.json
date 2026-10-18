@@ -390,6 +390,11 @@
             },
             "secure": {
               "type": "boolean"
+            },
+            "object_lock": {
+              "type": "boolean",
+              "default": true,
+              "description": "Zarzadane MinIO: true (domyslnie) = nowy bucket z Object Lock GOVERNANCE na retention_days i regula ILM; istniejacy bucket bez blokady jest odrzucany (blokady nie da sie dolozyc). false = swiadomie bez ochrony kopii przed nadpisaniem kluczem zapisu. Zewnetrzne S3: blokade konfiguruje operator magazynu."
             }
           }
         },

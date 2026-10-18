@@ -6,6 +6,10 @@
 #   1. minio_root_env.yml           — root-only srodowisko klienta `mc`;
 #   2. polityki                     — zapis i retencja jako pliki 0600;
 #   3. bucket + owner marker        — bucket zarzadany nalezy DO TEGO klastra;
+#                                     nowy powstaje z Object Lock, chyba ze
+#                                     backup.s3.object_lock: false;
+#   3a. minio_bucket_protection.yml — retencja GOVERNANCE + regula ILM, dopiero
+#                                     po weryfikacji markera wlasciciela;
 #   4. minio_owned_keys.yml         — jeden discovery: list + info wszystkich kont;
 #   5. reconcile_minio_account.yml  — x2: konto zapisu i konto retencji;
 #   6. sprzatanie                   — workspace provisioningu znika zawsze;
@@ -40,19 +44,19 @@
         mode: "0600"
 
     - name: Ensure bucket exists
+      # Object Lock da sie wlaczyc wylacznie przy tworzeniu bucketa. Dla
+      # istniejacego `--ignore-existing` jest no-opem niezaleznie od flagi;
+      # brak blokady wykrywa i odrzuca minio_bucket_protection.yml.
       ansible.builtin.command:
-        argv:
-          - docker
-          - run
-          - --rm
-          - --network
-          - container:minio
-          - --env-file
-          - "{{ galera_backup_minio_workspace.path }}/root.env"
-          - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
-          - mb
-          - --ignore-existing
-          - "myminio/{{ backup.s3.bucket }}"
+        argv: >-
+          {{
+            ['docker', 'run', '--rm', '--network', 'container:minio',
+             '--env-file', galera_backup_minio_workspace.path ~ '/root.env',
+             lock.minio.mc_image ~ '@' ~ lock.minio.mc_image_digest,
+             'mb', '--ignore-existing']
+            + (['--with-lock'] if (backup.s3.object_lock | default(true) | bool) else [])
+            + ['myminio/' ~ backup.s3.bucket]
+          }}
       changed_when: false
       no_log: true
 
@@ -128,6 +132,10 @@
           - (galera_backup_owner_marker_final.stdout | from_json).cluster_name == cluster.name
         fail_msg: Managed S3 bucket owner marker verification failed
         quiet: true
+
+    - name: Chron kopie przed nadpisaniem (Object Lock + ILM)
+      ansible.builtin.include_tasks:
+        file: minio_bucket_protection.yml
 
     - name: Zbuduj obraz stanu kont serwisowych MinIO
       ansible.builtin.include_tasks:

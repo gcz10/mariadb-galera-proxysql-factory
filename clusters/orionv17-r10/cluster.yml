@@ -68,6 +68,9 @@ backup:
     endpoint: "192.168.1.70:9000"
     bucket: "orionv17-galera-backups"
     secure: false
+    # Bucket powstal przed Object Lock (P4) i blokady nie da sie dolozyc.
+    # true dopiero po migracji kopii do nowego bucketa (docs/runbooks/backup.md).
+    object_lock: false
 
 monitoring:
   pmm:

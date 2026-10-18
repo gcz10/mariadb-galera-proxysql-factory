@@ -183,7 +183,7 @@ Rozdział ról jest więc taki: **donor** (dynamiczny) robi kopię, **koordynato
 
 **Skutek operacyjny:** gdy koordynator jest długo niedostępny, kopie nadal powstają (inny węzeł zostaje donorem), ale wygasłe przestają być kasowane do jego powrotu. Bucket rośnie; świeżość kopii pozostaje nienaruszona.
 
-**Ryzyko rezydualne:** klucz zapisu może nadpisać obiekt pod własnym prefiksem (bucket nie ma wersjonowania). Delete jest odcięty, nadpisanie nie.
+**Ryzyko rezydualne:** w buckecie bez Object Lock klucz zapisu może nadpisać obiekt pod własnym prefiksem. Zarządzane MinIO zamyka to blokadą (niżej); dla bucketów z `backup.s3.object_lock: false` i zewnętrznego S3 bez blokady ryzyko zostaje.
 
 ### Elekcja donora
 
@@ -226,10 +226,11 @@ Oba pliki leżą lokalnie na koordynatorze — nie ma potrzeby chodzić po węz�
 Jeżeli host z `backup.s3.endpoint` jest pierwszym hostem grupy `infra`, `cluster-backup-configure`:
 
 1. używa `MINIO_ROOT_USER` i `MINIO_ROOT_PASSWORD` tylko w tymczasowym pliku `0600` na hoście infra;
-2. tworzy bucket i marker właściciela przy użyciu root credentials;
-3. tworzy konto usługowe `galera-backup-<cluster>` (zapis, bez delete) oraz konto retencji `galera-backup-prune-<cluster>` (ewentualnie skrócone do 32 znaków, patrz wyżej) — obydwa z polityką ograniczoną do jednego bucketu i prefiksu klastra;
-4. zapisuje parę zapisu na wszystkich węzłach Galery i hoście restore, a parę retencji wyłącznie na `backup.scheduler.host`;
-5. usuwa tymczasowe dane root.
+2. tworzy bucket i marker właściciela przy użyciu root credentials; nowy bucket powstaje z Object Lock, chyba że `backup.s3.object_lock: false`;
+3. po weryfikacji markera ustawia domyślną retencję GOVERNANCE na `retention_days` i jedną regułę ILM (niżej);
+4. tworzy konto usługowe `galera-backup-<cluster>` (zapis, bez delete) oraz konto retencji `galera-backup-prune-<cluster>` (ewentualnie skrócone do 32 znaków, patrz wyżej) — obydwa z polityką ograniczoną do jednego bucketu i prefiksu klastra;
+5. zapisuje parę zapisu na wszystkich węzłach Galery i hoście restore, a parę retencji wyłącznie na `backup.scheduler.host`;
+6. usuwa tymczasowe dane root.
 
 Ponowne configure zachowuje działającą parę kluczy i zbiega politykę — nie rotuje klucza przy każdym uruchomieniu.
 
@@ -241,6 +242,24 @@ Rotacja zarządzanego MinIO:
 4. uruchom ręczny backup i potwierdzany restore.
 
 Usunięty klucz przestaje działać natychmiast. Configure tworzy nową parę i rozprowadza ją na oba hosty. Dla zewnętrznego S3 albo SMB ustaw nowe scoped credentials w środowisku i wykonaj te same kroki 3–4.
+
+### Ochrona kopii przed nadpisaniem (Object Lock)
+
+`backup.s3.object_lock` (domyślnie `true`) dotyczy zarządzanego MinIO. Każda wersja obiektu w buckecie jest objęta blokadą GOVERNANCE przez `retention_days` od zapisu:
+
+- nadpisanie kopii kluczem zapisu tworzy nową wersję, a poprzednia zostaje odczytywalna jako niebieżąca;
+- skasowanie którejkolwiek wersji przed końcem blokady serwer odrzuca (`WORM protected`) każdemu poza rootem MinIO z `--bypass`;
+- `prune` po `retention_days` tworzy delete markery, więc kopie znikają z listy natychmiast, ale miejsce zwalnia dopiero ILM: wersje niebieżące po 1 dniu od utraty statusu bieżącej, ale nie wcześniej niż koniec blokady, oraz delete markery bez wersji. Licz się z zajętością do około `retention_days + 1` dnia ponad dotychczasową.
+
+Blokada chroni historię, nie wybór kopii do odtworzenia. Klucz zapisu może opublikować nowszą spójną kopię, a `fetch_latest` wybiera bieżące wersje.
+
+Blokady nie da się włączyć na istniejącym buckecie. Configure zatrzymuje się na buckecie bez blokady, jeśli `object_lock` nie jest jawnie `false`. Migracja istniejącego klastra:
+
+1. ustaw w `cluster.yml` nowy `backup.s3.bucket` i usuń `object_lock: false`;
+2. uruchom `make cluster-backup-configure CLUSTER=<name>`, `make cluster-backup CLUSTER=<name>` i `make cluster-restore-drill CLUSTER=<name> CONFIRM=yes` — od tej chwili kopie i drill korzystają tylko z nowego bucketa;
+3. stary bucket zostaw do czasu, aż jego najmłodsza kopia przekroczy `retention_days`, a potem usuń go ręcznie rootem MinIO. Configure nigdy nie kasuje bucketów.
+
+Zewnętrzne S3: fabryka nie konfiguruje blokady. Włącza ją operator magazynu przy tworzeniu bucketa.
 
 ## Operacje
 
@@ -273,7 +292,7 @@ Backend filesystem publikuje przez katalog `.partial-*` i atomowy rename. S3 pub
 
 Każdy backend ma marker `galera-backup-owner.json`. Obcy `cluster_name`, uszkodzony albo brakujący marker blokuje operację (`E_OWNER_CONFLICT`); runner nie przejmuje cudzego katalogu lub bucketu. Dla zarządzanego MinIO marker tworzy configure z root credentials, a scoped konto może go wyłącznie czytać.
 
-`immutable_or_offsite_copy` opisuje własność infrastruktury, nie włącza jej automatycznie. Repozytoryjny MinIO na hoście `infra` jest poza węzłami Galery, ale nie jest przez to niezmienny ani off-site. Wymaga niezależnej ochrony storage, replikacji lub drugiej kopii, jeżeli ma przetrwać utratę całej lokalizacji.
+`immutable_or_offsite_copy` opisuje własność infrastruktury, nie włącza jej automatycznie. Repozytoryjny MinIO na hoście `infra` jest poza węzłami Galery, ale nie jest przez to off-site. Object Lock chroni kopie przed kluczami klastra, nie przed rootem MinIO ani utratą hosta. Przetrwanie utraty całej lokalizacji wymaga replikacji lub drugiej kopii.
 
 ## Ścieżki operacyjne
 

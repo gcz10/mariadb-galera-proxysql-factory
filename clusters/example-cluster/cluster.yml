@@ -114,6 +114,9 @@ backup:
   #   endpoint: "10.0.1.51:9000"
   #   bucket: "example-galera-backups"
   #   secure: false
+  #   # Zarzadane MinIO: nowy bucket z Object Lock GOVERNANCE na retention_days
+  #   # (domyslnie true). false = kopie bez ochrony przed nadpisaniem.
+  #   object_lock: true
 
 monitoring:
   pmm:
