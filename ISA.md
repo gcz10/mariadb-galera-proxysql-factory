@@ -30,7 +30,7 @@ principal_stated_goal_locked: "2026-07-22T15:27:04Z"
 
 ## Problem
 
-Potrzeba powtarzalnej, idempotentnej fabryki produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących hostach Rocky Linux 9. Dziś brak zautomatyzowanej, dowodzonej ścieżki: nowy klaster powinien powstawać wyłącznie przez dodanie `clusters/<name>/` (inventory + konfiguracja), a każdy stan HA, bezpieczeństwa, backupu i odtwarzania musi być potwierdzony wykonywalnym probe'em i dowodem — a nie jednorazowym skryptem Bash ani monolitycznym playbookiem. VM tworzy Terraform w Proxmox VE przed uruchomieniem Ansible (`terraform/`, cel `infra-provision`); projekt nie zarządza VMware ESXi/vCenter, nie przenosi VM oraz nie zarządza siecią fizyczną ani storagem hypervisora.
+Potrzeba powtarzalnej, idempotentnej fabryki produkcyjnych klastrów MariaDB Galera z ProxySQL na istniejących hostach Rocky Linux 9. Dziś brak zautomatyzowanej, dowodzonej ścieżki: nowy klaster powinien powstawać wyłącznie przez dodanie `clusters/<name>/` (inventory + konfiguracja), a każdy stan HA, bezpieczeństwa, backupu i odtwarzania musi być potwierdzony wykonywalnym probe'em i dowodem — a nie jednorazowym skryptem Bash ani monolitycznym playbookiem. VM może utworzyć Terraform w Proxmox VE przed uruchomieniem Ansible (`terraform/`, cel `infra-provision`) albo dostarczyć je zewnętrzny dostawca (`terraform_managed: false`); projekt nie zarządza VMware ESXi/vCenter, nie przenosi VM oraz nie zarządza siecią fizyczną ani storagem hypervisora.
 
 ## Vision
 
@@ -38,7 +38,7 @@ Repozytorium Ansible, w którym nowy niezależny klaster Galera+ProxySQL powstaj
 
 ## Out of Scope
 
-Tworzenie VM jest w zakresie: maszyny klastrów i warstwy współdzielonej powstają przez Terraform na Proxmox VE (`terraform/`, cel `infra-provision`, provider `bpg/proxmox`). Poza zakresem pozostaje:
+Tworzenie VM jest w zakresie jako jedna ze ścieżek dostarczenia hostów: maszyny klastrów i warstwy współdzielonej mogą powstawać przez Terraform na Proxmox VE (`terraform/`, cel `infra-provision`, provider `bpg/proxmox`). Hosty dostarczone poza Terraformem są obsługiwane przez `terraform_managed: false` na poziomie głównym `cluster.yml` lub `platform.yml`; ich tworzeniem i kasowaniem zarządza dostawca maszyn (`docs/runbooks/machines-from-elsewhere.md`). Poza zakresem pozostaje:
 
 - zarządzanie ESXi lub vCenter,
 - przenoszenie VM (przebudowa klastra to destroy + provision od zera, nie migracja),
@@ -69,7 +69,7 @@ Tworzenie VM jest w zakresie: maszyny klastrów i warstwy współdzielonej powst
 
 ## Constraints
 
-- Hosty: VM Rocky Linux 9/10 na Proxmox VE tworzone Terraformem (`make infra-provision`) i konfigurowane przez Ansible; ESXi/vCenter oraz przenoszenie VM poza zakresem.
+- Hosty: VM Rocky Linux 9/10 konfigurowane przez Ansible, tworzone Terraformem na Proxmox VE (`make infra-provision`) albo dostarczone poza nim (`terraform_managed: false`, cykl życia po stronie dostawcy); ESXi/vCenter oraz przenoszenie VM poza zakresem.
 - Wersje przypięte `versions.lock.yml`; produkcja wyłącznie `versions.policy: locked`; nigdy `state: latest`; brak dynamicznej zmiany major series; deployment zatrzymuje się, gdy pakiet z lockfile niedostępny.
 - Galera: 3 pełne węzły, `max_writers: 1`, read/write split wyłączony, SST przez `mariadb-backup`, nieparzysta liczba głosów i ochrona quorum.
 - ProxySQL: 2 węzły, natywny `mysql_galera_hostgroups`, admin port ograniczony do administration CIDR.
@@ -285,6 +285,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 
 ## Decisions
 
+- 2026-10-18 — refined: Problem, Out of Scope i Constraints opisują Terraform na Proxmox VE jako jedną ze ścieżek dostarczenia hostów, nie jedyną — ponieważ obie warstwy obsługują `terraform_managed: false` (wpis 2026-10-04) — dowód: pełna ścieżka na ośmiu hostach spoza Terraforma, 77/77 kroków PASS (Verification 2026-10-03); decyzja principal 2026-10-18.
 - 2026-10-04 — HOSTY SPOZA TERRAFORMA I TYP ENDPOINTU. (1) `terraform_managed` na poziomie głównym obowiązuje w `platform.yml` tak samo jak w `cluster.yml`: brak pola lub `true` wymaga roota `terraform/<nazwa>/main.tf` i zgodności jego mapy `vms` z inventory; tylko jawne `false` zwalnia z tego daną warstwę. `false` przy istniejącym roocie jest naruszeniem, bo `galera-rebuild` i cele `infra-*` nie czytają flagi i dalej działałyby na tym roocie — taki stan już wystąpił (`cassiopeiav14-r9`: root dodany w 876bd92 przy `false`, flaga usunięta dopiero w e0279a2). Szablony deklarują `false`. (2) Jedyny wdrażany `proxysql.endpoint.type` to `keepalived_vip` (ADR-001, `playbooks/f8_keepalived.yml`): schematy i oba walidatory odrzucają `external_load_balancer` i `dns` przed zmianą hostów; ich wsparcie wymaga nowego ADR i wykonawcy. MASTER_PROMPT (Interview C.3, architektura bazowa, kryteria Endpoint HA) pyta już tylko o dopuszczalność VIP. (3) `tools/pve-create-vm.sh` wskazuje w resize jawnie `disk=virtio0`, czyli dysk zaimportowany z obrazu.
 - P2-10 — decyzja użytkownika: wariant A, rzeczywista ścieżka produkcyjna w kodzie. Profil jest wymagany i nie ma wyjątków ryzyka. Platforma nie provisionuje laboratoryjnych PMM/MinIO/Maildev; operator dostarcza zewnętrzne PMM z zaufanym CA i SMTP oraz storage. Produkcyjny build pomija seed, drille i syntetyczny gcache, a bramka jest tylko odczytowa. Dotychczasowy lab nie został przeklasyfikowany ani wdrożony ponownie. Lokalne odmowy i smoke kontrolera nie dowodzą wdrożenia produkcyjnego, doręczenia poczty, odtwarzalności danych ani RTO/RPO.
 - 2026-07-22 — przyjęte założenie: standardowe porty (MariaDB 3306, Galera 4567/4568/4567, ProxySQL 6033/6032) — ponieważ oficjalne domyślne — dowód: MariaDB/ProxySQL docs.
