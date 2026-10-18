@@ -480,6 +480,9 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 
 ## Verification
 
+- P4, ochrona kopii przed nadpisaniem (2026-10-18) — prawdziwe zadania `minio_bucket_protection.yml` na żywym MinIO `x17mon`, na tymczasowych bucketach `p4-lock-probe-20261018{a,b,c}`: nowy bucket z blokadą dostał GOVERNANCE `1DAYS` i jedną regułę ILM, drugi przebieg bez zmian w retencji i ILM; bucket bez blokady zatrzymał przebieg z instrukcją migracji. Nadpisany obiekt zachował oryginał jako wersję niebieżącą (odczyt OK), a skasowanie każdej wersji bez `--bypass` serwer odrzucił (`WORM protected`); `rm` bieżącej wersji utworzył delete marker. Test `test_minio_bucket_protection.py` (prawdziwy `ansible-playbook`, 6 scenariuszy) zielony; mutant bez asercji blokady pada na scenariuszu bucketa bez blokady. CI: 16/16 kroków, 1013 testów, run 39129504162.
+  **Granica dowodu.** Nie czekano doby: sprzątanie wersji przez ILM po końcu blokady wynika z kodu przypiętego MinIO, nie z pomiaru. Buckety najemców mają `object_lock: false` i nie zostały zmienione; configure na nich nie uruchamiano. Tymczasowe buckety usunięte rootem z `--bypass`, lista bucketów wróciła do stanu sprzed próby.
+
 - Hosty spoza Terraforma, pełna ścieżka (2026-10-03) — osiem świeżych VM utworzonych przez API hypervisora w osobnej puli; platforma i najemca z `terraform_managed: false`, bez rootów Terraform. `platform-build` i `cluster-build` zakończone, a pomiar po budowie: **77/77 kroków i 9/9 niezmienników PASS** — SQL przez VIP z jednym writerem, TLS, monitoring, szyfrowana kopia poza klastrem z odtworzeniem na hoście restore oraz pięć scenariuszy awarii z powrotem do zdrowia; deklaracje bez zmian przez cały pomiar.
   **Granica dowodu.** Sizing laboratoryjny, nie produkcyjny; kontroler: przypięty `ansible-core` w izolowanym kontenerze Linux. Po pomiarze VM, dyski, pula, deklaracje, PKI i sekrety próby usunięte; definicje próby nie trafiły do repozytorium.
 
