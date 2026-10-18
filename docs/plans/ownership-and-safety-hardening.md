@@ -1,6 +1,6 @@
 # Plan: uszczelnienie granic własności i bezpieczników
 
-**Status:** W TOKU — P0/P1/P2-6/P2-7/P2-8/P2-9 zamknięte; P2-10 zamknięte jako implementacja i lokalna weryfikacja ścieżki; P3 ma jedną otwartą decyzję (LICENSE); P4 pozostaje osobnym kierunkiem; dług testowy (usunięcie dualnej ścieżki kontenerowej) zamknięty.
+**Status:** W TOKU — P0/P1/P2-6/P2-7/P2-8/P2-9 zamknięte; P2-10 zamknięte jako implementacja i lokalna weryfikacja ścieżki; P3 ma jedną otwartą decyzję (LICENSE); P4 zbadane na tymczasowym MinIO, wdrożenie czeka na decyzję o trybie Object Lock; dług testowy (usunięcie dualnej ścieżki kontenerowej) zamknięty.
 **Zrobione:** P0-1 (`85ff115`), P0-2 (`2d7df6d`), P1-3/P1-4/P1-5, P2-6/P2-8/P2-9/P2-10, P3 (higiena; audyt na kodzie 2026-08-24 potwierdził 10/11 pozycji zamkniętych), dług testowy (usunięcie ścieżki `not use_systemd` i labu kontenerowego). P2-7 domknięte: prawo kasowania kopii jest odseparowane od prawa zapisu i zweryfikowane na żywo.
 **Baza:** `main` @ `f1a3068`. Każda pozycja poniżej została zweryfikowana na kodzie;
 tezy recenzentów, których kod nie potwierdził, są wypisane na końcu.
@@ -566,17 +566,57 @@ nieaktualna: 10 z 11 pozycji technicznych było już zamkniętych w kodzie).
 
 ---
 
-## P4. Nadpisanie kopii kluczem zapisu (ryzyko rezydualne po P2-7)
+## P4. Nadpisanie kopii kluczem zapisu (ryzyko rezydualne po P2-7) — ZBADANE
 
 **Problem.** P2-7 odciął `s3:DeleteObject` od poświadczenia leżącego na każdym
 węźle Galery, ale `s3:PutObject` na istniejący klucz nadal niszczy poprzednią
 zawartość: bucket nie ma wersjonowania. Kompromitacja węzła bazy nie skasuje
 historii, lecz może ją nadpisać.
 
-**Kierunek.** Wersjonowanie bucketa + Object Lock. Wymaga weryfikacji w
-dokumentacji MinIO, czy i jak włączyć je na istniejącym buckecie — S3 pozwala
-włączyć Object Lock wyłącznie przy tworzeniu bucketa, więc realnie dotyczy
-nowych klastrów, a istniejące wymagałyby migracji danych do nowego bucketa.
+**Dowód (2026-09-30, jednorazowy MinIO).** Lokalny kontener
+`RELEASE.2025-09-07T16-13-09Z` o tym samym digeście co na `x17mon`
+(`sha256:14cea493…`), SDK `minio==7.2.20` (pin z `requirements-dev.txt`),
+konta serwisowe z politykami renderowanymi wprost z `minio-policy.json.j2`
+i `minio-policy-prune.json.j2`. Przepływ szedł przez niezmieniony `S3Backend`.
+Żaden istniejący magazyn nie był dotknięty; kontener usunięty po próbie.
+
+| Sprawdzenie | Bez wersjonowania | Wersjonowanie | Lock GOVERNANCE 1d | Lock COMPLIANCE 1d |
+|---|---|---|---|---|
+| `preflight`, publikacja 16 MiB (multipart) i 64 KiB, `fetch_latest`, znacznik drillu ×2, `prune` | ok | ok | ok | ok |
+| Klucz zapisu nadpisuje `backup.tar.enc` | **oryginał utracony** | oryginał w wersji niebieżącej | jw. | jw. |
+| Klucz zapisu kasuje wersję (`versionId`) | — | `AccessDenied` | `AccessDenied` | `AccessDenied` |
+| Klucz zapisu: `PutObject` z krótką retencją / `PutObjectRetention` | — | — | `AccessDenied` / `InvalidRequest` | `AccessDenied` / `InvalidRequest` |
+| Klucz retencji kasuje wersję (`versionId`) | — | **usunięta** | `InvalidRequest` | `InvalidRequest` |
+| Klucz retencji z `bypass-governance` | — | — | `AccessDenied` | `InvalidRequest` |
+| Root MinIO z `bypass-governance` | — | — | **usunięta** | `InvalidRequest` |
+| `prune` wygasłej kopii | obiekty usunięte | 3 delete markery, 3 wersje danych zostają (bajty odzyskiwalne) | jw. | jw. |
+| Object Lock na istniejącym buckecie z wersjonowaniem | `InvalidBucketState` | | | |
+
+**Wnioski.**
+
+- Samo wersjonowanie zamyka nadpisanie z węzła Galery, ale nie zmienia ryzyka
+  hosta retencji: w MinIO `s3:DeleteObject` wystarcza do skasowania konkretnej
+  wersji, polityka retencji nie ma `s3:DeleteObjectVersion`, a wersja zniknęła.
+- Object Lock w obu trybach odcina oba scoped klucze od historii. GOVERNANCE
+  zostawia rootowi MinIO obejście; COMPLIANCE nie zostawia go nikomu do końca
+  retencji — także wobec śmieci wgranych kluczem zapisu, które przy domyślnej
+  retencji bucketa też są zablokowane (zapełnienie dysku bez możliwości sprzątania).
+- Runner nie wymaga zmian: cały przepływ przeszedł bez modyfikacji kodu.
+- `prune` przestaje zwalniać miejsce: zostawia delete markery i wersje
+  niebieżące. Zwolnienie wymaga reguły ILM (`NoncurrentVersionExpiration`
+  i `ExpiredObjectDeleteMarker`) zakładanej rootem. Interakcja ILM z blokadą
+  **nie była testowana** (minimalna retencja to 1 dzień), a dokumentacja MinIO
+  sprawdzona przez Context7 jej nie rozstrzyga.
+- Istniejący bucket nie dostanie locka (`InvalidBucketState`): dotyczy nowych
+  bucketów, istniejące klastry wymagają migracji do nowego bucketa.
+- Poza P4: klucz zapisu może opublikować nową, spójną kopię (payload + sha +
+  metadane) o nowszym znaczniku czasu, a `fetch_latest` wybiera bieżące wersje.
+  Wersjonowanie chroni historię, nie wybór kopii do restore.
+
+**Do wdrożenia (po decyzji właściciela):** tryb blokady i jej długość względem
+`backup.retention_days`; `mc mb --with-lock` + domyślna retencja w
+`provision_minio.yml` dla nowych bucketów; reguła ILM dla wersji niebieżących
+z próbą na żywym oknie retencji; ścieżka migracji istniejących bucketów.
 
 **Koszt:** średni. **Blokuje:** nic — P2-7 jest samodzielnie poprawne.
 
