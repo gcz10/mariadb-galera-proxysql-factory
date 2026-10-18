@@ -27,8 +27,10 @@ network:
   - 192.168.1.0/24
   database_cluster_cidrs:
   - 192.168.1.0/24
+  # 192.168.10.0/24: siec stacji operatora (decyzja 2026-10-18).
   administration_cidrs:
   - 192.168.1.0/24
+  - 192.168.10.0/24
   monitoring_cidrs:
   - 192.168.1.70/32
 storage:

@@ -26,7 +26,9 @@ proxysql:
 network:
   application_cidrs: ["192.168.1.0/24"]
   database_cluster_cidrs: ["192.168.1.0/24"]
-  administration_cidrs: ["192.168.1.0/24"]
+  # 192.168.10.0/24: siec stacji operatora (decyzja 2026-10-18) — SSH, 6032,
+  # porty administracyjne infra.
+  administration_cidrs: ["192.168.1.0/24", "192.168.10.0/24"]
   monitoring_cidrs: ["192.168.1.70/32"]
 monitoring:
   pmm:
