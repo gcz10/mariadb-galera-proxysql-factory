@@ -58,11 +58,12 @@ backup:
     timezone: UTC
   s3:
     endpoint: 192.168.1.70:9000
-    bucket: cassiopeiav18-galera-backups
+    # Object Lock (P4) od 2026-10-20. Poprzedni bucket bez blokady
+    # `cassiopeiav18-galera-backups` zostaje do 2026-11-03 (retention_days od
+    # ostatniej kopii w nim), potem do usunięcia rootem MinIO
+    # (docs/runbooks/backup.md, „Ochrona kopii przed nadpisaniem").
+    bucket: cassiopeiav18-galera-backups-worm
     secure: false
-    # Bucket powstal przed Object Lock (P4) i blokady nie da sie dolozyc.
-    # true dopiero po migracji kopii do nowego bucketa (docs/runbooks/backup.md).
-    object_lock: false
 monitoring:
   pmm:
     server_url: https://192.168.1.70
