@@ -349,7 +349,7 @@ make cluster-rolling-restart CLUSTER=<nazwa>             # ISC-50/51
 make cluster-upgrade-plan CLUSTER=<nazwa> ANSIBLE_OPTS="-e f12_target=<seria>"  # ISC-53/54/56 (read-only; regresja EOL: ANSIBLE_OPTS="-e f12_target=<seria> -e f12_allow_eol_regression=true")
 make cluster-drift CLUSTER=<nazwa>                       # ISC-21
 #
-# Ręczny major upgrade krok po kroku (wykonany: 11.4.12 → 11.8.9):
+# Major upgrade etapami po jednym LTS (wykonany: 11.4.13 → 11.8.9 → 12.3.3):
 # docs/runbooks/upgrade-mariadb-major.md
 
 # F15 — reguły alertów (ISC-47); adres e-mail z monitoring.alerts.email w cluster.yml

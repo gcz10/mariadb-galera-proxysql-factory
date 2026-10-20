@@ -1,12 +1,13 @@
 ---
-# Major upgrade JEDNEGO węzła Galera wg docs/runbooks/upgrade-mariadb-major.md
-# (procedura 11.4.12 -> 11.8.9, wykonana 2026-08-31 na orionv13-r10 i
-# cassiopeiav12-r9). Operator sekwencjonuje: canary non-writer, pozostali
-# non-writers, writer ostatni (runbook §4). Playbook obsługuje JEDEN węzeł.
+# Major upgrade JEDNEGO węzła Galera wg docs/runbooks/upgrade-mariadb-major.md.
+# Cel = wersja z `versions.lock_file` klastra; operator przełącza lockfile na
+# każdy etap ścieżki z `make cluster-upgrade-plan` (np. 11.4 -> 11.8 -> 12.3)
+# i sekwencjonuje węzły: canary non-writer, pozostali non-writers, writer
+# ostatni (runbook §4). Playbook obsługuje JEDEN węzeł.
 #
 # Użycie:
 #   make cluster-upgrade-node CLUSTER=<klaster> target_node=<węzeł> \
-#     old_mariadb_version=<wersja instalowana przed upgrade>
+#     old_mariadb_version=<wersja zainstalowana na węźle>
 # Drain/undrain wykonuje się na KAŻDYM węźle grupy proxysql i jest fail-closed:
 # brak rejestracji węzła, błąd zapytania albo aktywne połączenia przerywają
 # przebieg zanim playbook zatrzyma MariaDB. Szczegóły kontraktu przy play 1.
@@ -35,7 +36,77 @@
           - old_mariadb_version | length > 0
         fail_msg: >-
           Ustaw -e target_node=<hostname z grupy galera: {{ groups['galera'] | default([]) | join(', ') }}>
-          oraz -e old_mariadb_version=<wersja> (np. -e old_mariadb_version=11.4.12).
+          oraz -e old_mariadb_version=<wersja zainstalowana na węźle, `rpm -q MariaDB-server`>.
+
+# === Play 0b: Strażnik ścieżki upgrade (read-only, PRZED drainem) ===
+# Rolling upgrade Galery idzie o JEDEN LTS na raz ("skipping versions during a
+# rolling upgrade is not supported" — mariadb.com/docs, General Upgrade
+# Information). Odmowa musi paść tutaj: porażka po drainie zostawia węzeł
+# OFFLINE_SOFT w ProxySQL, porażka po `dnf remove` — węzeł bez serwera.
+# Wersję bierzemy z RPM na hostach, nie z deklaracji operatora: błędne
+# `old_mariadb_version` robiło z podmiany repo cichy no-op, a instalacja
+# padała dopiero po usunięciu starego pakietu.
+- name: "F12-node — strażnik ścieżki upgrade (read-only, przed drainem)"
+  hosts: galera
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files:
+    - vars/mariadb_upgrade_paths.yml
+  vars:
+    upgrade_repo_file: /etc/yum.repos.d/mariadb.repo
+  tasks:
+    - name: "Zaladuj lockfile klastra (wersja docelowa)"
+      ansible.builtin.include_vars:
+        file: "../{{ (versions | default({})).lock_file | default('versions/versions.lock.yml') }}"
+        name: lock
+
+    - name: "Odczytaj zainstalowane pakiety"
+      ansible.builtin.package_facts:
+        manager: rpm
+
+    - name: "Zapamiętaj wersję serwera na węźle"
+      ansible.builtin.set_fact:
+        upgrade_installed_version: >-
+          {{ ((ansible_facts.packages | default({}))[lock.mariadb.server_package]
+              | default([{'version': 'brak'}]))[0].version }}
+
+    - name: "Odczytaj konfigurację repozytorium MariaDB na węźle docelowym"
+      ansible.builtin.slurp:
+        src: "{{ upgrade_repo_file }}"
+      register: upgrade_repo
+      when: inventory_hostname == target_node
+
+    - name: "Krok musi być legalnym hopem rolling, a klaster bez trzeciej serii"
+      vars:
+        old_series: "{{ old_mariadb_version | regex_replace('^(\\d+\\.\\d+)\\..*$', '\\1') }}"
+        new_series: "{{ lock.mariadb.version | regex_replace('^(\\d+\\.\\d+)\\..*$', '\\1') }}"
+        # Węzeł pominięty przez --limit nie ma faktu -> 'brak' -> odmowa.
+        node_installed: >-
+          {{ dict(groups['galera'] | zip(groups['galera'] | map('extract', hostvars)
+             | map(attribute='upgrade_installed_version', default='brak'))) }}
+        # Blok `>-` nie zdejmuje ukośników (inaczej niż "..."), więc pojedyncze.
+        node_series: >-
+          {{ node_installed.values() | list
+             | map('regex_replace', '^(\d+\.\d+)\..*$', '\1') | unique | list }}
+        repo_text: "{{ ((hostvars[target_node].upgrade_repo | default({})).content | default('')) | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - "'brak' not in (node_installed.values() | list)"
+          - node_installed[target_node] == old_mariadb_version
+          - old_mariadb_version is version(lock.mariadb.version, '<')
+          - new_series == old_series or (mariadb_lts_next[old_series] | default('')) == new_series
+          - node_series | difference([old_series, new_series]) | length == 0
+          - ('/repo/mariadb-server/' ~ old_mariadb_version ~ '/') in repo_text
+        fail_msg: >-
+          Upgrade {{ target_node }} zablokowany przed drainem. Zainstalowane {{ lock.mariadb.server_package }}:
+          {{ node_installed }}; podano old_mariadb_version={{ old_mariadb_version }}; cel z lockfile'a
+          {{ lock.mariadb.version }}. Wymagane: pakiet na każdym węźle, wersja węzła = podanej, cel nowszy,
+          krok w obrębie serii albo o jeden LTS ({{ old_series }} -> {{ mariadb_lts_next[old_series] | default('brak następnika') }}),
+          w klastrze wyłącznie serie {{ old_series }} i {{ new_series }}, repo węzła na
+          /repo/mariadb-server/{{ old_mariadb_version }}/. Ścieżkę etapów podaje `make cluster-upgrade-plan`.
+        success_msg: "{{ old_mariadb_version }} -> {{ lock.mariadb.version }} na {{ target_node }}: legalny krok rolling."
+      run_once: true
 
 # === Play 1: Drain węzła w ProxySQL (OFFLINE_SOFT + dowód opróżnienia) ===
 # WSZYSTKIE węzły grupy proxysql (jak f13_remove_node/cluster_deregister),

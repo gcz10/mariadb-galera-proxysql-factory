@@ -246,7 +246,7 @@ Legenda stanów: `[x]` — kryterium w pełni spełnione na aktualnym dowodzie; 
 | ISC-51 | literal | python | brama zdrowia (wsrep_local_state=4+Primary+size) + runtime | Synced przed kolejnym | probe-rolling-restart.py |
 | ISC-52 | literal | python | f12_patch.yml canary (non-writer pierwszy) | canary + health gate | probe-patch.py |
 | ISC-53 | literal | python | f12_upgrade_plan.yml host tasks changed=0 | brak zmian na hostach | probe-upgrade-plan.py |
-| ISC-54 | derived: official-upgrade-path | python | plan docs vs oficjalna docs MariaDB/Galera | ścieżka 11.4→12.3 LTS + skip-write-binlog + brak regresji EOL | probe-upgrade-plan.py |
+| ISC-54 | derived: official-upgrade-path | python | plan docs vs oficjalna docs MariaDB/Galera | etapy po jednym LTS (11.4→11.8→12.3) + skip-write-binlog + brak regresji EOL celu końcowego | probe-upgrade-plan.py, test_f12_upgrade_plan_path.py |
 | ISC-55 | literal | python | f12_patch.yml brama zdrowia until/retries | stop na utracie zdrowia | probe-patch.py |
 | ISC-56 | Anti: no-datadir-downgrade | python | assert odrzuca downgrade + test negatywny | brak downgrade datadir | probe-upgrade-plan.py |
 | ISC-57 | literal | python | f12_patch.yml ProxySQL serial:1 + SAVE TO DISK | jedna instancja naraz | probe-patch.py |
