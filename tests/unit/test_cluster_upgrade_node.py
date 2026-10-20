@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-r"""cluster_upgrade_node.yml: kontrakt gcache + smoke bramki drain na prawdziwym
+r"""cluster_upgrade_node.yml: kontrakt gcache + smoke bramek na prawdziwym
 ansible-playbook.
 
 Defekt wyjściowy: regexp `gcache\.size=[^ \t\n]+` połykał resztę listy opcji
@@ -7,7 +7,10 @@ wsrep_provider_options (page_size, socket.dynamic, TLS), bo między opcjami nie
 ma spacji. Drugi kontrakt: stop MariaDB nie może się odbyć, dopóki KAŻDA
 instancja ProxySQL nie potwierdzi drainu (rejestracja -> OFFLINE_SOFT w
 runtime -> ConnUsed==0); brak rejestracji, błąd zapytania, śmieciowy wynik albo
---limit omijający ProxySQL muszą zablokować przebieg.
+--limit omijający ProxySQL muszą zablokować przebieg. Trzeci kontrakt: krok
+wersji musi być legalnym hopem rolling (w obrębie serii albo o jeden LTS),
+zgodnym z wersją faktycznie zainstalowaną, bez trzeciej serii w klastrze —
+i odmowa pada PRZED drainem, więc ProxySQL zostaje nietknięty.
 
 Smoke NIE emuluje Ansibla i NIE jest emulacją ProxySQL: playbook jest
 wykonywany prawdziwym `ansible-playbook` na sztucznych hostach local, a
@@ -16,9 +19,12 @@ odpowiedzi admin-interfejsu (COUNT/SUM/ConnUsed) oraz sztywny stan wsrep dla
 bramy zdrowia. Testuje orkiestrację: czy kolejne bramy przerywają przebieg
 PRZED ciałem upgrade. Ciało upgrade (systemd/dnf/usługi) jest w kopii testowej
 zastąpione zadaniem-znacznikiem tuż za właściwymi bramami (asercja potwierdzeń
-drain, lockfile, brama zdrowia) — żadnych operacji systemowych.
+drain, lockfile, brama zdrowia) — żadnych operacji systemowych. Odczyt RPM
+(`package_facts`) zastępuje fakt z FAKE_INSTALLED; asercja strażnika ścieżki
+zostaje oryginalna.
 """
 
+import json
 import os
 import re
 import shutil
@@ -36,6 +42,7 @@ import jinja2
 REPO = Path(__file__).resolve().parents[2]
 PLAYBOOK = REPO / "playbooks" / "cluster_upgrade_node.yml"
 IDENTITY_REAL = "/etc/proxysql/admin-check.cnf"
+REPO_FILE_REAL = "/etc/yum.repos.d/mariadb.repo"
 
 TARGET_NODE = "gnode2"
 TARGET_IP = "10.53.0.12"
@@ -154,11 +161,17 @@ def deep_replace(value, old, new):
     return value
 
 
-def build_fixture(base):
-    """Kopia testowa: grafitowy inwentarz + wyciągnięte play 0-2.
+def play_named(plays, fragment):
+    return next(play for play in plays if fragment in play.get("name", ""))
 
-    Jedyna ingerencja w treść playbooka: podmiana ścieżki tożsamości admina
-    (admin-check.cnf) na fixture oraz wymiana CIAŁA play 2 (za właściwymi
+
+def build_fixture(base):
+    """Kopia testowa: grafitowy inwentarz + play walidacji, strażnika, drainu
+    i upgrade'u (wybierane po nazwie, nie po indeksie).
+
+    Ingerencje w treść playbooka: podmiana ścieżek tożsamości admina
+    (admin-check.cnf) i pliku repo na fixture, odczyt wersji z RPM zamieniony
+    na fakt z FAKE_INSTALLED oraz wymiana CIAŁA play upgrade (za właściwymi
     bramami) na zadanie-znacznik. Bramy zostają oryginalne.
     """
     bin_dir = base / "bin"
@@ -172,6 +185,7 @@ def build_fixture(base):
 
     identity = base / "admin-check.cnf"
     identity.write_text("[client]\nuser=admin\n", encoding="utf-8")
+    repo_file = base / "mariadb.repo"
 
     os.symlink(REPO / "playbooks" / "vars", play_dir / "vars")
     os.symlink(REPO / "playbooks" / "tasks", play_dir / "tasks")
@@ -187,9 +201,28 @@ def build_fixture(base):
     )
     marker = base / "marker.txt"
 
-    plays = deep_replace(load_plays()[:3], IDENTITY_REAL, str(identity))
-    plays[1]["environment"] = {"FAKE_MARIADB_HOST": "{{ inventory_hostname }}"}
-    upgrade = plays[2]
+    source = deep_replace(load_plays(), IDENTITY_REAL, str(identity))
+    source = deep_replace(source, REPO_FILE_REAL, str(repo_file))
+    validation = play_named(source, "walidacja parametrów")
+    guard = play_named(source, "strażnik ścieżki")
+    drain = play_named(source, "drain węzła")
+    upgrade = play_named(source, "upgrade pakietów")
+
+    read_start = next(
+        i for i, task in enumerate(guard["tasks"]) if "ansible.builtin.package_facts" in task
+    )
+    guard["tasks"][read_start:read_start + 2] = [
+        {
+            "name": "SMOKE — wersja serwera z FAKE_INSTALLED zamiast RPM",
+            "ansible.builtin.set_fact": {
+                "upgrade_installed_version": (
+                    "{{ (lookup('ansible.builtin.env', 'FAKE_INSTALLED') | from_json)"
+                    "[inventory_hostname] | default('brak') }}"
+                )
+            },
+        }
+    ]
+    drain["environment"] = {"FAKE_MARIADB_HOST": "{{ inventory_hostname }}"}
     body_start = next(
         i
         for i, task in enumerate(upgrade["tasks"])
@@ -206,7 +239,9 @@ def build_fixture(base):
         }
     ]
     site = play_dir / "smoke_site.yml"
-    site.write_text(yaml.safe_dump(plays, sort_keys=False), encoding="utf-8")
+    site.write_text(
+        yaml.safe_dump([validation, guard, drain, upgrade], sort_keys=False), encoding="utf-8"
+    )
 
     return {
         "base": base,
@@ -215,6 +250,7 @@ def build_fixture(base):
         "inventory": inventory,
         "site": site,
         "marker": marker,
+        "repo_file": repo_file,
         "state": base / "proxysql.sqlite3",
     }
 
@@ -388,7 +424,7 @@ class PackageResolutionTests(unittest.TestCase):
 
 @unittest.skipIf(ANSIBLE_PLAYBOOK is None, "ansible-playbook niedostępny w PATH")
 class DrainGateSmokeTests(unittest.TestCase):
-    """Prawdziwy ansible-playbook na wyciągniętych play 0-2 z atrapą mariadb.
+    """Prawdziwy ansible-playbook na play walidacji, strażnika, drainu i upgrade'u.
 
     Marker za bramami = jedyny dowód 'ciało upgrade osiągnięte'. Każdy scenariusz
     negatywny kończy się brakiem markera (brama przerwała przebieg).
@@ -400,12 +436,29 @@ class DrainGateSmokeTests(unittest.TestCase):
         cls.addClassCleanup(cls._tmp.cleanup)
         cls.fx = build_fixture(Path(cls._tmp.name))
 
-    def run_case(self, fault="", limit=None, target_status="ONLINE"):
+    def run_case(
+        self,
+        fault="",
+        limit=None,
+        target_status="ONLINE",
+        old="11.4.12",
+        installed=None,
+        lock_file=None,
+        repo_version=None,
+    ):
         fx = self.fx
         for host in ("px1", "px2"):
             seed_state(Path(str(fx["state"]) + "." + host), target_status)
         if fx["marker"].exists():
             fx["marker"].unlink()
+        if installed is None:
+            installed = {node: old for node in ("gnode1", "gnode2", "gnode3")}
+        fx["repo_file"].write_text(
+            "[mariadb-main]\nbaseurl = https://dlm.mariadb.com/repo/mariadb-server/"
+            + (repo_version or old)
+            + "/yum/rhel/9/x86_64\n",
+            encoding="utf-8",
+        )
         env = os.environ.copy()
         env.update(
             {
@@ -413,6 +466,7 @@ class DrainGateSmokeTests(unittest.TestCase):
                 "FAKE_MARIADB_STATE": str(fx["state"]),
                 "FAKE_MARIADB_FAULT": fault,
                 "FAKE_GALERA_SIZE": "3",
+                "FAKE_INSTALLED": json.dumps(installed),
                 "SMOKE_MARKER": str(fx["marker"]),
                 "ANSIBLE_CONFIG": str(fx["cfg"]),
             }
@@ -425,7 +479,7 @@ class DrainGateSmokeTests(unittest.TestCase):
             "-e",
             "target_node=" + TARGET_NODE,
             "-e",
-            "old_mariadb_version=11.4.12",
+            "old_mariadb_version=" + old,
             # Skrócone oczekiwanie: mechanizm until/retries zostaje prawdziwy,
             # scenariusz negatywny nie może trwać minut.
             "-e",
@@ -433,6 +487,8 @@ class DrainGateSmokeTests(unittest.TestCase):
             "-e",
             "upgrade_drain_delay=1",
         ]
+        if lock_file:
+            cmd += ["-e", json.dumps({"versions": {"lock_file": lock_file}})]
         if limit:
             cmd += ["--limit", limit]
         proc = subprocess.run(
@@ -463,6 +519,17 @@ class DrainGateSmokeTests(unittest.TestCase):
     def assert_blocked(self, proc):
         self.assertNotEqual(proc.returncode, 0, tail(proc.stdout + proc.stderr))
         self.assertFalse(self.fx["marker"].exists(), "marker za bramką po porażce drain")
+
+    def assert_blocked_before_drain(self, proc):
+        """Odmowa strażnika ścieżki: brak markera i ProxySQL nietknięty."""
+        self.assert_blocked(proc)
+        self.assertIn("zablokowany przed drainem", proc.stdout, tail(proc.stdout))
+        for host in ("px1", "px2"):
+            with sqlite3.connect(str(self.fx["state"]) + "." + host) as db:
+                self.assertEqual(
+                    db.execute("SELECT DISTINCT status FROM mysql_servers WHERE hostname=?", (TARGET_IP,)).fetchall(),
+                    [("ONLINE",)],
+                )
 
     def test_drained_node_reaches_upgrade_marker(self):
         proc = self.run_case()
@@ -497,9 +564,53 @@ class DrainGateSmokeTests(unittest.TestCase):
 
     def test_limit_skipping_proxies_blocks_marker(self):
         """--limit omijający ProxySQL: ciche pominięcie drainu łapie asercja
-        potwierdzeń na początku play 2 — marker niedostępny."""
-        proc = self.run_case(limit=TARGET_NODE)
+        potwierdzeń na początku play upgrade — marker niedostępny."""
+        proc = self.run_case(limit="galera")
         self.assert_blocked(proc)
+
+    def test_single_lts_hop_reaches_marker(self):
+        proc = self.run_case(old="11.4.13", lock_file="versions/versions-el9-118.lock.yml")
+        self.assert_reached(proc)
+
+    def test_lts_skip_blocked_before_drain(self):
+        """11.4 -> 12.3 pomija 11.8: rolling tego nie wspiera."""
+        proc = self.run_case(old="11.4.13", lock_file="versions/versions-el9-123.lock.yml")
+        self.assert_blocked_before_drain(proc)
+
+    def test_declared_version_must_match_node(self):
+        """Nieaktualne old_mariadb_version robiło z podmiany repo cichy no-op."""
+        proc = self.run_case(
+            old="11.4.12",
+            installed={"gnode1": "11.4.13", "gnode2": "11.4.13", "gnode3": "11.4.13"},
+        )
+        self.assert_blocked_before_drain(proc)
+
+    def test_resumed_hop_with_upgraded_peer_reaches_marker(self):
+        """W trakcie etapu klaster ma dokładnie dwie serie: starą i docelową."""
+        proc = self.run_case(
+            old="11.8.9",
+            installed={"gnode1": "12.3.3", "gnode2": "11.8.9", "gnode3": "11.8.9"},
+            lock_file="versions/versions-el9-123.lock.yml",
+        )
+        self.assert_reached(proc)
+
+    def test_third_series_in_cluster_blocked_before_drain(self):
+        """Niedokończony etap 11.4 -> 11.8 i start etapu do 12.3 = trzy serie."""
+        proc = self.run_case(
+            old="11.8.9",
+            installed={"gnode1": "11.8.9", "gnode2": "11.8.9", "gnode3": "11.4.13"},
+            lock_file="versions/versions-el9-123.lock.yml",
+        )
+        self.assert_blocked_before_drain(proc)
+
+    def test_repo_not_on_declared_version_blocked_before_drain(self):
+        """Repo serii zamiast wersji: podmiana repo nie trafiłaby w nic."""
+        proc = self.run_case(
+            old="11.4.13",
+            lock_file="versions/versions-el9-118.lock.yml",
+            repo_version="11.4",
+        )
+        self.assert_blocked_before_drain(proc)
 
 
 if __name__ == "__main__":

@@ -25,3 +25,16 @@ mariadb_lts_eol:
   "11.4": "2029-05-29"
   "11.8": "2028-06-04"
   "12.3": "2029-06-12"
+
+# Co zmienia się przy WEJŚCIU na serię — trafia do etapu planu. Tylko fakty
+# z oficjalnych przewodników upgrade'u i pomiarów na flocie (ADR-005).
+mariadb_series_notes:
+  "11.8": >-
+    Domyślne innodb_snapshot_isolation=ON (zmierzone: OFF na 11.4.13, ON na
+    12.3.3) — aplikacja w REPEATABLE READ może dostać ERROR 1020 przy
+    współbieżnych UPDATE/DELETE. Usunięte wsrep_load_data_splitting.
+  "12.3": >-
+    MariaDB-server nie zależy już od Galery: MariaDB-server-galera instaluje
+    się jawnie (lockfile server_galera_package). Usunięte big_tables,
+    storage_engine, large_page_size; nowe słowa zastrzeżone CONVERSION i
+    TO_DATE; MYSQLD_OPTS dla systemd przestarzałe.

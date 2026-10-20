@@ -87,6 +87,19 @@
     f12_target_version: "{{ f12_target | default(mariadb_baseline_series) }}"
     f12_eol_map: "{{ mariadb_lts_eol }}"
     f12_target_lts_eol: "{{ f12_eol_map[f12_target_version] | default('nieznany') }}"
+    # Ścieżka rolling: od serii obecnej po krawędziach `mariadb_lts_next` do celu,
+    # np. 11.4 -> 11.8 -> 12.3. Pusta, gdy cel na tej ścieżce nie leży (cel
+    # wstecz, seria spoza mapy). Pętla ograniczona liczbą krawędzi, więc kończy się.
+    f12_path_csv: >-
+      {%- set ns = namespace(cur=f12_current_major_minor, path=[f12_current_major_minor]) -%}
+      {%- for _edge in mariadb_lts_next -%}
+      {%- if ns.cur != f12_target_version and ns.cur in mariadb_lts_next -%}
+      {%- set ns.cur = mariadb_lts_next[ns.cur] -%}
+      {%- set ns.path = ns.path + [ns.cur] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ ns.path | join(',') if ns.cur == f12_target_version else '' }}
+    f12_path: "{{ f12_path_csv.split(',') if f12_path_csv | length > 0 else [] }}"
     # EOL wersji OBECNEJ bierzemy z lockfile — to jedyne zrodlo prawdy dla tego,
     # co faktycznie stoi na wezlach. Mapa sluzy jako zapas dla serii, ktorej
     # lockfile nie opisuje (np. plan liczony dla innego klastra niz zaladowany).
@@ -113,6 +126,15 @@
         name: lock
 
   tasks:
+    - name: "Klaster na serii docelowej — to nie jest major upgrade"
+      ansible.builtin.assert:
+        that:
+          - f12_current_major_minor != f12_target_version
+        fail_msg: >-
+          Klaster jest już na serii {{ f12_target_version }} ({{ f12_current_version }}).
+          Wydanie w obrębie serii to `make cluster-patch`, nie plan major upgrade'u.
+      when: f12_current_version != 'unknown'
+
     - name: "ISC-56: strażnik anti-downgrade — odmów jeśli obecna wersja >= docelowa"
       ansible.builtin.assert:
         that:
@@ -124,6 +146,20 @@
           Rollback wymaga odtworzenia datadir z backupu (mariadb-backup), NIE downgrade pakietów.
       when: f12_current_version != 'unknown' and f12_current_major_minor is match('\d+\.\d+')
 
+    - name: "ISC-54: cel musi leżeć na ścieżce rolling LTS -> LTS"
+      ansible.builtin.assert:
+        that:
+          - f12_path | length >= 2
+        fail_msg: >-
+          Brak ścieżki rolling z {{ f12_current_major_minor }} do {{ f12_target_version }} po krawędziach
+          `mariadb_lts_next` (playbooks/vars/mariadb_upgrade_paths.yml). Rolling upgrade Galery idzie
+          o jeden LTS na raz ("You must upgrade one major/LTS version at a time" — mariadb.com/docs,
+          General Upgrade Information); seria spoza mapy wymaga osobnej decyzji.
+      when: f12_current_version != 'unknown'
+
+    # Porównujemy EOL CELU KOŃCOWEGO z obecnym. Przystanki na ścieżce (np. 11.8
+    # w drodze 11.4 -> 12.3) mają prawo kończyć się wcześniej — klaster na nich
+    # nie zostaje. Cel końcowy 11.8 z 11.4 nadal jest odrzucany.
     - name: "Strażnik regresji wsparcia — odmów celu, który SKRACA okno EOL"
       ansible.builtin.assert:
         that:
@@ -157,30 +193,55 @@
           ## Ścieżka (ISC-54 — oficjalna dokumentacja)
           - **Obecna wersja:** MariaDB {{ f12_current_version }} (Galera 4, wsrep API 26)
           - **Cel:** MariaDB {{ f12_target_version }} LTS (EOL {{ f12_target_lts_eol }})
-          - **Metoda:** rolling in-place upgrade (Galera 4 wspiera 10.11/11.4/11.8, brak dump/restore)
+          - **Etapy:** {{ f12_path | join(' → ') }}. Rolling upgrade Galery idzie o jeden LTS
+            na raz: "You must upgrade one major/LTS version at a time. (...) skipping versions
+            during a rolling upgrade is not supported". Przystanek nie jest celem, więc jego
+            wcześniejszy EOL nie blokuje planu.
+          - **Metoda:** rolling in-place na każdym etapie, bez dump/restore. Pominięcie etapu
+            jest wspierane wyłącznie przy zatrzymaniu CAŁEGO klastra — tego ta procedura nie robi.
           - **Źródła:**
-            - https://mariadb.com/kb/en/upgrading-galera-cluster/
-            - https://mariadb.com/kb/en/upgrading-between-major-mariadb-versions/
-            - https://galeracluster.com/library/documentation/upgrading.html
+            - https://mariadb.com/docs/server/server-management/install-and-upgrade-mariadb/upgrading/mariadb-community-server-upgrade-paths/general-upgrade-information
+            - https://mariadb.com/docs/galera-cluster/galera-management/upgrading-galera-cluster/
+            - https://mariadb.com/kb/en/downgrading-between-major-mariadb-versions/
 
           ## Warunki wstępne
           1. **Pełny backup** mariadb-backup PRZED upgrade (ISC-32 — off-cluster, szyfrowany).
-          2. **gcache.size** wystarczające dla IST (obecnie: {{ f12_gcache }}); zalecane >=2G na czas upgrade,
-             aby węzły powracały przez IST, nie pełne SST.
-          3. **Brak DDL** w klastrze podczas rolling upgrade.
-          4. Wersja Galera 4 zgodna między węzłami (wsrep API 26).
+          2. **gcache.size** wystarczające dla IST (obecnie: {{ f12_gcache }}), aby węzły
+             powracały przez IST, nie pełne SST.
+          3. **Brak DDL** i nowych funkcji serii docelowej, dopóki ostatni etap nie obejmie
+             wszystkich węzłów.
+          4. `galera-4` tego samego wydania na każdym etapie (wsrep API 26).
+          {% for i in range((f12_path | length) - 1) %}
+          {% set src = f12_path[i] %}
+          {% set dst = f12_path[i + 1] %}
+          {% set lockname = 'versions/versions-el' ~ lock.rocky_linux.major ~ '-' ~ (dst | replace('.', '')) ~ '.lock.yml' %}
 
-          ## Procedura rolling (jeden węzeł naraz, non-writer pierwszy, writer ostatni)
-          1. Drain węzła w ProxySQL (`status='OFFLINE_SOFT'` w mysql_servers).
-          2. `systemctl stop mariadb`.
-          3. Aktualizuj repo → swap pakietów (MariaDB-server, MariaDB-client, galera-4).
-             Uwaga: dla 12.3+ zainstaluj jawnie `mariadb-server-galera`.
-          4. Usuń zdeprecjonowane zmienne z server.cnf.
-          5. `systemctl start mariadb` — węzeł powraca przez IST (jeśli gcache wystarczy).
-          6. **`mariadb-upgrade --skip-write-binlog`** — aktualizuje tabele systemowe LOKALNIE,
+          ## Etap {{ i + 1 }}: {{ src }} → {{ dst }}
+          1. `versions.lock_file` w `clusters/<klaster>/cluster.yml` → `{{ lockname }}`{{ '' if (playbook_dir ~ '/../' ~ lockname) is file else ' (BRAK — utwórz wg docs/runbooks/upgrade-mariadb-major.md §2)' }}.
+          2. Węzeł po węźle, non-writery najpierw, writer ostatni:
+             `make cluster-upgrade-node CLUSTER=<klaster> target_node=<węzeł> old_mariadb_version=<wersja na węźle>`.
+             Playbook odmawia przed drainem, gdy wersja na węźle różni się od podanej, gdy krok
+             nie jest jednym LTS albo gdy w klastrze jest już trzecia seria.
+          {% if src.split('.')[0] != dst.split('.')[0] %}
+          3. Zmiana rodziny {{ src.split('.')[0] }}.x → {{ dst.split('.')[0] }}.x: pakiet serwera jest usuwany i instalowany
+             od nowa (scriptlet odmawia `dnf upgrade`); playbook zachowuje `server.cnf`.
+          {% endif %}
+          {% if dst in mariadb_series_notes %}
+          - Zmiany przy wejściu na {{ dst }}: {{ mariadb_series_notes[dst] }}
+          {% endif %}
+          - Etap kończy się, gdy WSZYSTKIE węzły raportują {{ dst }}; następny etap dopiero wtedy.
+          - Host odtwarzania: `make cluster-restore-drill` wymienia `MariaDB-backup` na serię etapu.
+          {% endfor %}
+
+          ## Na każdym węźle (wykonuje `cluster_upgrade_node.yml`)
+          1. Drain węzła na każdym ProxySQL (`OFFLINE_SOFT`, `ConnUsed=0`).
+          2. `innodb_fast_shutdown=0`, `systemctl stop mariadb`.
+          3. Repo na wersję z lockfile'a etapu, instalacja przypiętych pakietów.
+          4. `systemctl start mariadb` — węzeł powraca przez IST (jeśli gcache wystarczy).
+          5. **`mariadb-upgrade --skip-write-binlog`** — aktualizuje tabele systemowe LOKALNIE,
              bez replikacji DDL do nie-uaktualnionych węzłów (`--skip-write-binlog` kluczowe).
-          7. Weryfikuj zdrowie: `wsrep_local_state=4`, `Primary`, `wsrep_ready=ON`, pełny size.
-          8. Re-enble traffic w ProxySQL, powtórz dla kolejnego węzła.
+          6. Brama zdrowia: `wsrep_local_state=4`, `Primary`, `wsrep_ready=ON`, pełny size.
+          7. Undrain na każdym ProxySQL, potem kolejny węzeł.
 
           ## ISC-55: stop przy utracie zdrowia
           Po każdym węźle brama zdrowia (wsrep_local_state=4 + Primary + size). Jeśli węzeł
@@ -193,12 +254,13 @@
           **Rollback = odtworzenie datadir z backupu (mariadb-backup), NIE downgrade pakietów.**
           Przed upgrade ustaw `innodb_fast_shutdown=0` (czysty flush) dla awaryjnego rollbacku.
 
-          ## Weryfikacja po upgrade
+          ## Weryfikacja po ostatnim etapie
           - Wszystkie węzły: `SELECT VERSION();` == {{ f12_target_version }}
           - `wsrep_cluster_status=Primary`, `wsrep_cluster_size={{ galera.nodes_expected }}`
           - `mariadb-upgrade --skip-write-binlog` raportuje OK na każdym węźle
           - `CHECK TABLE` na tabelach użytkownika (integralność)
           - Backup + restore drill po upgrade (ISC-36)
+          - `proxysql.server_version` w `platform.yml` = najstarszy najemca po upgrade
         mode: "0644"
       register: f12_plan_written
 

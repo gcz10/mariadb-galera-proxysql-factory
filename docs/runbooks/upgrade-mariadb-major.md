@@ -1,10 +1,17 @@
-# Runbook: ręczny major upgrade MariaDB/Galera (na przykładzie 11.4.12 → 11.8.9, orionv10-r10, 2026-08-29)
+# Runbook: major upgrade MariaDB/Galera (wykonane: 11.4.12 → 11.8.9 orionv10-r10 2026-08-29; 11.4.13 → 11.8.9 → 12.3.3 orionv16-r10 2026-09-10)
 
-Procedura wypracowana i wykonana na żywym klastrze. Repo ma **generator planu
-(read-only, ISC-53) i rolling patch w obrębie serii (`cluster-patch`), ale NIE ma
-playbooka egzekwującego major upgrade** — major wykonuje się ręcznie wg planu z
-`make cluster-upgrade-plan`, krok po kroku, z bramami zdrowia po każdym węźle.
-Ten dokument jest tym krokiem po kroku.
+Procedura wypracowana i wykonana na żywych klastrach. Plan liczy
+`make cluster-upgrade-plan` (read-only, ISC-53), a pojedynczy węzeł upgraduje
+`make cluster-upgrade-node` z bramami zdrowia. Ten dokument opisuje kolejność
+i kroki składowe.
+
+**Ścieżka idzie po jednym LTS na raz.** Rolling upgrade Galery nie wspiera
+pomijania wersji („You must upgrade one major/LTS version at a time" —
+mariadb.com/docs, General Upgrade Information), więc 11.4 → 12.3 to dwa etapy:
+11.4 → 11.8, potem 11.8 → 12.3. Kolejność LTS i seria bazowa (ADR-005) żyją w
+`playbooks/vars/mariadb_upgrade_paths.yml`. Każdy etap to osobny rolling po
+wszystkich węzłach z osobnym lockfile'em; następny etap zaczyna się dopiero,
+gdy cały klaster jest na serii poprzedniego.
 
 ## 0. Decyzja i ostrzeżenia (przeczytaj przed startem)
 
@@ -12,10 +19,11 @@ Ten dokument jest tym krokiem po kroku.
   `mariadb-upgrade` jest forward-incompatible. Jedyny rollback = odtworzenie
   datadiru z backupu mariadb-backup. Dlatego backup przed jest kontraktem, nie
   sugestią.
-- **Cel krótszy EOL niż obecna seria wymaga świadomej decyzji**: strażnik
-  „regresji wsparcia" w `f12_upgrade_plan.yml` odmówi (np. 11.8 EOL 2028-06 <
-  11.4 EOL 2029-05). Obejście: `-e f12_allow_eol_regression=true` **+ uzasadnienie
-  w ADR** (kontrakt strażnika; przykład: `docs/records/2026-08-29-mariadb-118-upgrade-orion.md`).
+- **Cel końcowy z krótszym EOL niż obecna seria wymaga świadomej decyzji**:
+  strażnik „regresji wsparcia" w `f12_upgrade_plan.yml` odmówi (np. cel 11.8,
+  EOL 2028-06-04 < 11.4, EOL 2029-05-29). Obejście: `-e f12_allow_eol_regression=true`
+  **+ uzasadnienie w ADR**. Przystanek na ścieżce (11.8 w drodze do 12.3) tego
+  nie wymaga — strażnik porównuje EOL celu końcowego.
 - **Mieszanie wersji**: między klastrami — wspierane (per-cluster `lock_file`);
   w obrębie jednego klastra — tylko przejściowo podczas tego rolling upgrade.
   Wszystkie węzły klastra kończą na jednej wersji.
@@ -51,9 +59,11 @@ galera, potem mariadb.
    powód, świadome regresje, procedura, rollback.
 4. Walidatory: `validate-cluster-schema.py` + `validate-lockfile.py`
    (ściślej: `python3 tests/validation/validate-cluster-schema.py clusters/<klaster>/cluster.yml clusters/schema/cluster.schema.json`).
-5. Plan: `make cluster-upgrade-plan CLUSTER=<klaster> ANSIBLE_OPTS="-e f12_target=<seria> [-e f12_allow_eol_regression=true]"`
-   → `docs/plans/major-upgrade-plan.md`. Recap musi pokazać `changed=0` na
-   węzłach (plan jest read-only — ISC-53).
+5. Plan: `make cluster-upgrade-plan CLUSTER=<klaster> [ANSIBLE_OPTS="-e f12_target=<seria>"]`
+   (domyślny cel: seria bazowa) → `docs/plans/major-upgrade-plan.md` z listą
+   etapów i lockfile'em każdego etapu. Recap musi pokazać `changed=0` na
+   węzłach (plan jest read-only — ISC-53). Kroki 1–2 powtarzasz przed każdym
+   etapem.
 
 ## 3. Backup przed (kontrakt ISC-32)
 
@@ -83,9 +93,16 @@ ostatni**.
 > **Automatyzacja per węzeł:** Całą poniższą sekwencję (5a drain w ProxySQL, 5b flush/stop/repo/dnf/start/IST/mup, 5c undrain i weryfikację zdrowia klastra)
 > wykonuje dedykowane polecenie fabryki:
 > ```bash
-> make cluster-upgrade-node CLUSTER=<klaster> target_node=<węzeł> old_mariadb_version=<wersja_przed>
+> make cluster-upgrade-node CLUSTER=<klaster> target_node=<węzeł> old_mariadb_version=<wersja_na_węźle>
 > ```
 > Poniższy opis przedstawia kroki składowe i służy do weryfikacji manualnej lub diagnostyki.
+>
+> Przed drainem playbook odczytuje RPM serwera na każdym węźle i odmawia, gdy:
+> wersja węzła różni się od `old_mariadb_version`, cel z lockfile'a nie jest
+> nowszy, krok nie jest w obrębie serii ani o jeden LTS, w klastrze jest seria
+> inna niż stara i docelowa (niedokończony poprzedni etap), albo repo węzła nie
+> wskazuje `/repo/mariadb-server/<old_mariadb_version>/`. ProxySQL zostaje
+> wtedy nietknięty.
 >
 > Playbook wymaga rejestracji węzła na każdej instancji grupy `proxysql`,
 > potwierdzenia `OFFLINE_SOFT` w runtime i wyniku `SUM(ConnUsed)=0`.
