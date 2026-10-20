@@ -137,6 +137,23 @@ def survivor_host(exclude=None):
     return next((h for h in GALERA_HOSTS if h != exclude), GALERA_HOSTS[0])
 
 
+# Identyfikator biezacego bootu jadra. Zmienia sie przy KAZDYM restarcie, wiec
+# dowodzi utraty maszyny takze wtedy, gdy wrocila, zanim zdazylismy zobaczyc ja
+# martwa. `printf`, nie `cat`: wynik ma znacznik, ktorego nie da sie pomylic
+# z trescia logu transakcji.
+BOOT_ID_CMD = "printf 'BOOT_ID=%s\\n' \"$(cat /proc/sys/kernel/random/boot_id)\""
+
+
+def boot_id(node):
+    """boot_id wezla albo None, gdy odczyt sie nie powiodl."""
+    try:
+        r = sh(node, BOOT_ID_CMD, timeout=30)
+    except subprocess.TimeoutExpired:
+        return None
+    m = re.search(r"BOOT_ID=([0-9a-f-]{36})", r.stdout)
+    return m.group(1) if r.returncode == 0 and m else None
+
+
 def present_seqs_on(host):
     """Zbior seq widoczny na WSKAZANYM wezle."""
     r = sh(host, 'mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e '
@@ -344,6 +361,11 @@ def main():
                     "(ale wtedy mierzysz wariant optymistyczny, nie utrate maszyny)."
                 )
                 return 2
+            boot_before = boot_id(killed_host)
+            if not boot_before:
+                print(f"REFUSED: nie odczytano boot_id z {killed_host} — bez niego nie da sie "
+                      "odroznic maszyny, ktora przetrwala, od takiej, ktora zdazyla wrocic.")
+                return 2
         kill_ts = time.time()
         if FAILOVER_MODE == "hard":
             # Maszyna przestaje istniec w trakcie wykonania, wiec NIE wolno czekac
@@ -369,12 +391,18 @@ def main():
             # Wynik async-uruchomienia ansible byl wczesniej ignorowany, wiec
             # ODRZUCONE zadanie (np. brak zapisu do sysrq) nadal dostawalo PASS,
             # dopoki workload dalej commitowal — test nie testowal awarii.
-            # Czekamy, az ofiara przestanie odpowiadac na ping; jesli odpowiada
-            # do konca terminu, awarii nie bylo i nie ma czego zaliczac.
+            # Czekamy, az ofiara przestanie odpowiadac na ping ALBO odpowie z innym
+            # boot_id. Drugi warunek jest konieczny: 2026-10-20 na o17db3 (Rocky 10)
+            # kazdy ping po rozkazie trafil w maszyne, ktora — jak pokazal uptime
+            # 2 min zaraz po przebiegu — juz sie zrestartowala, i sonda oglosila
+            # "never went down". Sam start rozkazu ma termin 30 s, a maszyna, ktora
+            # wstaje szybciej, wraca w tym oknie. Ta sama maszyna z tym samym
+            # boot_id do konca terminu = awarii nie bylo i nie ma czego zaliczac.
+            print(f"  kill command returned after {time.time() - kill_ts:.1f}s")
             if kill_launch is not None and kill_launch.returncode != 0:
                 print(f"  async kill launch on {killed_host} returned rc={kill_launch.returncode} "
                       "— i tak sprawdzam, czy maszyna faktycznie zginela")
-            down = False
+            down = None
             down_deadline = time.time() + HARD_DOWN_TIMEOUT
             while time.time() < down_deadline:
                 try:
@@ -385,16 +413,20 @@ def main():
                 except subprocess.TimeoutExpired:
                     still_up = False  # brak odpowiedzi w terminie = maszyna nie odpowiada
                 if not still_up:
-                    down = True
+                    down = "unreachable"
+                    break
+                current = boot_id(killed_host)
+                if current and current != boot_before:
+                    down = "rebooted (boot_id changed)"
                     break
                 time.sleep(2)
             if not down:
                 failures.append(
                     f"hard-mode kill did not take effect: {killed_host} still reachable "
-                    f"{HARD_DOWN_TIMEOUT}s after the sysrq command — machine never went "
-                    "down, so no failover was exercised")
+                    f"with the same boot_id {HARD_DOWN_TIMEOUT}s after the sysrq command — "
+                    "machine never went down, so no failover was exercised")
             else:
-                print(f"  confirmed {killed_host} unreachable "
+                print(f"  confirmed {killed_host} {down} "
                       f"({time.time() - kill_ts:.1f}s after the kill command)")
 
         # Wait for the workload to resume committing AFTER the kill instant.

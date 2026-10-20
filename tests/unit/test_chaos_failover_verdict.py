@@ -154,6 +154,10 @@ def _make_sh(state):
             out = state["state_comment"]
         elif "test -w /proc/sysrq-trigger" in script:
             out = "yes"
+        elif "random/boot_id" in script:
+            boot = "22222222-2222-2222-2222-222222222222" if state["rebooted"] else \
+                "11111111-1111-1111-1111-111111111111"
+            out = f"BOOT_ID={boot}"
         result = _Completed(rc, out)
         if check and rc != 0:
             raise RuntimeError(f"ansible {node} failed: {out}")
@@ -232,6 +236,8 @@ class ChaosFailoverVerdictTests(unittest.TestCase):
             "state_comment": "Synced",
             "ping_stdout": "SUCCESS",          # ofiara odpowiada => nie zginela
             "kill_launch_rc": 0,
+            "reboot_on_kill": False,           # maszyna wraca, zanim ja zobaczymy martwa
+            "rebooted": False,
             "sh": [],
             "commands": [],
         }
@@ -243,6 +249,8 @@ class ChaosFailoverVerdictTests(unittest.TestCase):
                 return _Completed(0 if "SUCCESS" in out else 2, out)
             if "-B" in cmd:  # async sysrq launch
                 rc = state["kill_launch_rc"]
+                if rc == 0 and state["reboot_on_kill"]:
+                    state["rebooted"] = True
                 return _Completed(rc, "" if rc == 0 else "unsupported parameter")
             return _Completed(0, "")
 
@@ -322,6 +330,22 @@ class ChaosFailoverVerdictTests(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn("PASS: failover survived", out)
         self.assertIn("unreachable", out)
+
+    def test_hard_mode_fast_reboot_counts_as_machine_loss(self):
+        # Defekt 2026-10-20 (o17db3, Rocky 10): maszyna zrestartowala sie, zanim
+        # sonda zdazyla zobaczyc ja martwa — kazdy ping trafial w system po
+        # restarcie i przebieg oglaszal "never went down". Zmieniony boot_id
+        # dowodzi utraty maszyny tak samo jak brak odpowiedzi.
+        rc, out, state = self._run_probe(
+            mode="hard",
+            kill_launch_rc=0,
+            reboot_on_kill=True,
+            ping_stdout=f"{WORKLOAD_HOST} | SUCCESS => {{\"ping\": \"pong\"}}",
+        )
+
+        self.assertEqual(rc, 0, out)
+        self.assertIn("rebooted (boot_id changed)", out)
+        self.assertIn("PASS: failover survived", out)
 
     # --- Bramka 3: nieudany odczyt logu to nieudany POMIAR ---
 
