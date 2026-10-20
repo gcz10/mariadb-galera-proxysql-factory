@@ -241,6 +241,46 @@
     - name: "TLS: zastosuj przeładowanie przed audytem logowania"
       ansible.builtin.meta: flush_handlers
 
+    # Wiersz mysql_galera_hostgroups MUSI przetrwac restart i klastrowy sync pary.
+    # Zmierzone 2026-10-20 (lyrav19-r9, proxysql.log x17p1): INSERT + SAVE dzialaly,
+    # restart wczytal wiersz z dysku, a 2 s pozniej "Cluster: Writing
+    # mysql_galera_hostgroups table" nadpisal tabele wersja peera bez tego najemcy.
+    # `LOAD`/`SAVE` zwracaly rc=0, a `changed_when: true` pokazywalo sukces; objaw
+    # wyszedl dopiero w audycie logowania (app_user z default_hostgroup na pustej
+    # hostgroupie). Czytamy wiec DYSK i RUNTIME PO restarcie i sync-u; brak wiersza =
+    # pad z konkretna przyczyna, a ponowny przebieg play zbiega (sprawdzone na zywo).
+    - name: "Potwierdź, że wiersz galera_hostgroups najemcy przetrwał restart i sync pary"
+      ansible.builtin.command:
+        argv: "{{ proxysql_admin_cli }}"
+        stdin: |
+          SELECT
+            (SELECT COUNT(*) FROM mysql_galera_hostgroups
+              WHERE writer_hostgroup={{ galera_writer_hg }}
+                AND backup_writer_hostgroup={{ galera_backup_hg }}
+                AND reader_hostgroup={{ galera_reader_hg }}
+                AND offline_hostgroup={{ galera_offline_hg }}),
+            (SELECT COUNT(*) FROM runtime_mysql_galera_hostgroups
+              WHERE writer_hostgroup={{ galera_writer_hg }}
+                AND backup_writer_hostgroup={{ galera_backup_hg }}
+                AND reader_hostgroup={{ galera_reader_hg }}
+                AND offline_hostgroup={{ galera_offline_hg }});
+      register: galera_hg_readback
+      until: galera_hg_readback.rc == 0 and (galera_hg_readback.stdout | trim) == '1\t1'
+      retries: 12
+      delay: 5
+      changed_when: false
+      no_log: true
+
+    - name: "Fail-closed: hostgroupy najemcy zniknęły po restarcie/sync (dysk, runtime)"
+      ansible.builtin.assert:
+        that:
+          - (galera_hg_readback.stdout | trim) == '1\t1'
+        fail_msg: >-
+          {{ inventory_hostname }}: mysql_galera_hostgroups ({{ galera_writer_hg }}/{{ galera_backup_hg }}/{{ galera_reader_hg }}/{{ galera_offline_hg }})
+          po restarcie i sync-u pary: dysk/runtime = {{ galera_hg_readback.stdout | default('?') | trim }}
+          (oczekiwane 1 1). Peer ProxySQL najpewniej nadpisal tabele wersja bez tego najemcy;
+          uruchom ponownie play, aby zbiegl na obu instancjach.
+
     - name: "Sprawdź aktualnego app_user w ProxySQL"
       ansible.builtin.command:
         argv: "{{ proxysql_admin_cli }}"
