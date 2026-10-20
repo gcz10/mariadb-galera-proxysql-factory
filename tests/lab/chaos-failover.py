@@ -31,11 +31,13 @@ APP_PW = os.environ.get("APP_DB_PASSWORD", "")
 # Zmierzone na newclaude8-r9 tym samym workloadem (3 przebiegi kazdy):
 #   soft: przerwa 6.0-6.2 s
 #   hard: przerwa 0.0-0.1 s
-# Twarda utrata maszyny okazala sie MNIEJ odczuwalna dla klienta niz zabicie
-# procesu — mechanizmu nie zweryfikowano, wiec nie ma tu teorii, tylko pomiar.
-# Sens tego trybu to inna sciezka awarii, nie dluzsza przerwa: dowodzi zerowej
-# utraty transakcji przy zniknieciu maszyny i przechodzi przez powrot wezla po
-# crashu, czego `soft` nie dotyka.
+# Na biezacej flocie (2026-10-20, 12.3.3, obaj najemcy) obraz jest inny:
+#   soft: 6.0 s (cassiopeiav18-r9), 6.5 s (orionv17-r10)
+#   hard: 11.4-14.9 s w 8 z 9 przebiegow, raz 1.4 s (orionv17-r10)
+# Mechanizmu zadnej z tych liczb nie weryfikowano, wiec nie ma tu teorii,
+# tylko pomiar. Sens trybu `hard` to inna sciezka awarii, nie dluzsza
+# przerwa: dowodzi zerowej utraty transakcji przy zniknieciu maszyny i
+# przechodzi przez powrot wezla po crashu, czego `soft` nie dotyka.
 FAILOVER_MODE = os.environ.get("FAILOVER_MODE", "soft").lower()
 # Karencja po wyciszeniu klastra, zanim brak wiersza uznamy za UTRATE:
 # liczniki wsrep opisuja replikacje, nie moment zejscia ostatniego
