@@ -452,6 +452,8 @@
   any_errors_fatal: true
   vars:
     target_ip: "{{ hostvars[target_node].galera_node_address }}"
+    upgrade_undrain_retries: 12
+    upgrade_undrain_delay: 5
     proxysql_admin_cli:
       - mariadb
       - --defaults-extra-file=/etc/proxysql/admin-check.cnf
@@ -505,27 +507,42 @@
       changed_when: upgrade_undrain_cfg_read[1] | int > 0
       no_log: true
 
-    - name: "Dowód w runtime: wszystkie wpisy węzła z powrotem ONLINE"
+    # ZMIENIONE 2026-10-20: dowód wymagał ONLINE na KAŻDYM wpisie, a monitor
+    # Galery ProxySQL po `LOAD ... TO RUNTIME` przepisuje wpis non-writera w
+    # hostgroupie writera na SHUNNED — to stan ustalony (max_writers=1), nie
+    # awaria. Jednorazowy odczyt przegrywał wyścig z monitorem: c18db2 wrócił
+    # do rotacji (backup writer ONLINE), a playbook ogłosił porażkę i przerwał
+    # rolling przed weryfikacją. Węzeł jest w rotacji, gdy ŻADEN wpis nie jest
+    # OFFLINE_SOFT/OFFLINE_HARD i co najmniej jeden jest ONLINE; odczyt
+    # ponawiany jak przy drainie, nadal fail-closed.
+    - name: "Dowód w runtime: węzeł wrócił do rotacji (bez OFFLINE, co najmniej jeden ONLINE)"
       ansible.builtin.command:
         argv: "{{ proxysql_admin_cli }}"
-        stdin: "SELECT COUNT(*), COALESCE(SUM(status<>'ONLINE'),0) FROM runtime_mysql_servers WHERE hostname='{{ target_ip }}'"
+        stdin: >-
+          SELECT COUNT(*),
+          COALESCE(SUM(status IN ('OFFLINE_SOFT','OFFLINE_HARD')),0),
+          COALESCE(SUM(status='ONLINE'),0)
+          FROM runtime_mysql_servers WHERE hostname='{{ target_ip }}'
       register: upgrade_undrain_rt
       changed_when: false
+      until: >-
+        upgrade_undrain_rt.rc == 0 and
+        (upgrade_undrain_rt.stdout | trim) is match('^[1-9][0-9]*\t0\t[1-9][0-9]*$')
+      retries: "{{ upgrade_undrain_retries }}"
+      delay: "{{ upgrade_undrain_delay }}"
+      failed_when: false
 
-    - name: "Rozłóż odczyt runtime na liczby"
-      ansible.builtin.set_fact:
-        upgrade_undrain_rt_read: "{{ upgrade_undrain_rt.stdout | trim | split('\t') | map('int') | list }}"
-
-    - name: "Fail-closed: runtime musi pokazywać ONLINE dla wszystkich wpisów"
+    - name: "Fail-closed: runtime musi pokazać węzeł w rotacji"
       ansible.builtin.assert:
         that:
-          - upgrade_undrain_rt_read[0] | int >= 1
-          - upgrade_undrain_rt_read[1] | int == 0
+          - upgrade_undrain_rt.rc == 0
+          - (upgrade_undrain_rt.stdout | trim) is match('^[1-9][0-9]*\t0\t[1-9][0-9]*$')
         fail_msg: >-
-          {{ inventory_hostname }}: runtime ProxySQL nie pokazuje ONLINE dla
-          {{ target_ip }} (wpisy={{ upgrade_undrain_rt_read[0] }},
-          pozostające offline={{ upgrade_undrain_rt_read[1] }}). Węzeł nie wróci
-          do rotacji — sprawdź monitor galera i konfigurację hostgroup.
+          {{ inventory_hostname }}: runtime ProxySQL nie pokazuje {{ target_ip }} w rotacji
+          (wpisy, OFFLINE, ONLINE = {{ upgrade_undrain_rt.stdout | default('') | trim }};
+          rc={{ upgrade_undrain_rt.rc | default('?') }}). SHUNNED w hostgroupie writera
+          u non-writera jest normalny; tu brakuje ONLINE albo został OFFLINE —
+          sprawdź monitor galera i konfigurację hostgroup.
 
 
 # === Play 4: Weryfikacja po upgrade na wskazanym węźle ===

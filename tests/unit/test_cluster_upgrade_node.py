@@ -98,6 +98,20 @@ def main():
                     "INSERT INTO runtime_mysql_servers "
                     "SELECT hostgroup_id, hostname, port, status FROM mysql_servers"
                 )
+                # Monitor Galery tuż po LOAD: non-writer w hostgroupie writera
+                # dostaje SHUNNED (stan ustalony przy max_writers=1), albo
+                # węzeł zostaje OFFLINE (realna porażka powrotu do rotacji).
+                shun = os.environ.get("FAKE_SHUN_HOST", "")
+                if fault == "monitor_shun" and shun:
+                    conn.execute(
+                        "UPDATE runtime_mysql_servers SET status='SHUNNED' "
+                        "WHERE hostgroup_id=10 AND hostname=?", (shun,)
+                    )
+                if fault == "stuck_offline" and shun:
+                    conn.execute(
+                        "UPDATE runtime_mysql_servers SET status='OFFLINE_SOFT' "
+                        "WHERE hostname=?", (shun,)
+                    )
                 conn.commit()
                 continue
             if "STATS_MYSQL_CONNECTION_POOL" in upper:
@@ -207,6 +221,10 @@ def build_fixture(base):
     guard = play_named(source, "strażnik ścieżki")
     drain = play_named(source, "drain węzła")
     upgrade = play_named(source, "upgrade pakietów")
+    undrain = play_named(source, "undrain węzła")
+    undrain["environment"] = {"FAKE_MARIADB_HOST": "{{ inventory_hostname }}"}
+    undrain_site = play_dir / "smoke_undrain.yml"
+    undrain_site.write_text(yaml.safe_dump([undrain], sort_keys=False), encoding="utf-8")
 
     read_start = next(
         i for i, task in enumerate(guard["tasks"]) if "ansible.builtin.package_facts" in task
@@ -249,6 +267,7 @@ def build_fixture(base):
         "cfg": cfg,
         "inventory": inventory,
         "site": site,
+        "undrain_site": undrain_site,
         "marker": marker,
         "repo_file": repo_file,
         "state": base / "proxysql.sqlite3",
@@ -611,6 +630,61 @@ class DrainGateSmokeTests(unittest.TestCase):
             repo_version="11.4",
         )
         self.assert_blocked_before_drain(proc)
+
+
+@unittest.skipIf(ANSIBLE_PLAYBOOK is None, "ansible-playbook niedostępny w PATH")
+class UndrainGateSmokeTests(unittest.TestCase):
+    """Play undrain na atrapie ProxySQL z monitorem Galery przepisującym runtime.
+
+    Defekt 2026-10-20 (cassiopeiav18-r9, c18db2): dowód wymagał ONLINE na każdym
+    wpisie, a monitor stawia non-writera w hostgroupie writera jako SHUNNED.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="undrain-smoke-")
+        cls.addClassCleanup(cls._tmp.cleanup)
+        cls.fx = build_fixture(Path(cls._tmp.name))
+
+    def run_undrain(self, fault):
+        fx = self.fx
+        for host in ("px1", "px2"):
+            seed_state(Path(str(fx["state"]) + "." + host), "OFFLINE_SOFT")
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": str(fx["bin"]) + os.pathsep + env.get("PATH", ""),
+                "FAKE_MARIADB_STATE": str(fx["state"]),
+                "FAKE_MARIADB_FAULT": fault,
+                "FAKE_SHUN_HOST": TARGET_IP,
+                "ANSIBLE_CONFIG": str(fx["cfg"]),
+            }
+        )
+        return subprocess.run(
+            [ANSIBLE_PLAYBOOK, "-i", str(fx["inventory"]), str(fx["undrain_site"]),
+             "-e", "target_node=" + TARGET_NODE,
+             "-e", "upgrade_undrain_retries=2", "-e", "upgrade_undrain_delay=1"],
+            capture_output=True, text=True, env=env,
+            cwd=str(fx["base"] / "playbooks"), timeout=240,
+        )
+
+    def runtime_status(self, host):
+        with sqlite3.connect(str(self.fx["state"]) + "." + host) as db:
+            return db.execute(
+                "SELECT hostgroup_id, status FROM runtime_mysql_servers WHERE hostname=? ORDER BY 1",
+                (TARGET_IP,),
+            ).fetchall()
+
+    def test_shunned_in_writer_hostgroup_counts_as_back_in_rotation(self):
+        proc = self.run_undrain("monitor_shun")
+        self.assertEqual(proc.returncode, 0, tail(proc.stdout + proc.stderr))
+        for host in ("px1", "px2"):
+            self.assertEqual(self.runtime_status(host), [(10, "SHUNNED"), (20, "ONLINE")])
+
+    def test_node_left_offline_fails_closed(self):
+        proc = self.run_undrain("stuck_offline")
+        self.assertNotEqual(proc.returncode, 0, tail(proc.stdout))
+        self.assertIn("nie pokazuje " + TARGET_IP + " w rotacji", proc.stdout)
 
 
 if __name__ == "__main__":
