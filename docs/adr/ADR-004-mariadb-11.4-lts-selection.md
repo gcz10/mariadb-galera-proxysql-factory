@@ -1,7 +1,7 @@
 # ADR-004: MariaDB 11.4.12 LTS — wybór wersji
 
 **Data:** 2026-07-22
-**Status:** Accepted (do potwierdzenia w F0 — co jest na hostach)
+**Status:** Superseded przez [ADR-005](ADR-005-mariadb-12.3-lts-baseline.md) (2026-10-20). Powód odrzucenia 12.3 poniżej („mniejsza dojrzałość") przestał obowiązywać: 12.3.3 przeszła na flocie pełny zestaw testów awarii, odtworzenia i TLS.
 **Decydent:** F1 research (oficjalne źródła)
 
 ## Kontekst

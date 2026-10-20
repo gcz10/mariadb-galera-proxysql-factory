@@ -28,13 +28,13 @@ versions:
   # `locked` bierze dokladnie wersje z lockfile'a; `candidate` dopuszcza
   # nowsze przy odbudowie. Dla czegokolwiek powaznego: `locked`.
   policy: "locked"
-  lock_file: "versions/versions-el10.lock.yml"
+  lock_file: "versions/versions-el10-123.lock.yml"
 
 proxysql:
   nodes_expected: 2
   # Wersja przedstawiana klientom w handshake'u: najstarsza MariaDB wsrod
   # najemcow tego endpointu, w formacie zwracanym przez sam serwer.
-  server_version: "11.4.13-MariaDB"
+  server_version: "12.3.3-MariaDB"
   # Tozsamosc TLS WSPOLNEGO endpointu. Jedna para serwuje cala flote jednym
   # certem, wiec CA jest wspolne, nie klastrowe: podpisanie go CA najemcy
   # zmusiloby klientow pozostalych do zaufania cudzemu CA, a usuniecie tego

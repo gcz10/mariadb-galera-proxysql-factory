@@ -15,7 +15,9 @@ platform:
 
 versions:
   policy: "candidate"
-  lock_file: "versions/versions.lock.yml"
+  # Seria bazowa MariaDB 12.3 (docs/adr/ADR-005-mariadb-12.3-lts-baseline.md);
+  # Rocky 10: versions/versions-el10-123.lock.yml.
+  lock_file: "versions/versions-el9-123.lock.yml"
 
 galera:
   cluster_name: "example_galera"

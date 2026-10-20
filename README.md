@@ -149,8 +149,10 @@ budowy.
   `pmm`, `minio` i `maildev`. Pusta lista jest legalna, gdy monitoring stoi poza
   fabryką. POMINIĘCIE bloku to co innego niż pusta lista: znaczy „pełny zestaw",
   więc dostaniesz też MinIO, nawet jeśli magazyn kopii masz gdzie indziej;
-- `versions.policy` i `versions.lock_file` — `versions/versions.lock.yml` dla
-  Rocky 9, `versions/versions-el10.lock.yml` dla Rocky 10;
+- `versions.policy` i `versions.lock_file` — seria bazowa MariaDB 12.3
+  ([ADR-005](docs/adr/ADR-005-mariadb-12.3-lts-baseline.md)):
+  `versions/versions-el9-123.lock.yml` dla Rocky 9,
+  `versions/versions-el10-123.lock.yml` dla Rocky 10;
 - `proxysql.endpoint.address` — VIP, który **nie jest adresem żadnej maszyny**
   z `inventory.yml`, oraz `.port`;
 - `proxysql.frontend_tls.{ca,certificate,private_key}_reference` — materiał

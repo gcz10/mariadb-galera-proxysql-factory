@@ -1,23 +1,18 @@
 ---
-# versions-el9-118.lock.yml — historyczny lockfile klastrów EL9 na MariaDB 11.8.
-# Ostatni użytkownik: zarchiwizowane definicje orionv12-r9 i cassiopeiav11-r9
-# (docs/records/archives/). Żaden żywy klaster go nie używa — żywe staki EL9
-# są na serii 11.4 (versions.lock.yml), a Rocky 10 na versions-el10.lock.yml.
+# versions-el9-123.lock.yml — lockfile Rocky Linux 9 dla MariaDB 12.3 LTS,
+# serii bazowej wg docs/adr/ADR-005-mariadb-12.3-lts-baseline.md.
+# Użytkownicy: warstwa wspólna `platform/xenonv17` (klient na hoście
+# aplikacyjnym) oraz każdy nowy najemca na Rocky 9.
 #
-# Powstaje z versions.lock.yml przez zmianę WYŁĄCZNIE bloku mariadb (11.4.12 → 12.3.3);
-# pozostałe bloki identyczne (piny platformowe EL9 bez zmian).
+# Powstaje z versions.lock.yml przez zmianę WYŁĄCZNIE bloku mariadb
+# (11.4.13 → 12.3.3); pozostałe bloki co do wartości identyczne (piny EL9).
+# Od 11.4 nie ma tu regresji wsparcia: EOL 12.3 = 2029-06-12, 11.4 = 2029-05-29.
 #
-# Powód istnienia: klastry wymagają dokładnie serii 11.8. Per-cluster `lock_file`
-# pozwala mieszać serie między klastrami bez mieszania ich w jednym klastrze.
-# Linia decyzyjna: docs/records/2026-08-29-mariadb-118-upgrade-orionv11.md
-# (pierwotny ADR: docs/records/2026-08-29-mariadb-118-upgrade-orion.md) oraz
-# docs/records/2026-08-29-mariadb-118-upgrade-cassiopeia.md.
-# Świadoma regresja okna wsparcia: EOL 11.8 = 2029-06 vs 11.4 = 2029-05 —
-# strażnik ISC-55 wymaga -e f12_allow_eol_regression=true.
-#
-# Weryfikacja 2026-08-29 (dnf probe na o12db1, enablerepo=mariadb-server/11.8/rhel9):
-# MariaDB-server/client/backup 12.3.3-1.el9 oraz galera-4 26.4.27-1.el9
-# (to samo wydanie galery co klaster 11.4 → wsrep API 26 → rolling zgodny).
+# Repodata `dlm.mariadb.com/repo/mariadb-server/12.3.3/yum/rhel/9/x86_64`
+# odczytane 2026-10-20: MariaDB-server, MariaDB-server-galera, MariaDB-client,
+# MariaDB-backup 12.3.3-1.el9 oraz galera-4 26.4.27-1.el9 (to samo wydanie
+# providera co w serii 11.4 i 11.8 → wsrep API 26 → rolling zgodny).
+# Na hoście: `x17app` ma MariaDB-client-12.3.3-1.el9 (2026-10-20).
 
 rocky_linux:
   major: 9
@@ -30,7 +25,7 @@ mariadb:
   series: "12.3"
   type: "LTS"
   eol: "2029-06"
-  rpm_release: "1.el9"           # zweryfikowane w dnf probe: MariaDB-server-12.3.3-1.el9
+  rpm_release: "1.el9"           # zweryfikowane w repodata 2026-10-20: MariaDB-server-12.3.3-1.el9
   repo_setup_script: "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup"
   repo_setup_args: "--mariadb-server-version=mariadb-12.3.3"
   repo_setup_sha256: "b54c87edfe81b9837ef44a4a4f39383dd8df32776e6a18c0743a5d3ece044ac3"
@@ -140,10 +135,6 @@ pmm_client:
   source: "https://docs.percona.com/percona-monitoring-and-management/3/install-pmm/install-pmm-client/package_manager.html"
 
 # Status: LOCKED — wskazywany przez definicje z `versions.policy: locked`
-# (cassiopeiav12-r9). Stopka nie jest ozdobą: validate-lockfile.py wybiera
+# (platform/xenonv17). Stopka nie jest ozdobą: validate-lockfile.py wybiera
 # po niej rygor (bramka placeholderów ISC-63, komplet kluczy REQUIRED,
-# format sum, wymóg `source`). Bez niej plik przechodził ścieżką łagodną
-# mimo że jest w użyciu — dopisane 2026-09-04 po pomiarze, który wykazał
-# brak stopki w obu lockfile'ach serii 11.8. Sam plik był kompletny
-# (0 brakujących kluczy, 0 placeholderów), więc to domknięcie kontroli,
-# nie naprawa treści.
+# format sum, wymóg `source`).

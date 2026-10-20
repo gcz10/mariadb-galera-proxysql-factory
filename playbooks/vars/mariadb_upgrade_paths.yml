@@ -1,0 +1,27 @@
+---
+# Jedyne źródło prawdy o seriach MariaDB dla major upgrade'u: seria bazowa,
+# kolejność LTS i daty końca wsparcia. Czytają je `f12_upgrade_plan.yml`
+# (plan) i `cluster_upgrade_node.yml` (wykonanie na węźle).
+#
+# Seria bazowa — docs/adr/ADR-005-mariadb-12.3-lts-baseline.md. To domyślny
+# cel planu upgrade'u; nowe deklaracje wskazują lockfile tej serii.
+mariadb_baseline_series: "12.3"
+
+# Następny LTS dla każdej serii. Rolling upgrade Galery (bez zatrzymania
+# klastra) idzie WYŁĄCZNIE po tych krawędziach: "You must upgrade one
+# major/LTS version at a time. (...) skipping versions during a rolling
+# upgrade is not supported" — mariadb.com/docs, General Upgrade Information
+# (odczyt 2026-10-20). Seria bez wpisu nie ma znanego następnika.
+mariadb_lts_next:
+  "10.11": "11.4"
+  "11.4": "11.8"
+  "11.8": "12.3"
+
+# Koniec wsparcia serii LTS — endoflife.date/api/mariadb.json (odczyt
+# 2026-10-20). 11.8 kończy się WCZEŚNIEJ niż 11.4: jako cel końcowy skraca
+# wsparcie, jako przystanek w drodze do 12.3 — nie.
+mariadb_lts_eol:
+  "10.11": "2028-02-16"
+  "11.4": "2029-05-29"
+  "11.8": "2028-06-04"
+  "12.3": "2029-06-12"

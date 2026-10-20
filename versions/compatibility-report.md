@@ -4,6 +4,11 @@
 **Sources:** mariadb.org, endoflife.date, proxysql.com, rockylinux.org, docs.ansible.com, github.com/ansible-collections/ansible.mysql, Percona PMM release notes, Prometheus node_exporter releases
 **Status:** Read-only research (BLK-4 rozstrzygnięty: internet dostępny). Host-dependent fakty pozostają na F0.
 
+> **Zastąpione w części MariaDB (2026-10-20):** rekomendacja 11.4 i teza o krótszym
+> oknie wsparcia 12.3 nie obowiązują. Wersja bazowa to 12.3 LTS (EOL 2029-06-12) —
+> [ADR-005](../docs/adr/ADR-005-mariadb-12.3-lts-baseline.md). Reszta raportu jest
+> historycznym zapisem badania F1.
+
 ## 1. Rocky Linux 9
 
 | Wartość | Wartość | Źródło |

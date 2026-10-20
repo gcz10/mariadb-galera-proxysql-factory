@@ -103,7 +103,7 @@ def main() -> int:
     # "SSL/TLS is now enabled in the server by default, with self-signed
     # certificates automatically generated if no server certificate is provided.
     # Clients now require SSL and have server certificate verification enabled
-    # by default". Nasz lockfile przypina wlasnie 11.4, wiec DOMYSLNIE
+    # by default". Flota pinuje serie od 11.4 wzwyz (baza: 12.3), wiec DOMYSLNIE
     # skonfigurowany klient odbija sie tu z "Certificate verification failure";
     # polaczenie wymaga jawnego --ssl-verify-server-cert=0. Zmierzone:
     # mariadb-slap przez VIP odmawia, ten sam klient z wylaczona weryfikacja laczy sie.

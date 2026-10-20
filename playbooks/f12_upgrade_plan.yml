@@ -71,26 +71,21 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  vars_files:
+    - vars/mariadb_upgrade_paths.yml
   vars:
     ansible_become: false
     f12_current_raw: "{{ hostvars[groups['galera'][0]].f12_mariadb_version.stdout | default('unknown') }}"
     # Normalizuj "11.4.12-MariaDB" → "11.4.12" dla porównania wersji
     f12_current_version: "{{ f12_current_raw | regex_replace('(-.*)?$', '') }}"
     f12_current_major_minor: "{{ f12_current_version | regex_replace('^(\\d+\\.\\d+)\\..*$', '\\1') }}"
-    # Cel upgrade jest KONFIGUROWALNY (-e f12_target_version=...). Domyślnie 12.3 LTS,
-    # bo to jedyny LTS z EOL późniejszym niż obecna 11.4 (2029-06-30 vs 2029-05-29).
+    # Cel upgrade jest KONFIGUROWALNY (-e f12_target=<seria>). Domyślnie seria
+    # bazowa z ADR-005 (`mariadb_baseline_series`, vars/mariadb_upgrade_paths.yml).
     # Cel NIE moze pochodzic z versions.lock.yml — lockfile przypina wersje OBECNA,
     # a nie miejsce docelowe upgrade'u. Mapa EOL dotyczy serii PRZYSZLYCH, ktorych
     # w lockfile z tego samego powodu nie ma.
-    # EOL wg endoflife.date/api/mariadb.json (zweryfikowane 2026-07-25):
-    #   11.4 -> 2029-05-29 | 11.8 -> 2028-06-04 | 12.3 -> 2029-06-30
-    # UWAGA: 11.8 ma EOL WCZEŚNIEJSZY niż 11.4 — upgrade 11.4->11.8 SKRACA wsparcie o ~12 mies.
-    f12_target_version: "{{ f12_target | default('12.3') }}"
-    f12_eol_map:
-      "10.11": "2028-02-16"
-      "11.4": "2029-05-29"
-      "11.8": "2028-06-04"
-      "12.3": "2029-06-30"
+    f12_target_version: "{{ f12_target | default(mariadb_baseline_series) }}"
+    f12_eol_map: "{{ mariadb_lts_eol }}"
     f12_target_lts_eol: "{{ f12_eol_map[f12_target_version] | default('nieznany') }}"
     # EOL wersji OBECNEJ bierzemy z lockfile — to jedyne zrodlo prawdy dla tego,
     # co faktycznie stoi na wezlach. Mapa sluzy jako zapas dla serii, ktorej

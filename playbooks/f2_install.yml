@@ -1,7 +1,8 @@
 ---
 # F2: Repozytoria + instalacja pakietow z lockfile — wylacznie wezly klastra
 # Satisfies: ISC-3 (wersje zgodne z lockfile), ISC-63 (no state:latest)
-# Instaluje: MariaDB 11.4 + galera-4 + mariadb-backup (galera/restore).
+# Instaluje: MariaDB + galera-4 + mariadb-backup w wersjach z lockfile klastra
+# (galera/restore); od 12.3 takze MariaDB-server-galera.
 # Sciezka ProxySQL (RPM + GPG + drop-in) mieszkala tutaj jako prerogatywa
 # klastra-"ownera" pary — od wydzielenia warstwy wspolnej instaluje ja
 # wylacznie platform_install.yml z lockfile platformy.
