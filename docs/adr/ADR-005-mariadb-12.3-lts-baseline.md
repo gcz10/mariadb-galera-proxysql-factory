@@ -92,8 +92,12 @@ Serwer 12.3 na Rocky 9 nie był jeszcze wdrożony. Repodata
 `dlm.mariadb.com/repo/mariadb-server/12.3.3/yum/rhel/9/x86_64` odczytane
 2026-10-20 zawiera `MariaDB-server`, `MariaDB-server-galera`,
 `MariaDB-backup` i `MariaDB-client` 12.3.3-1.el9 oraz `galera-4`
-26.4.27-1.el9. Dowodem wdrożenia jest upgrade `cassiopeiav18-r9` zapisany
-w ISA.md.
+26.4.27-1.el9.
+
+**Zamknięte tego samego dnia:** `cassiopeiav18-r9` (Rocky 9) przeszła
+rolling 11.4.13 → 11.8.9 → 12.3.3 bez utraty transakcji i z odtworzeniem
+kopii 12.3.3 na hoście restore; pełny zapis w ISA.md (Verification,
+2026-10-20).
 
 ## Odrzucone warianty
 

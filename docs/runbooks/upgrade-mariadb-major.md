@@ -1,4 +1,4 @@
-# Runbook: major upgrade MariaDB/Galera (wykonane: 11.4.12 → 11.8.9 orionv10-r10 2026-08-29; 11.4.13 → 11.8.9 → 12.3.3 orionv16-r10 2026-09-10)
+# Runbook: major upgrade MariaDB/Galera (wykonane: 11.4.12 → 11.8.9 orionv10-r10 2026-08-29; 11.4.13 → 11.8.9 → 12.3.3 orionv16-r10 2026-09-10 i cassiopeiav18-r9, Rocky 9, 2026-10-20)
 
 Procedura wypracowana i wykonana na żywych klastrach. Plan liczy
 `make cluster-upgrade-plan` (read-only, ISC-53), a pojedynczy węzeł upgraduje
@@ -173,14 +173,16 @@ NIE ma `active_writer` (writer = wiersz ONLINE w writer_hg przy
 `max_writers=1`). **Wydzielaj kwerendy** — błąd w drugiej kwerendzie zawali
 cały wywołanie ansible (rc≠0), mimo że pierwsza (UPDATE) zrobiła już swoje.
 
-### 5d. Węzeł restore (`<klaster>r1`) — po całym rollingu
+### 5d. Po ostatnim węźle etapu: runner kopii i węzeł restore
 
-`mariabackup` **starszy niż server nie odtworzy nowego backupu**. Podbij
-tooling na węźle restore (ten sam swap repo, tylko pakiety klienta/backupu):
-
-```bash
-ansible <klaster>r1 -i clusters/<klaster>/inventory.yml -b -m shell -a "sed -i 's#/repo/mariadb-server/<stara>/#/repo/mariadb-server/<nowa>/#' /etc/yum.repos.d/mariadb.repo; dnf -q makecache --disablerepo='*' --enablerepo='mariadb-main' >/dev/null; dnf -q install -y MariaDB-backup-<wer>-1.el10 MariaDB-client-<wer>-1.el10; rpm -q MariaDB-backup"
-```
+1. `make cluster-backup-configure CLUSTER=<klaster>` — runner kopii zapisuje w
+   metadanych wersję z wdrożonej konfiguracji (lockfile z chwili configure), nie
+   z serwera. Zmierzone 2026-10-20 na `cassiopeiav18-r9`: pierwsza kopia po
+   upgrade do 12.3.3 deklarowała `11.4.13`, a restore porównuje właśnie tę wartość.
+2. `make cluster-restore-drill CLUSTER=<klaster> CONFIRM=yes` —
+   `f10_restore.yml` wymienia `MariaDB-backup`/serwer na hoście restore na wersję
+   z lockfile'a (starszy `mariabackup` nie odtworzy nowszej kopii) i od razu
+   dowodzi odtworzenia.
 
 ## 6. Weryfikacja po upgrade
 
@@ -191,11 +193,14 @@ ansible galera -i clusters/<klaster>/inventory.yml -b -m shell -a "mysql -N -B -
 # Integralność tabel użytkownika (lista oddzielona PRZECINKAMI — nowa linia daje syntax error):
 T=$(mysql -N -B -e "SELECT CONCAT(table_schema,'.',table_name) FROM information_schema.tables WHERE table_schema IN (<twoje_schematy>)" | tr '\n' ',' | sed 's/,$//'); mysql -e "CHECK TABLE $T"
 
-# Backup po upgrade (dowód, że pipeline działa na nowej wersji):
-ansible <db1> … "/opt/galera-backup/galera-backup backup <klaster>"
+# Backup po upgrade (dowód, że pipeline działa na nowej wersji; po 5d.1):
+make cluster-backup CLUSTER=<klaster>
 
 # Restore drill (ISC-36 — backup odtwarzany na czysty węzeł restore):
 make cluster-restore-drill CLUSTER=<klaster> CONFIRM=yes
+
+# Converge musi dać changed=0 (upgrade nie zostawia dryfu):
+make lab-post-build-gate CLUSTER=<klaster>
 
 # Topologia ProxySQL po wyrównaniu — identyczna ze sprzed upgrade
 # (writer ONLINE w writer_hg, pozostali w backup_hg; active=1, max_writers=1).
@@ -232,15 +237,15 @@ niepotwierdzony".
 ## 9. Checklist skrócony
 
 ```
-[ ] repo serii docelowej istnieje dla EL10 (dnf probe), galera-4 zgodna
-[ ] lockfile nowy + cluster.yml przełączone + walidatory PASS
-[ ] ADR/record z uzasadnieniem (+ f12_allow_eol_regression jeśli EOL krótszy)
-[ ] plan wygenerowany (changed=0 na hostach)
+[ ] repo serii docelowej istnieje (repodata albo dnf probe), galera-4 zgodna
+[ ] plan wygenerowany (changed=0 na hostach) — lista etapów po jednym LTS
 [ ] backup przed — ID zapisany
+[ ] na każdy etap: cluster.yml → lockfile etapu, walidatory PASS
 [ ] rolling: canary → non-writers → writer; brama Synced po każdym
-[ ] o10r1: MariaDB-backup/client podbite do wersji docelowej
+[ ] po etapie: cluster-backup-configure; host restore podbity drillem
 [ ] VERSION() = cel na 3/3; CHECK TABLE OK; topologia ProxySQL jak przed
-[ ] backup po + restore drill PASS
+[ ] proxysql.server_version = najstarszy najemca (make platform-proxysql)
+[ ] backup po + restore drill PASS; idempotencja converge changed=0
 [ ] lab-app-verify (APP_DB_PASSWORD) — zalecane
-[ ] commit: lockfile + cluster.yml + ADR + plan
+[ ] commit: cluster.yml + platform.yml + zapis w ISA.md
 ```

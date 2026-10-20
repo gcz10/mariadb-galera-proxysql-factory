@@ -230,6 +230,9 @@
           - Zmiany przy wejściu na {{ dst }}: {{ mariadb_series_notes[dst] }}
           {% endif %}
           - Etap kończy się, gdy WSZYSTKIE węzły raportują {{ dst }}; następny etap dopiero wtedy.
+          - Po ostatnim węźle etapu: `make cluster-backup-configure CLUSTER=<klaster>` — runner kopii
+            zapisuje w metadanych wersję z wdrożonej konfiguracji, nie z serwera; bez tego kopie
+            nowej serii deklarują starą wersję, a restore porównuje właśnie ją.
           - Host odtwarzania: `make cluster-restore-drill` wymienia `MariaDB-backup` na serię etapu.
           {% endfor %}
 

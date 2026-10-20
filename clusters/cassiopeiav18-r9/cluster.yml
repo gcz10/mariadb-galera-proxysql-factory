@@ -5,7 +5,7 @@ platform:
   rocky_linux_major: 9
 versions:
   policy: locked
-  lock_file: versions/versions.lock.yml
+  lock_file: versions/versions-el9-123.lock.yml
 galera:
   cluster_name: cassiopeiav18_galera
   nodes_expected: 3
