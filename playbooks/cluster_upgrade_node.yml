@@ -408,6 +408,11 @@
       changed_when: false
       when: (old_mariadb_version | split('.'))[0] != (lock.mariadb.version | split('.'))[0]
 
+    # Nowy pakiet = nowe źródło polityki SELinux; bez przebudowy węzeł startuje
+    # na module starszej serii (zmierzone 2026-10-20, cassiopeiav18-r9).
+    - name: "SELinux - polityka MariaDB Galera z nowego pakietu"
+      ansible.builtin.include_tasks: tasks/mariadb_selinux_policy.yml
+
     - name: "Start MariaDB"
       ansible.builtin.systemd:
         name: mariadb
