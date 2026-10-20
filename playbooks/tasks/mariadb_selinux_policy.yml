@@ -1,11 +1,12 @@
 ---
 # Polityka SELinux MariaDB Galera z ZAINSTALOWANEGO pakietu + etykieta demona.
 # Wspólna dla instalacji (f2_install.yml) i major upgrade'u węzła
-# (cluster_upgrade_node.yml): nowy pakiet niesie nowe źródło polityki, a
-# moduł aktywny zostaje stary, dopóki ktoś go nie przebuduje. Zmierzone
-# 2026-10-20 na cassiopeiav18-r9: po upgrade 11.4.13 -> 12.3.3 pierwszy
-# converge ładował moduł na 3/3 węzłach — węzły pracowały na polityce
-# starszego pakietu.
+# (cluster_upgrade_node.yml): moduł jest kompilowany ze źródła, które przynosi
+# pakiet, więc wymiana pakietu przy upgrade'ie może je zmienić, a moduł
+# aktywny zostałby stary do najbliższego converge. Dla 11.4.13 -> 12.3.3 nie
+# zmieniło (2026-10-20, cassiopeiav18-r9: w dzienniku 3/3 węzłów brak
+# `semodule -i` także po pierwszym converge); kontrola sum zostaje jednak na
+# węźle, przed jego startem, a nie dopiero w osobnym przebiegu.
 #
 # Oficjalny pakiet MariaDB dostarcza źródło polityki Galera, ale nie ładuje
 # skompilowanego modułu. Bez niego SST mariabackup jest blokowany m.in. na setpgid.
