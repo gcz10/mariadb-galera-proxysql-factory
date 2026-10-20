@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -296,7 +297,10 @@ def elect_backup_donor(
     return preferred if preferred in healthy else healthy[0]
 
 
-def perform_physical_backup(work_dir: Path, datadir: Path, socket: Path, runner: CommandRunner) -> tuple[str, str]:
+def perform_physical_backup(
+    work_dir: Path, datadir: Path, socket: Path, runner: CommandRunner
+) -> tuple[str, str, str]:
+    """Kopia fizyczna; zwraca (wsrep_uuid, wsrep_seqno, server_version)."""
     raw_dir = work_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
@@ -330,7 +334,23 @@ def perform_physical_backup(work_dir: Path, datadir: Path, socket: Path, runner:
         raise BackupError("E_GALERA", f"Malformed mariadb_backup_galera_info content: '{info_content}'")
 
     wsrep_uuid, wsrep_seqno = parts[0], parts[1]
-    return wsrep_uuid, wsrep_seqno
+
+    # 4. Wersja serwera, ktory WYPRODUKOWAL te pliki — z raportu samego
+    # mariadb-backup, nie z konfiguracji runnera. Konfiguracja jest renderowana
+    # przy configure, wiec po major upgrade wezla deklarowala stara wersje:
+    # zmierzone 2026-10-20 na cassiopeiav18-r9, kopia z 12.3.3 z metadanymi
+    # 11.4.13, a restore porownuje wlasnie te wartosc z wersja hosta restore.
+    backup_info = raw_dir / "mariadb_backup_info"
+    if not backup_info.exists():
+        raise BackupError("E_GALERA", f"mariadb_backup_info file missing at '{backup_info}' after backup")
+    version_match = re.search(
+        r"^server_version\s*=\s*(\d+\.\d+\.\d+)",
+        backup_info.read_text(encoding="utf-8", errors="replace"),
+        re.MULTILINE,
+    )
+    if not version_match:
+        raise BackupError("E_GALERA", f"server_version missing in '{backup_info}'")
+    return wsrep_uuid, wsrep_seqno, version_match.group(1)
 
 
 def has_retention_credential(secrets: dict[str, str]) -> bool:
@@ -602,7 +622,9 @@ def run_backup(
         # przywrocenie synchronizacji.
         try:
             event_mgr.emit("galera.desync", {"applied": desynced})
-            wsrep_uuid, wsrep_seqno = perform_physical_backup(work_dir, cfg.paths.datadir, cfg.paths.socket, runner)
+            wsrep_uuid, wsrep_seqno, server_version = perform_physical_backup(
+                work_dir, cfg.paths.datadir, cfg.paths.socket, runner
+            )
         finally:
             if desynced:
                 set_wsrep_desync(cfg.paths.socket, runner, False)
@@ -681,7 +703,7 @@ def run_backup(
             "created_at": created_iso,
             "created_at_utc": created_iso,
             "created_unixtime": int(time.time()),
-            "mariadb_version": cfg.mariadb_version,
+            "mariadb_version": server_version,
             "wsrep_uuid": wsrep_uuid,
             "wsrep_seqno": wsrep_seqno,
             "sha256_plaintext": plaintext_sha,

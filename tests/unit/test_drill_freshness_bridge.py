@@ -627,7 +627,7 @@ class TestAbsentMarkerDoesNotEraseAFreshDrill(unittest.TestCase):
                     with patch.object(backup, "query_galera_vars", return_value=galera_vars):
                         with patch.object(backup, "get_storage_backend", return_value=fake_backend):
                             with patch.object(
-                                backup, "perform_physical_backup", return_value=("uuid-1", "100")
+                                backup, "perform_physical_backup", return_value=("uuid-1", "100", "11.4.12")
                             ):
                                 with patch.object(backup, "run_retention"):
                                     with patch.object(

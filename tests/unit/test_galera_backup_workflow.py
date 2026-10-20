@@ -266,7 +266,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
                     fake_backend = MagicMock()
                     with patch.object(backup, "get_storage_backend", return_value=fake_backend):
                         with patch.object(backup, "perform_physical_backup") as mock_backup:
-                            mock_backup.return_value = ("uuid-123", "456")
+                            mock_backup.return_value = ("uuid-123", "456", "11.4.12")
                             def fake_exec(cmd, env=None, cwd=None, timeout=None):
                                 # If openssl output file is in cmd, create dummy file
                                 for i, arg in enumerate(cmd):
@@ -359,7 +359,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             with patch("socket.gethostname", return_value="gnode4"):
                 with patch.object(backup, "query_galera_vars", return_value=galera_vars):
                     with patch.object(backup, "get_storage_backend", return_value=fake_backend):
-                        with patch.object(backup, "perform_physical_backup", return_value=("uuid-1", "100")):
+                        with patch.object(backup, "perform_physical_backup", return_value=("uuid-1", "100", "11.4.12")):
                             with patch.object(pipeline.CommandRunner, "_exec", side_effect=fake_exec) as mock_exec:
                                 # Mock tar file creation
                                 with patch("subprocess.Popen") as mock_popen:
@@ -489,7 +489,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             with patch("socket.gethostname", return_value="gnode4"):
                 with patch.object(backup, "query_galera_vars", return_value=galera_vars):
                     with patch.object(backup, "get_storage_backend", return_value=fake_backend):
-                        with patch.object(backup, "perform_physical_backup", return_value=("uuid-1", "100")):
+                        with patch.object(backup, "perform_physical_backup", return_value=("uuid-1", "100", "11.4.12")):
                             with patch.object(pipeline.CommandRunner, "_exec", side_effect=fake_exec):
                                 with patch("subprocess.Popen") as mock_popen:
                                     mock_proc = MagicMock()
@@ -591,7 +591,7 @@ class GaleraBackupWorkflowTests(unittest.TestCase):
             with patch("socket.gethostname", return_value="gnode4"):
                 with patch.object(backup, "query_galera_vars", return_value=galera_vars):
                     with patch.object(backup, "get_storage_backend", return_value=fake_backend):
-                        with patch.object(backup, "perform_physical_backup", return_value=("uuid-1", "100")):
+                        with patch.object(backup, "perform_physical_backup", return_value=("uuid-1", "100", "11.4.12")):
                             with patch.object(pipeline.CommandRunner, "_exec", side_effect=fake_exec):
                                 with patch("subprocess.Popen") as mock_popen:
                                     mock_proc = MagicMock()
