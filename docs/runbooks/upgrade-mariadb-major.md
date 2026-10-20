@@ -173,16 +173,13 @@ NIE ma `active_writer` (writer = wiersz ONLINE w writer_hg przy
 `max_writers=1`). **Wydzielaj kwerendy** — błąd w drugiej kwerendzie zawali
 cały wywołanie ansible (rc≠0), mimo że pierwsza (UPDATE) zrobiła już swoje.
 
-### 5d. Po ostatnim węźle etapu: runner kopii i węzeł restore
+### 5d. Po ostatnim węźle etapu: węzeł restore
 
-1. `make cluster-backup-configure CLUSTER=<klaster>` — runner kopii zapisuje w
-   metadanych wersję z wdrożonej konfiguracji (lockfile z chwili configure), nie
-   z serwera. Zmierzone 2026-10-20 na `cassiopeiav18-r9`: pierwsza kopia po
-   upgrade do 12.3.3 deklarowała `11.4.13`, a restore porównuje właśnie tę wartość.
-2. `make cluster-restore-drill CLUSTER=<klaster> CONFIRM=yes` —
-   `f10_restore.yml` wymienia `MariaDB-backup`/serwer na hoście restore na wersję
-   z lockfile'a (starszy `mariabackup` nie odtworzy nowszej kopii) i od razu
-   dowodzi odtworzenia.
+`make cluster-restore-drill CLUSTER=<klaster> CONFIRM=yes` — `f10_restore.yml`
+wymienia `MariaDB-backup`/serwer na hoście restore na wersję z lockfile'a
+(starszy `mariabackup` nie odtworzy nowszej kopii) i od razu dowodzi
+odtworzenia. Metadane kopii niosą wersję z raportu `mariadb-backup`
+(`mariadb_backup_info`), więc po etapie nie trzeba rekonfigurować runnera.
 
 ## 6. Weryfikacja po upgrade
 
@@ -193,7 +190,7 @@ ansible galera -i clusters/<klaster>/inventory.yml -b -m shell -a "mysql -N -B -
 # Integralność tabel użytkownika (lista oddzielona PRZECINKAMI — nowa linia daje syntax error):
 T=$(mysql -N -B -e "SELECT CONCAT(table_schema,'.',table_name) FROM information_schema.tables WHERE table_schema IN (<twoje_schematy>)" | tr '\n' ',' | sed 's/,$//'); mysql -e "CHECK TABLE $T"
 
-# Backup po upgrade (dowód, że pipeline działa na nowej wersji; po 5d.1):
+# Backup po upgrade (dowód, że pipeline działa na nowej wersji):
 make cluster-backup CLUSTER=<klaster>
 
 # Restore drill (ISC-36 — backup odtwarzany na czysty węzeł restore):
@@ -242,7 +239,7 @@ niepotwierdzony".
 [ ] backup przed — ID zapisany
 [ ] na każdy etap: cluster.yml → lockfile etapu, walidatory PASS
 [ ] rolling: canary → non-writers → writer; brama Synced po każdym
-[ ] po etapie: cluster-backup-configure; host restore podbity drillem
+[ ] po etapie: host restore podbity drillem
 [ ] VERSION() = cel na 3/3; CHECK TABLE OK; topologia ProxySQL jak przed
 [ ] proxysql.server_version = najstarszy najemca (make platform-proxysql)
 [ ] backup po + restore drill PASS; idempotencja converge changed=0
