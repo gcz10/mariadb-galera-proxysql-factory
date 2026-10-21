@@ -43,7 +43,15 @@ from minio.error import S3Error
 from urllib3.util import Timeout
 
 import _backup_artifact_reader as artifact_reader
-from _probe_common import ProbeContext, finish, require_hosts, run_ansible
+from _probe_common import (
+    LocalForward,
+    ProbeContext,
+    finish,
+    require_hosts,
+    run_ansible,
+    ssh_target,
+    tcp_reachable,
+)
 
 CTX = ProbeContext()
 CLUSTER = CTX.config
@@ -464,19 +472,53 @@ def probe_s3(backup, sla_hours, now, failures, undetermined):
             )
         return None
 
-    client = Minio(
-        probe_endpoint,
-        access_key=access,
-        secret_key=secret,
-        secure=probe_secure,
-        http_client=urllib3.PoolManager(
-            timeout=Timeout(connect=5, read=30),
-            retries=False,
-            cert_reqs="CERT_REQUIRED",
-        ),
-    )
-    return verify_s3(
-        client, probe_endpoint, bucket, CLUSTER_NAME, sla_hours, now, failures, undetermined
+    def read(endpoint):
+        client = Minio(
+            endpoint,
+            access_key=access,
+            secret_key=secret,
+            secure=probe_secure,
+            http_client=urllib3.PoolManager(
+                timeout=Timeout(connect=5, read=30),
+                retries=False,
+                cert_reqs="CERT_REQUIRED",
+            ),
+        )
+        return verify_s3(
+            client, endpoint, bucket, CLUSTER_NAME, sla_hours, now, failures, undetermined
+        )
+
+    # Laboratorium: stanowisko operatora bywa w sieci administracyjnej, ktorej
+    # ingress S3 (playbooks/vars/infra_ingress.yml: 9000 tylko dla
+    # database_cluster_cidrs) celowo nie wpuszcza. Zamiast poszerzac polityke pod
+    # sonde, odczyt idzie tunelem SSH przez backup.scheduler.host — host, ktory
+    # sam publikuje kopie, czyli ten sam punkt sieci co runner. Klucze zostaja na
+    # kontrolerze (nic nie trafia do argv hosta), a podsumowanie mowi, ktora
+    # droga czytano. Produkcja tego nie robi: przy secure=true tunel do
+    # 127.0.0.1 zmienilby nazwe weryfikowana w certyfikacie, wiec produkcja
+    # mierzy wylacznie bezposrednia droge do zadeklarowanego endpointu.
+    if PRODUCTION or PROBE_ENDPOINT_OVERRIDE or tcp_reachable(probe_host, probe_port):
+        return read(probe_endpoint)
+
+    relay = str((backup.get("scheduler") or {}).get("host", ""))
+    if not relay or relay not in inventory_host_names():
+        # Brak hosta posredniczacego nie jest powodem, zeby NIE zmierzyc: proba
+        # wprost da prawdziwy blad backendu ("nie odpowiada"), a nie odmowe sondy.
+        return read(probe_endpoint)
+    try:
+        with LocalForward(ssh_target(CTX, relay), probe_host, probe_port) as tunnel:
+            summary = read(f"127.0.0.1:{tunnel.local_port}")
+    except RuntimeError as exc:
+        undetermined.append(
+            f"S3 {probe_endpoint} unreachable from this controller; SSH relay via "
+            f"{relay} failed: {str(exc)[:300]}"
+        )
+        return None
+    if summary is None:
+        return None
+    return (
+        f"{summary}; S3 API {probe_endpoint} read through an SSH tunnel via {relay} "
+        "(the backup scheduler host), because this controller has no direct route to it"
     )
 
 

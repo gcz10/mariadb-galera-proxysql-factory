@@ -422,6 +422,115 @@ class S3ArtifactVerdictTests(unittest.TestCase):
                 self.assertUndetermined(store, "nie dostarczyl artefaktu")
 
 
+# === S3 route: direct, or relayed through the backup scheduler host ==========
+
+
+class FakeForward:
+    """Stands in for the SSH local forward: records how it was opened."""
+
+    opened = []
+
+    def __init__(self, ssh_prefix, remote_host, remote_port, fail=None):
+        self.args = (tuple(ssh_prefix), remote_host, remote_port)
+        self.fail = fail
+        self.local_port = 40123
+
+    def __enter__(self):
+        FakeForward.opened.append(self.args)
+        if self.fail:
+            raise self.fail
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class S3RouteTests(unittest.TestCase):
+    """The verdict must not depend on the operator's seat, and must say how it was read."""
+
+    INVENTORY = {
+        "all": {
+            "children": {
+                "galera": {"hosts": {"db1": {"ansible_host": "10.0.0.11"}}},
+                "infra": {"hosts": {"mon": {"ansible_host": "10.0.0.70"}}},
+            }
+        }
+    }
+
+    def cluster(self, environment="laboratory", scheduler="db1"):
+        config = lab_cluster() if environment == "laboratory" else production_cluster()
+        config["backup"]["s3"] = {"endpoint": "mon:9000", "bucket": "b", "secure": environment != "laboratory"}
+        if scheduler is not None:
+            config["backup"]["scheduler"] = {"mode": "cron", "host": scheduler}
+        return config
+
+    def run_probe_s3(self, config, reachable, forward_fail=None):
+        probe = load_probe(config, self.INVENTORY)
+        store = bucket_with(("20260930-020000", build_artifact()))
+        endpoints = []
+        FakeForward.opened = []
+
+        def fake_minio(endpoint, **_):
+            endpoints.append(endpoint)
+            return store
+
+        failures, undetermined = [], []
+        with mock.patch.object(probe, "tcp_reachable", lambda host, port: reachable), \
+                mock.patch.object(probe, "ssh_target", lambda ctx, host: ["ssh", f"root@{host}"]), \
+                mock.patch.object(
+                    probe, "LocalForward",
+                    lambda prefix, host, port: FakeForward(prefix, host, port, forward_fail),
+                ), \
+                mock.patch.object(probe, "Minio", fake_minio), \
+                mock.patch.object(probe, "s3_credentials", lambda: ("access", "secret")):
+            summary = probe.probe_s3(config["backup"], 26, NOW, failures, undetermined)
+        return summary, failures, undetermined, endpoints, FakeForward.opened
+
+    def test_reachable_endpoint_is_read_directly(self):
+        summary, failures, undetermined, endpoints, opened = self.run_probe_s3(
+            self.cluster(), reachable=True
+        )
+        self.assertEqual((failures, undetermined, opened), ([], [], []))
+        self.assertEqual(endpoints, ["10.0.0.70:9000"])
+        self.assertNotIn("tunnel", summary)
+
+    def test_lab_relays_through_the_scheduler_host_and_says_so(self):
+        summary, failures, undetermined, endpoints, opened = self.run_probe_s3(
+            self.cluster(), reachable=False
+        )
+        self.assertEqual((failures, undetermined), ([], []))
+        self.assertEqual(opened, [(("ssh", "root@db1"), "10.0.0.70", 9000)])
+        self.assertEqual(endpoints, ["127.0.0.1:40123"])
+        self.assertIn("galera-c1-20260930-020000", summary)
+        self.assertIn("SSH tunnel via db1", summary)
+
+    def test_failed_relay_is_undetermined_not_a_verdict(self):
+        summary, failures, undetermined, endpoints, _ = self.run_probe_s3(
+            self.cluster(), reachable=False, forward_fail=RuntimeError("ssh exited 255")
+        )
+        self.assertIsNone(summary)
+        self.assertEqual((failures, endpoints), ([], []))
+        self.assertTrue(any("ssh exited 255" in item for item in undetermined), undetermined)
+
+    def test_without_a_relay_host_the_probe_still_measures_directly(self):
+        for scheduler in (None, "ghost"):
+            with self.subTest(scheduler=scheduler):
+                summary, failures, undetermined, endpoints, opened = self.run_probe_s3(
+                    self.cluster(scheduler=scheduler), reachable=False
+                )
+                self.assertEqual((failures, undetermined, opened), ([], [], []))
+                self.assertEqual(endpoints, ["10.0.0.70:9000"])
+                self.assertIn("galera-c1-20260930-020000", summary)
+                self.assertNotIn("tunnel", summary)
+
+    def test_production_never_relays(self):
+        summary, failures, undetermined, endpoints, opened = self.run_probe_s3(
+            self.cluster(environment="production"), reachable=False
+        )
+        self.assertEqual(opened, [])
+        self.assertEqual(endpoints, ["10.0.0.70:9000"])
+
+
 # === production credentials and refusals ====================================
 
 

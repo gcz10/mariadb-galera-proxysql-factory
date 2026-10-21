@@ -276,6 +276,118 @@ def _store(res: AnsibleResult, host: str, buf: list[str]) -> None:
         res.bodies[host] = "\n".join(buf).strip()
 
 
+def tcp_reachable(host: str, port: int, timeout: float = 5.0) -> bool:
+    """Czy kontroler otwiera polaczenie TCP do host:port (bez wysylania danych)."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+_SSH_PARAMS_EXPR = (
+    "{{ [ansible_host | default(inventory_hostname), ansible_port | default(22),"
+    " ansible_user | default(''), ansible_ssh_private_key_file | default(''),"
+    " ansible_ssh_common_args | default('')] | to_json }}"
+)
+
+
+def ssh_target(ctx: ProbeContext, host: str, timeout: int = 60) -> list[str]:
+    """Prefiks `ssh` do hosta z inwentarza, wyrenderowany przez SAMEGO ansible.
+
+    Parametry (adres, port, uzytkownik, klucz, ssh_common_args z known_hosts
+    i StrictHostKeyChecking) sa te same, ktorych ansible uzywa dla tego hosta —
+    sonda nie zgaduje i nie oslabia weryfikacji klucza hosta. Jinja w
+    inwentarzu (`{{ inventory_dir }}`) renderuje ansible, nie ta funkcja.
+    Rzuca RuntimeError, gdy parametrow nie da sie odczytac.
+    """
+    inventory = str(REPO_ROOT / os.environ.get(
+        "CLUSTER_INVENTORY", f"clusters/{ctx.cluster_name}/inventory.yml"
+    ))
+    cmd = ["ansible", host, "-i", inventory, "-o", "-m", "ansible.builtin.debug",
+           "-a", f"msg={_SSH_PARAMS_EXPR}"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=REPO_ROOT)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise RuntimeError(f"ansible nie podal parametrow SSH dla {host}: {type(exc).__name__}") from exc
+    for line in proc.stdout.splitlines():
+        head, sep, payload = line.partition("=>")
+        if not sep or not head.strip().startswith(f"{host} | SUCCESS"):
+            continue
+        msg = json.loads(payload).get("msg")
+        params = json.loads(msg) if isinstance(msg, str) else msg
+        if not (isinstance(params, list) and len(params) == 5):
+            break
+        address, port, user, key, common = params
+        argv = ["ssh", "-p", str(port)]
+        if key:
+            key_path = Path(os.path.expanduser(str(key)))
+            argv += ["-i", str(key_path if key_path.is_absolute() else REPO_ROOT / key_path)]
+        argv += shlex.split(str(common or ""))
+        argv.append(f"{user}@{address}" if user else str(address))
+        return argv
+    raise RuntimeError(
+        f"ansible nie podal parametrow SSH dla {host}: {(proc.stdout + proc.stderr).strip()[:200]}"
+    )
+
+
+class LocalForward:
+    """`ssh -N -L 127.0.0.1:<wolny port>:<remote_host>:<remote_port>` na czas bloku.
+
+    Forward jest gotowy dopiero, gdy port lokalny przyjmuje polaczenia; proces
+    ssh, ktory sie zakonczyl (zly klucz, odrzucony forward), to RuntimeError z
+    jego stderr, nigdy "dzialajacy" tunel. Po bloku proces jest zawsze konczony.
+    """
+
+    def __init__(self, ssh_prefix: list[str], remote_host: str, remote_port: int,
+                 ready_timeout: float = 20.0) -> None:
+        self.ssh_prefix = list(ssh_prefix)
+        self.remote_host = remote_host
+        self.remote_port = int(remote_port)
+        self.ready_timeout = ready_timeout
+        self.local_port = 0
+        self._proc: subprocess.Popen | None = None
+
+    def __enter__(self) -> "LocalForward":
+        import time
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            self.local_port = probe.getsockname()[1]
+        argv = self.ssh_prefix[:-1] + [
+            "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
+            "-o", "ConnectTimeout=10",
+            "-L", f"127.0.0.1:{self.local_port}:{self.remote_host}:{self.remote_port}",
+            self.ssh_prefix[-1],
+        ]
+        self._proc = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+        )
+        deadline = time.monotonic() + self.ready_timeout
+        while time.monotonic() < deadline:
+            if self._proc.poll() is not None:
+                err = (self._proc.stderr.read() if self._proc.stderr else "").strip()
+                raise RuntimeError(f"ssh zakonczyl sie kodem {self._proc.returncode}: {err[:200]}")
+            if tcp_reachable("127.0.0.1", self.local_port, timeout=1.0):
+                return self
+            time.sleep(0.25)
+        self._stop()
+        raise RuntimeError(f"tunel ssh nie wstal w {self.ready_timeout:.0f}s")
+
+    def _stop(self) -> None:
+        if self._proc and self._proc.poll() is None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait()
+
+    def __exit__(self, *exc) -> bool:
+        self._stop()
+        return False
+
+
 def require_hosts(
     res: AnsibleResult,
     expected: list[str],
