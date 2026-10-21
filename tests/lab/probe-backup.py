@@ -510,8 +510,8 @@ def probe_s3(backup, sla_hours, now, failures, undetermined):
             summary = read(f"127.0.0.1:{tunnel.local_port}")
     except RuntimeError as exc:
         undetermined.append(
-            f"S3 {probe_endpoint} unreachable from this controller; SSH relay via "
-            f"{relay} failed: {str(exc)[:300]}"
+            f"S3 {probe_endpoint} nieosiagalny z tego kontrolera; tunel SSH przez "
+            f"{relay} nie wstal: {str(exc)[:300]}"
         )
         return None
     if summary is None:

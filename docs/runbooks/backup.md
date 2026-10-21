@@ -131,7 +131,9 @@ zadeklarowanego endpointu S3 (w labie ingress 9000 dopuszcza tylko
 `database_cluster_cidrs`), laboratorium czyta ten sam endpoint tunelem SSH przez
 `backup.scheduler.host` — host, który sam publikuje kopie — a podsumowanie
 wypisuje drogę (`read through an SSH tunnel via <host>`). Klucze zostają na
-kontrolerze; nieudany tunel to UNDETERMINED, nie PASS. Produkcja nie tuneluje,
+kontrolerze; nieudany tunel to UNDETERMINED, nie PASS, a brak
+`backup.scheduler.host` w inwentarzu nie wstrzymuje pomiaru — sonda próbuje
+wtedy wprost i oddaje błąd backendu. Produkcja nie tuneluje,
 bo przy `secure=true` zmieniłoby to nazwę weryfikowaną w certyfikacie. SMB czyta przez już poprawnie
 zamontowany zasób albo `smbclient` z szyfrowaniem; rola instaluje klienta
 z `lock.backup_tools.smb_client_package`. Sonda niczego nie montuje ani zapisuje.
