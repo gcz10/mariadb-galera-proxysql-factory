@@ -60,6 +60,8 @@
       GALERA_MC_AK={{ mc_account.existing_access_key }}
       GALERA_MC_SK={{ mc_account.existing_secret_key }}
   when: galera_backup_acct_candidate
+  # Plik w katalogu roboczym wywolania (minio_root_env.yml), kasowany w always.
+  changed_when: false
   no_log: true
 
 - name: Verify candidate scoped credential can access its bucket
@@ -95,6 +97,69 @@
         and (galera_backup_acct_probe.rc | default(1) | int) == 0
       }}
 
+# Polityka i nazwa istniejacego konta sa PORÓWNYWANE przed zapisem. Do
+# 2026-10-21 `mc admin accesskey edit` szedl przy kazdym `configure`
+# (changed_when: true), wiec nawet przebieg bez zmian raportowal zmiane i
+# `changed` przestawal cokolwiek mowic. MinIO zwraca polityke z innym porzadkiem
+# akcji niz szablon (zmierzone na RELEASE.2025-09-07: ListMultipartUploadParts,
+# PutObject, AbortMultipartUpload, GetObject), wiec porownanie jest po zbiorach.
+# Niezrozumiala odpowiedz `info` = roznica = zapis, nigdy cichy brak zmian.
+- name: Read the current policy of the existing scoped credential
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - container:minio
+      - --env-file
+      - "{{ galera_backup_minio_workspace.path }}/root.env"
+      - "{{ lock.minio.mc_image }}@{{ lock.minio.mc_image_digest }}"
+      - admin
+      - accesskey
+      - info
+      - myminio
+      - "{{ mc_account.existing_access_key }}"
+      - --json
+  register: galera_backup_acct_info
+  when: galera_backup_acct_reuse
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Compare the existing policy and name with the declared ones
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import json, sys
+        def canon(policy):
+            return sorted(
+                json.dumps({k: sorted(v) if isinstance(v, list) else v
+                            for k, v in statement.items()}, sort_keys=True)
+                for statement in policy.get("Statement", [])
+            )
+        try:
+            info = json.loads(sys.stdin.read())
+            with open(sys.argv[1], encoding="utf-8") as handle:
+                declared = json.load(handle)
+            same = (
+                info.get("status") == "success"
+                and info.get("name") == sys.argv[2]
+                and canon(info.get("policy") or {}) == canon(declared)
+            )
+        except Exception:
+            same = False
+        print("same" if same else "differs")
+      - "{{ mc_account.policy }}"
+      - "{{ mc_account.name }}"
+    stdin: "{{ galera_backup_acct_info.stdout | default('') }}"
+  register: galera_backup_acct_policy_cmp
+  when: galera_backup_acct_reuse
+  changed_when: false
+  no_log: true
+
 - name: Converge policy on the existing scoped credential
   ansible.builtin.command:
     argv:
@@ -117,8 +182,10 @@
       - /tmp/policy.json
       - --name
       - "{{ mc_account.name }}"
-  when: galera_backup_acct_reuse
-  # `mc accesskey edit` zapisuje polityke — mutacja, nawet gdy wynik identyczny.
+  when:
+    - galera_backup_acct_reuse
+    - (galera_backup_acct_policy_cmp.stdout | default('') | trim) != 'same'
+  # Zapis wykonuje sie tylko przy roznicy, wiec `changed` jest prawdziwy.
   changed_when: true
   no_log: true
 
@@ -174,6 +241,8 @@
       GALERA_MC_AK={{ lookup('vars', mc_account.access_fact) }}
       GALERA_MC_SK={{ lookup('vars', mc_account.secret_fact) }}
   when: not galera_backup_acct_reuse
+  # Zmiane stanu MinIO raportuje create wyzej; to tylko plik roboczy.
+  changed_when: false
   no_log: true
 
 - name: Potwierdz dostep nowego klucza MinIO do bucketa

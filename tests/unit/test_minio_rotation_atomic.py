@@ -441,7 +441,11 @@ class ReusePathUntouched(unittest.TestCase):
     def test_converge_policy_unchanged(self):
         task = find_task(reconcile_tasks(), FRAGMENT_CONVERGE)
         self.assertIsNotNone(task, "brak konwergencji polityki")
-        self.assertEqual(task.get("when"), "galera_backup_acct_reuse")
+        conditions = task.get("when")
+        conditions = conditions if isinstance(conditions, list) else [conditions]
+        # Konwergencja zyje wylacznie na sciezce reuse; o tym, CZY zapisac,
+        # decyduje porownanie polityki (test_minio_policy_converge.py).
+        self.assertEqual(conditions[0], "galera_backup_acct_reuse")
         argv = task["ansible.builtin.command"]["argv"]
         self.assertIn("edit", argv)
         self.assertIn("--policy", argv)

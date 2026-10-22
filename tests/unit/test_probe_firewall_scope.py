@@ -88,7 +88,7 @@ class ProbeFirewallScopeTests(unittest.TestCase):
             (None, None, None),
         )
 
-    def run_main(self, module, broken_docker=False, reachable=None):
+    def run_main(self, module, broken_docker=False, reachable=None, controller="192.0.2.70"):
         queried = []
 
         def command(pattern, command, timeout=120):
@@ -130,7 +130,7 @@ class ProbeFirewallScopeTests(unittest.TestCase):
 
         with (
             mock.patch.object(module, "run_command", side_effect=command),
-            mock.patch.object(module, "source_address", return_value="192.0.2.70"),
+            mock.patch.object(module, "source_address", return_value=controller),
             mock.patch.object(
                 module, "reachable",
                 side_effect=reachable or (lambda host, port: port in (22, 3306, 6033, 443)),
@@ -192,6 +192,58 @@ class ProbeMeasurementPathTests(unittest.TestCase):
         self.assertEqual(code, 2, output)
         self.assertIn("UNDETERMINED", output)
         self.assertIn("POZOSTAJE NIEZMIERZONA", output)
+
+
+class DeclaredReachabilityTests(unittest.TestCase):
+    """Osiagalnosc z kontrolera wynika z deklaracji, nie z zalozenia o jego sieci.
+
+    Sonda zakladala, ze kontroler siedzi w sieci aplikacyjnej i bazodanowej, i
+    zawsze wymagala 3306/6033/443. Stanowisko operatora tylko w sieci
+    administracyjnej (zmierzone 2026-10-18: 192.168.10.140, poza
+    database_cluster_cidrs/application_cidrs) dawalo wtedy FAIL na poprawnej
+    polityce, a zarazem sonda nie sprawdzala, czy te porty sa przed nim ZAMKNIETE.
+    """
+
+    ADMIN_ONLY = {
+        "network": {
+            "administration_cidrs": ["192.0.2.0/24", "198.51.100.0/24"],
+            "database_cluster_cidrs": ["192.0.2.0/24"],
+            "monitoring_cidrs": ["192.0.2.70/32"],
+            "application_cidrs": ["192.0.2.0/24"],
+        },
+    }
+
+    def measure(self, inventory, config, open_ports):
+        module = load_probe(inventory, config)
+        return ProbeFirewallScopeTests().run_main(
+            module,
+            reachable=lambda host, port: (host, port) in open_ports,
+            controller="198.51.100.140",
+        )[:2]
+
+    def test_admin_only_controller_passes_when_database_ports_are_closed_to_it(self):
+        code, output = self.measure(TENANT_INVENTORY, self.ADMIN_ONLY, {("192.0.2.11", 22)})
+        self.assertEqual(code, 0, output)
+
+    def test_database_port_open_to_an_undeclared_network_fails(self):
+        code, output = self.measure(
+            TENANT_INVENTORY, self.ADMIN_ONLY, {("192.0.2.11", 22), ("192.0.2.11", 3306)}
+        )
+        self.assertEqual(code, 1, output)
+        self.assertIn("192.0.2.11:3306", output)
+        self.assertIn("NIE powinien", output)
+
+    def test_platform_admin_seat_reaches_infra_admin_ports_but_not_the_client_port(self):
+        config = dict(self.ADMIN_ONLY, platform={"name": "probe-platform"})
+        allowed = {("192.0.2.21", 22), ("192.0.2.31", 443)}
+        code, output = self.measure(PLATFORM_INVENTORY, config, allowed)
+        self.assertEqual(code, 0, output)
+        code, output = self.measure(PLATFORM_INVENTORY, config, allowed | {("192.0.2.21", 6033)})
+        self.assertEqual(code, 1, output)
+        self.assertIn("192.0.2.21:6033", output)
+        code, output = self.measure(PLATFORM_INVENTORY, config, {("192.0.2.21", 22)})
+        self.assertEqual(code, 1, output)
+        self.assertIn("192.0.2.31:443", output)
 
 
 

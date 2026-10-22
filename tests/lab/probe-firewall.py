@@ -203,6 +203,31 @@ def reachable(host: str, port: int, timeout: float = 1.5) -> bool:
     except OSError:
         return False
 
+_PORT_RULE_RE = re.compile(
+    r'^rule family="ipv4" source address="(?P<cidr>[^"]+)" '
+    r'port port="(?P<port>\d+)" protocol="(?P<proto>tcp|udp)" accept$'
+)
+
+
+def admits(host: str, port: int, address: str) -> bool:
+    """Czy DEKLAROWANA polityka hosta wpuszcza `address` na TCP `port`.
+
+    Liczone z `expected_rules()` — tego samego zbioru regul, ktory sonda
+    porownuje z firewalld — wiec oczekiwanie osiagalnosci i oczekiwana polityka
+    maja jedno zrodlo. Dla hosta infra to ten sam zbior, ktory realizuje filtr
+    Dockera (vars/infra_ingress.yml).
+    """
+    for rule in expected_rules(host):
+        match = _PORT_RULE_RE.match(rule)
+        if (
+            match
+            and match["proto"] == "tcp"
+            and int(match["port"]) == port
+            and in_cidrs(address, [match["cidr"]])
+        ):
+            return True
+    return False
+
 
 def check(condition: bool, message: str, failures: list[str]) -> None:
     if not condition:
@@ -329,15 +354,32 @@ def main() -> int:
         f"host kontrolny ({controller_ip}) siega SSH spoza administration_cidrs",
         failures,
     )
+    # Porty klienckie: oczekiwanie wynika z deklaracji, nie z zalozenia, ze
+    # kontroler siedzi w sieci aplikacyjnej i bazodanowej. Stanowisko tylko w
+    # sieci administracyjnej MA nie dosiegac 3306/6033 — i to tez jest pomiar.
+    names = {address: name for name, address in inventory_hosts.items()}
+    for address, port, label in (
+        (first_galera, 3306, "Galera client port"),
+        (first_proxy, 6033, "ProxySQL client port"),
+        (infra_host, 443, "PMM port"),
+    ):
+        if not address:
+            continue
+        expected_open = admits(names.get(address, address), port, controller_ip)
+        measured_open = reachable(address, port)
+        check(
+            measured_open == expected_open,
+            f"{address}:{port} ({label}): kontroler {controller_ip} "
+            + ("powinien dosiegac wg deklaracji, a port jest zamkniety"
+               if expected_open else
+               "NIE powinien dosiegac wg deklaracji, a port jest otwarty"),
+            failures,
+        )
     if first_galera:
-        check(reachable(first_galera, 3306), "controller cannot reach allowed Galera client port", failures)
         check(not reachable(first_galera, 111), "unexpected rpcbind port 111 reachable", failures)
     if first_proxy:
-        check(reachable(first_proxy, 6033), "controller cannot reach allowed ProxySQL client port", failures)
         check(not reachable(first_proxy, 6132), "unexpected ProxySQL TLS admin port 6132 reachable", failures)
         check(not reachable(first_proxy, 6133), "unexpected ProxySQL TLS client port 6133 reachable", failures)
-    if infra_host:
-        check(reachable(infra_host, 443), "controller cannot reach allowed PMM port", failures)
 
     if not in_cidrs(controller_ip, NETWORK["monitoring_cidrs"]):
         if first_galera:

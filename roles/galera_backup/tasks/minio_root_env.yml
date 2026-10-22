@@ -44,6 +44,12 @@
     path: /run
     prefix: galera-backup-minio-
   register: galera_backup_minio_workspace
+  # Katalog roboczy tego wywolania: powstaje i znika w tym samym przebiegu
+  # (always w provision_minio.yml), wiec netto nie zmienia stanu hosta. Bez tego
+  # kazdy `configure` raportowal ~7 zmian i `changed` nie odroznial dryfu od
+  # rutyny (zmierzone 2026-10-21 na orionv17-r10). To samo dla zadan ponizej i
+  # dla plikow renderowanych do tego katalogu.
+  changed_when: false
   become: true
   delegate_to: "{{ groups['infra'][0] }}"
 
@@ -55,6 +61,7 @@
     group: root
     mode: "0700"
   become: true
+  changed_when: false
   delegate_to: "{{ groups['infra'][0] }}"
 
 - name: Zapisz root-only srodowisko klienta MinIO
@@ -69,5 +76,6 @@
     content: >-
       MC_HOST_myminio=http://{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}:{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}@localhost:9000
   become: true
+  changed_when: false
   delegate_to: "{{ groups['infra'][0] }}"
   no_log: true

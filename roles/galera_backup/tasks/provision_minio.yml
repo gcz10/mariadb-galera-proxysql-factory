@@ -32,6 +32,8 @@
         owner: root
         group: root
         mode: "0600"
+      # Plik w katalogu roboczym wywolania (minio_root_env.yml), kasowany w always.
+      changed_when: false
 
     - name: Render retention policy to temporary file
       # Osobna polityka dla osobnego konta: kasowanie kopii jest odciete od ich
@@ -42,6 +44,7 @@
         owner: root
         group: root
         mode: "0600"
+      changed_when: false
 
     - name: Ensure bucket exists
       # Object Lock da sie wlaczyc wylacznie przy tworzeniu bucketa. Dla
@@ -178,6 +181,8 @@
         path: "{{ galera_backup_minio_workspace.path }}"
         state: absent
       become: true
+      # Sprzatanie katalogu roboczego tego samego przebiegu, nie zmiana stanu hosta.
+      changed_when: false
       when:
         - galera_backup_minio_workspace is defined
         - galera_backup_minio_workspace.path is defined

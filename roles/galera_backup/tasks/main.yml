@@ -64,14 +64,62 @@
 # Entrypoint robi `sys.path.insert(0, dirname(__file__))` i importuje ten pakiet,
 # wiec MUSI jechac razem z nim. Bez tego kolejny deploy zostawia na hoscie plik,
 # ktory wywala sie na `ModuleNotFoundError: galera_backup` przy pierwszym cronie.
+#
+# Tylko zrodla, bez `__pycache__` kontrolera. Do 2026-10-21 `copy src:
+# galera_backup/` wysylal tez bytecode z Pythona, ktorym na kontrolerze biegly
+# testy (zmierzone na c18db2: .pyc cpython-39 i cpython-314 obok wlasnych
+# cpython-312 hosta). Kazde lokalne uruchomienie testow przebudowywalo te pliki,
+# wiec nastepny `configure` raportowal zmiane bez zmiany kodu. Hostowi obcy
+# bytecode jest bezuzyteczny (interpreter czyta tylko swoj cache_tag).
+- name: Deploy galera_backup package directories
+  ansible.builtin.file:
+    path: "/opt/galera-backup/galera_backup/{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: >-
+    {{ query('community.general.filetree', role_path ~ '/files/galera_backup')
+       | selectattr('state', 'equalto', 'directory')
+       | rejectattr('path', 'search', '(^|/)__pycache__($|/)') | list }}
+  loop_control:
+    label: "{{ item.path }}"
+
 - name: Deploy galera_backup package (modules imported by the executable)
   ansible.builtin.copy:
-    src: galera_backup/
-    dest: /opt/galera-backup/galera_backup/
+    src: "{{ item.src }}"
+    dest: "/opt/galera-backup/galera_backup/{{ item.path }}"
     owner: root
     group: root
     mode: "0644"
-    directory_mode: "0755"
+  loop: >-
+    {{ query('community.general.filetree', role_path ~ '/files/galera_backup')
+       | selectattr('state', 'equalto', 'file')
+       | rejectattr('path', 'search', '(^|/)__pycache__/|\.py[co]$') | list }}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Read the bytecode tag of the host interpreter
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, -c, "import sys; print(sys.implementation.cache_tag)"]
+  register: galera_backup_cache_tag
+  changed_when: false
+
+- name: Find bytecode the host interpreter cannot use
+  ansible.builtin.find:
+    paths: /opt/galera-backup/galera_backup
+    patterns: "*.pyc"
+    excludes: "*.{{ galera_backup_cache_tag.stdout | trim }}.pyc"
+    recurse: true
+  register: galera_backup_foreign_bytecode
+
+- name: Remove bytecode shipped from the controller
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ galera_backup_foreign_bytecode.files }}"
+  loop_control:
+    label: "{{ item.path }}"
 
 - name: Deploy cluster config.json
   ansible.builtin.template:
