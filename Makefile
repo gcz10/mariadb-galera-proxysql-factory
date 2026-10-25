@@ -1069,8 +1069,8 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 # FAIL NA CASSIOPEI PRZY POMIARZE POWYZEJ 4096M JEST WIEC ZAMIERZONY, NIE REGRESJA:
 # opisuje zaakceptowany niedobor, a nie awarie. Obu pomiarow nie uniewazniamy —
 # 4145M (maksimum z 5 rund) i historyczne 6023M (3508143 B/s, pojedyncza probka)
-# zostaja jako zmierzone fakty i nadal sluza interpretacji bramki. Orion decyzji
-# nie dotyczy: 3175M wobec 4096M = zapas 29%.
+# zostaja jako zmierzone fakty i nadal sluza interpretacji bramki. Orion do
+# 2026-10-23 decyzji nie dotyczyl (3175M = zapas 29%); od 2026-10-25 patrz nizej.
 # NIEZMIENNE: nie wypisuj sondy z bramki i nie zmieniaj progu po cichu.
 # Powód i historia: ISA.md, ISC-68.
 # 2026-09-22: osobna zgoda operatora dla nowej cassiopeiav18-r9: pozostaje
@@ -1082,8 +1082,10 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 # (1790977 B/s) = PASS i banner. Czerwona bramka na v18 NIE jest wiec z gory
 # oczekiwana: FAIL przy ISC-68 jest zaakceptowany, kazdy inny FAIL to regresja.
 # Orion: do 2026-10-23 mial zapas (3175M / 2516M wobec 4096M); 2026-10-25 po
-# restarcie hypervisora zmierzono 5431M (3163212 B/s) — pierwszy niedobor Oriona,
-# NIE objety zadna decyzja operatora (ISA.md, Verification 2026-10-25).
+# restarcie hypervisora zmierzono 5431M (3163212 B/s) i ponownie 5324M
+# (3101220 B/s). DECYZJA OPERATORA 2026-10-25: Orion tez zostaje z 4096M,
+# niedobor przyjety swiadomie (6G/8G odrzucone). FAIL ISC-68 na Orionie jest
+# odtad zaakceptowany jak na Cassiopei; powod i pomiary: ISA.md, Verification.
 # Stara v17 jest zarchiwizowana (docs/records/archives/).
 	$(TARGET_ENV) tests/lab/probe-gcache.py
 	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone (zaakceptowane wyjatki ISC-68 musza byc wypisane przy klastrze w ISA.md)"
