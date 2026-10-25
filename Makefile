@@ -1081,6 +1081,9 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 # hypervisora): 2026-09-22 4546M (2647889 B/s) = FAIL, 2026-10-23 3075M
 # (1790977 B/s) = PASS i banner. Czerwona bramka na v18 NIE jest wiec z gory
 # oczekiwana: FAIL przy ISC-68 jest zaakceptowany, kazdy inny FAIL to regresja.
+# Orion: do 2026-10-23 mial zapas (3175M / 2516M wobec 4096M); 2026-10-25 po
+# restarcie hypervisora zmierzono 5431M (3163212 B/s) — pierwszy niedobor Oriona,
+# NIE objety zadna decyzja operatora (ISA.md, Verification 2026-10-25).
 # Stara v17 jest zarchiwizowana (docs/records/archives/).
 	$(TARGET_ENV) tests/lab/probe-gcache.py
 	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone (zaakceptowane wyjatki ISC-68 musza byc wypisane przy klastrze w ISA.md)"
