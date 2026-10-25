@@ -1066,7 +1066,7 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 # cassiopeiav17-r9 NIE jest podnoszony — najemca zostaje z 4096M, a zmierzony
 # niedobor (maksimum 4145M wobec 4096M, o 1,2%) jest PRZYJETY SWIADOMIE. Bez
 # rolling restartu i bez zmiany okna IST; wariant podniesienia rozmiaru ODRZUCONY.
-# CZERWONA NA CASSIOPEI JEST WIEC ZAMIERZONA, NIE REGRESJA: ten jeden FAIL
+# FAIL NA CASSIOPEI PRZY POMIARZE POWYZEJ 4096M JEST WIEC ZAMIERZONY, NIE REGRESJA:
 # opisuje zaakceptowany niedobor, a nie awarie. Obu pomiarow nie uniewazniamy —
 # 4145M (maksimum z 5 rund) i historyczne 6023M (3508143 B/s, pojedyncza probka)
 # zostaja jako zmierzone fakty i nadal sluza interpretacji bramki. Orion decyzji
@@ -1076,8 +1076,11 @@ lab-post-build-gate:  ## Bramka po budowie: wszystkie sondy stanu ustalonego, fa
 # 2026-09-22: osobna zgoda operatora dla nowej cassiopeiav18-r9: pozostaje
 # 4096M mimo DWOCH pomiarow tej generacji — 4273M podczas budowy (2489129 B/s)
 # i 4546M w pelnej bramie (2647889 B/s, maksimum z 5 rund). Obowiazuje wyzszy.
-# Sonda nadal fail-closed; zaakceptowane ryzyko NIE zmienia FAIL w PASS, wiec
-# ta bramka na v18 KONCZY SIE NIEZEREM i banner ponizej nie zostaje wypisany.
+# Sonda nadal fail-closed; zaakceptowane ryzyko NIE zmienia FAIL w PASS. Werdykt
+# zalezy od rate zmierzonego W TYM przebiegu (obciazenie wspoldzielonego
+# hypervisora): 2026-09-22 4546M (2647889 B/s) = FAIL, 2026-10-23 3075M
+# (1790977 B/s) = PASS i banner. Czerwona bramka na v18 NIE jest wiec z gory
+# oczekiwana: FAIL przy ISC-68 jest zaakceptowany, kazdy inny FAIL to regresja.
 # Stara v17 jest zarchiwizowana (docs/records/archives/).
 	$(TARGET_ENV) tests/lab/probe-gcache.py
 	@echo "PASS: brama po budowie — wszystkie sondy stanu ustalonego zmierzone i zielone (zaakceptowane wyjatki ISC-68 musza byc wypisane przy klastrze w ISA.md)"
