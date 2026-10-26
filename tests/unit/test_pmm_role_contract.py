@@ -212,8 +212,9 @@ class RoleStructureTests(unittest.TestCase):
         users = [
             task for task in shared
             if isinstance(task.get("ansible.mariadb.mariadb_user"), dict)
+            and task["ansible.mariadb.mariadb_user"].get("state") == "present"
         ]
-        self.assertEqual(len(users), 1, "monitor_account.yml tworzy dokladnie jedno konto")
+        self.assertEqual(len(users), 1, "monitor_account.yml tworzy konto dokladnie jednym zadaniem")
 
     def test_uri_tasks_carry_no_inline_auth(self):
         """Auth uri zyje w module_defaults wywolan roli, nie w zadaniach."""

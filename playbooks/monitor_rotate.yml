@@ -29,6 +29,8 @@
   hosts: galera[0]
   become: true
   gather_facts: false
+  vars_files:
+    - vars/db_account_sources.yml
   vars:
     monitor_user_a: "proxysql_monitor"
     monitor_user_b: "proxysql_monitor_b"
@@ -113,31 +115,36 @@
 
   tasks:
     # EXPAND: obie tozsamosci dzialaja rownoczesnie. Konto zaklada sie na
-    # galera[0]; Galera replikuje tabele uprawnien na pozostale wezly.
+    # galera[0]; Galera replikuje tabele uprawnien na pozostale wezly. Host =
+    # adresy pary ProxySQL (vars/db_account_sources.yml), jak konto aktywne.
     - name: "Expand — utworz bezczynne konto monitora"
       ansible.mariadb.mariadb_user:
         name: "{{ monitor_idle_user }}"
         password: "{{ monitor_next_password }}"
-        host: "%"
+        host: "{{ item }}"
         priv: "*.*:PROCESS,REPLICATION CLIENT"
         state: present
         login_unix_socket: /var/lib/mysql/mysql.sock
+      loop: "{{ db_monitor_account_hosts }}"
       no_log: true
       when: rotation_phase == 'expand'
 
     # Switch bez tego kroku bylby skokiem na oslep: ProxySQL przelaczylby sie na
     # konto, ktorego istnienia nikt nie potwierdzil na KAZDYM backendzie.
-    - name: "Expand — potwierdz logowanie bezczynnym kontem na KAZDYM backendzie"
+    # Logowanie idzie Z KAZDEGO wezla pary — to jedyne zrodla, ktorym konto
+    # pozwala sie zalogowac — z CA najemcy, ktorym ProxySQL weryfikuje backend.
+    - name: "Expand — potwierdz logowanie bezczynnym kontem z KAZDEGO proxy na KAZDYM backendzie"
       ansible.builtin.command:
         argv: >-
-          {{ ['mariadb', '-h', hostvars[item].galera_node_address, '-P', '3306',
+          {{ ['mariadb', '-h', hostvars[item.1].galera_node_address, '-P', '3306',
               '-u', monitor_idle_user, '-N', '-B', '-e', 'SELECT 1']
-             + (['--ssl-ca=/etc/mysql/tls/ca.pem', '--ssl-verify-server-cert']
+             + (['--ssl-ca=/etc/mysql/tls/' ~ cluster.name ~ '/ca.pem', '--ssl-verify-server-cert']
                 if ((tls | default({})).mode | default('disabled')) == 'full'
                 else ['--disable-ssl']) }}
       environment:
         MYSQL_PWD: "{{ monitor_next_password }}"
-      loop: "{{ groups['galera'] }}"
+      delegate_to: "{{ item.0 }}"
+      loop: "{{ groups['proxysql'] | product(groups['galera']) | list }}"
       changed_when: false
       when: rotation_phase == 'expand'
       no_log: true
@@ -186,11 +193,14 @@
           konto zniknie dopiero, gdy oba wezly potwierdza tozsamosc aktywna.
       when: rotation_phase == 'contract'
 
+    # Kasujemy konto na deklarowanych adresach ORAZ na dawnym '%', zeby rotacja
+    # sprzed zawezenia hostow nie zostawila bezczynnej tozsamosci otwartej na siec.
     - name: "Contract — usun bezczynne (poprzednie) konto monitora"
       ansible.mariadb.mariadb_user:
         name: "{{ monitor_idle_user }}"
-        host: "%"
+        host: "{{ item }}"
         state: absent
         login_unix_socket: /var/lib/mysql/mysql.sock
+      loop: "{{ db_monitor_account_hosts + ['%'] }}"
       no_log: true
       when: rotation_phase == 'contract'

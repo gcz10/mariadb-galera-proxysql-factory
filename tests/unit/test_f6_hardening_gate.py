@@ -60,8 +60,8 @@ case "$sql" in
   *"user='root' AND host NOT IN"*) exit 0 ;;
   *"authentication_string=''"*) exit 0 ;;
   *"SHOW GRANTS FOR 'sst_user'"*) echo "GRANT RELOAD, PROCESS, LOCK TABLES, BINLOG ADMIN, REPLICATION CLIENT ON *.* TO \`sst_user\`@\`localhost\`";;
-  *"COUNT(*) FROM mysql.user"*) echo 1 ;;
-  *"SHOW GRANTS FOR 'pmm_monitor'"*) echo "GRANT PROCESS, SELECT ON *.* TO \`pmm_monitor\`@\`%\`";;
+  *"SELECT host FROM mysql.user"*) echo 192.168.1.70 ;;
+  *"SHOW GRANTS FOR 'pmm_monitor'@'192.168.1.70'"*) echo "GRANT PROCESS, SELECT ON *.* TO \`pmm_monitor\`@\`192.168.1.70\`";;
   *) exit 0 ;;
 esac
 exit 0
@@ -141,6 +141,17 @@ class HardeningGateTests(unittest.TestCase):
         for probe in ("hardening kont i baz MariaDB",):
             self.assertIn(probe, result.stdout)
         self.assertIn("Hardening zakończony", result.stdout)
+
+    def test_pmm_account_open_to_any_host_fails(self):
+        """pmm_monitor@'%' to naruszenie, nawet z poprawnymi grantami."""
+        client = HEALTHY_CLIENT.replace("echo 192.168.1.70 ;;", "echo '%' ;;").replace(
+            "SHOW GRANTS FOR 'pmm_monitor'@'192.168.1.70'", "SHOW GRANTS FOR 'pmm_monitor'@'%'"
+        )
+        self._install_client(client)
+        result = self._run_playbook()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("konto otwarte na '%'", result.stdout)
 
     def test_playbook_never_ends_the_play_instead_of_failing(self):
         text = PLAYBOOK.read_text(encoding="utf-8")

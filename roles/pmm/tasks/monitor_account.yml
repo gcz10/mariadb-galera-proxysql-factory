@@ -5,16 +5,47 @@
       - pmm_monitor_password | length >= (isa_min_secret_length | default(12))
     fail_msg: "Ustaw PMM_MONITOR_PASSWORD poza repozytorium."
   when: pmm_mode == 'agentless'
+# Host = zrodla eksportera (pmm_monitor_sources), nie '%': agentless laczy sie
+# z PMM Server (network.monitoring_cidrs), lokalny agent po TCP z 127.0.0.1.
+# Najpierw konta na deklarowanych adresach, potem usuniecie pozostalych.
 - name: "Utwórz replikowane konto PMM na pierwszym węźle Galera"
   ansible.mariadb.mariadb_user:
     name: "{{ pmm_monitor_user }}"
     password: "{{ pmm_monitor_password }}"
-    host: "%"
+    host: "{{ item }}"
     priv: "*.*:PROCESS,REPLICATION CLIENT,SELECT,SHOW DATABASES,RELOAD"
     state: present
     login_unix_socket: /var/lib/mysql/mysql.sock
     column_case_sensitive: "{{ true if pmm_mode == 'agentless' else omit }}"
+  loop: "{{ pmm_monitor_account_hosts }}"
   when:
     - inventory_hostname in groups.get('galera', [])
     - galera_node_idx | default(1) | int == 1
   no_log: true
+
+- name: "Odczytaj hosty konta PMM"
+  ansible.builtin.command:
+    argv:
+      - mariadb
+      - --socket=/var/lib/mysql/mysql.sock
+      - -N
+      - -B
+      - -e
+      - "SELECT host FROM mysql.user WHERE user='{{ pmm_monitor_user }}'"
+  register: pmm_monitor_host_rows
+  changed_when: false
+  check_mode: false
+  when:
+    - inventory_hostname in groups.get('galera', [])
+    - galera_node_idx | default(1) | int == 1
+
+- name: "Usuń hosty konta PMM spoza deklaracji (w tym dawne '%')"
+  ansible.mariadb.mariadb_user:
+    name: "{{ pmm_monitor_user }}"
+    host: "{{ item }}"
+    state: absent
+    login_unix_socket: /var/lib/mysql/mysql.sock
+  loop: "{{ pmm_monitor_host_rows.stdout_lines | map('trim') | select | reject('in', pmm_monitor_account_hosts) | list }}"
+  when:
+    - inventory_hostname in groups.get('galera', [])
+    - galera_node_idx | default(1) | int == 1

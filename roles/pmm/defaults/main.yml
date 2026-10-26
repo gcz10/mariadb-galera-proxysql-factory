@@ -12,6 +12,11 @@ pmm_admin_user: "{{ (lookup('ansible.builtin.env', 'PMM_ADMIN_USER') | default('
 pmm_admin_password: "{{ lookup('ansible.builtin.env', 'PMM_ADMIN_PASSWORD') }}"
 pmm_monitor_user: "pmm_monitor"
 pmm_monitor_password: "{{ lookup('ansible.builtin.env', 'PMM_MONITOR_PASSWORD') }}"
+# Skad eksporter MySQL loguje sie jako pmm_monitor: agentless = PMM Server
+# (zadeklarowany network.monitoring_cidrs, ten sam, ktory firewall wpuszcza na
+# 3306), agent = lokalny mysqld_exporter po TCP z 127.0.0.1.
+pmm_monitor_sources: "{{ network.monitoring_cidrs if pmm_mode == 'agentless' else ['127.0.0.1'] }}"
+pmm_monitor_account_hosts: "{{ pmm_monitor_sources | mariadb_account_hosts }}"
 pmm_proxysql_admin_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_ADMIN_PASSWORD') }}"
 
 # Agentless zachowuje nadpisanie PMM_SERVER_URL z f11_pmm_client.yml.

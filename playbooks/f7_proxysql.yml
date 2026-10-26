@@ -20,6 +20,7 @@
   # ktorego backend nie zna. Nazwa jest per klaster (wspolna para ProxySQL).
   vars_files:
     - vars/proxysql_hostgroups.yml
+    - vars/db_account_sources.yml
   vars:
     proxysql_monitor_user: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_USER') | default('proxysql_monitor', true) }}"
     proxysql_monitor_password: "{{ lookup('ansible.builtin.env', 'PROXYSQL_MONITOR_PASSWORD') }}"
@@ -35,25 +36,56 @@
         fail_msg: "Ustaw PROXYSQL_MONITOR_PASSWORD i APP_DB_PASSWORD poza repozytorium."
 
   tasks:
-    - name: "Utwórz proxysql_monitor (PROCESS, REPLICATION CLIENT)"
+    # Host = zmierzone zrodla logowania (vars/db_account_sources.yml), nie '%'.
+    # Najpierw powstaja konta na deklarowanych adresach, dopiero potem znikaja
+    # pozostale: MariaDB wybiera najbardziej konkretny host, wiec w zadnym
+    # momencie zrodlo z deklaracji nie zostaje bez konta.
+    - name: "Utwórz proxysql_monitor (PROCESS, REPLICATION CLIENT) na adresach pary ProxySQL"
       ansible.mariadb.mariadb_user:
         name: "{{ proxysql_monitor_user }}"
         password: "{{ proxysql_monitor_password }}"
-        host: "%"
+        host: "{{ item }}"
         priv: "*.*:PROCESS,REPLICATION CLIENT"
         state: present
         login_unix_socket: /var/lib/mysql/mysql.sock
+      loop: "{{ db_monitor_account_hosts }}"
       no_log: true
 
-    - name: "Utwórz app_user (test application access)"
+    - name: "Utwórz app_user (test application access) na adresach ProxySQL i hosta aplikacyjnego"
       ansible.mariadb.mariadb_user:
         name: "{{ app_user }}"
         password: "{{ app_password }}"
-        host: "%"
+        host: "{{ item }}"
         priv: "isa_test.*:ALL"
         state: present
         login_unix_socket: /var/lib/mysql/mysql.sock
+      loop: "{{ db_app_account_hosts }}"
       no_log: true
+
+    - name: "Odczytaj hosty kont sieciowych najemcy"
+      ansible.builtin.command:
+        argv:
+          - mariadb
+          - --socket=/var/lib/mysql/mysql.sock
+          - -N
+          - -B
+          - -e
+          - "SELECT CONCAT(user, '|', host) FROM mysql.user WHERE user IN ('{{ proxysql_monitor_user }}', '{{ app_user }}')"
+      register: tenant_account_rows
+      changed_when: false
+      check_mode: false
+
+    - name: "Usuń hosty kont sieciowych spoza deklaracji (w tym dawne '%')"
+      vars:
+        tenant_account_keep: >-
+          {{ (db_monitor_account_hosts | map('regex_replace', '^', proxysql_monitor_user ~ '|') | list)
+             + (db_app_account_hosts | map('regex_replace', '^', app_user ~ '|') | list) }}
+      ansible.mariadb.mariadb_user:
+        name: "{{ item.split('|')[0] }}"
+        host: "{{ item.split('|')[1] }}"
+        state: absent
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      loop: "{{ tenant_account_rows.stdout_lines | map('trim') | select | reject('in', tenant_account_keep) | list }}"
 
 - name: "F7 — zarejestruj najemcę we wspoldzielonym ProxySQL"
   hosts: proxysql

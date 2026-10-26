@@ -93,14 +93,48 @@ def main() -> int:
             failures,
         )
 
-    # ISC-42: pmm_monitor least privilege
-    pmm_result = query_section("ISC-42 pmm_monitor grants", "SHOW GRANTS FOR 'pmm_monitor'@'%'")
-    if pmm_result is not None:
+    # Konta sieciowe maja host = adres zrodla, nigdy wzorzec. '%' albo '_' w
+    # kolumnie Host otwiera konto na kazdy adres, ktory przepusci firewall.
+    wildcard_result = query_section(
+        "konta z wzorcem hosta",
+        "SELECT CONCAT(user,'@',host) FROM mysql.user "
+        "WHERE INSTR(host,'%') > 0 OR INSTR(host,'_') > 0",
+    )
+    if wildcard_result is not None:
+        wildcard_result = wildcard_result.strip()
         check(
-            "PROCESS" in pmm_result and "SELECT" in pmm_result,
-            f"ISC-42: pmm_monitor missing required grants: {pmm_result}",
+            not wildcard_result,
+            f"konta z wzorcem hosta zamiast adresu zrodla: {wildcard_result}",
             failures,
         )
+
+    # Host kont to adresy IP, wiec rozwiazywanie nazw jest zbedna zaleznoscia
+    # logowania od DNS; zmienna wymaga restartu, wiec mierzymy wartosc runtime.
+    resolve_result = query_section("skip_name_resolve", "SELECT @@skip_name_resolve")
+    if resolve_result is not None:
+        check(
+            resolve_result.strip() == "1",
+            f"skip_name_resolve wylaczony (runtime={resolve_result.strip()!r})",
+            failures,
+        )
+
+    # ISC-42: pmm_monitor least privilege — na KAZDYM hoscie konta.
+    pmm_hosts = query_section(
+        "ISC-42 pmm_monitor hosts", "SELECT host FROM mysql.user WHERE user='pmm_monitor'"
+    )
+    if pmm_hosts is not None:
+        hosts = [line.strip() for line in pmm_hosts.splitlines() if line.strip()]
+        check(bool(hosts), "ISC-42: brak konta pmm_monitor", failures)
+        for host in hosts:
+            pmm_result = query_section(
+                f"ISC-42 pmm_monitor@{host} grants", f"SHOW GRANTS FOR 'pmm_monitor'@'{host}'"
+            )
+            if pmm_result is not None:
+                check(
+                    "PROCESS" in pmm_result and "SELECT" in pmm_result,
+                    f"ISC-42: pmm_monitor@{host} missing required grants: {pmm_result}",
+                    failures,
+                )
 
     # Waznosc certyfikatow TLS na KAZDYM wezle Galery (gdy tls.mode == full).
     #

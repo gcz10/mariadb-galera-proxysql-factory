@@ -1,0 +1,15 @@
+---
+# Adresy, z ktorych loguja sie sieciowe konta najemcy na backendach Galery.
+# Konto ma host rowny tym adresom zamiast '%': blad w firewallu nie wystawia
+# go wtedy calej sieci. Zmierzone zrodla (PROCESSLIST, 2026-10-26):
+#   - konto aplikacyjne: wezly pary ProxySQL (ruch aplikacji przez VIP) oraz
+#     host aplikacyjny, ktory sondy kontraktu i bench lacza wprost z backendem
+#     (probe-app-conformance.py przy tls.mode=full, bench-app.py);
+#   - monitor ProxySQL: wylacznie wezly pary ProxySQL.
+# PMM ma osobne zrodlo (network.monitoring_cidrs), patrz roles/pmm/defaults.
+# Lista pochodzi z inwentarza klastra, ktory deklaruje wspolne hosty platformy.
+db_proxysql_sources: "{{ groups.get('proxysql', []) | map('extract', hostvars, 'proxysql_node_address') | list }}"
+db_app_sources: "{{ db_proxysql_sources + (groups.get('app', []) | map('extract', hostvars, 'app_node_address') | list) }}"
+
+db_monitor_account_hosts: "{{ db_proxysql_sources | mariadb_account_hosts }}"
+db_app_account_hosts: "{{ db_app_sources | mariadb_account_hosts }}"

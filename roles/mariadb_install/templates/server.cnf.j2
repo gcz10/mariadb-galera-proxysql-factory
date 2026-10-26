@@ -34,6 +34,12 @@ wsrep_log_conflicts = {{ (mariadb_tuning | default({})).wsrep_log_conflicts | de
 
 # === Bind ===
 bind-address = 0.0.0.0
+# Konta sieciowe maja host = adres IP zrodla (playbooks/vars/db_account_sources.yml,
+# roles/pmm pmm_monitor_sources), wiec rozwiazywanie nazw nic nie daje, a kosztuje:
+# kazde logowanie pytalo DNS o nazwe klienta (w logu "IP address ... could not be
+# resolved"), czyli logowanie zalezalo od DNS. Przy ON kolumna Host moze zawierac
+# tylko IP albo localhost; zmienna nie jest dynamiczna (zmiana = restart).
+skip_name_resolve = ON
 
 # === Tuning (produkcja: nadpisz przez mariadb_tuning w cluster.yml; lab: minimalne wartości) ===
 innodb_buffer_pool_size = {{ (mariadb_tuning | default({})).innodb_buffer_pool_size | default('256M') }}

@@ -143,35 +143,40 @@
           - "'LOCK TABLES' in sst_grants.stdout"
         fail_msg: "sst_user brakuje uprawnień SST: {{ sst_grants.stdout }}"
 
-    # ISC-42: least privilege pmm_monitor (konto jest tworzone dopiero w F11)
-    - name: "ISC-42: sprawdź czy konto pmm_monitor istnieje"
+    # ISC-42: least privilege pmm_monitor (konto jest tworzone dopiero w F11).
+    # Konto ma host per zrodlo eksportera (roles/pmm, pmm_monitor_sources), wiec
+    # granty sprawdzamy na KAZDYM jego hoscie, a host '%' jest naruszeniem.
+    - name: "ISC-42: odczytaj hosty konta pmm_monitor"
       ansible.builtin.shell: >
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SELECT COUNT(*) FROM mysql.user
-        WHERE User='{{ pmm_monitor_user }}' AND Host='%'"
-      register: pmm_monitor_count
+        "SELECT host FROM mysql.user
+        WHERE User='{{ pmm_monitor_user }}'"
+      register: pmm_monitor_hosts
       changed_when: false
 
-    - name: "ISC-42: granty pmm_monitor"
+    - name: "ISC-42: granty pmm_monitor na każdym hoście"
       ansible.builtin.shell: >
         mariadb --socket=/var/lib/mysql/mysql.sock -N -B -e
-        "SHOW GRANTS FOR '{{ pmm_monitor_user }}'@'%'"
+        "SHOW GRANTS FOR '{{ pmm_monitor_user }}'@'{{ item }}'"
       register: pmm_grants
       changed_when: false
-      when: pmm_monitor_count.stdout | int > 0
+      loop: "{{ pmm_monitor_hosts.stdout_lines | map('trim') | select | list }}"
 
-    - name: "ISC-42: pmm_monitor ma uprawnienia monitoringu"
+    - name: "ISC-42: pmm_monitor ma uprawnienia monitoringu i nie ma hosta '%'"
       ansible.builtin.assert:
         that:
-          - "'PROCESS' in pmm_grants.stdout"
-          - "'SELECT' in pmm_grants.stdout"
-        fail_msg: "pmm_monitor brakuje uprawnień: {{ pmm_grants.stdout }}"
-      when: pmm_monitor_count.stdout | int > 0
+          - "'%' not in (pmm_monitor_hosts.stdout_lines | map('trim') | list)"
+          - "'PROCESS' in item.stdout"
+          - "'SELECT' in item.stdout"
+        fail_msg: "pmm_monitor@{{ item.item }}: brak uprawnień monitoringu albo konto otwarte na '%' ({{ item.stdout }})"
+      loop: "{{ pmm_grants.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     - name: "ISC-42: odrocz weryfikację pmm_monitor do F11"
       ansible.builtin.debug:
         msg: "Konto pmm_monitor jeszcze nie istnieje; F11 utworzy je i ustawi dokładne granty."
-      when: pmm_monitor_count.stdout | int == 0
+      when: pmm_monitor_hosts.stdout_lines | map('trim') | select | list | length == 0
 
 
     - name: "Raport hardening"
@@ -179,6 +184,6 @@
         msg: >-
           Hardening zakończony: anonimowe konta usunięte, test DB usunięta,
           root localhost-only, SST least privilege zweryfikowane;
-          PMM least privilege {{ 'zweryfikowane' if pmm_monitor_count.stdout | int > 0 else 'odroczone do F11' }}.
+          PMM least privilege {{ 'zweryfikowane' if (pmm_monitor_hosts.stdout_lines | map('trim') | select | list | length) > 0 else 'odroczone do F11' }}.
 
   handlers: []

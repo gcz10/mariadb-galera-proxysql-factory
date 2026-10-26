@@ -289,7 +289,12 @@ INVENTORY = {
             "ansible_python_interpreter": sys.executable,
         },
         "children": {
-            "proxysql": {"hosts": {"px1": None, "px2": None}},
+            "proxysql": {
+                "hosts": {
+                    "px1": {"proxysql_node_address": "192.0.2.11"},
+                    "px2": {"proxysql_node_address": "192.0.2.12"},
+                }
+            },
             "galera": {"hosts": {"db1": {"galera_node_address": "127.0.0.1"}}},
         },
     }
@@ -339,6 +344,11 @@ def build_fixture(base):
                         "dest": "{{ lookup('ansible.builtin.env', 'SMOKE_MARKER') }}",
                         "mode": "0644",
                     }
+    # Kopia playbooka lezy poza playbooks/, wiec dostaje obok to, co oryginal
+    # bierze ze swojego katalogu: vars_files i filtr hostow kont.
+    (base / "vars").mkdir()
+    shutil.copy(TENANT_PLAY.parent / "vars" / "db_account_sources.yml", base / "vars")
+    shutil.copytree(TENANT_PLAY.parent / "filter_plugins", base / "filter_plugins")
     play_path = base / "monitor_rotate.fixture.yml"
     play_path.write_text(yaml.safe_dump(plays, sort_keys=False), encoding="utf-8")
 

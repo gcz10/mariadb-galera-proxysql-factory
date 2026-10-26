@@ -24,3 +24,8 @@ patrz `tests/validation/probe-role-contract.py`).
 - `gcache_size` WYMAGANY statycznie w `cluster.yml` (playbook bez fallbacku —
   ISC-68). Zmiana wartości = edycja cluster.yml + config na węzłach razem
   (pilnuje F13 drift).
+- `skip_name_resolve = ON` na sztywno: konta sieciowe mają host = adres IP
+  źródła (`playbooks/vars/db_account_sources.yml`, `roles/pmm`
+  `pmm_monitor_sources`, filtr `playbooks/filter_plugins/mariadb_accounts.py`),
+  więc konto z nazwą hosta albo wzorcem `%` nigdy nie jest poprawne
+  (`probe-hardening.py` mierzy oba warunki). Zmiana wymaga restartu.

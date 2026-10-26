@@ -17,19 +17,22 @@
 # nie ma. f11_pmm_client.yml tworzy je tez, ale biegnie PO tym playbooku,
 # wiec na swiezym klastrze bylo za pozno.
 #
-# WYLACZNIE @'%'. Konto @localhost jest w tym repo uznane za legacy i
+# NIGDY @'localhost'. Konto @localhost jest w tym repo uznane za legacy i
 # Sciezka agentless usuwa konto legacy; tworzenie go tutaj dawalo ping-pong
 # (agent tworzy, agentless kasuje) i F11 nigdy nie zbiegalo do changed=0.
+# Od 2026-10-26 host konta to zrodla eksportera (pmm_monitor_sources), nie '%':
+# pod lokalnym agentem 127.0.0.1, bo eksporter laczy sie po TCP.
 #
 # CIEN ANONIMOWYCH KONT: swieza instalacja Mariadb tworzy ''@'localhost'
-# (i ''@'<hostname>'), a MariaDB resolvuje 127.0.0.1 do 'localhost'.
-# Anonim o bardziej konkretnym hoscie WYGRYWA z pmm_monitor@'%' — eksporter
-# laczy sie po TCP na 127.0.0.1 i dostaje "Access denied for user
-# 'pmm_monitor'@'localhost'", a API PMM odrzuca POST golym 400 bez
-# wskazania przyczyny. F6 (ISC-40) usuwa anonimowych, ale biegnie PO F11,
-# wiec na swiezym klastrze kazde tworzenie eksportera pod lokalnym agentem
-# padalo. Tu idzie identyczne SQL jak w F6 — F6 zostaje audytorem, a jego
-# drugi przebieg jest no-op. DDL replikuje sie Galera-wide z jednego wezla.
+# (i ''@'<hostname>'). Przed `skip_name_resolve=ON` MariaDB resolvowala
+# 127.0.0.1 do 'localhost' i anonim o bardziej konkretnym hoscie WYGRYWAL z
+# pmm_monitor@'%' — eksporter laczyl sie po TCP na 127.0.0.1 i dostawal
+# "Access denied for user 'pmm_monitor'@'localhost'", a API PMM odrzucalo
+# POST golym 400 bez wskazania przyczyny. F6 (ISC-40) usuwa anonimowych, ale
+# biegnie PO F11, wiec usuniecie zostaje tez tutaj (identyczne SQL jak w F6;
+# F6 zostaje audytorem, a jego drugi przebieg jest no-op) — anonim nie ma
+# prawa istniec niezaleznie od rozwiazywania nazw. DDL replikuje sie
+# Galera-wide z jednego wezla.
 - name: "Usun anonimowe konta cieniujace pmm_monitor (to samo SQL co F6)"
   ansible.builtin.shell: |-
     set -o pipefail
